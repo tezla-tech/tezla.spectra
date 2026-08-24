@@ -14,6 +14,11 @@ hand, and a clean clone builds with one command.
 | **Git** | Fetches the repository and JUCE. | <https://git-scm.com/download/win> |
 | **Ninja** *(optional)* | Noticeably faster builds. CMake ships with a copy, or install standalone. | <https://github.com/ninja-build/ninja/releases> |
 
+**JUCE is not in this list on purpose.** It is fetched by CMake, and if you
+already have a copy you can point the build at it instead — see
+[section 4](#4-juce-getting-it-or-using-one-you-already-have). There is no
+Steinberg VST3 SDK to install either; JUCE bundles it.
+
 When installing the Build Tools, select the **"Desktop development with C++"**
 workload. That single checkbox brings in the compiler, the Windows SDK and the
 CMake integration. Nothing else is needed.
@@ -68,6 +73,8 @@ scripts\build.bat -clean                   :: wipe build\ first
 scripts\build.bat NONE -test               :: DSP + tests only; skips JUCE entirely
 scripts\build.bat -vs                      :: force the Visual Studio generator
 scripts\build.bat -ninja                   :: force Ninja (needs a developer prompt)
+scripts\build.bat -juce C:\dev\JUCE        :: use a JUCE you already have
+scripts\build.bat -juce-system             :: use a JUCE you installed
 ```
 
 By default the script uses the Visual Studio generator, which works from any
@@ -143,7 +150,8 @@ Useful extra options, all optional:
 | `-DTEZLA_BUILD_TOOLS=OFF` | Skip the measurement tools |
 | `-DTEZLA_BUILD_STANDALONE=ON` | Also build a standalone `.exe` per plugin |
 | `-DTEZLA_WARNINGS_AS_ERRORS=ON` | Treat warnings as errors |
-| `-DTEZLA_JUCE_PATH=C:\dev\JUCE` | Use a local JUCE checkout instead of downloading |
+| `-DTEZLA_JUCE_PATH=C:/dev/JUCE` | Use a JUCE you already have — see [section 4](#4-juce-getting-it-or-using-one-you-already-have) |
+| `-DTEZLA_JUCE_SOURCE=System` | Use a JUCE installed with `cmake --install` — see [section 4.4](#44-route-c--a-juce-you-installed-with-cmake---install) |
 
 ### 3.3 Using Ninja instead (faster)
 
@@ -222,7 +230,198 @@ folder.
 
 ---
 
-## 4. Install into FL Studio
+## 4. JUCE: getting it, or using one you already have
+
+### 4.1 There is nothing to install
+
+JUCE is a source tree, not an SDK with an installer. Nothing has to go into
+`Program Files`, no registry keys, no environment set-up. The build needs a
+folder containing JUCE's `modules/` and `extras/` directories, and that is all.
+
+It also **bundles the VST3 wrapper**, so there is no separate Steinberg SDK to
+download either, whichever route you pick below.
+
+| Route | Use when | Flag |
+|---|---|---|
+| **A — download** (default) | You have no JUCE and do not want to manage one | none |
+| **B — a source tree you have** | You already keep a JUCE checkout | `-DTEZLA_JUCE_PATH=…` |
+| **C — an installed JUCE** | You ran `cmake --install` on JUCE | `-DTEZLA_JUCE_SOURCE=System` |
+
+All three end up with exactly the same targets. The configure output always
+says which one it used and what version it found:
+
+```
+-- Tezla: using the JUCE source tree at C:/dev/JUCE
+-- Tezla: JUCE 9.0.1
+```
+
+---
+
+### 4.2 Route A — let CMake download it (the default)
+
+Do nothing. The first configure clones JUCE into the build folder:
+
+```
+build\_deps\juce-src\
+```
+
+A few hundred MB, once per build folder. It is not re-downloaded on later
+builds, and `git` is the only prerequisite. This is what `scripts\build.bat`
+does when you give it no JUCE flag.
+
+To throw it away, delete the build folder (`scripts\build.bat -clean`). To keep
+it across build folders, use route B instead and point at the downloaded copy.
+
+---
+
+### 4.3 Route B — a JUCE source tree you already have
+
+Get JUCE however you like — either is fine:
+
+```bat
+:: a git clone, shallow so it is quick
+git clone --depth 1 --branch 9.0.1 https://github.com/juce-framework/JUCE C:\dev\JUCE
+```
+
+or download the source zip for a release from
+<https://github.com/juce-framework/JUCE/releases> and unzip it anywhere.
+
+Then point the build at it:
+
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
+      -DTEZLA_PLUGINS=Emberdrive ^
+      -DTEZLA_JUCE_PATH=C:/dev/JUCE
+cmake --build build --config Release
+```
+
+or with the script:
+
+```bat
+scripts\build.bat Emberdrive -juce C:\dev\JUCE
+```
+
+**The path is the root of the JUCE repository** — the folder that directly
+contains `modules\` and `extras\`. Pointing at `modules\` is the easy mistake
+and the build tells you so rather than failing later inside JUCE.
+
+Forward or back slashes both work in the CMake flag.
+
+#### Setting it once instead of every time
+
+`TEZLA_JUCE_PATH` is a CMake cache variable, so it only needs to be given on the
+**first** configure of a build folder; later `cmake --build` calls remember it.
+
+If you would rather not repeat it for every new build folder, set an environment
+variable once and the build picks it up automatically:
+
+```bat
+:: this session only
+set JUCE_PATH=C:\dev\JUCE
+
+:: permanently, for your user (open a new terminal afterwards)
+setx JUCE_PATH C:\dev\JUCE
+```
+
+`TEZLA_JUCE_PATH` works as an environment variable too, and takes precedence.
+An explicit `-DTEZLA_JUCE_PATH=` on the command line beats both.
+
+---
+
+### 4.4 Route C — a JUCE you installed with `cmake --install`
+
+JUCE can be installed properly, producing a `JUCEConfig.cmake` that
+`find_package` understands. If you have done that — or want to, so several
+projects share one copy — this is the route.
+
+To install JUCE itself:
+
+```bat
+git clone --depth 1 --branch 9.0.1 https://github.com/juce-framework/JUCE C:\src\JUCE
+cd C:\src\JUCE
+cmake -B build -DCMAKE_INSTALL_PREFIX=C:/dev/juce-installed
+cmake --build build --target install
+```
+
+Then build this project against it:
+
+```bat
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
+      -DTEZLA_PLUGINS=Emberdrive ^
+      -DTEZLA_JUCE_SOURCE=System ^
+      -DCMAKE_PREFIX_PATH=C:/dev/juce-installed
+cmake --build build --config Release
+```
+
+or:
+
+```bat
+scripts\build.bat Emberdrive -juce-system
+```
+
+If JUCE is installed somewhere CMake already searches, `-DCMAKE_PREFIX_PATH` is
+unnecessary. To point at one exact install, `-DJUCE_DIR=C:/dev/juce-installed/lib/cmake/JUCE-9.0.1`
+also works — that is plain `find_package` behaviour, nothing special to this
+project.
+
+> Verified: this repository builds a complete, validator-passing VST3 from an
+> installed JUCE, not just from a source tree.
+
+---
+
+### 4.5 Which versions work
+
+| | Version |
+|---|---|
+| Pinned and tested | **9.0.1** |
+| Minimum accepted | **8.0.0** |
+
+The minimum is real, not cautious: the editor uses `juce::FontOptions` and the
+parameters use the `AudioParameter*Attributes` API, neither of which exists in
+JUCE 7. A JUCE below 8.0.0 is rejected at configure time with a message saying
+so, rather than failing later as a wall of template errors from inside JUCE's
+own headers.
+
+Anything that is not exactly 9.0.1 configures with a warning — supported, but
+untested here. If a build fails inside JUCE's headers, try the pinned version
+before assuming the plugin is at fault.
+
+To move the pin (for everyone, not just your machine), change
+`TEZLA_JUCE_VERSION` in [`../cmake/FetchJUCE.cmake`](../cmake/FetchJUCE.cmake),
+or override it for one build folder:
+
+```bat
+cmake -S . -B build -DTEZLA_JUCE_VERSION=9.0.0 -DTEZLA_PLUGINS=Emberdrive
+```
+
+---
+
+### 4.6 Licence
+
+JUCE is dual-licensed **AGPLv3 or commercial**, with a free tier covering
+personal and small-revenue use. That is JUCE's licence and applies to you as its
+user regardless of which route above you take — read `LICENSE.md` in whichever
+copy you end up with. Nothing in this repository grants or restricts anything
+about JUCE.
+
+Steinberg's VST3 SDK, which JUCE bundles, has been MIT-licensed since v3.8
+(October 2025), so the plugin *format* carries no obligations at all.
+
+---
+
+### 4.7 Building offline
+
+Route A needs network access on the first configure of each build folder.
+Routes B and C need none, which makes them the ones to use on a machine without
+internet: clone or install JUCE once where you do have a connection, copy it
+across, and point at it.
+
+The DSP-only build (`-DTEZLA_PLUGINS=NONE`) never touches the network at all —
+JUCE is not fetched, because it is not needed.
+
+---
+
+## 5. Install into FL Studio
 
 `scripts\build.bat -install` copies the built bundles to
 `C:\Program Files\Common Files\VST3\`, which is the folder FL Studio scans by
@@ -244,7 +443,7 @@ Then in FL Studio: **Options → Manage plugins → Find more plugins**. Tick
 
 ---
 
-## 5. Building on Linux (optional, for CI and for checking the wrapper)
+## 6. Building on Linux (optional, for CI and for checking the wrapper)
 
 The plugins target Windows, but the plugin target does build on Linux, and doing
 so is a cheap way to catch wrapper mistakes before they reach the DAW — the
@@ -264,7 +463,7 @@ not — but it removes most of the round trips.
 
 ---
 
-## 6. Build without a DAW
+## 7. Build without a DAW
 
 The DSP is deliberately independent of JUCE, so it builds and runs anywhere:
 
@@ -290,7 +489,7 @@ produces about a plugin.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 **`cmake` is not recognised**
 The CMake installer's "Add to PATH" box was not ticked. Re-run the installer, or
@@ -300,14 +499,22 @@ add `C:\Program Files\CMake\bin` to PATH. Open a *new* terminal afterwards.
 The Build Tools are missing the C++ workload. Re-run the Visual Studio Installer,
 *Modify*, and tick **Desktop development with C++**.
 
-**The JUCE download fails or is very slow**
+**The JUCE download fails, is very slow, or you are offline**
 Clone it once by hand and point the build at it:
 ```bat
 git clone --depth 1 --branch 9.0.1 https://github.com/juce-framework/JUCE C:\dev\JUCE
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 ^
-      -DTEZLA_JUCE_PATH=C:\dev\JUCE -DTEZLA_PLUGINS=Emberdrive
-cmake --build build --config Release
+scripts\build.bat Emberdrive -juce C:\dev\JUCE
 ```
+Set `JUCE_PATH` as an environment variable to avoid repeating it. Full detail,
+including using a JUCE you have already installed, is in
+[section 4](#4-juce-getting-it-or-using-one-you-already-have).
+
+**`'...' is not the top of a JUCE source tree`**
+`TEZLA_JUCE_PATH` must point at the folder that directly contains JUCE's
+`modules\` and `extras\` directories, not at `modules\` itself. The check is
+deliberately strict because `modules\` has a `CMakeLists.txt` of its own, and
+pointing there configures happily and then fails with `Unknown CMake command
+juce_add_modules`.
 
 **`running scripts is disabled on this system`**
 That is PowerShell refusing to run an unsigned `.ps1`. You do not need to change
@@ -336,7 +543,7 @@ points at JUCE rather than at the cause.
 
 ---
 
-## 8. Adding a new plugin
+## 9. Adding a new plugin
 
 1. `plugins/<Name>/` with `CMakeLists.txt`, `Source/`, `Dsp/`, `README.md`.
 2. Claim a unique 4-character plugin code in [`../plugins/README.md`](../plugins/README.md).

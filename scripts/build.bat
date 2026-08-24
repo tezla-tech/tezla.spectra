@@ -15,6 +15,7 @@ rem    build.bat NONE -test               DSP core + tests only, no JUCE
 rem    build.bat -config Debug            Debug build
 rem    build.bat -install                 also copy to the system VST3 folder
 rem    build.bat -clean                   wipe the build folder first
+rem    build.bat -juce C:\dev\JUCE        use a JUCE you already have
 rem    build.bat -list                    show available plugins
 rem    build.bat -help
 rem ============================================================================
@@ -27,6 +28,7 @@ set "DO_INSTALL=0"
 set "DO_TEST=0"
 set "DO_CLEAN=0"
 set "GENERATOR="
+set "JUCEARGS="
 
 :parse
 if "%~1"=="" goto after_parse
@@ -40,6 +42,8 @@ if /I "%~1"=="-test"    goto opt_test
 if /I "%~1"=="-config"  goto opt_config
 if /I "%~1"=="-plugins" goto opt_plugins
 if /I "%~1"=="-builddir" goto opt_builddir
+if /I "%~1"=="-juce"        goto opt_juce
+if /I "%~1"=="-juce-system" goto opt_juce_system
 if /I "%~1"=="-ninja"   goto opt_ninja
 if /I "%~1"=="-vs"      goto opt_vs
 rem Anything else is taken as the plugin list, so "build.bat Emberdrive" works.
@@ -87,6 +91,20 @@ if "%~2"=="" (
 )
 set "BUILDDIR=%~2"
 shift
+shift
+goto parse
+:opt_juce
+if "%~2"=="" (
+    echo ERROR: -juce needs the path to your JUCE folder,
+    echo        e.g. -juce C:\dev\JUCE
+    exit /b 1
+)
+set "JUCEARGS=-DTEZLA_JUCE_PATH=%~2"
+shift
+shift
+goto parse
+:opt_juce_system
+set "JUCEARGS=-DTEZLA_JUCE_SOURCE=System"
 shift
 goto parse
 :opt_ninja
@@ -152,7 +170,7 @@ if /I "%GENERATOR%"=="Visual Studio 17 2022" set "GENARGS=-G "%GENERATOR%" -A x6
 
 echo.
 echo Configuring ^(%CONFIG%, plugins: %PLUGINS%^)...
-cmake -S "%REPO%" -B "%BUILDDIR%" %GENARGS% -DTEZLA_PLUGINS=%PLUGINS% -DCMAKE_BUILD_TYPE=%CONFIG%
+cmake -S "%REPO%" -B "%BUILDDIR%" %GENARGS% -DTEZLA_PLUGINS=%PLUGINS% -DCMAKE_BUILD_TYPE=%CONFIG% %JUCEARGS%
 if errorlevel 1 (
     echo.
     echo ERROR: CMake configure failed. See docs\BUILD.md, section "Troubleshooting".
@@ -265,6 +283,9 @@ echo                   ^(needs an Administrator prompt^)
 echo   -test           run the DSP unit tests after building
 echo   -clean          delete the build folder first
 echo   -builddir ^<d^>   use a different build folder
+echo   -juce ^<path^>    use a JUCE source tree you already have
+echo                   ^(or set the JUCE_PATH environment variable once^)
+echo   -juce-system    use a JUCE installed with "cmake --install"
 echo   -ninja          force the Ninja generator ^(needs a VS developer prompt^)
 echo   -vs             force the Visual Studio 2022 generator
 echo   -list           show available plugin names

@@ -156,7 +156,10 @@ Rules:
 
 - **CMake is the only build system.** No checked-in `.sln`/`.vcxproj`.
 - **Dependencies are fetched by CMake** (`FetchContent`), pinned to an exact
-  tag or commit. Never require the user to download an SDK by hand.
+  tag or commit. Never require the user to download an SDK by hand — but always
+  let them supply their own copy if they have one, and say how in
+  `docs/BUILD.md`. Validate what they supply and fail with a message that names
+  the fix, rather than letting a wrong path fail deep inside the dependency.
 - **Never break the "one command" build.** `scripts\build.bat` must build
   everything from a clean clone.
 - **PowerShell is never a requirement.** `scripts\build.bat` is a real batch
@@ -190,8 +193,14 @@ Rules:
 
 ### Framework: JUCE
 
-JUCE is the house framework, fetched by CMake and pinned in
-`cmake/FetchJUCE.cmake` (currently 9.0.1). It is dual-licensed AGPLv3 /
+JUCE is the house framework, pinned in `cmake/FetchJUCE.cmake` (currently
+9.0.1, minimum 8.0.0). There are three supported ways to get it and all are
+documented in `docs/BUILD.md` §4: downloaded by CMake (default),
+`-DTEZLA_JUCE_PATH=` for a source tree the user already has, or
+`-DTEZLA_JUCE_SOURCE=System` for one installed with `cmake --install`. Never
+assume the download is the only route — a user with their own JUCE must not be
+forced to fetch a second copy, and an air-gapped machine must still be able to
+build. It is dual-licensed AGPLv3 /
 commercial, with a free tier that covers personal and small-revenue use, and it
 bundles the VST3 wrapper so no separate SDK install is needed.
 

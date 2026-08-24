@@ -5,6 +5,7 @@
 #
 #   ./scripts/build.sh                 # DSP core + tests + tools
 #   ./scripts/build.sh --plugins ALL   # also build plugin targets (needs JUCE deps)
+#   ./scripts/build.sh --juce ~/JUCE   # use a JUCE you already have
 #   ./scripts/build.sh --test
 
 set -euo pipefail
@@ -14,12 +15,15 @@ build_dir="${repo_root}/build"
 plugins="NONE"
 config="Release"
 run_tests=0
+juce_args=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --plugins) plugins="$2"; shift 2 ;;
         --config)  config="$2";  shift 2 ;;
         --build-dir) build_dir="$2"; shift 2 ;;
+        --juce)    juce_args=(-DTEZLA_JUCE_PATH="$2"); shift 2 ;;
+        --juce-system) juce_args=(-DTEZLA_JUCE_SOURCE=System); shift ;;
         --test)    run_tests=1; shift ;;
         --clean)   rm -rf "${build_dir}"; shift ;;
         -h|--help)
@@ -36,7 +40,8 @@ fi
 
 cmake -S "${repo_root}" -B "${build_dir}" "${generator[@]}" \
       -DCMAKE_BUILD_TYPE="${config}" \
-      -DTEZLA_PLUGINS="${plugins}"
+      -DTEZLA_PLUGINS="${plugins}" \
+      "${juce_args[@]}"
 
 cmake --build "${build_dir}" --parallel
 
