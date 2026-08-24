@@ -365,3 +365,445 @@ TEZLA_TEST (engine_reset_leaves_no_state_behind)
     for (std::size_t i = 0; i < first.size(); ++i)
         CHECK (first[i] == second[i]);
 }
+
+// ============================================================================
+//  Phase 2: mangle, multiband, expert controls
+// ============================================================================
+
+TEZLA_TEST (engine_harmonic_profile_has_not_drifted)
+{
+    // The numbers published in the plugin README, pinned. Every one of them is
+    // a promise about how the plugin sounds, and a refactor that quietly moves
+    // any of them has changed the sound of every project that uses it.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    struct Expected { double driveDb, levelDbFs, thdDb, secondDb, thirdDb; };
+    const Expected expected[] = {
+        {  0.0, -12.04, -41.40, -41.40, -71.95 },
+        { 12.0, -12.06, -29.53, -29.60, -48.01 },
+        { 30.0, -12.37, -14.35, -19.87, -16.22 },
+    };
+
+    const double frequency = measure::binExactFrequency (1000.0, fs, fftSize);
+    const auto input = measure::sine (frequency, dsp::dbToGain (-12.0), fs, 2 * fftSize);
+
+    for (const auto& reference : expected)
+    {
+        Parameters parameters;
+        parameters.driveDb   = reference.driveDb;
+        parameters.character = 0.35;
+        parameters.ceilingDb = 0.0;
+        parameters.kneeDb    = 0.0;
+        parameters.autoTrim  = true;
+
+        const auto report = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+        CHECK_NEAR (report.fundamentalDbFs,  reference.levelDbFs, 0.05);
+        CHECK_NEAR (report.thdDb,            reference.thdDb,     0.1);
+        CHECK_NEAR (report.harmonicsDb[0],   reference.secondDb,  0.1);
+        CHECK_NEAR (report.harmonicsDb[1],   reference.thirdDb,   0.1);
+    }
+}
+
+TEZLA_TEST (fold_at_zero_changes_nothing)
+{
+    // Fold sits in the path permanently, so its zero setting has to be a true
+    // bypass -- not "almost".
+    constexpr double fs = 48000.0;
+    const auto input = measure::sine (220.0, 0.4, fs, 16384);
+
+    Parameters without;
+    without.driveDb = 9.0;
+
+    Parameters with = without;
+    with.foldAmount = 0.0;
+    with.foldRange  = 100.0;      // range means nothing when the amount is zero
+
+    const auto a = run (without, input, fs);
+    const auto b = run (with, input, fs);
+
+    for (std::size_t i = 0; i < a.size(); ++i)
+        CHECK (a[i] == b[i]);
+}
+
+TEZLA_TEST (fold_range_multiplier_escalates_the_damage)
+{
+    // The point of the x10 and x100 ranges: a clipper converges on a square
+    // wave and stops getting more interesting, a folder does not. Harmonic
+    // energy should keep climbing well past the point where the fundamental
+    // stops being the loudest thing present.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = measure::binExactFrequency (110.0, fs, fftSize);
+    const auto input = measure::sine (frequency, 0.5, fs, 2 * fftSize);
+
+    double previousThd = -200.0;
+
+    std::printf ("        %-8s %10s %12s\n", "range", "THD", "aliasing");
+
+    for (const double range : { 1.0, 10.0, 100.0 })
+    {
+        Parameters parameters;
+        parameters.driveDb    = 0.0;
+        parameters.foldAmount = 1.0;
+        parameters.foldRange  = range;
+        parameters.ceilingDb  = 0.0;
+        parameters.kneeDb     = 0.0;
+        parameters.autoTrim   = true;
+
+        const auto report = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+        std::printf ("        x%-7.0f %10.2f %12.1f\n", range, report.thdDb, report.audibleAliasingDb);
+
+        CHECK (report.thdDb > previousThd + 3.0);
+        previousThd = report.thdDb;
+
+        // Still has to hold a sensible output level -- Range changes the sound,
+        // not the volume.
+        CHECK (report.fundamentalDbFs > -30.0);
+        CHECK (report.fundamentalDbFs < 6.0);
+    }
+
+    // By x100 the harmonics are louder than what generated them.
+    CHECK (previousThd > 0.0);
+}
+
+TEZLA_TEST (fold_is_stable_at_maximum_everything)
+{
+    // Fold x100 into full drive into the limiter, at full scale. Nothing here
+    // may produce a NaN or run away.
+    constexpr double fs = 48000.0;
+
+    Parameters parameters;
+    parameters.driveDb    = 30.0;
+    parameters.foldAmount = 1.0;
+    parameters.foldRange  = 100.0;
+    parameters.character  = 1.0;
+
+    std::vector<double> input (16384);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 2.0 * std::sin (2.0 * std::numbers::pi * 45.0 * static_cast<double> (i) / fs);
+
+    const auto output = run (parameters, input, fs);
+
+    for (const double sample : output)
+    {
+        CHECK (std::isfinite (sample));
+        CHECK (std::abs (sample) < 4.0);
+    }
+}
+
+TEZLA_TEST (multiband_is_level_flat_against_single_band)
+{
+    // A crossover that does not sum flat shows up as a dip or a bump at the
+    // crossover point, which on a mix bus is instantly audible.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    for (const double testFrequency : { 60.0, 120.0, 500.0, 2500.0, 8000.0 })
+    {
+        const double frequency = measure::binExactFrequency (testFrequency, fs, fftSize);
+        const auto input = measure::sine (frequency, 0.25, fs, 2 * fftSize);
+
+        Parameters single;
+        single.driveDb   = 0.0;
+        single.character = 0.0;
+        single.ceilingDb = 0.0;
+        single.kneeDb    = 0.0;
+        single.autoTrim  = false;
+
+        Parameters multi = single;
+        multi.multiband = true;
+
+        const auto a = measure::analyseHarmonics (tail (run (single, input, fs), fftSize), fs, frequency);
+        const auto b = measure::analyseHarmonics (tail (run (multi,  input, fs), fftSize), fs, frequency);
+
+        CHECK_NEAR (b.fundamentalDbFs, a.fundamentalDbFs, 0.3);
+    }
+}
+
+TEZLA_TEST (multiband_solo_and_mute_route_correctly)
+{
+    constexpr double fs = 48000.0;
+
+    const auto bandLevelDb = [fs] (double testFrequency, BandState low, BandState mid, BandState high)
+    {
+        Parameters parameters;
+        parameters.multiband = true;
+        parameters.driveDb   = 0.0;
+        parameters.ceilingDb = 0.0;
+        parameters.kneeDb    = 0.0;
+        parameters.autoTrim  = false;
+        parameters.bands[0].state = low;
+        parameters.bands[1].state = mid;
+        parameters.bands[2].state = high;
+
+        const auto input = measure::sine (testFrequency, 0.25, fs, 24000);
+        const auto output = tail (run (parameters, input, fs), 8192);
+
+        double sumOfSquares = 0.0;
+        for (const double sample : output)
+            sumOfSquares += sample * sample;
+
+        return dsp::gainToDb (std::sqrt (sumOfSquares / static_cast<double> (output.size())));
+    };
+
+    // 30 Hz rather than 50: a crossover is a slope, not a wall, and 50 Hz is
+    // only about 30 dB down through the mid band's 4th-order rolloff. That is
+    // correct behaviour, so the test picks a frequency where the answer is
+    // unambiguous instead of pretending the slope is steeper than it is.
+    CHECK (bandLevelDb (30.0,   BandState::Solo, BandState::On, BandState::On) > -20.0);
+    CHECK (bandLevelDb (5000.0, BandState::Solo, BandState::On, BandState::On) < -50.0);
+
+    // Muting the low band does the opposite.
+    CHECK (bandLevelDb (30.0,   BandState::Mute, BandState::On, BandState::On) < -50.0);
+    CHECK (bandLevelDb (5000.0, BandState::Mute, BandState::On, BandState::On) > -20.0);
+
+    // Mute wins over another band's solo.
+    CHECK (bandLevelDb (30.0, BandState::Mute, BandState::Solo, BandState::On) < -50.0);
+}
+
+TEZLA_TEST (multiband_band_drive_trim_is_independent)
+{
+    // The reason multiband exists here: a clean sub under destroyed mids.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    Parameters parameters;
+    parameters.multiband = true;
+    parameters.driveDb   = 6.0;
+    parameters.ceilingDb = 0.0;
+    parameters.kneeDb    = 0.0;
+    parameters.autoTrim  = true;
+    parameters.bands[0].driveTrimDb = -24.0;   // sub stays clean
+    parameters.bands[1].driveTrimDb =  24.0;   // mids get hammered
+
+    const auto profileAt = [&] (double testFrequency)
+    {
+        const double frequency = measure::binExactFrequency (testFrequency, fs, fftSize);
+        const auto input = measure::sine (frequency, 0.3, fs, 2 * fftSize);
+        return measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+    };
+
+    const auto sub = profileAt (55.0);
+    const auto mid = profileAt (700.0);
+
+    CHECK (sub.thdDb < -50.0);          // genuinely clean down there
+    CHECK (mid.thdDb > -20.0);          // and genuinely dirty up here
+    CHECK (mid.thdDb > sub.thdDb + 25.0);
+}
+
+TEZLA_TEST (multiband_master_limiter_holds_the_ceiling)
+{
+    constexpr double fs = 48000.0;
+    constexpr double ceilingDb = -3.0;
+
+    Parameters parameters;
+    parameters.multiband = true;
+    parameters.driveDb   = 18.0;
+    parameters.ceilingDb = ceilingDb;
+    parameters.kneeDb    = 6.0;
+    parameters.attackMs  = 1.0;
+    parameters.autoTrim  = false;
+
+    std::vector<double> input (96000);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.5 * std::sin (2.0 * std::numbers::pi *  60.0 * static_cast<double> (i) / fs)
+                 + 0.5 * std::sin (2.0 * std::numbers::pi * 900.0 * static_cast<double> (i) / fs)
+                 + 0.4 * std::sin (2.0 * std::numbers::pi * 6000.0 * static_cast<double> (i) / fs);
+
+    const auto output = tail (run (parameters, input, fs), 48000);
+
+    double peak = 0.0;
+    for (const double sample : output)
+        peak = std::max (peak, std::abs (sample));
+
+    // Three bands summing can overshoot what any one of them was limited to;
+    // the master limiter is what catches that. Its attack is fixed and fast
+    // rather than following the Speed control, because catching that overshoot
+    // is its only job.
+    CHECK (dsp::gainToDb (peak) <= ceilingDb + 1.5);
+}
+
+TEZLA_TEST (expert_bias_overrides_character)
+{
+    // With the expert panel on, bias is set directly and Character stops
+    // driving it -- otherwise the two controls would fight.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = measure::binExactFrequency (500.0, fs, fftSize);
+    const auto input = measure::sine (frequency, 0.25, fs, 2 * fftSize);
+
+    Parameters parameters;
+    parameters.driveDb   = 18.0;
+    parameters.character = 0.0;          // would normally mean "no even harmonics"
+    parameters.ceilingDb = 0.0;
+    parameters.kneeDb    = 0.0;
+    parameters.expert.enabled = true;
+    parameters.expert.bias    = 1.2;     // but expert says otherwise
+
+    const auto report = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+    CHECK (report.harmonicsDb[0] > -30.0);   // strong second harmonic despite Character 0
+
+    // And with bias back at zero the second harmonic disappears again.
+    parameters.expert.bias = 0.0;
+    const auto symmetric = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+    CHECK (symmetric.harmonicsDb[0] < symmetric.harmonicsDb[1] - 30.0);
+}
+
+TEZLA_TEST (expert_adaa_toggle_actually_changes_the_aliasing)
+{
+    // The switch exists so you can hear what antialiasing is doing -- and
+    // sometimes want the grit. If turning it off changed nothing measurable it
+    // would be a lie on the panel.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = measure::binExactFrequency (2000.0, fs, fftSize);
+    const auto input = measure::sine (frequency, 0.5, fs, 2 * fftSize);
+
+    Parameters parameters;
+    parameters.driveDb   = 30.0;
+    parameters.kneeDb    = 0.0;
+    parameters.autoTrim  = false;
+    parameters.oversampling = dsp::OversamplingMode::Off;   // no oversampling to hide behind
+
+    // Ceiling above the signal so the limiter sits idle. Its gain modulation
+    // produces sidebands that the analysis counts as non-harmonic energy, and
+    // at these levels that swamps the thing being measured -- with the limiter
+    // working, ADAA on and off both read -93.6 dB and the toggle looks broken.
+    parameters.ceilingDb = 24.0;
+    parameters.expert.enabled = true;
+
+    parameters.expert.adaaEnabled = true;
+    const auto on = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+    parameters.expert.adaaEnabled = false;
+    const auto off = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+    std::printf ("        ADAA on %.1f dB, off %.1f dB aliasing\n",
+                 on.audibleAliasingDb, off.audibleAliasingDb);
+
+    CHECK (on.audibleAliasingDb < off.audibleAliasingDb - 3.0);
+}
+
+TEZLA_TEST (expert_stereo_link_changes_the_image)
+{
+    // Fully linked, both channels get the same gain and the centre image holds.
+    // Fully independent, a loud left pulls only the left down.
+    constexpr double fs = 48000.0;
+    const int numSamples = 48000;
+
+    const auto rightLevelWithLink = [&] (double link)
+    {
+        Parameters parameters;
+        parameters.driveDb   = 0.0;
+        parameters.ceilingDb = -18.0;
+        parameters.kneeDb    = 0.0;
+        parameters.attackMs  = 1.0;
+        parameters.autoTrim  = false;
+        parameters.expert.enabled    = true;
+        parameters.expert.stereoLink = link;
+
+        Engine engine;
+        engine.prepare (fs, 512, 2);
+        engine.setParameters (parameters);
+        engine.reset();
+
+        std::vector<double> left (static_cast<std::size_t> (numSamples));
+        std::vector<double> right (static_cast<std::size_t> (numSamples));
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const double phase = 2.0 * std::numbers::pi * 200.0 * static_cast<double> (i) / fs;
+            left[static_cast<std::size_t> (i)]  = 0.9 * std::sin (phase);   // loud
+            right[static_cast<std::size_t> (i)] = 0.05 * std::sin (phase);  // quiet
+        }
+
+        for (int offset = 0; offset < numSamples; offset += 512)
+        {
+            const int block = std::min (512, numSamples - offset);
+            double* pointers[2] = { left.data() + offset, right.data() + offset };
+            engine.process (pointers, 2, block);
+        }
+
+        double sumOfSquares = 0.0;
+        for (int i = numSamples / 2; i < numSamples; ++i)
+            sumOfSquares += right[static_cast<std::size_t> (i)] * right[static_cast<std::size_t> (i)];
+
+        return dsp::gainToDb (std::sqrt (sumOfSquares / static_cast<double> (numSamples / 2)));
+    };
+
+    const double linked = rightLevelWithLink (1.0);
+    const double independent = rightLevelWithLink (0.0);
+
+    // Linked: the quiet right channel is pulled down with the loud left.
+    // Independent: it is left alone, so it stays louder.
+    CHECK (independent > linked + 3.0);
+}
+
+TEZLA_TEST (expert_headroom_moves_where_saturation_starts)
+{
+    // The constant that decides how soon the curve bends. Smaller headroom
+    // means the same drive distorts far more.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = measure::binExactFrequency (1000.0, fs, fftSize);
+    const auto input = measure::sine (frequency, 0.25, fs, 2 * fftSize);
+
+    double previousThd = -300.0;
+
+    for (const double headroom : { 16.0, 8.0, 4.0, 2.0, 1.0 })
+    {
+        Parameters parameters;
+        parameters.driveDb   = 6.0;
+        parameters.ceilingDb = 0.0;
+        parameters.kneeDb    = 0.0;
+        parameters.expert.enabled = true;
+        parameters.expert.shaperHeadroom = headroom;
+
+        const auto report = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+        CHECK (report.thdDb > previousThd);
+        previousThd = report.thdDb;
+    }
+}
+
+
+TEZLA_TEST (oversampling_mode_applies_on_the_very_first_call)
+{
+    // prepare() necessarily runs before any parameters are known, so it uses
+    // the defaults. The engine used to decide whether to rebuild by asking
+    // "have parameters been set before?", which meant the first setParameters()
+    // after prepare() was ignored -- so a project saved with oversampling on
+    // anything but Auto reopened running Auto, and no test noticed because both
+    // the measurement and the reference were wrong in the same way.
+    constexpr double fs = 48000.0;
+
+    struct Expected { dsp::OversamplingMode mode; int factor; int latency; };
+    const Expected expected[] = {
+        { dsp::OversamplingMode::Off,  1,  0 },
+        { dsp::OversamplingMode::X2,   2, 47 },
+        { dsp::OversamplingMode::X4,   4, 63 },
+        { dsp::OversamplingMode::X8,   8, 71 },
+        { dsp::OversamplingMode::Auto, 4, 63 },   // 48 kHz session
+    };
+
+    for (const auto& reference : expected)
+    {
+        Parameters parameters;
+        parameters.oversampling = reference.mode;
+
+        Engine engine;
+        engine.prepare (fs, 512, 1);
+        engine.setParameters (parameters);
+
+        CHECK (engine.getOversamplingFactor() == reference.factor);
+        CHECK (engine.getLatencySamples() == reference.latency);
+    }
+}

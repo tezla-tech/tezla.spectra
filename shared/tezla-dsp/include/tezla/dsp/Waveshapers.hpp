@@ -76,6 +76,72 @@ private:
     double normalisation_ { 1.0 };
 };
 
+/// Sine wavefolder -- the destruction stage.
+///
+///   f(x) = N(g) * sin(g*x) / g
+///
+/// The form is chosen so that g = 0 is *exactly* the identity, not merely close
+/// to it: sin(g*x)/g tends to x as g tends to zero. That matters because this
+/// sits in the signal path at all times, and a folder that colours the sound at
+/// its zero setting is a folder you can never turn off.
+///
+/// Past g = pi/2 the curve turns over and starts folding the signal back on
+/// itself. Each further pi of g*x is another fold, so the harmonic content keeps
+/// evolving as g rises instead of converging on a square wave the way a clipper
+/// does. That is the whole reason a x100 range is musically interesting rather
+/// than just loud: at g = 100 a full-scale input is folded about 32 times per
+/// half cycle, and the spectrum is nothing like distortion.
+///
+/// N(g) holds the output level roughly constant once folding starts, so the
+/// Range switch changes the *sound* rather than the volume.
+class SineFolder
+{
+public:
+    explicit SineFolder (double gain = 0.0) noexcept { setGain (gain); }
+
+    /// 0 is a straight wire. Folding begins around pi/2.
+    void setGain (double gain) noexcept
+    {
+        gain_ = std::max (gain, 0.0);
+        // Below pi/2 nothing has folded yet and the curve is its own best
+        // normalisation; above it the peak is 1/g, so scale by g*2/pi to hold
+        // the level. The two agree exactly at pi/2, so there is no step.
+        normalisation_ = std::max (1.0, gain_ * 2.0 / std::numbers::pi);
+        negligible_ = gain_ < 1.0e-8;
+    }
+
+    [[nodiscard]] double getGain() const noexcept { return gain_; }
+
+    [[nodiscard]] double evaluate (double x) const noexcept
+    {
+        if (negligible_)
+            return x;
+
+        return normalisation_ * std::sin (gain_ * x) / gain_;
+    }
+
+    /// Antiderivative, with F1(0) = 0.
+    ///
+    /// Written as 2*sin^2(g*x/2) rather than the algebraically identical
+    /// 1 - cos(g*x). They agree on paper and not in floating point: for small
+    /// g*x, 1 - cos(g*x) is a difference of two numbers either side of 1 and
+    /// loses almost every significant digit, which ADAA then divides by an
+    /// equally small number. The half-angle form has no cancellation at all.
+    [[nodiscard]] double antiderivative (double x) const noexcept
+    {
+        if (negligible_)
+            return 0.5 * x * x;
+
+        const double halfAngle = std::sin (0.5 * gain_ * x);
+        return normalisation_ * 2.0 * halfAngle * halfAngle / (gain_ * gain_);
+    }
+
+private:
+    double gain_          { 0.0 };
+    double normalisation_ { 1.0 };
+    bool   negligible_    { true };
+};
+
 /// Hard clip, kept for measurement baselines rather than for musical use.
 /// Its aliasing figures are the numbers everything else is compared against.
 class HardClip

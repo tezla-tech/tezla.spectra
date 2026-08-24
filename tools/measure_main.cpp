@@ -223,6 +223,65 @@ int runEmberdrive (const Args& args)
     return 0;
 }
 
+/// The wavefolder is a bass tool, and the reason is measurable: a folder's
+/// harmonics extend to roughly (fold gain) x the fundamental, so on a 40 Hz sub
+/// they all fit comfortably below Nyquist and on a 2 kHz lead they do not.
+/// This prints where that boundary actually falls.
+int runFold (const Args& args)
+{
+    using namespace tezla::measure;
+    using namespace tezla::emberdrive;
+
+    constexpr std::size_t fftSize = 32768;
+    const double sampleRate = args.sampleRate;
+    const double ranges[] = { 1.0, 10.0, 100.0 };
+    const double frequencies[] = { 40.0, 80.0, 160.0, 330.0, 660.0, 1320.0, 2640.0 };
+
+    std::printf ("Emberdrive fold -- audible-band aliasing (dB rel. fundamental) at %.0f Hz\n", sampleRate);
+    std::printf ("Fold at maximum, drive 0 dB, Auto oversampling.\n\n");
+    std::printf ("  %-10s %14s %14s %14s\n", "input", "Range x1", "Range x10", "Range x100");
+
+    for (const double inputHz : frequencies)
+    {
+        std::printf ("  %7.0f Hz", inputHz);
+
+        for (const double range : ranges)
+        {
+            Parameters parameters;
+            parameters.driveDb    = 0.0;
+            parameters.foldAmount = 1.0;
+            parameters.foldRange  = range;
+            parameters.ceilingDb  = 24.0;    // limiter idle, so it is the fold being measured
+            parameters.kneeDb     = 0.0;
+            parameters.autoTrim   = true;
+
+            Engine engine;
+            engine.prepare (sampleRate, 271, 1);
+            engine.setParameters (parameters);
+            engine.reset();
+
+            const double frequency = binExactFrequency (inputHz, sampleRate, fftSize);
+            auto signal = sine (frequency, 0.5, sampleRate, 2 * fftSize);
+
+            for (std::size_t offset = 0; offset < signal.size(); offset += 271)
+            {
+                const int numSamples = static_cast<int> (std::min<std::size_t> (271, signal.size() - offset));
+                double* pointer = signal.data() + offset;
+                engine.process (&pointer, 1, numSamples);
+            }
+
+            const std::vector<double> steadyState (signal.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                                   signal.end());
+            std::printf (" %14.1f", analyseHarmonics (steadyState, sampleRate, frequency).audibleAliasingDb);
+        }
+        std::printf ("\n");
+    }
+
+    std::printf ("\nBelow about -60 dB the folding is clean; above it the aliasing is part of\n");
+    std::printf ("the sound, which on a sub or a reese is usually what you want anyway.\n");
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -230,6 +289,7 @@ void printUsage()
     std::printf ("  filter-response [--fs --freq --q --out FILE]\n");
     std::printf ("  clip-aliasing   [--fs --freq --drive]\n");
     std::printf ("  emberdrive      [--freq --gain CHARACTER --out FILE]\n");
+    std::printf ("  fold            [--fs]  wavefolder aliasing vs input frequency\n");
 }
 
 } // namespace
@@ -249,6 +309,7 @@ int main (int argc, char** argv)
     if (command == "filter-response") return runFilterResponse (args);
     if (command == "clip-aliasing")   return runClipAliasing (args);
     if (command == "emberdrive")      return runEmberdrive (args);
+    if (command == "fold")            return runFold (args);
 
     printUsage();
     return 1;
