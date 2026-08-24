@@ -19,6 +19,8 @@
 #include <tezla/measure/Harmonics.hpp>
 #include <tezla/measure/Signals.hpp>
 
+#include "EmberdriveEngine.hpp"
+
 namespace {
 
 struct Args
@@ -132,12 +134,102 @@ int runClipAliasing (const Args& args)
     return 0;
 }
 
+/// Sweeps Emberdrive's drive control at every session rate the rig uses and
+/// reports what it does to harmonics and aliasing. This is the measurement that
+/// backs up any claim about how the plugin sounds.
+int runEmberdrive (const Args& args)
+{
+    using namespace tezla::measure;
+    using namespace tezla::emberdrive;
+
+    constexpr std::size_t fftSize = 32768;
+    const double rates[] = { 44100.0, 48000.0, 96000.0, 192000.0 };
+    const double drives[] = { 0.0, 6.0, 12.0, 18.0, 24.0, 30.0 };
+
+    std::FILE* csv = nullptr;
+    if (! args.outPath.empty())
+    {
+        csv = std::fopen (args.outPath.c_str(), "w");
+        if (csv == nullptr)
+        {
+            std::fprintf (stderr, "could not open %s for writing\n", args.outPath.c_str());
+            return 1;
+        }
+        std::fprintf (csv, "sample_rate,oversampling,drive_db,character,level_dbfs,thd_db,h2_db,h3_db,audible_aliasing_db,latency_samples\n");
+    }
+
+    std::printf ("Emberdrive -- drive sweep, character %.2f, %.0f Hz test tone\n\n", args.gainDb, args.frequency);
+
+    for (const double sampleRate : rates)
+    {
+        Parameters parameters;
+        parameters.character = args.gainDb;    // --gain doubles as character here
+        parameters.ceilingDb = 0.0;
+        parameters.kneeDb    = 0.0;
+        parameters.autoTrim  = true;
+
+        Engine probe;
+        probe.prepare (sampleRate, 512, 1);
+        probe.setParameters (parameters);
+
+        std::printf ("  %7.0f Hz session, Auto = x%d (%.0f kHz internal), latency %d samples (%.2f ms)\n",
+                     sampleRate, probe.getOversamplingFactor(), probe.getOversampledRate() / 1000.0,
+                     probe.getLatencySamples(),
+                     1000.0 * probe.getLatencySamples() / sampleRate);
+        std::printf ("    %-8s %10s %8s %9s %9s %12s\n", "drive", "level", "THD", "h2", "h3", "aliasing");
+
+        for (const double driveDb : drives)
+        {
+            parameters.driveDb = driveDb;
+
+            Engine engine;
+            engine.prepare (sampleRate, 271, 1);
+            engine.setParameters (parameters);
+            engine.reset();
+
+            const double frequency = binExactFrequency (args.frequency, sampleRate, fftSize);
+            auto signal = sine (frequency, 0.25, sampleRate, 2 * fftSize);
+
+            for (std::size_t offset = 0; offset < signal.size(); offset += 271)
+            {
+                const int numSamples = static_cast<int> (std::min<std::size_t> (271, signal.size() - offset));
+                double* pointer = signal.data() + offset;
+                engine.process (&pointer, 1, numSamples);
+            }
+
+            const std::vector<double> steadyState (signal.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                                   signal.end());
+            const auto report = analyseHarmonics (steadyState, sampleRate, frequency);
+
+            std::printf ("    +%-6.0f dB %9.2f %8.2f %9.2f %9.2f %12.1f\n",
+                         driveDb, report.fundamentalDbFs, report.thdDb,
+                         report.harmonicsDb[0], report.harmonicsDb[1], report.audibleAliasingDb);
+
+            if (csv != nullptr)
+                std::fprintf (csv, "%.0f,%d,%.1f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%d\n",
+                              sampleRate, engine.getOversamplingFactor(), driveDb, parameters.character,
+                              report.fundamentalDbFs, report.thdDb,
+                              report.harmonicsDb[0], report.harmonicsDb[1],
+                              report.audibleAliasingDb, engine.getLatencySamples());
+        }
+        std::printf ("\n");
+    }
+
+    if (csv != nullptr)
+    {
+        std::fclose (csv);
+        std::printf ("wrote %s\n", args.outPath.c_str());
+    }
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
     std::printf ("  selftest                          verify the analysis chain itself\n");
     std::printf ("  filter-response [--fs --freq --q --out FILE]\n");
     std::printf ("  clip-aliasing   [--fs --freq --drive]\n");
+    std::printf ("  emberdrive      [--freq --gain CHARACTER --out FILE]\n");
 }
 
 } // namespace
@@ -156,6 +248,7 @@ int main (int argc, char** argv)
     if (command == "selftest")        return runSelfTest();
     if (command == "filter-response") return runFilterResponse (args);
     if (command == "clip-aliasing")   return runClipAliasing (args);
+    if (command == "emberdrive")      return runEmberdrive (args);
 
     printUsage();
     return 1;

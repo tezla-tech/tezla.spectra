@@ -8,7 +8,13 @@ target_include_directories(tezla_measure INTERFACE "${CMAKE_CURRENT_LIST_DIR}/in
 target_compile_features(tezla_measure INTERFACE cxx_std_20)
 
 if(TEZLA_BUILD_TOOLS)
-    add_executable(tezla-measure measure_main.cpp)
+    # Same trick as tests/: the plugins' DSP is framework-free, so it links
+    # straight into the measurement tool with no JUCE involved.
+    file(GLOB _plugin_dsp_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../plugins/*/Dsp/*.cpp")
+    file(GLOB _plugin_dsp_dirs    CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../plugins/*/Dsp")
+
+    add_executable(tezla-measure measure_main.cpp ${_plugin_dsp_sources})
+    target_include_directories(tezla-measure PRIVATE ${_plugin_dsp_dirs})
     target_link_libraries(tezla-measure PRIVATE
         tezla::dsp
         tezla::measure
