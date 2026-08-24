@@ -81,7 +81,19 @@ private:
     juce::Label outputMeterLabel_    { {}, "OUT" };
     juce::Label reductionMeterLabel_ { {}, "GR" };
 
-    juce::Label statusLabel_;
+    /// Wraps, so the "what Auto is doing right now" sentence is never truncated.
+    class WrappingLabel final : public juce::Label
+    {
+    public:
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (findColour (juce::Label::textColourId));
+            g.setFont (getFont());
+            g.drawFittedText (getText(), getLocalBounds(), juce::Justification::topLeft, 2, 1.0f);
+        }
+    };
+
+    WrappingLabel statusLabel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EmberdriveEditor)
 };

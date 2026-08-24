@@ -21,6 +21,37 @@ juce::NormalisableRange<float> skewedRange (float minimum, float maximum, float 
     range.setSkewForCentre (centre);
     return range;
 }
+
+/// Formats a value the way the user thinks about it, with a unit and a sensible
+/// number of decimals. Without this JUCE prints the raw float and a release
+/// time reads "199.9999847", which looks broken because it is.
+juce::AudioParameterFloatAttributes formatted (const juce::String& unit, int decimals)
+{
+    return juce::AudioParameterFloatAttributes()
+        .withLabel (unit)
+        .withStringFromValueFunction ([unit, decimals] (float value, int)
+        {
+            return juce::String (value, decimals) + " " + unit;
+        })
+        .withValueFromStringFunction ([] (const juce::String& text)
+        {
+            return text.getFloatValue();
+        });
+}
+
+/// Milliseconds below 10 want a decimal; above that they do not.
+juce::AudioParameterFloatAttributes millisecondAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withLabel ("ms")
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            if (value < 1.0f)  return juce::String (value, 2) + " ms";
+            if (value < 10.0f) return juce::String (value, 1) + " ms";
+            return juce::String (juce::roundToInt (value)) + " ms";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
+}
 } // namespace
 
 juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createParameterLayout()
@@ -35,7 +66,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::drive, kStateSchemaVersion }, "Drive",
         skewedRange (0.0f, 30.0f, 12.0f), 0.0f,
-        Attributes().withLabel ("dB")));
+        formatted ("dB", 1)));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::character, kStateSchemaVersion }, "Character",
@@ -60,22 +91,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::ceiling, kStateSchemaVersion }, "Ceiling",
         juce::NormalisableRange<float> { -24.0f, 0.0f }, -0.3f,
-        Attributes().withLabel ("dBFS")));
+        formatted ("dBFS", 1)));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::knee, kStateSchemaVersion }, "Knee",
         juce::NormalisableRange<float> { 0.0f, 24.0f }, 6.0f,
-        Attributes().withLabel ("dB")));
+        formatted ("dB", 1)));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::speed, kStateSchemaVersion }, "Speed",
         skewedRange (0.05f, 100.0f, 5.0f), 5.0f,
-        Attributes().withLabel ("ms")));
+        millisecondAttributes()));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::release, kStateSchemaVersion }, "Release",
         skewedRange (20.0f, 2000.0f, 200.0f), 200.0f,
-        Attributes().withLabel ("ms")));
+        millisecondAttributes()));
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::autoRelease, kStateSchemaVersion }, "Auto Release", false));
@@ -83,12 +114,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::mix, kStateSchemaVersion }, "Mix",
         juce::NormalisableRange<float> { 0.0f, 100.0f }, 100.0f,
-        Attributes().withLabel ("%")));
+        formatted ("%", 0)));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::output, kStateSchemaVersion }, "Output",
         juce::NormalisableRange<float> { -24.0f, 24.0f }, 0.0f,
-        Attributes().withLabel ("dB")));
+        formatted ("dB", 1)));
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::autoTrim, kStateSchemaVersion }, "Auto Trim", true));
@@ -287,9 +318,21 @@ void EmberdriveProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
 
 juce::String EmberdriveProcessor::describeOversampling() const
 {
-    const int factor = engine_.getOversamplingFactor();
-    const double hostRate = sampleRate_;
+    // Derived from the mode and the host's rate rather than read back from the
+    // engine. Before prepareToPlay the engine still holds its defaults, and
+    // reporting those told a 44.1 kHz session that oversampling was off when
+    // Auto would in fact run x4.
+    const double hostRate = getSampleRate() > 0.0 ? getSampleRate() : sampleRate_;
+
+    if (hostRate <= 0.0)
+        return "Waiting for the host to report its sample rate.";
+
+    const auto mode = static_cast<dsp::OversamplingMode> (
+        juce::jlimit (0, 4, static_cast<int> (state_.getRawParameterValue (ids::oversampling)->load())));
+
+    const int factor = dsp::oversamplingFactor (mode, hostRate);
     const double internalRate = hostRate * factor;
+    const int latency = dsp::Oversampler::latencyForFactor (factor);
 
     const auto rateText = [] (double rate)
     {
@@ -299,15 +342,18 @@ juce::String EmberdriveProcessor::describeOversampling() const
     juce::String description;
     description << "Your session is at " << rateText (hostRate) << ". ";
 
-    if (factor == 1)
-        description << "Oversampling is off, so the saturation runs at the session rate. "
-                    << "At " << rateText (hostRate) << " there is already enough room above the "
-                    << "audio band for the harmonics, so Auto leaves it off and spends nothing.";
+    if (factor == 1 && mode == dsp::OversamplingMode::Auto)
+        description << "Auto is running x1: at " << rateText (hostRate)
+                    << " there is already room above the audio band for the harmonics, "
+                    << "so it spends no CPU and adds no latency.";
+    else if (factor == 1)
+        description << "Oversampling is off. Saturation runs at the session rate, which saves "
+                    << "CPU and gives up about 25 dB of alias rejection at high drive.";
     else
-        description << "Running x" << factor << ", so the saturation works at "
-                    << rateText (internalRate) << " internally and its harmonics land on real "
-                    << "frequencies instead of folding back as aliasing. Costs "
-                    << juce::String (1000.0 * reportedLatency_ / hostRate, 2)
+        description << (mode == dsp::OversamplingMode::Auto ? "Auto is running x" : "Running x")
+                    << factor << ", saturating at " << rateText (internalRate)
+                    << " internally so the harmonics land on real frequencies instead of folding "
+                    << "back. Costs " << juce::String (1000.0 * latency / hostRate, 2)
                     << " ms of latency, which the host compensates.";
 
     return description;

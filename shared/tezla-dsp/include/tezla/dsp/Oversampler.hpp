@@ -136,15 +136,24 @@ public:
 
     [[nodiscard]] int getFactor() const noexcept { return factor_; }
 
-    /// Round-trip latency in base-rate samples. Whole number at every factor.
-    [[nodiscard]] int getLatencySamples() const noexcept
+    /// Round-trip latency in base-rate samples for a given factor. A pure
+    /// function of the tap counts, so a UI can ask what a factor *would* cost
+    /// without having an engine prepared for it.
+    [[nodiscard]] static constexpr int latencyForFactor (int factor) noexcept
     {
+        int stages = 0;
+        for (int f = factor; f > 1; f /= 2)
+            ++stages;
+
         int latency = 0;
-        for (int stage = 0; stage < numStages_; ++stage)
+        for (int stage = 0; stage < stages && stage < kMaxStages; ++stage)
             latency += (kTapsPerStage[static_cast<std::size_t> (stage)] - 1) >> (stage + 1);
 
         return latency;
     }
+
+    /// Round-trip latency in base-rate samples. Whole number at every factor.
+    [[nodiscard]] int getLatencySamples() const noexcept { return latencyForFactor (factor_); }
 
     /// Upsamples `numSamples` base-rate frames and returns the oversampled
     /// buffers, which hold numSamples * factor frames. The caller processes

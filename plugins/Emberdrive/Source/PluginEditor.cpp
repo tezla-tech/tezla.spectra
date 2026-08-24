@@ -226,11 +226,12 @@ EmberdriveEditor::EmberdriveEditor (EmberdriveProcessor& processorToUse)
     statusLabel_.setColour (juce::Label::textColourId, kDimText);
     statusLabel_.setFont (juce::FontOptions (11.0f));
     statusLabel_.setJustificationType (juce::Justification::centredLeft);
+    statusLabel_.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (statusLabel_);
 
     setResizable (true, true);
-    setResizeLimits (620, 380, 1240, 760);
-    setSize (720, 440);
+    setResizeLimits (660, 430, 1320, 860);
+    setSize (780, 500);
 
     startTimerHz (30);
 }
@@ -273,7 +274,9 @@ void EmberdriveEditor::paint (juce::Graphics& g)
 
     g.setColour (kDimText);
     g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("TEZLA TECH  ·  saturation + limiter", header.reduced (16, 0),
+    // Plain ASCII rather than a middle dot: a raw multi-byte character in a
+    // string literal comes back through JUCE as mojibake ("Â·").
+    g.drawText ("TEZLA TECH  -  saturation + limiter", header.reduced (16, 0),
                 juce::Justification::centredRight);
 }
 
@@ -282,7 +285,9 @@ void EmberdriveEditor::resized()
     auto bounds = getLocalBounds();
     bounds.removeFromTop (44);
 
-    auto footer = bounds.removeFromBottom (26);
+    // Two lines: the status text says what Auto is doing right now, and at a
+    // 96 kHz session that sentence does not fit on one.
+    auto footer = bounds.removeFromBottom (40);
     statusLabel_.setBounds (footer.reduced (16, 4));
 
     auto meterArea = bounds.removeFromRight (110).reduced (10, 12);
@@ -300,7 +305,8 @@ void EmberdriveEditor::resized()
 
     auto controls = bounds.reduced (12, 8);
 
-    auto toggles = controls.removeFromBottom (28);
+    auto toggles = controls.removeFromBottom (30);
+    controls.removeFromBottom (8);   // keep the toggles clear of the knob readouts
     oversamplingLabel_.setBounds (toggles.removeFromLeft (90));
     oversampling_.setBounds (toggles.removeFromLeft (84).reduced (0, 2));
     toggles.removeFromLeft (16);
@@ -308,20 +314,32 @@ void EmberdriveEditor::resized()
     autoRelease_.setBounds (toggles.removeFromLeft (120));
     bypass_.setBounds (toggles.removeFromLeft (90));
 
-    const auto layoutRow = [] (juce::Rectangle<int> row, std::initializer_list<Knob*> knobs)
+    // Both rows use the same column width, set by the wider row, so the knobs
+    // line up in a grid instead of the four-knob row being noticeably fatter.
+    constexpr int columns = 5;
+
+    const auto layoutRow = [] (juce::Rectangle<int> row, int columnWidth,
+                               std::initializer_list<Knob*> knobs)
     {
-        const int width = row.getWidth() / static_cast<int> (knobs.size());
         for (auto* knob : knobs)
         {
-            auto cell = row.removeFromLeft (width);
+            auto cell = row.removeFromLeft (columnWidth);
             knob->label.setBounds (cell.removeFromTop (16));
             knob->slider.setBounds (cell.reduced (4, 0));
         }
     };
 
-    const int rowHeight = controls.getHeight() / 2;
-    layoutRow (controls.removeFromTop (rowHeight), { &drive_, &character_, &tone_, &mix_, &output_ });
-    layoutRow (controls, { &ceiling_, &knee_, &speed_, &release_ });
+    const int columnWidth = controls.getWidth() / columns;
+
+    // A gap between the rows, so a row's label groups with its own knob rather
+    // than reading as a caption for the value box above it.
+    constexpr int rowGap = 10;
+    const int rowHeight = (controls.getHeight() - rowGap) / 2;
+
+    layoutRow (controls.removeFromTop (rowHeight), columnWidth,
+               { &drive_, &character_, &tone_, &mix_, &output_ });
+    controls.removeFromTop (rowGap);
+    layoutRow (controls, columnWidth, { &ceiling_, &knee_, &speed_, &release_ });
 }
 
 } // namespace tezla::emberdrive
