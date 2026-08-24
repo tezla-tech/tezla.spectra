@@ -1,0 +1,50 @@
+# ---- Build output -------------------------------------------------------
+build/
+build-*/
+out/
+cmake-build-*/
+_deps/
+*_artefacts/
+
+# ---- Fetched dependencies (never commit; CMake fetches them) ------------
+extern/JUCE/
+extern/vst3sdk/
+
+# ---- MSVC / Visual Studio ----------------------------------------------
+.vs/
+*.vcxproj*
+*.sln
+*.user
+*.suo
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.idb
+
+# ---- Compiled binaries --------------------------------------------------
+*.vst3
+*.dll
+*.exe
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+
+# ---- Editors / OS -------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/settings.json.example
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- Test + analysis scratch -------------------------------------------
+tests/output/
+*.wav
+!assets/**/*.wav
+*.csv
+!docs/**/*.csv
