@@ -129,7 +129,12 @@ struct HalfbandCoefficients
             h = sinc * window;
         }
 
-        if (h == 0.0)
+        // Structural zeros only: every even offset except the centre is
+        // exactly zero by construction, which is what makes this a halfband and
+        // what lets the polyphase branches skip half the taps. Compared against
+        // the offset rather than the value, because JUCE builds with
+        // -Wfloat-equal and it is right to.
+        if (offset != 0 && (offset % 2) == 0)
             continue;
 
         result.allTaps.push_back ({ i, h });

@@ -55,6 +55,14 @@ the plugin accordingly.
 | Vicanek, *[Note on Alias Suppression in Digital Distortion](https://vicanek.de/articles/AADistortion.pdf)* | paper | A compact alternative treatment. |
 | *Antialiasing Piecewise Polynomial Waveshapers*, [DAFx-23](https://www.dafx.de/paper-archive/2023/DAFx23_paper_61.pdf) | paper | Extends the above to piecewise shapers — relevant to hard-knee clipping. |
 
+**What ADAA is actually worth, measured.** On top of x4 oversampling with a
+tanh shaper it buys **0.3 dB** at moderate drive — nothing. At +27 dB of drive
+it buys **21 to 25 dB**, at every session rate. A tanh is smooth enough that
+ADAA has little to fix until the signal is deep into the curve; that is exactly
+where this music lives, which is why it is worth its extra evaluation and
+divide per sample. With oversampling turned off entirely it is worth 5-9 dB.
+Pinned in `tests/test_Adaa.cpp`.
+
 **Measured baseline, from `tezla-measure clip-aliasing`:** a naive hard clipper
 at 4× drive on a 1 kHz sine produces inharmonic energy at **−47 dB** at 48 kHz
 and **−65 dB** at 192 kHz. Four times the rate buys about 18 dB. It never
@@ -91,6 +99,28 @@ outlier. Trust a plain biquad to be rate-independent only below about Fs/8. Put
 anything whose high-frequency shape actually matters — a cabinet response, a
 tape head bump, the tone stack inside a saturation stage — inside an oversampled
 section. Pinned in `tests/test_Biquad.cpp`.
+
+---
+
+## Measurement practice
+
+Three ways the harness has already lied, all now guarded by tests:
+
+- **Peak-picking under-reads a sine near Nyquist.** A 16 kHz tone at 48 kHz has
+  three samples per cycle and peak-picks at 0.866, which looks exactly like a
+  filter 1.2 dB down. Use RMS × √2 for sine amplitude; it is exact at any sample
+  density.
+- **An FFT reads a start-up transient as broadband noise.** Including the
+  oversampler's ramp reports -30 dB of aliasing for a chain that is really at
+  -130 dB. Always analyse a steady-state window.
+- **Full-band aliasing figures hide the number that matters.** A saturator can
+  read -79 dB overall while being at -157 dB below 18 kHz, because the whole
+  residual is one harmonic sitting in the decimator's transition band at 22 kHz.
+  `analyseHarmonics` reports the audible band separately for this reason.
+
+And one about the signal: generate test tones at a **bin-exact** frequency
+(`binExactFrequency`), so the analysis needs no window and has no leakage. A
+measured -110 dB floor is then real rather than an artefact of the measurement.
 
 ---
 

@@ -18,9 +18,19 @@ corrupt install. The build cannot detect this; this table is the only guard.
 
 | Code | Folder | Product name | Type | Status |
 |------|--------|--------------|------|--------|
-| —    | —      | _(first plugin: tube/tape/cabinet saturator)_ | Effect | In planning |
+| `Tzem` | [`Emberdrive`](Emberdrive/) | Tezla Emberdrive | Effect — saturation + limiter | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
+
+### Reserved names
+
+Held for the plugins already sketched out, so they do not get used for
+something else in the meantime:
+
+| Name | Code | Intended for |
+|------|------|--------------|
+| `Ferrite` | `Tzfe` | Plugin #2 — the tape machine proper: wow, flutter, hysteresis, head bump |
+| `Anvil` | `Tzan` | Plugin #3 — amp and cabinet distortion, the Steinberg Warp lane |
 
 ---
 

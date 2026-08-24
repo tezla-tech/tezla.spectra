@@ -43,16 +43,26 @@ public:
     void setCurrentAndTarget (Float value) noexcept
     {
         current_ = target_ = value;
+        smoothing_ = false;
     }
 
-    void setTarget (Float value) noexcept { target_ = value; }
+    void setTarget (Float value) noexcept
+    {
+        target_ = value;
+        smoothing_ = true;
+    }
 
     [[nodiscard]] Float getTarget()  const noexcept { return target_; }
     [[nodiscard]] Float getCurrent() const noexcept { return current_; }
 
     /// True while the smoother is still moving. Lets a caller skip per-sample
     /// work and use the plain value when nothing is being automated.
-    [[nodiscard]] bool isSmoothing() const noexcept { return current_ != target_; }
+    ///
+    /// Tracked with a flag rather than by comparing current against target:
+    /// the comparison would be an exact float equality test, which is both a
+    /// warning under -Wfloat-equal and fragile if the snap threshold ever
+    /// changes.
+    [[nodiscard]] bool isSmoothing() const noexcept { return smoothing_; }
 
     /// Advance one sample and return the new value.
     Float next() noexcept
@@ -62,7 +72,10 @@ public:
         // Exponential approach never exactly arrives; snap when the remaining
         // distance is inaudible so isSmoothing() can terminate.
         if (std::abs (target_ - current_) < static_cast<Float>(1.0e-9))
+        {
             current_ = target_;
+            smoothing_ = false;
+        }
 
         return current_;
     }
@@ -81,6 +94,7 @@ private:
     Float  coefficient_ { 1 };
     Float  current_     {};
     Float  target_      {};
+    bool   smoothing_   { false };
 };
 
 } // namespace tezla::dsp

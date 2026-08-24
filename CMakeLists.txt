@@ -17,7 +17,9 @@ cmake_minimum_required(VERSION 3.22)
 project(TezlaTech
     VERSION 0.1.0
     DESCRIPTION "tezla.tech VST3 plugin workshop"
-    LANGUAGES CXX)
+    # C as well as C++: JUCE vendors zlib, libpng and friends as C, and refuses
+    # to configure without it.
+    LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 

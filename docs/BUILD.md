@@ -87,7 +87,27 @@ Then in FL Studio: **Options → Manage plugins → Find more plugins**. Tick
 
 ---
 
-## 4. Build without a DAW
+## 4. Building on Linux (optional, for CI and for checking the wrapper)
+
+The plugins target Windows, but the plugin target does build on Linux, and doing
+so is a cheap way to catch wrapper mistakes before they reach the DAW — the
+Steinberg validator runs there too. On Ubuntu 24.04:
+
+```bash
+sudo apt-get install -y build-essential cmake ninja-build git pkg-config \
+    libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libxext-dev libxcomposite-dev libasound2-dev libfreetype6-dev \
+    libfontconfig1-dev libgl1-mesa-dev
+
+./scripts/build.sh --plugins Emberdrive
+```
+
+This is *not* a substitute for building on Windows — MSVC finds things g++ does
+not — but it removes most of the round trips.
+
+---
+
+## 5. Build without a DAW
 
 The DSP is deliberately independent of JUCE, so it builds and runs anywhere:
 
@@ -112,7 +132,7 @@ produces about a plugin.
 
 ---
 
-## 5. Troubleshooting
+## 6. Troubleshooting
 
 **`cmake` is not recognised**
 The CMake installer's "Add to PATH" box was not ticked. Re-run the installer, or
@@ -145,9 +165,14 @@ will not load it.
 That is a bug in the plugin, not the host. Report the session sample rate; see
 the sample-rate policy in [`../CLAUDE.md`](../CLAUDE.md).
 
+**`A C compiler is required to build targets that depend on JUCE`**
+The top-level `project()` must list `C` as well as `CXX` — JUCE vendors zlib,
+libpng and friends as C. Already handled; noted here because the error message
+points at JUCE rather than at the cause.
+
 ---
 
-## 6. Adding a new plugin
+## 7. Adding a new plugin
 
 1. `plugins/<Name>/` with `CMakeLists.txt`, `Source/`, `Dsp/`, `README.md`.
 2. Claim a unique 4-character plugin code in [`../plugins/README.md`](../plugins/README.md).

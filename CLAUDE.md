@@ -223,10 +223,16 @@ squarely the plugin's problem, not the host's, for two reasons:
   little gain."*
   The tooltip should read the **actual current host rate** and say what Auto is
   doing right now. Do not make the user work it out.
-- Anti-imaging/anti-aliasing filters: **minimum-phase (IIR/polyphase) by
-  default** to keep latency and pre-ringing low, which matters for drums.
-  Offer linear-phase only where it is genuinely useful (mastering-style
-  limiting), and declare the latency either way.
+- Tone-shaping filters are **minimum-phase by default**, so pre-ringing never
+  lands in the audible band.
+- **Oversampling filters are the documented exception: linear-phase halfband
+  FIRs.** A halfband's transition band sits at Nyquist, so its pre-ringing is
+  above 20 kHz and inaudible, and a windowed-sinc designed at run time can be
+  verified by measurement in a way a table of IIR coefficients cannot. Declare
+  the latency either way. `shared/tezla-dsp/include/tezla/dsp/Oversampler.hpp`
+  picks tap counts per stage (95/65/65) so the round-trip latency is a **whole
+  number of base-rate samples** at every factor — 47/63/71 for x2/x4/x8.
+  A fractional latency cannot be reported honestly to a host.
 - Filter coefficients are **always** computed from the actual sample rate.
   Never hard-code a coefficient derived at 44.1 or 48 k.
 - **But that alone is not enough, and this has been measured.** The bilinear
@@ -295,7 +301,10 @@ Detail lives in `docs/PLUGIN-CONVENTIONS.md`; the short version:
 - UI is resizable and readable on a high-DPI display. Function before flourish;
   clear metering beats skeuomorphic decoration.
 - The plugin's own name, vendor "Tezla Tech", and a unique 4-character plugin
-  code — **registered in `plugins/README.md`** so codes never collide.
+  code — **registered in `plugins/README.md`** so codes never collide. That file
+  also holds reserved names for plugins already sketched out (`Ferrite` for the
+  tape machine, `Anvil` for amp/cabinet), so they do not get spent on something
+  else.
 
 ---
 
@@ -341,8 +350,23 @@ GPL code is ever pasted in, say so loudly and record it.
   16 kHz tone at 48 kHz (three samples per cycle reads 0.866, which looks
   exactly like a filter 1.2 dB down — use RMS, never peak, for sine amplitude),
   and a 3 dB scaling error in its own dBFS reference.
-- Validate the final `.vst3` with Steinberg's `validator` (built as part of
-  the VST3 SDK) before handing it over.
+- Validate the final `.vst3` with Steinberg's `validator` before handing it
+  over. Build it from the (MIT-licensed) VST3 SDK with:
+  ```
+  git clone --recursive --depth 1 https://github.com/steinbergmedia/vst3sdk
+  cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF \
+        -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+        -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF
+  cmake --build build --target validator
+  ```
+  The examples and VSTGUI need GTK and xcb dev packages that the validator
+  itself does not; turning them off is what makes this build anywhere.
+- **A Linux build is a cheap dress rehearsal for the Windows one.** The plugin
+  target builds and validates on Linux with the X11/ALSA dev packages listed in
+  `docs/BUILD.md`, which catches wrapper mistakes long before they reach the
+  user's machine. It does not replace building on Windows — MSVC finds things
+  g++ does not — but it removes most of the round trips.
 - Report honestly. If a test fails or a step was skipped, say so with the
   output.
 
