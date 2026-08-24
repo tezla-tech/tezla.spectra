@@ -429,13 +429,12 @@ void EmberdriveEditor::buildPages()
     bands->addChoice (ids::bandHighState, "High Band",
         "On, Mute or Solo. Solo on any band silences the others; Mute always wins.");
 
+    // Kept to what fits: drawFittedText drops whole lines rather than scrolling,
+    // and a note that visibly runs out of room reads worse than a shorter one.
     bands->setNote (
-        "Multiband splits at the two crossovers and saturates each band separately, then "
-        "limits the sum. The reason to reach for it here is a clean sub under destroyed mids: "
-        "pull Low Drive down, push Mid Drive up.\n\n"
-        "Linkwitz-Riley 4th order, so the bands sum flat -- at the cost of phase rotation. "
-        "Multiband mode is not phase-transparent against bypass; that is true of every "
-        "crossover-based processor.");
+        "A clean sub under destroyed mids: pull Low Drive down, push Mid Drive up. "
+        "Linkwitz-Riley 4th order, so the bands sum flat -- at the cost of phase rotation, "
+        "which means multiband is not phase-transparent against bypass.");
 
     pages_[1] = std::move (bands);
 
@@ -464,10 +463,10 @@ void EmberdriveEditor::buildPages()
         "Fold turns a peak back on itself instead of flattening it, so the harmonics keep "
         "changing as you push rather than settling into a square wave. At 0 it is exactly a "
         "straight wire.\n\n"
-        "Range x100 is a BASS tool. Measured aliasing stays below -175 dB on 40-160 Hz "
+        "Range x100 is a BASS tool: measured aliasing stays below -175 dB on 40-160 Hz "
         "fundamentals and reaches -46 dB by 2.6 kHz, because a folder's harmonics run to "
-        "roughly the fold gain times the fundamental. On a sub or a reese it is clean; on a "
-        "lead it will alias -- which may be exactly what you are after.\n\n"
+        "roughly the fold gain times the fundamental. Clean on a sub or a reese; on a lead it "
+        "will alias, which may be what you are after.\n\n"
         "Bit crushing, downsampling, rectification and feedback are planned for this page.");
 
     pages_[2] = std::move (mangle);
