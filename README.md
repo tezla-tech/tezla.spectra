@@ -31,19 +31,25 @@ Install [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/down
 [CMake](https://cmake.org/download/) and [Git](https://git-scm.com/download/win) —
 all free. Then:
 
-```powershell
+```bat
 git clone https://github.com/wingit33/tezla.tech.git
 cd tezla.tech
 
-.\scripts\build.ps1                          # build everything, Release
-.\scripts\build.ps1 -Plugins Foo             # build one plugin
-.\scripts\build.ps1 -Plugins Foo,Bar         # build a list
-.\scripts\build.ps1 -Install                 # also copy .vst3 to the system folder
-.\scripts\build.ps1 -List                    # show available plugin targets
+scripts\build.bat                        :: build everything, Release
+scripts\build.bat Emberdrive             :: build one plugin
+scripts\build.bat Emberdrive,Foo         :: build a list
+scripts\build.bat -install               :: also copy .vst3 to the system folder
+scripts\build.bat -list                  :: show available plugin targets
+scripts\build.bat NONE -test             :: DSP + tests only, seconds, no JUCE
 ```
 
-Built plugins land in `build/<Plugin>_artefacts/<Config>/VST3/`.
-`-Install` copies them to `C:\Program Files\Common Files\VST3\` (run the shell
+`build.bat` is a plain batch file: it runs in ordinary `cmd.exe`, needs no
+PowerShell, and **does not ask you to relax any script execution policy**. If
+you would rather run no script at all, the whole build is two CMake commands —
+`docs/BUILD.md` §3 has the manual recipe.
+
+Built plugins land in `build\plugins\<Plugin>\<Plugin>_artefacts\<Config>\VST3\`.
+`-install` copies them to `C:\Program Files\Common Files\VST3\` (run the prompt
 as Administrator), which is where FL Studio scans by default.
 
 Full instructions, including where to get every tool and how to fix a failed

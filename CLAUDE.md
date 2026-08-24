@@ -101,7 +101,7 @@ tezla.tech/
 │       └── Resources/        # graphics, presets
 ├── tests/                    # DSP unit tests + measurement harness
 ├── tools/                    # offline analysis (THD, aliasing, response)
-├── scripts/                  # build.ps1 / build.bat / build.sh, install
+├── scripts/                  # build.bat (primary) / build.sh / build.ps1
 └── docs/
     ├── BUILD.md              # toolchain setup + build guide
     ├── DSP-REFERENCES.md     # sources, papers, licences
@@ -157,18 +157,33 @@ Rules:
 - **CMake is the only build system.** No checked-in `.sln`/`.vcxproj`.
 - **Dependencies are fetched by CMake** (`FetchContent`), pinned to an exact
   tag or commit. Never require the user to download an SDK by hand.
-- **Never break the "one command" build.** `scripts\build.ps1` must build
+- **Never break the "one command" build.** `scripts\build.bat` must build
   everything from a clean clone.
+- **PowerShell is never a requirement.** `scripts\build.bat` is a real batch
+  script, not a wrapper that shells out to `powershell -ExecutionPolicy Bypass`.
+  Windows blocks unsigned `.ps1` files by default and the user does not want that
+  guard relaxed on their machine — which is correct, and compiling a plugin is
+  no reason to. `build.ps1` may exist as a convenience, but nothing may depend
+  on it, and every documented path must work without it.
+- **Every script must have a documented manual equivalent.** `docs/BUILD.md` §3
+  spells out the raw CMake and MSVC invocations for anyone who would rather run
+  no script at all. If a script grows a step, document the manual form in the
+  same commit.
 - The build script targets **one plugin, all plugins, or a named list**:
   ```
-  .\scripts\build.ps1                       # all plugins, Release
-  .\scripts\build.ps1 -Plugins Foo          # just Foo
-  .\scripts\build.ps1 -Plugins Foo,Bar      # a list
-  .\scripts\build.ps1 -Config Debug -Install
+  scripts\build.bat                        :: all plugins, Release
+  scripts\build.bat Foo                    :: just Foo
+  scripts\build.bat Foo,Bar                :: a list
+  scripts\build.bat -config Debug -install
+  scripts\build.bat NONE -test             :: DSP + tests only, no JUCE
   ```
-- `-Install` copies the built `.vst3` bundles to
-  `C:\Program Files\Common Files\VST3\` (needs an elevated shell), which is
-  where FL Studio scans by default.
+- `-install` copies the built `.vst3` bundles to
+  `C:\Program Files\Common Files\VST3\` (needs an elevated prompt), which is
+  where FL Studio scans by default. It checks for elevation first rather than
+  failing halfway through.
+- **No Developer Command Prompt required.** The Visual Studio CMake generator
+  finds MSVC itself; the developer prompt is only needed for the Ninja path,
+  which the script uses when it detects `ninja` and `cl` already on `PATH`.
 - Keep the tree warning-clean on MSVC at `/W4`. Warnings are how DSP bugs
   announce themselves early.
 - **Update `docs/BUILD.md` whenever a build step or tool version changes.**

@@ -1,0 +1,12 @@
+# Keep line endings correct per platform regardless of who clones where.
+* text=auto
+
+# Batch files must be CRLF or cmd.exe mis-parses labels and continuations.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts must stay LF or the shebang breaks.
+*.sh  text eol=lf
+
+*.png binary
+*.wav binary
