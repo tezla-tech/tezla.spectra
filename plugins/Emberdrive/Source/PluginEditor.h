@@ -34,6 +34,74 @@ private:
     float peakDb_ { -100.0f };
 };
 
+/// Wraps, so the "what Auto is doing right now" sentence is never truncated.
+class WrappingLabel final : public juce::Label
+{
+public:
+    void paint (juce::Graphics& g) override;
+};
+
+/// A rotary control with its name above and its value below, plus the tooltip
+/// that is this plugin's only documentation.
+struct Knob
+{
+    juce::Slider slider;
+    juce::Label  label;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+};
+
+/// One page of the control surface. Holds its own knobs and lays them out on a
+/// grid; the editor just decides which page is visible.
+class ControlPage final : public juce::Component
+{
+public:
+    ControlPage (juce::AudioProcessorValueTreeState& state, int columns)
+        : state_ (state), columns_ (columns) {}
+
+    void addKnob (const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void addChoice (const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void addToggle (const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void addBreak();
+
+    /// A line of guidance shown under the grid. For the things that are too
+    /// important to leave in a tooltip nobody hovers over.
+    void setNote (const juce::String& note) { note_ = note; }
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    struct Choice
+    {
+        juce::ComboBox box;
+        juce::Label    label;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
+    };
+
+    struct Toggle
+    {
+        juce::ToggleButton button;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+    };
+
+    /// What sits in each grid cell, in the order it was added.
+    struct Cell
+    {
+        enum class Kind { knob, choice, toggle, gap } kind {};
+        int index {};
+    };
+
+    juce::AudioProcessorValueTreeState& state_;
+    int columns_;
+
+    std::vector<std::unique_ptr<Knob>>   knobs_;
+    std::vector<std::unique_ptr<Choice>> choices_;
+    std::vector<std::unique_ptr<Toggle>> toggles_;
+    std::vector<Cell> cells_;
+    juce::String note_;
+    int gridBottom_ { 0 };
+};
+
 class EmberdriveEditor final : public juce::AudioProcessorEditor,
                                private juce::Timer
 {
@@ -46,52 +114,25 @@ public:
 
 private:
     void timerCallback() override;
-
-    struct Knob
-    {
-        juce::Slider slider;
-        juce::Label  label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
-    };
-
-    void addKnob (Knob&, const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void buildPages();
+    void showPage (int index);
 
     EmberdriveProcessor& processor_;
 
     juce::TooltipWindow tooltips_ { this, 500 };
 
-    Knob drive_, character_, tone_, ceiling_, knee_, speed_, release_, mix_, output_;
+    static constexpr int kNumPages = 4;
+    std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;
+    std::array<juce::TextButton, kNumPages> tabs_;
+    int currentPage_ { 0 };
 
-    juce::ComboBox oversampling_;
-    juce::Label    oversamplingLabel_;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> oversamplingAttachment_;
-
-    juce::ToggleButton autoTrim_    { "Auto trim" };
-    juce::ToggleButton autoRelease_ { "Auto release" };
-    juce::ToggleButton bypass_      { "Bypass" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoTrimAttachment_;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoReleaseAttachment_;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment_;
-
-    LevelMeter inputMeter_  { LevelMeter::Style::level };
-    LevelMeter outputMeter_ { LevelMeter::Style::level };
+    LevelMeter inputMeter_     { LevelMeter::Style::level };
+    LevelMeter outputMeter_    { LevelMeter::Style::level };
     LevelMeter reductionMeter_ { LevelMeter::Style::gainReduction };
 
     juce::Label inputMeterLabel_     { {}, "IN" };
     juce::Label outputMeterLabel_    { {}, "OUT" };
     juce::Label reductionMeterLabel_ { {}, "GR" };
-
-    /// Wraps, so the "what Auto is doing right now" sentence is never truncated.
-    class WrappingLabel final : public juce::Label
-    {
-    public:
-        void paint (juce::Graphics& g) override
-        {
-            g.setColour (findColour (juce::Label::textColourId));
-            g.setFont (getFont());
-            g.drawFittedText (getText(), getLocalBounds(), juce::Justification::topLeft, 2, 1.0f);
-        }
-    };
 
     WrappingLabel statusLabel_;
 

@@ -10,7 +10,8 @@ no reverse engineering of anyone's product.
 
 The first plugin, **Emberdrive**, measures identically to within 0.01 dB at
 44.1, 48, 96 and 192 kHz, holds its output level within 0.33 dB across a 30 dB
-drive range, and keeps audible-band aliasing below −220 dB. Numbers, not
+drive range, and keeps audible-band aliasing below −220 dB. It also has a
+wavefolder with a ×100 range for when none of that is the point. Numbers, not
 adjectives: see [its README](plugins/Emberdrive/README.md).
 
 ---
@@ -19,7 +20,7 @@ adjectives: see [its README](plugins/Emberdrive/README.md).
 
 | Plugin | Type | Status |
 |---|---|---|
-| **[Emberdrive](plugins/Emberdrive/)** | Tube/tape saturation → soft-knee limiter | v0.1.0 — builds, 57 tests pass, 47/47 on Steinberg's validator |
+| **[Emberdrive](plugins/Emberdrive/)** | Tube/tape saturation → soft-knee limiter, wavefolder, 3-band | v0.2.0 — 83 tests pass, 47/47 on Steinberg's validator |
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

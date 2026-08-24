@@ -26,6 +26,34 @@ inline constexpr auto output       = "output";
 inline constexpr auto autoTrim     = "autoTrim";
 inline constexpr auto oversampling = "oversampling";
 inline constexpr auto bypass       = "bypass";
+
+// Added in schema version 2. Appended, never inserted: VST3 hosts and FL's own
+// automation index by ID, and reordering silently repoints every automation
+// lane in every project that already uses the plugin.
+inline constexpr auto foldAmount    = "foldAmount";
+inline constexpr auto foldRange     = "foldRange";
+
+inline constexpr auto multiband     = "multiband";
+inline constexpr auto crossoverLow  = "crossoverLow";
+inline constexpr auto crossoverHigh = "crossoverHigh";
+inline constexpr auto bandLowDrive  = "bandLowDrive";
+inline constexpr auto bandMidDrive  = "bandMidDrive";
+inline constexpr auto bandHighDrive = "bandHighDrive";
+inline constexpr auto bandLowState  = "bandLowState";
+inline constexpr auto bandMidState  = "bandMidState";
+inline constexpr auto bandHighState = "bandHighState";
+
+inline constexpr auto expertEnabled = "expertEnabled";
+inline constexpr auto expBias       = "expBias";
+inline constexpr auto expHeadBumpHz = "expHeadBumpHz";
+inline constexpr auto expHeadBumpDb = "expHeadBumpDb";
+inline constexpr auto expGapLossHz  = "expGapLossHz";
+inline constexpr auto expGapLossDb  = "expGapLossDb";
+inline constexpr auto expHeadroom   = "expHeadroom";
+inline constexpr auto expDcHz       = "expDcHz";
+inline constexpr auto expStereoLink = "expStereoLink";
+inline constexpr auto expDetectorRms = "expDetectorRms";
+inline constexpr auto expAdaa       = "expAdaa";
 } // namespace ids
 
 class EmberdriveProcessor final : public juce::AudioProcessor
@@ -74,6 +102,7 @@ public:
         std::atomic<float> outputVuDb   { -100.0f };
         std::atomic<float> outputPeakDb { -100.0f };
         std::atomic<float> gainReductionDb { 0.0f };
+        std::array<std::atomic<float>, kNumBands> bandGainReductionDb {};
     };
 
     MeterValues& getMeterValues() noexcept { return meters_; }

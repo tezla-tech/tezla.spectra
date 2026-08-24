@@ -190,7 +190,12 @@ bool Engine::setParameters (const Parameters& parameters)
                                ? std::clamp (parameters.expert.dcBlockerHz, 1.0, 40.0) : kDcBlockerHz;
 
     const bool factorChanged = requestedFactor != preparedFactor_;
-    const bool dcChanged     = requestedDcHz != preparedDcHz_;
+
+    // A tolerance rather than an exact compare: any real change to the corner
+    // is far larger than this, and an exact float comparison is both a warning
+    // under -Wfloat-equal and a way to rebuild the whole engine because a
+    // parameter round-tripped through a host at slightly different precision.
+    const bool dcChanged = std::abs (requestedDcHz - preparedDcHz_) > 1.0e-9;
 
     parameters_ = parameters;
 

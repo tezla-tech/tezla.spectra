@@ -8,7 +8,12 @@ namespace tezla::emberdrive
 
 namespace
 {
-constexpr int kStateSchemaVersion = 1;
+// Parameters carry the schema version they were introduced at. Existing ones
+// must keep theirs forever: the version hint feeds the VST3 parameter ID, so
+// bumping it on a live parameter is indistinguishable from renaming it.
+constexpr int kSchemaV1 = 1;
+constexpr int kSchemaV2 = 2;
+constexpr int kStateSchemaVersion = kSchemaV2;
 constexpr auto kStateTypeName = "EmberdriveState";
 constexpr double kBypassFadeSeconds = 0.010;
 
@@ -131,6 +136,107 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::bypass, kStateSchemaVersion }, "Bypass", false));
 
+    // ---- schema version 2: mangle, multiband and expert --------------------
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::foldAmount, kSchemaV2 }, "Fold",
+        juce::NormalisableRange<float> { 0.0f, 100.0f }, 0.0f,
+        formatted ("%", 0)));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::foldRange, kSchemaV2 }, "Fold Range",
+        juce::StringArray { "x1", "x10", "x100" }, 0));
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::multiband, kSchemaV2 }, "Multiband", false));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::crossoverLow, kSchemaV2 }, "Low / Mid",
+        skewedRange (40.0f, 800.0f, 150.0f), 120.0f,
+        formatted ("Hz", 0)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::crossoverHigh, kSchemaV2 }, "Mid / High",
+        skewedRange (800.0f, 12000.0f, 2500.0f), 2500.0f,
+        formatted ("Hz", 0)));
+
+    const auto bandDrive = [&layout] (const char* id, const juce::String& name)
+    {
+        layout.add (std::make_unique<Parameter> (
+            juce::ParameterID { id, kSchemaV2 }, name,
+            juce::NormalisableRange<float> { -24.0f, 24.0f }, 0.0f,
+            formatted ("dB", 1)));
+    };
+    bandDrive (ids::bandLowDrive,  "Low Drive");
+    bandDrive (ids::bandMidDrive,  "Mid Drive");
+    bandDrive (ids::bandHighDrive, "High Drive");
+
+    const auto bandState = [&layout] (const char* id, const juce::String& name)
+    {
+        layout.add (std::make_unique<Choice> (
+            juce::ParameterID { id, kSchemaV2 }, name,
+            juce::StringArray { "On", "Mute", "Solo" }, 0));
+    };
+    bandState (ids::bandLowState,  "Low Band");
+    bandState (ids::bandMidState,  "Mid Band");
+    bandState (ids::bandHighState, "High Band");
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::expertEnabled, kSchemaV2 }, "Expert", false));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expBias, kSchemaV2 }, "Bias",
+        juce::NormalisableRange<float> { -2.0f, 2.0f }, 0.0f,
+        formatted ("", 2)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expHeadBumpHz, kSchemaV2 }, "Bump Freq",
+        skewedRange (40.0f, 300.0f, 90.0f), 90.0f,
+        formatted ("Hz", 0)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expHeadBumpDb, kSchemaV2 }, "Bump Gain",
+        juce::NormalisableRange<float> { -6.0f, 6.0f }, 1.5f,
+        formatted ("dB", 1)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expGapLossHz, kSchemaV2 }, "Gap Freq",
+        skewedRange (2000.0f, 16000.0f, 8000.0f), 8000.0f,
+        formatted ("Hz", 0)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expGapLossDb, kSchemaV2 }, "Gap Gain",
+        juce::NormalisableRange<float> { -12.0f, 6.0f }, -2.5f,
+        formatted ("dB", 1)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expHeadroom, kSchemaV2 }, "Headroom",
+        skewedRange (1.0f, 16.0f, 4.0f), 4.0f,
+        formatted ("x", 2)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expDcHz, kSchemaV2 }, "DC Block",
+        skewedRange (1.0f, 40.0f, 10.0f), 10.0f,
+        formatted ("Hz", 1)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expStereoLink, kSchemaV2 }, "Stereo Link",
+        juce::NormalisableRange<float> { 0.0f, 100.0f }, 100.0f,
+        formatted ("%", 0)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::expDetectorRms, kSchemaV2 }, "Detector",
+        juce::NormalisableRange<float> { 0.0f, 100.0f }, 0.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            if (value < 1.0f)  return juce::String ("Peak");
+            if (value > 99.0f) return juce::String ("RMS");
+            return juce::String (juce::roundToInt (value)) + "% RMS";
+        }))); 
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::expAdaa, kSchemaV2 }, "Antialiasing", true));
+
     return layout;
 }
 
@@ -212,6 +318,42 @@ void EmberdriveProcessor::pullParameters()
 
     parameters_.oversampling = static_cast<dsp::OversamplingMode> (
         juce::jlimit (0, 4, static_cast<int> (value (ids::oversampling))));
+
+    // ---- mangle ----------------------------------------------------------
+    parameters_.foldAmount = value (ids::foldAmount) / 100.0;
+
+    static constexpr double kFoldRanges[] = { 1.0, 10.0, 100.0 };
+    parameters_.foldRange = kFoldRanges[juce::jlimit (0, 2, static_cast<int> (value (ids::foldRange)))];
+
+    // ---- multiband -------------------------------------------------------
+    parameters_.multiband       = value (ids::multiband) > 0.5;
+    parameters_.crossoverLowHz  = value (ids::crossoverLow);
+    parameters_.crossoverHighHz = value (ids::crossoverHigh);
+
+    const char* bandDriveIds[kNumBands] { ids::bandLowDrive, ids::bandMidDrive, ids::bandHighDrive };
+    const char* bandStateIds[kNumBands] { ids::bandLowState, ids::bandMidState, ids::bandHighState };
+
+    for (int band = 0; band < kNumBands; ++band)
+    {
+        const auto b = static_cast<std::size_t> (band);
+        parameters_.bands[b].driveTrimDb = value (bandDriveIds[band]);
+        parameters_.bands[b].state = static_cast<BandState> (
+            juce::jlimit (0, 2, static_cast<int> (value (bandStateIds[band]))));
+    }
+
+    // ---- expert ----------------------------------------------------------
+    auto& expert = parameters_.expert;
+    expert.enabled        = value (ids::expertEnabled) > 0.5;
+    expert.bias           = value (ids::expBias);
+    expert.headBumpHz     = value (ids::expHeadBumpHz);
+    expert.headBumpDb     = value (ids::expHeadBumpDb);
+    expert.gapLossHz      = value (ids::expGapLossHz);
+    expert.gapLossDb      = value (ids::expGapLossDb);
+    expert.shaperHeadroom = value (ids::expHeadroom);
+    expert.dcBlockerHz    = value (ids::expDcHz);
+    expert.stereoLink     = value (ids::expStereoLink) / 100.0;
+    expert.detectorRms    = value (ids::expDetectorRms) / 100.0;
+    expert.adaaEnabled    = value (ids::expAdaa) > 0.5;
 }
 
 void EmberdriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -314,6 +456,10 @@ void EmberdriveProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     meters_.outputVuDb.store   (static_cast<float> (outputMeter_[0].getVuDb()),   std::memory_order_relaxed);
     meters_.outputPeakDb.store (static_cast<float> (outputMeter_[0].getPeakDb()), std::memory_order_relaxed);
     meters_.gainReductionDb.store (static_cast<float> (engine_.getGainReductionDb()), std::memory_order_relaxed);
+
+    for (int band = 0; band < kNumBands; ++band)
+        meters_.bandGainReductionDb[static_cast<std::size_t> (band)].store (
+            static_cast<float> (engine_.getBandGainReductionDb (band)), std::memory_order_relaxed);
 }
 
 juce::String EmberdriveProcessor::describeOversampling() const
@@ -381,8 +527,10 @@ void EmberdriveProcessor::setStateInformation (const void* data, int sizeInBytes
     if (! tree.isValid())
         return;
 
-    // Only version 1 exists so far. When version 2 arrives, migrate here rather
-    // than dropping the state on the floor.
+    // Version 1 projects predate the mangle, multiband and expert parameters.
+    // Nothing to migrate: every one of them defaults to neutral, so a version 1
+    // project reopens sounding exactly as it did. A version from the future is
+    // refused rather than half-loaded.
     const int version = tree.getProperty ("schemaVersion", 1);
     if (version > kStateSchemaVersion)
         return;
@@ -437,12 +585,46 @@ const Preset& presetAt (int index)
           [] { Parameters p; p.driveDb = 4.0;  p.character = 0.3;  p.toneTilt = 0.0;
                p.ceilingDb = -0.3; p.kneeDb = 18.0; p.attackMs = 30.0; p.releaseMs = 400.0;
                p.autoRelease = true; p.mix = 1.0; p.outputDb = 0.0; p.autoTrim = true; return p; }() },
+
+        // Multiband doing the job it exists for: the sub band left alone while
+        // everything above it is driven hard.
+        { "Clean sub, dirty top",
+          [] { Parameters p; p.driveDb = 15.0; p.character = 0.5;  p.toneTilt = 0.1;
+               p.ceilingDb = -0.5; p.kneeDb = 8.0;  p.attackMs = 6.0;  p.releaseMs = 180.0;
+               p.autoRelease = true; p.mix = 1.0; p.autoTrim = true;
+               p.multiband = true; p.crossoverLowHz = 130.0; p.crossoverHighHz = 2200.0;
+               p.bands[0].driveTrimDb = -18.0;
+               p.bands[1].driveTrimDb =  6.0;
+               p.bands[2].driveTrimDb =  0.0;
+               return p; }() },
+
+        // The folder at a musical setting: metallic and hollow, still tracking
+        // the note. Range x1, because on a sustained bass x10 already stops
+        // sounding like the note you played.
+        { "Folded reese",
+          [] { Parameters p; p.driveDb = 8.0;  p.character = 0.7;  p.toneTilt = 0.2;
+               p.ceilingDb = -0.3; p.kneeDb = 10.0; p.attackMs = 2.0;  p.releaseMs = 120.0;
+               p.mix = 1.0; p.autoTrim = true;
+               p.foldAmount = 0.45; p.foldRange = 1.0;
+               return p; }() },
+
+        // Schizo. Everything at once, on purpose.
+        { "Annihilate",
+          [] { Parameters p; p.driveDb = 24.0; p.character = 0.9;  p.toneTilt = 0.3;
+               p.ceilingDb = -0.3; p.kneeDb = 3.0;  p.attackMs = 0.5;  p.releaseMs = 60.0;
+               p.mix = 1.0; p.autoTrim = true;
+               p.foldAmount = 1.0; p.foldRange = 10.0;
+               p.multiband = true; p.crossoverLowHz = 110.0; p.crossoverHighHz = 1800.0;
+               p.bands[0].driveTrimDb = -12.0;   // even here, the sub survives
+               p.bands[1].driveTrimDb =   6.0;
+               p.bands[2].driveTrimDb =   0.0;
+               return p; }() },
     };
 
     return presets[juce::jlimit (0, static_cast<int> (std::size (presets)) - 1, index)];
 }
 
-constexpr int kNumPresets = 5;
+constexpr int kNumPresets = 8;
 } // namespace
 
 int EmberdriveProcessor::getNumPrograms() { return kNumPresets; }
@@ -479,6 +661,30 @@ void EmberdriveProcessor::setCurrentProgram (int index)
     set (ids::output,    static_cast<float> (preset.outputDb));
     set (ids::autoRelease, preset.autoRelease ? 1.0f : 0.0f);
     set (ids::autoTrim,    preset.autoTrim    ? 1.0f : 0.0f);
+
+    // Schema version 2 parameters. A preset is a complete parameter set, so
+    // these are written even when the preset leaves them neutral -- otherwise
+    // loading a preset would inherit whatever the last one left behind.
+    set (ids::foldAmount, static_cast<float> (preset.foldAmount * 100.0));
+    set (ids::foldRange,  preset.foldRange >= 100.0 ? 2.0f : (preset.foldRange >= 10.0 ? 1.0f : 0.0f));
+
+    set (ids::multiband,     preset.multiband ? 1.0f : 0.0f);
+    set (ids::crossoverLow,  static_cast<float> (preset.crossoverLowHz));
+    set (ids::crossoverHigh, static_cast<float> (preset.crossoverHighHz));
+
+    const char* bandDriveIds[kNumBands] { ids::bandLowDrive, ids::bandMidDrive, ids::bandHighDrive };
+    const char* bandStateIds[kNumBands] { ids::bandLowState, ids::bandMidState, ids::bandHighState };
+
+    for (int band = 0; band < kNumBands; ++band)
+    {
+        const auto b = static_cast<std::size_t> (band);
+        set (bandDriveIds[band], static_cast<float> (preset.bands[b].driveTrimDb));
+        set (bandStateIds[band], static_cast<float> (static_cast<int> (preset.bands[b].state)));
+    }
+
+    // Presets never turn the expert panel on: it exists for deliberate hands-on
+    // work, and a preset silently overriding Character would be a surprise.
+    set (ids::expertEnabled, 0.0f);
 }
 
 juce::AudioProcessorEditor* EmberdriveProcessor::createEditor()

@@ -305,6 +305,11 @@ Every plugin must satisfy these before it is considered done:
   it is an explicit option, off by default.
 - **Reset properly:** `prepareToPlay` clears all state. No pops when transport
   restarts, no state leaking between projects.
+- **`prepare()` runs before any parameters are known**, so anything it
+  configures from a parameter must be re-checked against what it actually built
+  — not against "have parameters been set yet". Getting this wrong made the
+  oversampling control silently inert on load, and no test caught it because the
+  measurement and the reference were wrong in the same way.
 - **Silence in, silence out** (barring intentional noise/hiss features, which
   must be defeatable).
 
@@ -316,6 +321,11 @@ Detail lives in `docs/PLUGIN-CONVENTIONS.md`; the short version:
 
 - Parameters use stable string IDs and a **versioned** parameter layout. Never
   reorder or renumber existing parameters — old projects must reopen correctly.
+  New parameters are **appended** and carry the schema version they were
+  introduced at; existing ones keep theirs forever, because the version hint
+  feeds the VST3 parameter ID and bumping it on a live parameter is
+  indistinguishable from renaming it. Every new parameter defaults to neutral,
+  so a project saved before it existed reopens sounding the same.
 - Ranges are musical, not mathematical: dB where the user thinks in dB, ms
   where they think in ms, skewed so the useful range sits mid-travel.
 - **Every control has a tooltip** that says what it does *and* what it costs.
