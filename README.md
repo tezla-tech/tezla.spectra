@@ -14,13 +14,22 @@ drive range, and keeps audible-band aliasing below −220 dB. It also has a
 wavefolder with a ×100 range for when none of that is the point. Numbers, not
 adjectives: see [its README](plugins/Emberdrive/README.md).
 
+The second, **Halo**, is a harmonic exciter that adds harmonics without also
+adding a copy of the source — which is what every exciter built on the classic
+highpass-distort-blend structure does, and why their blend controls double as
+EQs. Its wet path measures −271 dB at the fundamental. See
+[its README](plugins/Halo/README.md).
+
 ---
 
 ## Status
 
 | Plugin | Type | Status |
 |---|---|---|
-| **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band | v0.3.0 — 100 tests pass, 47/47 on Steinberg's validator |
+| **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band | v0.3.0 — 47/47 on Steinberg's validator |
+| **[Halo](plugins/Halo/)** | Harmonic exciter and bass enhancer | v0.1.0 — 47/47 on Steinberg's validator |
+
+132 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

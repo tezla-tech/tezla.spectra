@@ -124,6 +124,39 @@ measured -110 dB floor is then real rather than an artefact of the measurement.
 
 ---
 
+## Harmonic exciters and virtual bass — used for Halo
+
+The exciter is old enough that its primary source is an expired patent, and the
+bass-enhancement half has a substantial modern literature behind it.
+
+| Source | Licence / status | What it was used for |
+|---|---|---|
+| Knoppel / Aphex Ltd., US 4,150,253, *Signal distortion circuit and method of use* (filed 1978, granted 1979) | Patent, long expired — a published disclosure | The original structure: a second-order Butterworth highpass into an asymmetric soft clipper, recombined with deliberate phase shift, and the "transient discriminate" idea behind Halo's Punch |
+| Shekar & Smith, *Modeling the Harmonic Exciter*, AES 135th Convention e-Brief (2013) | Paper | Confirms that structure, and that soft clipping is what keeps the generated harmonics low-order |
+| Oo, Gan & Lim, *Generalized harmonic analysis of the Arc-Tangent Square Root (ATSR) nonlinear device for virtual bass systems*, ICASSP 2010 | Paper | The even/odd split as the design axis. **Not** implemented as published: the ATSR even term `sqrt(1 - (gx)^2)` is imaginary past `\|gx\| = 1` and has infinite slope at the edge, which a plugin that must survive a hot drum bus cannot have. Halo's even curve is bounded and defined everywhere instead |
+| Oo & Gan, *Harmonic and Intermodulation Analysis of Nonlinear Devices Used in Virtual Bass Systems*, AES 124th Convention (2008) | Paper | Why intermodulation, not THD, is the metric that matters for this class of device — hence `tezla-measure imd` |
+| Gan, Kuo & Toh, *Virtual bass for home entertainment, multimedia PC, game station and portable audio systems*, IEEE Trans. Consumer Electronics (2001) | Paper | Missing-fundamental bass enhancement: the psychoacoustics behind Halo's Below mode |
+| Le Brun, *Digital Waveshaping Synthesis*, JAES 27(4) (1979) | Paper | Chebyshev harmonic control. Not used yet; it is the basis of the planned Precision mode |
+| [`alpo/DeaDBeeF-virtual-bass-plugin`](https://github.com/alpo/DeaDBeeF-virtual-bass-plugin) | **MIT** | A readable reference implementation of ATSR, used to check the paper's formulation against working code |
+| [Calf Studio Gear](https://calf-studio-gear.org/) | **GPLv3** | **Control layout and signal-flow structure only, read and not copied.** Its Exciter is four cascaded biquad highpasses into `tap_distortion` into two lowpasses; its Bass Enhancer is the mirror image. Halo's own curves are derived from the papers above and share no code with it |
+
+### Licence position on Calf
+
+`CLAUDE.md` §9 permits reading GPL code to understand a *technique* and forbids
+copying it. What was read here was the class declarations in
+`src/calf/modules_dist.h` — filter counts, filter orders, and which distortion
+object is called — to understand the arrangement of blocks. Calf's distortion
+itself is `dsp::tap_distortion`, the tube curve from TAP-plugins, also GPL.
+**That curve was deliberately not read**, precisely so that Halo's shaper could
+not be influenced by it. Halo's odd and even curves are stated in full in
+`shared/tezla-dsp/include/tezla/dsp/HarmonicGenerator.hpp` and follow from the
+papers and from ordinary calculus.
+
+No Calf code is present in this repository, and none of it was consulted while
+writing the generator.
+
+---
+
 ## Indexes worth keeping open
 
 - [olilarkin/awesome-musicdsp](https://github.com/olilarkin/awesome-musicdsp) — curated index of everything else

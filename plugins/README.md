@@ -19,6 +19,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | Code | Folder | Product name | Type | Status |
 |------|--------|--------------|------|--------|
 | `Tzem` | [`Emberdrive`](Emberdrive/) | Tezla Emberdrive | Effect — saturation, destruction, 3-band limiter | v0.3.0, builds and validates |
+| `Tzha` | [`Halo`](Halo/) | Tezla Halo | Effect — harmonic exciter and bass enhancer | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 
@@ -73,5 +74,7 @@ tezla_add_plugin(
 
 3. Write the DSP in `Dsp/`, with tests in `../../tests/`.
 4. Write the JUCE wrapper in `Source/`.
-5. Build it: `.\scripts\build.ps1 -Plugins Example -Install`
+5. Build it: `scripts\build.bat Example -install` on Windows, or
+   `./scripts/build.sh Example` on macOS and Linux. Nothing depends on
+   PowerShell — see `CLAUDE.md` §5.
 6. Update the table above and the status table in the root `README.md`.
