@@ -63,8 +63,26 @@ public:
 
     void process (Float input, Float& low, Float& high) noexcept
     {
-        low  = lowB_.process (lowA_.process (input));
-        high = highB_.process (highA_.process (input));
+        low  = processLow (input);
+        high = processHigh (input);
+    }
+
+    /// One branch only.
+    ///
+    /// A single-band processor needs one side of the split and throws the other
+    /// away, and running the discarded branch costs two biquads per sample per
+    /// channel for nothing. Do not mix these with process() on one instance:
+    /// each branch carries its own filter state, and a branch that stops being
+    /// called goes stale rather than merely idle.
+    [[nodiscard]] Float processLow (Float input) noexcept
+    {
+        return lowB_.process (lowA_.process (input));
+    }
+
+    /// @see processLow
+    [[nodiscard]] Float processHigh (Float input) noexcept
+    {
+        return highB_.process (highA_.process (input));
     }
 
     /// The allpass a band has to be run through to stay phase-aligned with a

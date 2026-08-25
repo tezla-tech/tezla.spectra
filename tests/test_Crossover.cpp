@@ -213,3 +213,34 @@ TEZLA_TEST (crossover_survives_being_automated_past_nyquist)
     CHECK (std::isfinite (mid));
     CHECK (std::isfinite (high));
 }
+
+TEZLA_TEST (crossover_single_branch_matches_the_full_split)
+{
+    // Single-band processing wants one side of the split and throws the other
+    // away. The saving is only legitimate if the branch it keeps is bit-for-bit
+    // what process() would have produced -- otherwise the plugin quietly sounds
+    // different in single-band mode from multiband mode at the same frequency.
+    LinkwitzRiley4<double> both;
+    LinkwitzRiley4<double> branches;
+
+    both.prepare (48000.0);
+    branches.prepare (48000.0);
+    both.setCrossover (3000.0);
+    branches.setCrossover (3000.0);
+
+    // Something with content on both sides of the corner and a discontinuity,
+    // so the filter states are genuinely exercised rather than idling.
+    for (int i = 0; i < 4096; ++i)
+    {
+        const double t = static_cast<double> (i) / 48000.0;
+        const double input = std::sin (2.0 * std::numbers::pi * 120.0 * t)
+                           + 0.5 * std::sin (2.0 * std::numbers::pi * 9000.0 * t)
+                           + (i == 2048 ? 1.0 : 0.0);
+
+        double low = 0.0, high = 0.0;
+        both.process (input, low, high);
+
+        CHECK (branches.processLow (input) == low);
+        CHECK (branches.processHigh (input) == high);
+    }
+}

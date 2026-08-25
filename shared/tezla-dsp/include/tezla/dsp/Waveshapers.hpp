@@ -186,6 +186,94 @@ private:
     double amount_ { 0.0 };
 };
 
+/// Bounded even-harmonic generator -- the partner curve to BiasedTanh.
+///
+///   f(x) = 1 - 1 / sqrt(1 + (g*x)^2)
+///
+/// The virtual-bass literature reaches for the arc-tangent square root device,
+/// whose even term is sqrt(1 - (g*x)^2). That term is imaginary past
+/// |g*x| = 1 and its slope goes to infinity as it approaches the edge. A
+/// plugin that has to survive a hot drum bus cannot have a domain, so this
+/// curve is used instead. Three properties earn it the place:
+///
+///   * defined, smooth and bounded for every input, however hard it is driven;
+///   * slope at the origin is exactly zero, so it contributes no linear term
+///     at all -- which is what HarmonicGenerator.hpp is built around;
+///   * the antiderivative is elementary, so ADAA applies.
+///
+/// Musically it is second-harmonic dominant at low gain and behaves like a
+/// smoothed full-wave rectifier at high gain, so one control walks from an
+/// octave-up shimmer to something with real bite.
+///
+/// Being even, it produces a large DC offset by construction. A DcBlocker
+/// downstream is not optional.
+class SoftEven
+{
+public:
+    explicit SoftEven (double gain = 1.0) noexcept { setGain (gain); }
+
+    /// Gain 0 is exactly the zero function, not approximately: no harmonics,
+    /// no DC, nothing to fade out.
+    void setGain (double gain) noexcept { gain_ = std::max (gain, 0.0); }
+
+    [[nodiscard]] double getGain() const noexcept { return gain_; }
+
+    /// Written as u^2 / (r * (r + 1)) rather than as 1 - 1/r.
+    ///
+    /// The two are algebraically identical and only one of them is usable: for
+    /// quiet input both 1 and 1/r are within u^2/2 of each other, so the direct
+    /// form subtracts almost the whole number away and returns what is left of
+    /// the rounding. This form never subtracts anything.
+    [[nodiscard]] double evaluate (double x) const noexcept
+    {
+        const double u = gain_ * x;
+        const double r = std::sqrt (1.0 + u * u);
+        return (u * u) / (r * (r + 1.0));
+    }
+
+    /// Antiderivative, F1(0) = 0:  x - asinh(g*x)/g.
+    ///
+    /// The same trap one level deeper, and this one cannot be written away: as
+    /// the gain falls both terms tend to x and the answer is the u^3/6 that
+    /// survives the subtraction. Below the threshold this evaluates the series
+    /// for u - asinh(u) instead, which has no subtraction in it.
+    ///
+    /// Getting this wrong would be silent. ADAA divides differences of this
+    /// function by differences of the input, so the error arrives as noise on
+    /// quiet material rather than as anything that looks like a bug.
+    [[nodiscard]] double antiderivative (double x) const noexcept
+    {
+        if (gain_ <= 0.0)
+            return 0.0;
+
+        const double u = gain_ * x;
+
+        if (std::abs (u) < kSeriesThreshold)
+        {
+            const double u2 = u * u;
+
+            // u - asinh(u) = u^3/6 - 3u^5/40 + 5u^7/112 - 35u^9/1152 + 63u^11/2816
+            const double series = u * u2 * (1.0 / 6.0
+                                    + u2 * (-3.0 / 40.0
+                                    + u2 * (5.0 / 112.0
+                                    + u2 * (-35.0 / 1152.0
+                                    + u2 * (63.0 / 2816.0)))));
+
+            return series / gain_;
+        }
+
+        return x - std::asinh (u) / gain_;
+    }
+
+private:
+    /// Where the two forms are equally wrong -- about 1e-12 relative error
+    /// each. Below this the subtraction dominates the error, above it the
+    /// truncated series does.
+    static constexpr double kSeriesThreshold = 0.05;
+
+    double gain_ { 1.0 };
+};
+
 /// Hard clip, kept for measurement baselines rather than for musical use.
 /// Its aliasing figures are the numbers everything else is compared against.
 class HardClip

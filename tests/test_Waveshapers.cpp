@@ -9,6 +9,7 @@
 #include <tezla/dsp/Bitcrusher.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Waveshapers.hpp>
+#include <tezla/measure/Fft.hpp>
 #include <tezla/measure/Harmonics.hpp>
 #include <tezla/measure/Signals.hpp>
 
@@ -317,4 +318,153 @@ TEZLA_TEST (downsampler_ratio_is_continuous)
         const double measuredRatio = 2000.0 / static_cast<double> (changes);
         CHECK_NEAR (measuredRatio, ratio, ratio * 0.05);
     }
+}
+
+// ---------------------------------------------------------------------------
+// SoftEven -- the even-harmonic generator behind Halo's Colour control.
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (soft_even_at_zero_gain_is_exactly_silence)
+{
+    // Not "nearly nothing". Colour and Drive both scale this curve, and a
+    // generator that still emits at its zero setting is one that can never be
+    // turned off -- the same rule the folder follows.
+    const SoftEven even { 0.0 };
+
+    for (const double x : { -1.0e6, -4.0, -0.3, 0.0, 0.3, 4.0, 1.0e6 })
+    {
+        CHECK (even.evaluate (x) == 0.0);
+        CHECK (even.antiderivative (x) == 0.0);
+    }
+}
+
+TEZLA_TEST (soft_even_is_even_and_stays_bounded)
+{
+    // Even, so it generates the even harmonics the odd curve cannot. Bounded,
+    // so a hot transient produces harmonics rather than an explosion -- this is
+    // the property the ATSR device from the literature does not have.
+    for (const double gain : { 0.1, 1.0, 20.0 })
+    {
+        const SoftEven even { gain };
+
+        for (const double x : { 1.0e-8, 0.01, 0.5, 1.0, 100.0, 1.0e9 })
+        {
+            CHECK_NEAR (even.evaluate (-x), even.evaluate (x), 1.0e-15);
+            CHECK (even.evaluate (x) >= 0.0);
+            CHECK (even.evaluate (x) < 1.0);
+            CHECK (std::isfinite (even.evaluate (x)));
+            CHECK (std::isfinite (even.antiderivative (x)));
+        }
+    }
+}
+
+TEZLA_TEST (soft_even_has_no_linear_term_at_all)
+{
+    // The whole design of HarmonicGenerator rests on this: the even curve
+    // contributes nothing to the fundamental, so there is nothing to cancel.
+    // Small-signal behaviour must be g^2 x^2 / 2 -- pure second order.
+    for (const double gain : { 0.25, 1.0, 8.0 })
+    {
+        const SoftEven even { gain };
+
+        for (const double x : { 1.0e-6, 1.0e-4, 1.0e-3 })
+        {
+            // f(x) = u^2/2 - 3u^4/8 + ..., so the leading term is right to
+            // within 3u^2/4. Asserting a fixed tolerance instead would either
+            // pass vacuously or fail on the fourth-order term and look like a
+            // bug in the curve.
+            const double u = gain * x;
+            const double expected = 0.5 * u * u;
+            CHECK_NEAR (even.evaluate (x) / expected, 1.0, u * u);
+        }
+
+        // Slope at the origin, measured the way ADAA would see it.
+        constexpr double step = 1.0e-9;
+        const double slope = (even.evaluate (step) - even.evaluate (-step)) / (2.0 * step);
+        CHECK_NEAR (slope, 0.0, 1.0e-12);
+    }
+}
+
+TEZLA_TEST (soft_even_antiderivative_is_the_integral_of_the_curve)
+{
+    for (const double gain : { 0.05, 0.5, 2.0, 30.0 })
+    {
+        const SoftEven even { gain };
+        constexpr double step = 1.0e-7;
+
+        for (const double x : { -3.0, -0.7, -0.05, 0.05, 0.7, 3.0 })
+        {
+            const double numerical = (even.antiderivative (x + step)
+                                    - even.antiderivative (x - step)) / (2.0 * step);
+            CHECK_NEAR (numerical, even.evaluate (x), 1.0e-5);
+        }
+    }
+}
+
+TEZLA_TEST (soft_even_antiderivative_survives_tiny_arguments)
+{
+    // The reason the series branch exists, pinned as a number.
+    //
+    // x - asinh(g*x)/g subtracts two values that agree to within g^2 x^3 / 6.
+    // At g*x = 1e-9 that difference is under one ULP of x, so the direct form
+    // returns rounding noise and ADAA turns it into audible hiss on quiet
+    // material. Both forms are computed here and only one of them is right.
+    constexpr double gain = 1.0e-9;
+    const SoftEven even { gain };
+
+    volatile double guard = 1.0;      // keeps the compiler from folding this
+    const double x = static_cast<double> (guard);
+
+    const double exact = gain * gain * x * x * x / 6.0;
+    CHECK_NEAR (even.antiderivative (x) / exact, 1.0, 1.0e-6);
+
+    const double naive = x - std::asinh (gain * x) / gain;
+    CHECK (std::abs (naive - exact) / exact > 0.1);
+}
+
+TEZLA_TEST (soft_even_generates_the_even_harmonic_series)
+{
+    // A sine in should come out with a strong second harmonic and, at this
+    // gain, a fourth -- and essentially nothing at the third.
+    constexpr double sampleRate = 192000.0;
+    constexpr std::size_t fftSize = 1 << 15;
+
+    const double frequency = binExactFrequency (1000.0, sampleRate, fftSize);
+    const auto input = sine (frequency, 1.0, sampleRate, fftSize);
+
+    const SoftEven even { 2.0 };
+    Adaa1<SoftEven> adaa;
+
+    std::vector<double> output (fftSize);
+    double mean = 0.0;
+
+    for (std::size_t i = 0; i < fftSize; ++i)
+    {
+        output[i] = adaa.process (input[i], even);
+        mean += output[i];
+    }
+
+    // Even curves sit on a DC pedestal by construction; remove it so the
+    // harmonic analysis is not reading the offset as signal.
+    mean /= static_cast<double> (fftSize);
+    for (auto& sample : output)
+        sample -= mean;
+
+    const auto spectrum = fftOfReal (output);
+    const double binWidth = sampleRate / static_cast<double> (fftSize);
+
+    const auto levelAt = [&] (int harmonic)
+    {
+        const auto bin = static_cast<std::size_t> (std::llround (frequency * harmonic / binWidth));
+        return std::abs (spectrum[bin]);
+    };
+
+    const double second = levelAt (2);
+    const double third  = levelAt (3);
+    const double fourth = levelAt (4);
+
+    CHECK (second > 0.0);
+    CHECK (fourth > 0.0);
+    CHECK (third < second * 1.0e-6);      // odd harmonics must be absent
+    CHECK (fourth < second);              // and the series must decay
 }
