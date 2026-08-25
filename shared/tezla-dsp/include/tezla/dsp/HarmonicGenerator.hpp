@@ -69,6 +69,30 @@ namespace tezla::dsp {
     return 1.0 / std::sqrt (std::sqrt (inner));
 }
 
+/// Mean output of the even curve, for a sine. The pedestal it sits on.
+///
+/// An even function has a DC term by construction, and that term is not a
+/// constant -- it grows and shrinks with the signal. Leaving it to a DC blocker
+/// downstream does not work, and measuring is what showed why: sweeping a tone
+/// across the band edge, the moving pedestal appeared as -29.5 dBFS of energy
+/// sitting exactly on the blocker's 12 Hz corner. On drums it would be a
+/// permanent low-frequency wobble, which on this music is the worst place to
+/// put one.
+///
+/// So the pedestal is subtracted at the source instead, tracked against the
+/// same amplitude the fundamental trim uses. Like fundamentalGain() this is a
+/// closed-form fit to an elliptic integral -- here the complete integral of the
+/// first kind -- accurate to 0.0035 absolute, or about 49 dB of cancellation.
+/// A DC blocker still follows it for whatever the fit and non-sinusoidal
+/// material leave behind.
+[[nodiscard]] inline double evenPedestal (double v) noexcept
+{
+    const double v2 = v * v;
+    const double inner = 1.0 + 0.860 * v2 + 0.180 * v2 * v + 0.0050 * v2 * v2;
+
+    return 1.0 - 1.0 / std::sqrt (std::sqrt (inner));
+}
+
 /// Blended odd/even harmonic generator, shaped for ADAA (see Adaa.hpp).
 ///
 /// Drive 0 is exactly the zero function -- no harmonics, no DC, nothing to fade
@@ -85,7 +109,8 @@ public:
     void setDrive (double drive) noexcept
     {
         drive_ = std::max (drive, 0.0);
-        updateDerived();
+        updateTrim();
+        updateWeights();
     }
 
     [[nodiscard]] double getDrive() const noexcept { return drive_; }
@@ -106,8 +131,10 @@ public:
     void setInputAmplitude (double amplitude) noexcept
     {
         amplitude_ = std::max (amplitude, 0.0);
-        updateDerived();
+        updateTrim();
     }
+
+    [[nodiscard]] double getInputAmplitude() const noexcept { return amplitude_; }
 
     /// 0 is purely odd (third harmonic upwards), 1 is purely even (second).
     ///
@@ -124,7 +151,7 @@ public:
         colourOdd_  = std::cos (angle);
         colourEven_ = std::sin (angle);
 
-        updateDerived();
+        updateWeights();
     }
 
     [[nodiscard]] double getColour() const noexcept { return colour_; }
@@ -138,7 +165,7 @@ public:
         // of one square root and one division.
         const double s = (u * u) / (r * (r + 1.0));
 
-        return oddWeight_ * x * (oddTrim_ - s) + colourEven_ * s;
+        return oddWeight_ * x * (oddTrim_ - s) + evenWeight_ * (s - evenDc_);
     }
 
     /// Antiderivative, F1(0) = 0.
@@ -164,14 +191,35 @@ public:
         const double oddPart = 0.5 * oddTrim_ * xSquared
                              - (drive_ * drive_ * xSquared * xSquared) / (2.0 * rPlusOne * rPlusOne);
 
-        return oddWeight_ * oddPart + colourEven_ * evenAntiderivative (u);
+        return oddWeight_ * oddPart
+             + evenWeight_ * (evenAntiderivative (u) - evenDc_ * x);
     }
 
 private:
-    void updateDerived() noexcept
+    /// Split from the level match because this one is called per sample, from
+    /// the envelope, and the other is not.
+    void updateTrim() noexcept
     {
-        oddTrim_ = 1.0 - fundamentalGain (drive_ * amplitude_);
+        const double v = drive_ * amplitude_;
 
+        oddTrim_ = 1.0 - fundamentalGain (v);
+        evenDc_  = evenPedestal (v);
+
+        // The even curve is scaled by the amplitude it is being fed, and
+        // measuring is what showed why. Unlike the odd curve it saturates
+        // towards 1 in absolute terms rather than towards the input's own
+        // scale, so without this a quiet band at high drive produces
+        // *full-scale* harmonics: at drive 1.0 a source 30 dB down measured its
+        // second harmonic 8 dB *above* the input that made it. On a decaying
+        // tail the harmonics would hang there while the source fell away.
+        //
+        // With it, both halves scale with the source and Drive is left
+        // controlling the recipe rather than the level.
+        evenWeight_ = colourEven_ * amplitude_;
+    }
+
+    void updateWeights() noexcept
+    {
         // Level match, and why it cannot be a constant.
         //
         // As drive rises the saturator tends towards a square wave of amplitude
@@ -183,7 +231,8 @@ private:
         // The square root tracks that drift to within about 1.5 dB over the
         // whole range; tests/test_HarmonicGenerator.cpp fails if it stops
         // doing so.
-        oddWeight_ = colourOdd_ * kOddLevelMatch * std::sqrt (1.0 + 0.9 * drive_);
+        oddWeight_  = colourOdd_ * kOddLevelMatch * std::sqrt (1.0 + 0.9 * drive_);
+        evenWeight_ = colourEven_ * amplitude_;
     }
 
     /// (u - asinh(u)) / drive, evaluated so it stays accurate as u goes to zero.
@@ -224,7 +273,9 @@ private:
     double colourOdd_  { 1.0 };
     double colourEven_ { 0.0 };
     double oddWeight_  { 0.0 };
+    double evenWeight_ { 0.0 };
     double oddTrim_    { 0.0 };
+    double evenDc_     { 0.0 };
 };
 
 } // namespace tezla::dsp

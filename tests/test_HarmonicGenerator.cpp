@@ -153,21 +153,62 @@ TEZLA_TEST (harmonic_generator_even_half_matches_the_reference_curve)
     // The generator fuses both curves so one square root serves both, which
     // duplicates the even formula that Waveshapers.hpp also states plainly.
     // This is what stops the two drifting apart: SoftEven is the readable
-    // reference, the generator is the fast path, and they must agree exactly.
+    // reference and the generator is the fast path.
+    //
+    // They are not identical, and the two ways they differ are both deliberate:
+    // the generator scales the even half by the amplitude it is being fed, and
+    // subtracts that amplitude's DC pedestal. Stating the relationship in full
+    // is the point -- an equivalence written loosely enough to survive a real
+    // change is not guarding anything.
     HarmonicGenerator generator;
     generator.setColour (1.0);
 
     for (const double drive : { 0.05, 0.5, 4.0, 50.0 })
-    {
-        generator.setDrive (drive);
-        const SoftEven reference { drive };
-
-        for (const double x : { -3.0, -0.5, -1.0e-4, 1.0e-4, 0.5, 3.0 })
+        for (const double amplitude : { 0.25, 1.0, 3.0 })
         {
-            CHECK_NEAR (generator.evaluate (x), reference.evaluate (x), 1.0e-15);
-            CHECK_NEAR (generator.antiderivative (x), reference.antiderivative (x), 1.0e-15);
+            generator.setDrive (drive);
+            generator.setInputAmplitude (amplitude);
+
+            const SoftEven reference { drive };
+            const double pedestal = evenPedestal (drive * amplitude);
+
+            for (const double x : { -3.0, -0.5, -1.0e-4, 1.0e-4, 0.5, 3.0 })
+            {
+                CHECK_NEAR (generator.evaluate (x),
+                            amplitude * (reference.evaluate (x) - pedestal), 1.0e-14);
+                CHECK_NEAR (generator.antiderivative (x),
+                            amplitude * (reference.antiderivative (x) - pedestal * x), 1.0e-14);
+            }
         }
-    }
+}
+
+TEZLA_TEST (fitted_pedestal_matches_the_real_integral)
+{
+    // evenPedestal() is a closed-form fit to a complete elliptic integral of the
+    // first kind, and the even half's DC removal depends on it. Check it against
+    // the integral rather than against numbers copied out of the same fit.
+    //
+    // Absolute error is what matters here, not relative: this is a pedestal
+    // being subtracted, so what is left over is what leaks through.
+    const auto integrated = [] (double v)
+    {
+        constexpr int steps = 20001;
+        double total = 0.0;
+
+        for (int i = 0; i < steps; ++i)
+        {
+            const double t = 0.5 * std::numbers::pi * (static_cast<double> (i) + 0.5)
+                           / static_cast<double> (steps);
+            const double s = std::sin (t);
+            total += 1.0 / std::sqrt (1.0 + v * v * s * s);
+        }
+
+        return 1.0 - (2.0 / std::numbers::pi) * total
+                     * (0.5 * std::numbers::pi / static_cast<double> (steps));
+    };
+
+    for (const double v : { 0.0, 0.1, 0.5, 1.0, 2.0, 5.0, 15.0, 40.0, 120.0, 500.0 })
+        CHECK_NEAR (evenPedestal (v), integrated (v), 4.0e-3);
 }
 
 TEZLA_TEST (harmonic_generator_halves_have_the_symmetry_they_claim)
