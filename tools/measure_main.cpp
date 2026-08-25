@@ -4,10 +4,14 @@
 //   tezla-measure selftest
 //   tezla-measure filter-response [--fs 48000] [--freq 1000] [--q 0.707] [--out response.csv]
 //   tezla-measure clip-aliasing   [--fs 48000] [--freq 1000] [--drive 4]
+//   tezla-measure imd             [--fs 48000] [--freq 3000] [--drive 0.8]
+//   tezla-measure naive-exciter   [--fs 48000] [--freq 5000]
+//   tezla-measure halo            [--fs 48000]
 //
 // New commands get added here as plugins need them. Anything that measures a
 // nonlinearity belongs in this tool, not in a DAW screenshot.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -16,10 +20,12 @@
 
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Version.hpp>
+#include <tezla/measure/Fft.hpp>
 #include <tezla/measure/Harmonics.hpp>
 #include <tezla/measure/Signals.hpp>
 
 #include "EmberdriveEngine.hpp"
+#include "HaloEngine.hpp"
 
 namespace {
 
@@ -32,6 +38,17 @@ struct Args
     double drive        { 4.0 };
     std::string outPath;
 
+    /// Whether --freq was actually given. Without this every command shares one
+    /// default, and the naive-exciter baseline quietly measured a 1 kHz tone
+    /// through a 3 kHz highpass -- which is silence, and duly reported -247 dB
+    /// of aliasing for a structure that actually manages -28.
+    bool frequencyGiven { false };
+
+    [[nodiscard]] double frequencyOr (double fallback) const
+    {
+        return frequencyGiven ? frequency : fallback;
+    }
+
     static Args parse (int argc, char** argv)
     {
         Args args;
@@ -41,7 +58,7 @@ struct Args
             const std::string value = argv[i + 1];
 
             if      (key == "--fs")    args.sampleRate = std::atof (value.c_str());
-            else if (key == "--freq")  args.frequency  = std::atof (value.c_str());
+            else if (key == "--freq")  { args.frequency = std::atof (value.c_str()); args.frequencyGiven = true; }
             else if (key == "--q")     args.q          = std::atof (value.c_str());
             else if (key == "--gain")  args.gainDb     = std::atof (value.c_str());
             else if (key == "--drive") args.drive      = std::atof (value.c_str());
@@ -282,6 +299,242 @@ int runFold (const Args& args)
     return 0;
 }
 
+/// Lead-in long enough for Halo's band envelope to settle, in seconds rather
+/// than in samples.
+///
+/// A two-pole 30 ms average needs about a second. A fixed 32768-sample lead-in
+/// is 0.68 s at 48 kHz but only 0.17 s at 192 kHz, so with a sample count the
+/// envelope was still drifting inside the measurement window at high rates --
+/// which modulated the wet path and reported itself as 60 dB of aliasing that
+/// was not there.
+constexpr double kHaloSettleSeconds = 1.5;
+
+std::vector<double> settlingSine (double frequency, double amplitude,
+                                  double sampleRate, std::size_t windowLength)
+{
+    const auto preroll = static_cast<std::size_t> (sampleRate * kHaloSettleSeconds);
+    return tezla::measure::sine (frequency, amplitude, sampleRate, preroll + windowLength);
+}
+
+/// Runs a mono signal through a Halo engine, block by block.
+std::vector<double> runHalo (const tezla::halo::Parameters& parameters,
+                             const std::vector<double>& input, double sampleRate)
+{
+    tezla::halo::Engine engine;
+    engine.prepare (sampleRate, 271, 1);
+    engine.setParameters (parameters);
+    engine.reset();
+
+    std::vector<double> output = input;
+
+    for (std::size_t offset = 0; offset < output.size(); offset += 271)
+    {
+        const int numSamples = static_cast<int> (std::min<std::size_t> (271, output.size() - offset));
+        double* pointer = output.data() + offset;
+        engine.process (&pointer, 1, numSamples);
+    }
+
+    return output;
+}
+
+/// Two-tone intermodulation.
+///
+/// Harmonic distortion is the number everyone quotes, and for a harmonic
+/// exciter it is the wrong one on its own: harmonics land on musically related
+/// frequencies and mostly sound like tone, while intermodulation products land
+/// on unrelated ones and sound like dirt. The virtual-bass literature grades
+/// these devices on IMD for exactly that reason.
+int runImd (const Args& args)
+{
+    using namespace tezla::measure;
+    using namespace tezla::halo;
+
+    constexpr std::size_t fftSize = 32768;
+    const double sampleRate = args.sampleRate;
+
+    // Two closely spaced tones, so the difference product lands well below both
+    // and cannot be confused with a harmonic of either.
+    const double centre = args.frequencyOr (3000.0);
+    const double lower = binExactFrequency (centre, sampleRate, fftSize);
+    const double upper = binExactFrequency (centre * 1.1, sampleRate, fftSize);
+    const double difference = upper - lower;
+
+    std::printf ("Halo intermodulation -- %.1f Hz + %.1f Hz at %.0f Hz, each at -6 dBFS\n",
+                 lower, upper, sampleRate);
+    std::printf ("Difference product at %.1f Hz, reported relative to one input tone.\n\n", difference);
+    std::printf ("  %-8s %14s %14s %14s\n", "drive", "colour 0", "colour 0.5", "colour 1");
+
+    for (const double drive : { 0.25, 0.5, 0.75, 1.0 })
+    {
+        std::printf ("  %6.2f  ", drive);
+
+        for (const double colour : { 0.0, 0.5, 1.0 })
+        {
+            Parameters parameters;
+            parameters.drive    = drive;
+            parameters.colour   = colour;
+            parameters.focusHz  = centre * 0.6;
+            parameters.autoTrim = false;
+
+            std::vector<double> input (static_cast<std::size_t> (sampleRate * kHaloSettleSeconds)
+                                       + fftSize);
+            for (std::size_t i = 0; i < input.size(); ++i)
+            {
+                const double t = static_cast<double> (i) / sampleRate;
+                input[i] = 0.5 * std::sin (2.0 * 3.14159265358979323846 * lower * t)
+                         + 0.5 * std::sin (2.0 * 3.14159265358979323846 * upper * t);
+            }
+
+            const auto output = runHalo (parameters, input, sampleRate);
+            const std::vector<double> settled (output.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                               output.end());
+
+            const auto spectrum = fftOfReal (settled);
+            const double binWidth = sampleRate / static_cast<double> (fftSize);
+
+            const auto level = [&] (double hz)
+            {
+                const auto bin = static_cast<std::size_t> (std::llround (hz / binWidth));
+                return 2.0 * std::abs (spectrum[bin]) / static_cast<double> (fftSize);
+            };
+
+            const double reference = level (lower);
+            const double product   = level (difference);
+
+            std::printf (" %14.1f", 20.0 * std::log10 (std::max (product / reference, 1.0e-30)));
+        }
+        std::printf ("\n");
+    }
+
+    std::printf ("\nThe difference tone is what a listener hears as roughness rather than as\n");
+    std::printf ("brightness, so it matters more than THD on this kind of processor.\n");
+    return 0;
+}
+
+/// The baseline every Halo figure is quoted against.
+///
+/// A conventional exciter is a highpass, a distortion, and a blend, all at the
+/// host's own sample rate. That structure is built here in a few lines so the
+/// comparison is honest -- our own code, measured the same way, rather than a
+/// number claimed about somebody else's plugin.
+int runNaiveExciter (const Args& args)
+{
+    using namespace tezla::dsp;
+    using namespace tezla::measure;
+
+    constexpr std::size_t fftSize = 32768;
+    const double sampleRate = args.sampleRate;
+
+    // The same 5 kHz tone `halo` uses. If the two commands measured different
+    // tones the comparison between them would not be one.
+    const double frequency = binExactFrequency (args.frequencyOr (5000.0), sampleRate, fftSize);
+
+    std::printf ("Naive exciter baseline -- highpass, tanh, blend, all at %.0f Hz.\n", sampleRate);
+    std::printf ("No oversampling and no antialiasing, which is the structure to beat.\n");
+    std::printf ("Test tone %.1f Hz at -0.9 dBFS, the same one `halo` uses.\n\n", frequency);
+    std::printf ("  %-10s %18s %18s\n", "focus", "audible alias dB", "full-band dB");
+
+    for (const double focusHz : { 1000.0, 3000.0, 6000.0 })
+    {
+        Biquad<double> highA, highB;
+        const auto coefficients = design::highpass (focusHz, 0.70710678118654752, sampleRate);
+        highA.setCoefficients (coefficients);
+        highB.setCoefficients (coefficients);
+
+        auto signal = sine (frequency, 0.9, sampleRate, 2 * fftSize);
+
+        for (double& sample : signal)
+        {
+            const double band = highB.process (highA.process (sample));
+            sample += std::tanh (8.0 * band) * 0.25;
+        }
+
+        const std::vector<double> settled (signal.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                           signal.end());
+        const auto report = analyseHarmonics (settled, sampleRate, frequency);
+
+        std::printf ("  %7.0f Hz %18.1f %18.1f\n", focusHz, report.audibleAliasingDb, report.aliasingDb);
+    }
+
+    std::printf ("\nCompare against `tezla-measure halo`, which is the same measurement on the\n");
+    std::printf ("real engine with ADAA inside an oversampled block.\n");
+    return 0;
+}
+
+int runHalo (const Args& args)
+{
+    using namespace tezla::measure;
+    using namespace tezla::halo;
+
+    constexpr std::size_t fftSize = 32768;
+    const double sampleRate = args.sampleRate;
+    const double frequency = binExactFrequency (5000.0, sampleRate, fftSize);
+
+    std::printf ("Halo -- audible-band aliasing (dB rel. fundamental) at %.0f Hz\n", sampleRate);
+    std::printf ("5 kHz tone at -0.9 dBFS, Focus 3 kHz, Ceiling on at 16 kHz, Auto oversampling.\n\n");
+    std::printf ("  %-8s %14s %14s %14s\n", "drive", "colour 0", "colour 0.5", "colour 1");
+
+    for (const double drive : { 0.25, 0.5, 0.75, 1.0 })
+    {
+        std::printf ("  %6.2f  ", drive);
+
+        for (const double colour : { 0.0, 0.5, 1.0 })
+        {
+            Parameters parameters;
+            parameters.drive    = drive;
+            parameters.colour   = colour;
+            parameters.focusHz  = 3000.0;
+            parameters.autoTrim = false;
+
+            const auto output = runHalo (parameters, settlingSine (frequency, 0.9, sampleRate, fftSize),
+                                         sampleRate);
+            const std::vector<double> settled (output.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                               output.end());
+
+            std::printf (" %14.1f", analyseHarmonics (settled, sampleRate, frequency).audibleAliasingDb);
+        }
+        std::printf ("\n");
+    }
+
+    std::printf ("\nHarmonic content of the wet path alone, Listen on, Drive 0.7, Focus 2 kHz,\n");
+    std::printf ("Ceiling off, in dB relative to the input tone:\n\n");
+    std::printf ("  %-10s %10s %10s %10s %10s\n", "colour", "H1", "H2", "H3", "H4");
+
+    for (const double colour : { 0.0, 0.5, 1.0 })
+    {
+        Parameters parameters;
+        parameters.listen    = true;
+        parameters.drive     = 0.7;
+        parameters.colour    = colour;
+        parameters.focusHz   = 2000.0;
+        parameters.ceilingOn = false;
+        parameters.autoTrim  = false;
+
+        const double tone = binExactFrequency (4000.0, sampleRate, fftSize);
+        const auto output = runHalo (parameters, settlingSine (tone, 0.8, sampleRate, fftSize), sampleRate);
+        const std::vector<double> settled (output.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                           output.end());
+
+        const auto spectrum = fftOfReal (settled);
+        const double binWidth = sampleRate / static_cast<double> (fftSize);
+
+        std::printf ("  %8.2f  ", colour);
+
+        for (int harmonic = 1; harmonic <= 4; ++harmonic)
+        {
+            const auto bin = static_cast<std::size_t> (std::llround (tone * harmonic / binWidth));
+            const double amplitude = 2.0 * std::abs (spectrum[bin]) / static_cast<double> (fftSize);
+            std::printf (" %10.1f", 20.0 * std::log10 (std::max (amplitude / 0.8, 1.0e-30)));
+        }
+        std::printf ("\n");
+    }
+
+    std::printf ("\nH1 is the fundamental leaking into the wet path, which a conventional exciter\n");
+    std::printf ("mixes back at close to full level. Here it is what is left after the even half\n");
+    std::printf ("cannot produce one at all and the odd half subtracts its own.\n");
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -290,6 +543,9 @@ void printUsage()
     std::printf ("  clip-aliasing   [--fs --freq --drive]\n");
     std::printf ("  emberdrive      [--freq --gain CHARACTER --out FILE]\n");
     std::printf ("  fold            [--fs]  wavefolder aliasing vs input frequency\n");
+    std::printf ("  halo            [--fs]  exciter aliasing and harmonic content\n");
+    std::printf ("  imd             [--fs --freq]  two-tone intermodulation (3 kHz default)\n");
+    std::printf ("  naive-exciter   [--fs --freq]  host-rate baseline to beat (5 kHz default)\n");
 }
 
 } // namespace
@@ -310,6 +566,9 @@ int main (int argc, char** argv)
     if (command == "clip-aliasing")   return runClipAliasing (args);
     if (command == "emberdrive")      return runEmberdrive (args);
     if (command == "fold")            return runFold (args);
+    if (command == "imd")             return runImd (args);
+    if (command == "naive-exciter")   return runNaiveExciter (args);
+    if (command == "halo")            return runHalo (args);
 
     printUsage();
     return 1;

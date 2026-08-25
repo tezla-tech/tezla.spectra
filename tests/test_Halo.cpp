@@ -71,6 +71,24 @@ double binLevelDb (const std::vector<double>& signal, double sampleRate,
     return dsp::gainToDb (amplitude / referenceAmplitude, -400.0);
 }
 
+/// A test tone with enough silence-free lead-in for the engine to settle,
+/// measured in seconds rather than in samples.
+///
+/// This matters more than it looks. The band envelope is a two-pole 30 ms
+/// average, so it needs about a second to be properly settled -- and a fixed
+/// 32768-sample lead-in is 0.68 s at 48 kHz but only 0.17 s at 192 kHz. With
+/// the fixed count, the envelope was still drifting inside the measurement
+/// window at high rates, which modulated the wet path and dressed itself up as
+/// 60 dB of extra aliasing that was not there. Time, not samples.
+constexpr double kSettleSeconds = 1.5;
+
+std::vector<double> settlingSine (double frequency, double amplitude,
+                                  double sampleRate, std::size_t windowLength)
+{
+    const auto preroll = static_cast<std::size_t> (sampleRate * kSettleSeconds);
+    return sine (frequency, amplitude, sampleRate, preroll + windowLength);
+}
+
 Parameters defaultParameters()
 {
     Parameters parameters;
@@ -170,7 +188,7 @@ TEZLA_TEST (halo_produces_no_dc)
             constexpr std::size_t length = 1 << 15;
             const double frequency = binExactFrequency (mode == BandMode::Above ? 4000.0 : 60.0,
                                                         96000.0, length);
-            const auto input = sine (frequency, 0.6, 96000.0, length * 2);
+            const auto input = settlingSine (frequency, 0.6, 96000.0, length);
 
             const auto output = run (parameters, input, 96000.0);
             const auto settled = steadyState (output, length);
@@ -208,7 +226,7 @@ TEZLA_TEST (halo_wet_path_carries_almost_no_fundamental)
             parameters.focusHz = 2000.0;
             parameters.ceilingOn = false;
 
-            const auto input = sine (frequency, 0.8, sampleRate, length * 2);
+            const auto input = settlingSine (frequency, 0.8, sampleRate, length);
             const auto output = run (parameters, input, sampleRate);
             const auto settled = steadyState (output, length);
 
@@ -248,7 +266,7 @@ TEZLA_TEST (halo_track_decides_whether_harmonics_follow_the_source)
         parameters.focusHz = 2000.0;
         parameters.ceilingOn = false;
 
-        const auto input = sine (frequency, amplitude, sampleRate, length * 2);
+        const auto input = settlingSine (frequency, amplitude, sampleRate, length);
         const auto output = run (parameters, input, sampleRate);
         const auto settled = steadyState (output, length);
 
@@ -287,7 +305,7 @@ TEZLA_TEST (halo_sounds_the_same_at_every_session_rate)
         parameters.ceilingOn = false;
 
         const double frequency = binExactFrequency (3000.0, sampleRate, length);
-        const auto input = sine (frequency, 0.7, sampleRate, length * 2);
+        const auto input = settlingSine (frequency, 0.7, sampleRate, length);
         const auto output = run (parameters, input, sampleRate);
         const auto settled = steadyState (output, length);
 
@@ -320,7 +338,7 @@ TEZLA_TEST (halo_does_not_alias_in_the_audible_band)
         parameters.colour = colour;
         parameters.focusHz = 3000.0;
 
-        const auto input = sine (frequency, 0.9, sampleRate, length * 2);
+        const auto input = settlingSine (frequency, 0.9, sampleRate, length);
         const auto output = run (parameters, input, sampleRate);
         const auto settled = steadyState (output, length);
 
@@ -353,7 +371,7 @@ TEZLA_TEST (halo_below_mode_puts_harmonics_where_a_small_speaker_can_find_them)
     parameters.colour = 0.5;
     parameters.ceilingOn = false;
 
-    const auto input = sine (frequency, 0.8, sampleRate, length * 2);
+    const auto input = settlingSine (frequency, 0.8, sampleRate, length);
     const auto output = run (parameters, input, sampleRate);
     const auto settled = steadyState (output, length);
 
@@ -389,7 +407,7 @@ TEZLA_TEST (halo_ceiling_actually_bounds_the_harmonics)
     parameters.colour = 0.5;
     parameters.focusHz = 1200.0;
 
-    const auto input = sine (frequency, 0.8, sampleRate, length * 2);
+    const auto input = settlingSine (frequency, 0.8, sampleRate, length);
 
     parameters.ceilingOn = false;
     const auto wideOpen = steadyState (run (parameters, input, sampleRate), length);
