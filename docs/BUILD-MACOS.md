@@ -41,8 +41,8 @@ which applies unchanged on macOS.
 ## 2. Build
 
 ```bash
-git clone https://github.com/wingit33/tezla.tech.git
-cd tezla.tech
+git clone https://github.com/tezla-tech/tezla.spectra.git
+cd tezla.spectra
 
 ./scripts/build.sh Emberdrive --install
 ```

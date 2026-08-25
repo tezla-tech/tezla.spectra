@@ -1,5 +1,5 @@
 # ==============================================================================
-#  tezla.tech — top-level build
+#  tezla.spectra — top-level build
 #
 #  Builds the framework-free DSP library and its tests/tools with no external
 #  dependencies at all, and optionally builds any subset of the VST3 plugins
@@ -34,9 +34,9 @@ if(APPLE)
     endif()
 endif()
 
-project(TezlaTech
+project(TezlaSpectra
     VERSION 0.1.0
-    DESCRIPTION "tezla.tech VST3 plugin workshop"
+    DESCRIPTION "tezla.spectra plugin workshop"
     # C as well as C++: JUCE vendors zlib, libpng and friends as C, and refuses
     # to configure without it.
     LANGUAGES C CXX)

@@ -1,4 +1,4 @@
-# CLAUDE.md — tezla.tech plugin workshop
+# CLAUDE.md — tezla.spectra plugin workshop
 
 Standing instructions for Claude working in this repository. Read this before
 touching anything. If a rule here conflicts with a request in chat, the chat
@@ -102,7 +102,7 @@ the sound and the workflow*, never a source of code.
 ## 3. Repository layout
 
 ```
-tezla.tech/
+tezla.spectra/
 ├── CLAUDE.md                 # this file
 ├── README.md                 # human-facing overview
 ├── CMakeLists.txt            # top-level; aggregates everything
@@ -381,6 +381,25 @@ Detail lives in `docs/PLUGIN-CONVENTIONS.md`; the short version:
   also holds reserved names for plugins already sketched out (`Ferrite` for the
   tape machine, `Anvil` for amp/cabinet), so they do not get spent on something
   else.
+
+### Identifiers that are frozen forever
+
+The project is **tezla.spectra**; the company is **Tezla Tech**; the domain is
+**tezla.tech**. Those are three different things and only the first is a project
+name. Renaming the project must not touch the other two, because four
+identifiers below are load-bearing and changing any of them silently destroys
+existing work:
+
+| Identifier | Value | What breaks if it changes |
+|---|---|---|
+| `PLUGIN_MANUFACTURER_CODE` | `Tzla` | Combined with the plugin code it *is* the VST3 unique ID, and it is the AU manufacturer code. Change it and every saved project loses its plugin instances — the host looks for an ID that no longer exists and reports the plugin as missing. |
+| `PLUGIN_CODE` | `Tzem` for Emberdrive | Same. |
+| `BUNDLE_ID` | `tech.tezla.<Name>` | Reverse-DNS of the **domain**, not the project. The domain has not changed, so neither does this. |
+| Parameter string IDs | e.g. `drive` | Renaming one resets that parameter in every project that uses it. |
+
+A rename touches URLs, titles, the CMake `project()` and prose. It does not
+touch plugin identity. If the manufacturer code ever genuinely has to change,
+that is a **new plugin** with a migration path, not a rename.
 
 ---
 

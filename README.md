@@ -33,8 +33,8 @@ Install [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/down
 all free. Then:
 
 ```bat
-git clone https://github.com/wingit33/tezla.tech.git
-cd tezla.tech
+git clone https://github.com/tezla-tech/tezla.spectra.git
+cd tezla.spectra
 
 scripts\build.bat                        :: build everything, Release
 scripts\build.bat Emberdrive             :: build one plugin
@@ -65,8 +65,8 @@ Audio Unit**, universal for Apple Silicon and Intel:
 xcode-select --install
 brew install cmake ninja
 
-git clone https://github.com/wingit33/tezla.tech.git
-cd tezla.tech
+git clone https://github.com/tezla-tech/tezla.spectra.git
+cd tezla.spectra
 ./scripts/build.sh Emberdrive --install
 ```
 

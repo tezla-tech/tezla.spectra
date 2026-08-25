@@ -296,7 +296,7 @@ jobs:
             platform="$(basename "$dir")"
             # -y preserves the bundle structure; macOS bundles are directories
             # and a plain zip of the contents would not be loadable.
-            (cd "$dir" && zip -qry "../../release/tezla-${version}-${platform}.zip" .)
+            (cd "$dir" && zip -qry "../../release/tezla-spectra-${version}-${platform}.zip" .)
           done
 
           ls -la release
@@ -354,7 +354,7 @@ jobs:
           # creates one, and without it the tag would land on the default branch
           # rather than on the commit that was actually built and tested.
           gh release create "$VERSION" release/*.zip \
-            --title "tezla.tech $VERSION" \
+            --title "tezla.spectra $VERSION" \
             --target "$GITHUB_SHA" \
             --notes-file release-notes.md
 

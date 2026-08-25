@@ -21,6 +21,14 @@ whichever it saw first. `tezla_add_plugin()` rejects a code that is not exactly
 four characters, but it cannot detect a collision — the registry is the only
 guard, so keep it current.
 
+**None of the four values above may change once a plugin has shipped**, and in
+particular a project rename must not touch them. The project is *tezla.spectra*;
+the company is *Tezla Tech*; the domain is *tezla.tech*. Only the first is a
+project name. Changing the manufacturer or plugin code changes the plugin's
+identity, and every saved project loses its instances — the host looks for an ID
+that no longer exists and reports the plugin as missing. See
+[`../CLAUDE.md`](../CLAUDE.md) §8.
+
 ---
 
 ## Parameters

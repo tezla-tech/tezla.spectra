@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  tezla.tech build script for macOS and Linux.
+#  tezla.spectra build script for macOS and Linux.
 #
 #  On macOS this is the primary way to build: VST3 and Audio Unit, universal
 #  arm64 + x86_64 by default. On Linux it is mainly how the framework-free DSP

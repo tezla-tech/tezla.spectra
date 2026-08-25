@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 rem ============================================================================
-rem  tezla.tech build script -- native cmd.exe, no PowerShell involved.
+rem  tezla.spectra build script -- native cmd.exe, no PowerShell involved.
 rem
 rem  Deliberately not a wrapper around build.ps1. Running an unsigned .ps1 means
 rem  either relaxing the machine's execution policy or passing -ExecutionPolicy
@@ -269,7 +269,7 @@ if "!ANY!"=="0" echo    ^(none yet^)
 exit /b 0
 
 :usage
-echo tezla.tech build script
+echo tezla.spectra build script
 echo.
 echo   build.bat                       all plugins, Release
 echo   build.bat Emberdrive            one plugin
