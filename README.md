@@ -76,8 +76,10 @@ downloaded plugins loading: **[`docs/BUILD-MACOS.md`](docs/BUILD-MACOS.md)**.
 ## Prebuilt binaries
 
 Every push builds Windows and macOS plugins in CI, downloadable from the run's
-artifacts; version tags cut a GitHub Release. See
-**[`docs/CI.md`](docs/CI.md)**.
+**Artifacts**. To cut a GitHub Release, either push a version tag
+(`git tag v0.3.0 && git push origin v0.3.0`) or use **Actions → CI → Run
+workflow** and type a version. An ordinary push deliberately does not release.
+See **[`docs/CI.md`](docs/CI.md)**.
 
 ---
 

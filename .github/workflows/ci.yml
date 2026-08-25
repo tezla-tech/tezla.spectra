@@ -1,7 +1,17 @@
 name: CI
 
 # Tests run on every push and pull request. Plugin builds run alongside them and
-# upload downloadable bundles; a version tag additionally cuts a Release.
+# upload downloadable bundles.
+#
+# Releases happen two ways, and never automatically on an ordinary push -- that
+# would mean a release per commit:
+#
+#   1. Push a tag:   git tag v0.3.0 && git push origin v0.3.0
+#   2. Actions -> CI -> "Run workflow", and type a version into the box.
+#
+# If you were expecting a release and got a skipped job, it is almost certainly
+# because neither of those happened. The build job writes the instructions into
+# the run summary.
 #
 # macOS runner minutes are billed at 10x on private repositories. If that ever
 # matters, move the `build` job behind `workflow_dispatch` and tags only.
@@ -11,6 +21,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Cut a release with this version (e.g. v0.3.0). Leave empty to just build.'
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -192,19 +207,74 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # A skipped job on the run page says "Skipped" and nothing else. Putting
+      # the reason and the remedy in the summary means nobody has to go and read
+      # the workflow to find out why no release appeared.
+      - name: Explain what happens next
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.name }} build"
+            echo
+            echo "Download from the **Artifacts** section at the bottom of this run."
+            echo
+            if [ "${{ runner.os }}" = "macOS" ]; then
+              echo "macOS builds are universal and unsigned. Clear the quarantine"
+              echo "attribute before your DAW will load them:"
+              echo
+              echo '```bash'
+              echo 'xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/*.vst3'
+              echo 'xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/*.component'
+              echo '```'
+              echo
+            fi
+            if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" != "true" ] \
+               && [ -z "${{ github.event.inputs.release_version }}" ]; then
+              echo "_No release was cut: this run is not a version tag and no version"
+              echo "was given. To cut one, either push a tag:_"
+              echo
+              echo '```bash'
+              echo 'git tag v0.3.0 && git push origin v0.3.0'
+              echo '```'
+              echo
+              echo "_or use **Run workflow** on this workflow and type a version._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ---------------------------------------------------------------------------
   # A version tag turns the artefacts into a Release.
   # ---------------------------------------------------------------------------
   release:
     name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    # Two routes in: a version tag, or a manual run with a version typed in.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != ''
+    needs: [test, test-arm64, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
+
+      # Resolved through the environment rather than interpolated straight into
+      # the script: workflow inputs are attacker-controlled on a public
+      # repository, and `${{ }}` inside a run block is textual substitution.
+      - name: Resolve the version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.release_version }}
+        run: |
+          version="${INPUT_VERSION:-$GITHUB_REF_NAME}"
+
+          if ! printf '%s' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a version like v1.2.3 -- refusing to tag with it."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
 
       - name: Download the built plugins
         uses: actions/download-artifact@v4
@@ -215,7 +285,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p release
-          version="${GITHUB_REF_NAME}"
+          version="${{ steps.version.outputs.version }}"
+
+          if [ -z "$(ls -A artifacts 2>/dev/null)" ]; then
+            echo "::error::No artifacts were downloaded; nothing to release."
+            exit 1
+          fi
 
           for dir in artifacts/*/; do
             platform="$(basename "$dir")"
@@ -225,6 +300,7 @@ jobs:
           done
 
           ls -la release
+          [ -n "$(ls -A release)" ] || { echo "::error::No zips were produced."; exit 1; }
 
       # Written to a file with a quoted heredoc rather than passed inline: the
       # notes contain backticks, backslashes and Windows paths, all of which a
@@ -272,7 +348,16 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" release/*.zip \
-            --title "tezla.tech ${GITHUB_REF_NAME}" \
+          # --target matters on the manual route: there is no tag yet, so gh
+          # creates one, and without it the tag would land on the default branch
+          # rather than on the commit that was actually built and tested.
+          gh release create "$VERSION" release/*.zip \
+            --title "tezla.tech $VERSION" \
+            --target "$GITHUB_SHA" \
             --notes-file release-notes.md
+
+          echo "### Released $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$VERSION" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

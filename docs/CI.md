@@ -52,20 +52,38 @@ JUCE is cloned once and cached, keyed on the version read out of
 [`cmake/FetchJUCE.cmake`](../cmake/FetchJUCE.cmake) — so bumping the pin there
 is the only change needed and the cache invalidates itself.
 
-## 3. Releases, on a version tag
+## 3. Releases
 
-Pushing a tag beginning with `v` additionally packages the artifacts into zips
-and creates a GitHub Release:
+**A release never happens on an ordinary push** — that would mean one per
+commit. There are two ways to ask for one, and if you were expecting a release
+and got a skipped job, it is because neither happened.
+
+### Push a version tag
 
 ```bash
 git tag v0.3.0
 git push origin v0.3.0
 ```
 
-The release notes are generated from
-[a template in the workflow](../.github/workflows/ci.yml) and include the macOS
-quarantine instructions, because without them a downloaded plugin will not load
-and the DAW's error message blames the plugin.
+### Or run the workflow by hand
+
+**Actions → CI → Run workflow**, then type a version into the box. Useful when
+you want a build to hand to someone without committing to a tag first — the tag
+is created for you, pointing at the exact commit that was built and tested.
+
+Leaving the box empty just builds, and cuts no release.
+
+### Either way
+
+The version must look like `v1.2.3`, optionally with a pre-release suffix
+(`v1.2.3-beta.1`). Anything else fails the job rather than creating a tag you
+did not mean. Both routes package the artifacts into per-platform zips and
+attach them to a GitHub Release, with notes that include the macOS quarantine
+instructions — without those, a downloaded plugin will not load and the DAW's
+error message blames the plugin.
+
+The build job writes all of this into the run summary, so the reason a release
+did or did not happen is on the run page rather than only in this file.
 
 ---
 
