@@ -1,4 +1,4 @@
-# tezla.tech
+# tezla.spectra
 
 64-bit **VST3** audio plugins for Windows 11 / FL Studio 2026 — built for
 dubstep and DnB/jungle production.
