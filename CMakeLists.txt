@@ -14,6 +14,26 @@
 
 cmake_minimum_required(VERSION 3.22)
 
+# ---------------------------------------------------------------- macOS ------
+# Both of these must be set BEFORE project(), because CMake bakes them into the
+# compiler checks it runs there. Setting them afterwards silently does nothing.
+if(APPLE)
+    option(TEZLA_UNIVERSAL_BINARY "Build a universal arm64 + x86_64 binary on macOS" ON)
+
+    if(TEZLA_UNIVERSAL_BINARY AND NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+        # One bundle that runs natively on Apple Silicon and on Intel. Roughly
+        # doubles compile time and binary size; the alternative is shipping two
+        # downloads and having people pick the wrong one.
+        set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures to build")
+    endif()
+
+    if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+        # 11.0 is the first release with Apple Silicon, so a universal binary
+        # cannot usefully target anything older on the arm64 side anyway.
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+    endif()
+endif()
+
 project(TezlaTech
     VERSION 0.1.0
     DESCRIPTION "tezla.tech VST3 plugin workshop"
@@ -45,6 +65,7 @@ option(TEZLA_BUILD_STANDALONE "Also build a standalone app for each plugin"   OF
 option(TEZLA_COPY_AFTER_BUILD "Copy built VST3 bundles to the system VST3 folder" OFF)
 option(TEZLA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"           OFF)
 option(TEZLA_ENABLE_AVX2      "Build with AVX2 (needs a 2013-or-newer CPU)"   OFF)
+option(TEZLA_BUILD_AU         "Also build Audio Unit versions (macOS only)"   ON)
 
 include(TezlaCompilerOptions)
 

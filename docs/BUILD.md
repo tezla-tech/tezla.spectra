@@ -3,6 +3,14 @@
 Everything here is free. No IDE is required, no SDK has to be downloaded by
 hand, and a clean clone builds with one command.
 
+> **On a Mac?** Use **[`BUILD-MACOS.md`](BUILD-MACOS.md)** instead — it covers
+> VST3 *and* Audio Unit, universal binaries, and the Gatekeeper quarantine issue
+> that stops downloaded plugins loading. Sections 3 and 4 of this document
+> (manual CMake, and using your own JUCE) apply on every platform.
+>
+> **Want a prebuilt binary?** Every push builds Windows and macOS plugins in CI
+> — see [`CI.md`](CI.md).
+
 ---
 
 ## 1. Install the tools (Windows 11)

@@ -1,0 +1,239 @@
+name: CI
+
+# Tests run on every push and pull request. Plugin builds run alongside them and
+# upload downloadable bundles; a version tag additionally cuts a Release.
+#
+# macOS runner minutes are billed at 10x on private repositories. If that ever
+# matters, move the `build` job behind `workflow_dispatch` and tags only.
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # The framework-free DSP, on all three platforms. No JUCE, no download, no GUI
+  # stack -- this is the whole point of keeping the DSP independent of the
+  # plugin framework, and it means a platform-specific numerical bug shows up in
+  # about a minute rather than after a full plugin build.
+  # ---------------------------------------------------------------------------
+  test:
+    name: DSP tests (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  name: Linux }
+          - { os: windows-latest, name: Windows }
+          - { os: macos-latest,   name: macOS }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTEZLA_PLUGINS=NONE
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel
+
+      - name: Run tests
+        shell: bash
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # The measurement harness has bugs like any other code, and a run where it
+      # silently mis-measures is worse than one that fails. Checking the
+      # instrument before trusting it is a rule in CLAUDE.md.
+      - name: Verify the measurement harness
+        shell: bash
+        run: |
+          exe="$(find build -type f \( -name 'tezla-measure' -o -name 'tezla-measure.exe' \) | head -1)"
+          if [ -z "$exe" ]; then
+            echo "tezla-measure was not built" >&2
+            exit 1
+          fi
+          "$exe" selftest
+
+  # ---------------------------------------------------------------------------
+  # The plugins themselves. Windows gets VST3; macOS gets VST3 and Audio Unit,
+  # universal for Apple Silicon and Intel.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Plugins (${{ matrix.name }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: Windows, artifact: windows-vst3 }
+          - { os: macos-latest,   name: macOS,   artifact: macos-vst3-au }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JUCE is a few hundred MB and does not change between runs, so it is
+      # cloned once and cached. The version is read from the CMake file rather
+      # than repeated here, so there is only one place to change it.
+      - name: Read the pinned JUCE version
+        id: juce
+        shell: bash
+        run: |
+          version="$(sed -n 's/.*TEZLA_JUCE_VERSION "\([^"]*\)".*/\1/p' cmake/FetchJUCE.cmake | head -1)"
+          if [ -z "$version" ]; then
+            echo "Could not read TEZLA_JUCE_VERSION from cmake/FetchJUCE.cmake" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Pinned JUCE version: $version"
+
+      - name: Cache JUCE
+        id: cache-juce
+        uses: actions/cache@v4
+        with:
+          path: JUCE
+          key: juce-${{ steps.juce.outputs.version }}-${{ runner.os }}
+
+      - name: Clone JUCE
+        if: steps.cache-juce.outputs.cache-hit != 'true'
+        shell: bash
+        run: git clone --depth 1 --branch "${{ steps.juce.outputs.version }}" https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DTEZLA_PLUGINS=ALL \
+                -DTEZLA_JUCE_PATH="${{ github.workspace }}/JUCE" \
+                -DTEZLA_BUILD_TESTS=OFF \
+                -DTEZLA_BUILD_TOOLS=OFF
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel
+
+      # Bundles are directories on both platforms, hence -type d. That is not
+      # cosmetic: on Windows a VST3 bundle is a folder containing
+      # Contents/x86_64-win/Name.vst3, a *file* with the same extension, so
+      # matching on the name alone collects the bundle and the DLL inside it.
+      #
+      # The empty check is here because upload-artifact will happily upload
+      # nothing at all if the build quietly produced no bundles.
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          mkdir -p staging
+          found=0
+          while IFS= read -r bundle; do
+            echo "Found $bundle"
+            cp -R "$bundle" staging/
+            found=1
+          done < <(find build -maxdepth 8 -type d \( -name '*.vst3' -o -name '*.component' \) -print)
+
+          if [ "$found" -eq 0 ]; then
+            echo "No plugin bundles were produced." >&2
+            exit 1
+          fi
+          ls -la staging
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: staging/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # A version tag turns the artefacts into a Release.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the built plugins
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p release
+          version="${GITHUB_REF_NAME}"
+
+          for dir in artifacts/*/; do
+            platform="$(basename "$dir")"
+            # -y preserves the bundle structure; macOS bundles are directories
+            # and a plain zip of the contents would not be loadable.
+            (cd "$dir" && zip -qry "../../release/tezla-${version}-${platform}.zip" .)
+          done
+
+          ls -la release
+
+      # Written to a file with a quoted heredoc rather than passed inline: the
+      # notes contain backticks, backslashes and Windows paths, all of which a
+      # double-quoted shell string would try to interpret.
+      - name: Write the release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'NOTES'
+          ## Installing
+
+          **Windows** — copy the `.vst3` folder into
+          `C:\Program Files\Common Files\VST3\`, then rescan in your DAW.
+
+          **macOS** — copy `.vst3` into `~/Library/Audio/Plug-Ins/VST3/` and
+          `.component` into `~/Library/Audio/Plug-Ins/Components/`.
+
+          ### macOS: clear the quarantine first
+
+          These builds are **not code signed**, so macOS quarantines anything
+          downloaded and your DAW will report the plugin as damaged, or simply
+          not list it. The plugin is fine; the attribute is the problem:
+
+          ```bash
+          xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/*.vst3
+          xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/*.component
+          ```
+
+          Logic caches Audio Unit scans. If a new version does not appear:
+
+          ```bash
+          killall -9 AudioComponentRegistrar
+          ```
+
+          ### Formats
+
+          macOS builds are universal (Apple Silicon and Intel) and include both
+          VST3 and Audio Unit — Logic and GarageBand load nothing but AU.
+          Windows builds are VST3, 64-bit only.
+
+          Full instructions: [docs/BUILD-MACOS.md](docs/BUILD-MACOS.md) and
+          [docs/BUILD.md](docs/BUILD.md).
+          NOTES
+          cat release-notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release/*.zip \
+            --title "tezla.tech ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md

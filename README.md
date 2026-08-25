@@ -56,6 +56,29 @@ as Administrator), which is where FL Studio scans by default.
 Full instructions, including where to get every tool and how to fix a failed
 build: **[`docs/BUILD.md`](docs/BUILD.md)**.
 
+## Quick start (macOS)
+
+Needs only the Xcode Command Line Tools and CMake, both free. Builds **VST3 and
+Audio Unit**, universal for Apple Silicon and Intel:
+
+```bash
+xcode-select --install
+brew install cmake ninja
+
+git clone https://github.com/wingit33/tezla.tech.git
+cd tezla.tech
+./scripts/build.sh Emberdrive --install
+```
+
+Full instructions, including the Gatekeeper quarantine issue that stops
+downloaded plugins loading: **[`docs/BUILD-MACOS.md`](docs/BUILD-MACOS.md)**.
+
+## Prebuilt binaries
+
+Every push builds Windows and macOS plugins in CI, downloadable from the run's
+artifacts; version tags cut a GitHub Release. See
+**[`docs/CI.md`](docs/CI.md)**.
+
 ---
 
 ## How it's put together
@@ -90,7 +113,9 @@ rate. Manual override is always available if you want to spend or save CPU.
 
 ## Documentation
 
-- [`docs/BUILD.md`](docs/BUILD.md) — toolchain setup and build guide
+- [`docs/BUILD.md`](docs/BUILD.md) — toolchain setup and build guide (Windows)
+- [`docs/BUILD-MACOS.md`](docs/BUILD-MACOS.md) — the same for macOS, plus AU and Gatekeeper
+- [`docs/CI.md`](docs/CI.md) — what continuous integration builds and where to get it
 - [`docs/PLUGIN-CONVENTIONS.md`](docs/PLUGIN-CONVENTIONS.md) — parameters, presets, UI, versioning
 - [`docs/DSP-REFERENCES.md`](docs/DSP-REFERENCES.md) — papers and open-source references used, with licences
 - [`plugins/README.md`](plugins/README.md) — plugin registry and how to add a new one

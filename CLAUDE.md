@@ -8,8 +8,9 @@ wins for that task, but say so and update this file if the change is permanent.
 
 ## 1. What this repository is
 
-A collection of **64-bit VST3 audio plugins** — effects first, synths later —
-written from scratch for a Windows 11 / FL Studio 2026 production rig.
+A collection of **64-bit audio plugins** — effects first, synths later —
+written from scratch for a Windows 11 / FL Studio 2026 production rig, and built
+for macOS as well.
 
 The music being made is **dubstep and DnB/jungle**. That biases every design
 decision: the plugins must survive brutal input levels, hold together on sub
@@ -62,8 +63,21 @@ the sound and the workflow*, never a source of code.
 
 ### 2.2 Technical non-negotiables
 
-- **VST3 only, x86-64 only.** No VST2 (SDK is not licensable), no 32-bit.
-  Adding CLAP later is fine and cheap; do not add it without being asked.
+- **VST3 everywhere; Audio Unit additionally on macOS.** No VST2 (SDK is not
+  licensable), no 32-bit. AU is not optional on a Mac in practice — Logic Pro
+  and GarageBand load nothing else — but it is macOS-only and gated on
+  `TEZLA_BUILD_AU`. Adding CLAP later is fine and cheap; do not add it without
+  being asked.
+- **Architectures: x86-64 on Windows and Linux; universal arm64 + x86_64 on
+  macOS.** `CMAKE_OSX_ARCHITECTURES` and `CMAKE_OSX_DEPLOYMENT_TARGET` are read
+  by CMake *before* `project()`, so they must be set at the very top of the
+  root `CMakeLists.txt` and only take effect on a fresh build folder. Setting
+  them later, or in an existing folder, silently does nothing.
+- **macOS builds are not code signed**, so anything downloaded is quarantined
+  and Gatekeeper refuses it — the DAW then reports the plugin as damaged. Every
+  document and release note that offers a macOS download must say how to clear
+  the quarantine attribute. A locally built plugin is never affected, which is
+  exactly why this is easy to forget.
 - **Sample-rate independent.** A plugin must sound the *same* at 44.1, 48, 96
   and 192 kHz. See §6 — this is the rule most easily broken and the one that
   matters most on this rig.
@@ -101,9 +115,12 @@ tezla.tech/
 │       └── Resources/        # graphics, presets
 ├── tests/                    # DSP unit tests + measurement harness
 ├── tools/                    # offline analysis (THD, aliasing, response)
-├── scripts/                  # build.bat (primary) / build.sh / build.ps1
+├── .github/workflows/        # CI: tests on 3 platforms, Windows + macOS builds
+├── scripts/                  # build.bat (Windows) / build.sh (macOS, Linux)
 └── docs/
-    ├── BUILD.md              # toolchain setup + build guide
+    ├── BUILD.md              # toolchain setup + build guide (Windows)
+    ├── BUILD-MACOS.md        # the same for macOS, plus AU and Gatekeeper
+    ├── CI.md                 # what CI builds and where the binaries are
     ├── DSP-REFERENCES.md     # sources, papers, licences
     └── PLUGIN-CONVENTIONS.md # parameters, presets, UI, versioning
 ```
@@ -189,7 +206,15 @@ Rules:
   which the script uses when it detects `ninja` and `cl` already on `PATH`.
 - Keep the tree warning-clean on MSVC at `/W4`. Warnings are how DSP bugs
   announce themselves early.
-- **Update `docs/BUILD.md` whenever a build step or tool version changes.**
+- **Update `docs/BUILD.md` whenever a build step or tool version changes** — and
+  `docs/BUILD-MACOS.md` too, if the change is not Windows-specific. The two are
+  separate documents because the toolchains and install locations share almost
+  nothing; sections 3 and 4 of `BUILD.md` (manual CMake, supplying your own
+  JUCE) are the cross-platform parts.
+- **CI is not a substitute for building locally, and it has never run here.**
+  This project is developed in a Linux container, so the Windows and macOS
+  workflow jobs are reasoned about rather than observed. Say so rather than
+  implying they are proven.
 
 ### Framework: JUCE
 
@@ -408,6 +433,9 @@ GPL code is ever pasted in, say so loudly and record it.
   ```
   The examples and VSTGUI need GTK and xcb dev packages that the validator
   itself does not; turning them off is what makes this build anywhere.
+- **CI runs the DSP tests on Linux, Windows and macOS** on every push, which is
+  cheap precisely because the DSP needs no framework. A numerical difference
+  between MSVC and clang surfaces there before it reaches a DAW.
 - **A Linux build is a cheap dress rehearsal for the Windows one.** The plugin
   target builds and validates on Linux with the X11/ALSA dev packages listed in
   `docs/BUILD.md`, which catches wrapper mistakes long before they reach the

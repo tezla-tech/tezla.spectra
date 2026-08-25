@@ -46,7 +46,21 @@ function(tezla_add_plugin)
         endif()
     endif()
 
+    if(ARG_IS_SYNTH)
+        set(_au_main_type kAudioUnitType_MusicDevice)
+    else()
+        set(_au_main_type kAudioUnitType_Effect)
+    endif()
+
     set(_formats VST3)
+
+    # Audio Unit, macOS only. Logic Pro and GarageBand load nothing else, so on
+    # a Mac this is not optional in practice -- and it is the same DSP, the same
+    # editor and the same presets behind a second wrapper.
+    if(APPLE AND TEZLA_BUILD_AU)
+        list(APPEND _formats AU)
+    endif()
+
     if(TEZLA_BUILD_STANDALONE)
         list(APPEND _formats Standalone)
     endif()
@@ -62,6 +76,9 @@ function(tezla_add_plugin)
         VERSION                   "${ARG_VERSION}"
         FORMATS                   ${_formats}
         VST3_CATEGORIES           ${ARG_VST3_CATEGORIES}
+        # Apple requires the manufacturer code to contain at least one character
+        # that is not lower case; "Tzla" and the plugin codes all satisfy that.
+        AU_MAIN_TYPE              ${_au_main_type}
         IS_SYNTH                  ${ARG_IS_SYNTH}
         NEEDS_MIDI_INPUT          ${ARG_NEEDS_MIDI_INPUT}
         EDITOR_WANTS_KEYBOARD_FOCUS FALSE
