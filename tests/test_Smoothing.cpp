@@ -135,9 +135,18 @@ TEZLA_TEST (snap_to_zero_kills_denormals_only)
 
 TEZLA_TEST (scoped_no_denormals_restores_the_fpu_mode)
 {
+    // isSupported() being false is a build that cannot flush denormals at all,
+    // which CLAUDE.md section 2.2 does not permit -- so this is a hard failure,
+    // deliberately, and not a reason to skip the rest of the test.
+    //
+    // It has already earned that: the guard handled x86 only, so on Apple
+    // Silicon it compiled cleanly, ran happily, and did absolutely nothing.
+    // Making the test skip itself there would have shipped every Mac a plugin
+    // with no denormal protection and no way to notice.
+    CHECK (ScopedNoDenormals::isSupported());
+
     // The host's code runs on this thread too and did not ask for flush-to-zero,
     // so the guard must put the control word back exactly as it found it.
-    CHECK (ScopedNoDenormals::isSupported());
 
     volatile double tiny = 1.0e-308;
     {

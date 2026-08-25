@@ -63,12 +63,51 @@ jobs:
           "$exe" selftest
 
   # ---------------------------------------------------------------------------
+  # Apple Silicon is ARM, and an x86-only assumption in the DSP compiles
+  # cleanly, runs happily and does nothing there -- which is exactly how a
+  # denormal guard that only handled x86 got as far as a release. Cross
+  # compiling and running the suite under emulation catches that class of bug
+  # on a Linux runner, in about a minute, without waiting for a Mac.
+  # ---------------------------------------------------------------------------
+  test-arm64:
+    name: DSP tests (ARM64, emulated)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu qemu-user
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-arm64 \
+                -DCMAKE_SYSTEM_NAME=Linux \
+                -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+                -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+                -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+                -DCMAKE_EXE_LINKER_FLAGS="-static" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DTEZLA_PLUGINS=NONE
+
+      - name: Build
+        run: cmake --build build-arm64 --parallel
+
+      - name: Run the suite under emulation
+        run: qemu-aarch64 build-arm64/bin/tezla-tests
+
+      - name: Verify the measurement harness
+        run: qemu-aarch64 build-arm64/bin/tezla-measure selftest
+
+  # ---------------------------------------------------------------------------
   # The plugins themselves. Windows gets VST3; macOS gets VST3 and Audio Unit,
   # universal for Apple Silicon and Intel.
   # ---------------------------------------------------------------------------
   build:
     name: Plugins (${{ matrix.name }})
-    needs: test
+    needs: [test, test-arm64]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

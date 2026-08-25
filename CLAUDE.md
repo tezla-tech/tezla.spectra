@@ -86,7 +86,12 @@ the sound and the workflow*, never a source of code.
 - **64-bit internal processing.** `double` through the nonlinear and dynamics
   path. `float` is acceptable only in bulk convolution/FFT where it is
   measurably transparent and clearly documented.
-- **Denormals off** (FTZ/DAZ) for the duration of every audio callback.
+- **Denormals off** (FTZ/DAZ) for the duration of every audio callback — on
+  **every architecture**, not just x86. The control register differs: MXCSR on
+  x86, FPCR bit 24 on AArch64. An x86-only guard compiles cleanly on Apple
+  Silicon, runs happily, and does nothing at all; there is no error and no
+  warning to notice. `ScopedNoDenormals::isSupported()` returning false is a
+  build that must not ship, and the test asserts it rather than skipping.
 - **Report latency to the host.** Oversampling and lookahead both add latency.
   FL Studio's PDC only works if we declare it, and it must be declared again
   whenever it changes.
@@ -436,6 +441,17 @@ GPL code is ever pasted in, say so loudly and record it.
 - **CI runs the DSP tests on Linux, Windows and macOS** on every push, which is
   cheap precisely because the DSP needs no framework. A numerical difference
   between MSVC and clang surfaces there before it reaches a DAW.
+- **CI also cross-compiles for ARM64 and runs the suite under emulation.**
+  Apple Silicon is ARM, and an x86-only assumption is invisible until it runs
+  there. That job costs a Linux minute and is how this class of bug gets caught
+  without waiting on a Mac runner. Cross-check locally the same way:
+  ```
+  cmake -B build-arm -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+        -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+        -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+        -DCMAKE_EXE_LINKER_FLAGS=-static -DTEZLA_PLUGINS=NONE
+  cmake --build build-arm && qemu-aarch64 build-arm/bin/tezla-tests
+  ```
 - **A Linux build is a cheap dress rehearsal for the Windows one.** The plugin
   target builds and validates on Linux with the X11/ALSA dev packages listed in
   `docs/BUILD.md`, which catches wrapper mistakes long before they reach the
@@ -443,6 +459,12 @@ GPL code is ever pasted in, say so loudly and record it.
   g++ does not — but it removes most of the round trips.
 - Report honestly. If a test fails or a step was skipped, say so with the
   output.
+- **A failing test is a claim about the code until proven otherwise.** Making it
+  skip, loosen or special-case itself is only correct once the behaviour it
+  asserts has been shown not to matter. The denormal guard is the worked
+  example: the obvious reading was "this platform does not support the feature,
+  so skip the test there", and the actual answer was "this platform was never
+  implemented, so implement it".
 
 ---
 

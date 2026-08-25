@@ -17,6 +17,25 @@ trusts a number it produces.
 clang shows up in about a minute rather than after a full plugin build, and the
 job needs nothing installed on the runner.
 
+## 1b. The same tests, cross-compiled for ARM64
+
+A Linux runner cross-compiles the suite for AArch64 and runs it under
+`qemu-user`. Apple Silicon is ARM, and an x86-only assumption in the DSP
+compiles cleanly, runs happily and does nothing there — which is exactly how a
+denormal guard that only handled x86 reached a release. This job catches that
+class of bug in about a minute on a 1× runner, rather than waiting on a Mac.
+
+Reproduce it locally with `gcc-aarch64-linux-gnu` and `qemu-user` installed:
+
+```bash
+cmake -B build-arm -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+      -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+      -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+      -DCMAKE_EXE_LINKER_FLAGS=-static -DTEZLA_PLUGINS=NONE
+cmake --build build-arm
+qemu-aarch64 build-arm/bin/tezla-tests
+```
+
 ## 2. Plugin builds, downloadable
 
 Windows and macOS build the actual plugins and upload them as run artifacts:
