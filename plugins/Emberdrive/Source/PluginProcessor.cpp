@@ -11,10 +11,23 @@ namespace
 // Parameters carry the schema version they were introduced at. Existing ones
 // must keep theirs forever: the version hint feeds the VST3 parameter ID, so
 // bumping it on a live parameter is indistinguishable from renaming it.
-constexpr int kSchemaV1 = 1;
+//
+// The original parameters were written against kStateSchemaVersion, which is
+// exactly the mistake that rule exists to prevent -- every bump of the state
+// version moved their IDs with it, and their hint has already travelled 1 -> 2
+// -> 3 across two releases. kSchemaV1Frozen pins them where they currently sit
+// so it cannot happen again.
+//
+// It is deliberately 3 and not 1. Setting it back to 1 would be the
+// theoretically correct value and would move every one of those IDs a third
+// time, breaking the projects saved against the released build. The damage is
+// done; freezing where they are costs nothing and stops the bleeding. Anything
+// added from here on gets its own constant, and none of them is
+// kStateSchemaVersion.
+constexpr int kSchemaV1Frozen = 3;
 constexpr int kSchemaV2 = 2;
 constexpr int kSchemaV3 = 3;
-constexpr int kStateSchemaVersion = kSchemaV3;
+constexpr int kStateSchemaVersion = 3;
 constexpr auto kStateTypeName = "EmberdriveState";
 constexpr double kBypassFadeSeconds = 0.010;
 
@@ -70,12 +83,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::drive, kStateSchemaVersion }, "Drive",
+        juce::ParameterID { ids::drive, kSchemaV1Frozen }, "Drive",
         skewedRange (0.0f, 30.0f, 12.0f), 0.0f,
         formatted ("dB", 1)));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::character, kStateSchemaVersion }, "Character",
+        juce::ParameterID { ids::character, kSchemaV1Frozen }, "Character",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.35f,
         Attributes().withStringFromValueFunction ([] (float value, int)
         {
@@ -85,7 +98,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
         })));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::tone, kStateSchemaVersion }, "Tone",
+        juce::ParameterID { ids::tone, kSchemaV1Frozen }, "Tone",
         juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f,
         Attributes().withStringFromValueFunction ([] (float value, int)
         {
@@ -95,47 +108,47 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
         })));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::ceiling, kStateSchemaVersion }, "Ceiling",
+        juce::ParameterID { ids::ceiling, kSchemaV1Frozen }, "Ceiling",
         juce::NormalisableRange<float> { -24.0f, 0.0f }, -0.3f,
         formatted ("dBFS", 1)));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::knee, kStateSchemaVersion }, "Knee",
+        juce::ParameterID { ids::knee, kSchemaV1Frozen }, "Knee",
         juce::NormalisableRange<float> { 0.0f, 24.0f }, 6.0f,
         formatted ("dB", 1)));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::speed, kStateSchemaVersion }, "Speed",
+        juce::ParameterID { ids::speed, kSchemaV1Frozen }, "Speed",
         skewedRange (0.05f, 100.0f, 5.0f), 5.0f,
         millisecondAttributes()));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::release, kStateSchemaVersion }, "Release",
+        juce::ParameterID { ids::release, kSchemaV1Frozen }, "Release",
         skewedRange (20.0f, 2000.0f, 200.0f), 200.0f,
         millisecondAttributes()));
 
     layout.add (std::make_unique<Boolean> (
-        juce::ParameterID { ids::autoRelease, kStateSchemaVersion }, "Auto Release", false));
+        juce::ParameterID { ids::autoRelease, kSchemaV1Frozen }, "Auto Release", false));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::mix, kStateSchemaVersion }, "Mix",
+        juce::ParameterID { ids::mix, kSchemaV1Frozen }, "Mix",
         juce::NormalisableRange<float> { 0.0f, 100.0f }, 100.0f,
         formatted ("%", 0)));
 
     layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::output, kStateSchemaVersion }, "Output",
+        juce::ParameterID { ids::output, kSchemaV1Frozen }, "Output",
         juce::NormalisableRange<float> { -24.0f, 24.0f }, 0.0f,
         formatted ("dB", 1)));
 
     layout.add (std::make_unique<Boolean> (
-        juce::ParameterID { ids::autoTrim, kStateSchemaVersion }, "Auto Trim", true));
+        juce::ParameterID { ids::autoTrim, kSchemaV1Frozen }, "Auto Trim", true));
 
     layout.add (std::make_unique<Choice> (
-        juce::ParameterID { ids::oversampling, kStateSchemaVersion }, "Oversampling",
+        juce::ParameterID { ids::oversampling, kSchemaV1Frozen }, "Oversampling",
         juce::StringArray { "Auto", "Off", "x2", "x4", "x8" }, 0));
 
     layout.add (std::make_unique<Boolean> (
-        juce::ParameterID { ids::bypass, kStateSchemaVersion }, "Bypass", false));
+        juce::ParameterID { ids::bypass, kSchemaV1Frozen }, "Bypass", false));
 
     // ---- schema version 2: mangle, multiband and expert --------------------
 
