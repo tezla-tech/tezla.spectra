@@ -84,7 +84,7 @@ void ControlPage::addKnob (const char* parameterId, const juce::String& name, co
     auto knob = std::make_unique<Knob>();
 
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 78, kValueHeight);
+    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 96, kValueHeight);
     knob->slider.setColour (juce::Slider::rotarySliderFillColourId, kEmber);
     knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId, kPanel.brighter (0.25f));
     knob->slider.setColour (juce::Slider::thumbColourId, kEmberBright);
@@ -449,6 +449,15 @@ void EmberdriveEditor::buildPages()
         "At 0 it is exactly a straight wire -- not almost, exactly. Turn it up and "
         "the sound goes metallic, then bell-like, then completely synthetic.");
 
+    mangle->addKnob (ids::rectify, "Rectify",
+        "Blends toward full-wave rectification: every negative half cycle flipped up.\n\n"
+        "That doubles the fundamental, so you get an octave-up ghost that tracks whatever "
+        "note is playing with no pitch tracking involved. Partway up, the two halves of the "
+        "waveform stop matching, which is a very direct route to even harmonics.\n\n"
+        "It sits first in the chain, so Fold and the saturation work on the octave rather "
+        "than on the original note. Stack it with Fold for textures that stop resembling "
+        "the input entirely.");
+
     mangle->addChoice (ids::foldRange, "Range",
         "The multiplier on Fold. This is the destruction switch.\n\n"
         "x1 is a musical wavefolder. x10 is aggressive -- harmonics louder than the "
@@ -459,15 +468,53 @@ void EmberdriveEditor::buildPages()
         "extend to roughly the fold gain times the fundamental. On a sub or a reese "
         "it is clean; on a lead it will alias, and that may be what you want.");
 
+    // One paragraph, because the grid is three rows deep here and drawFittedText
+    // drops whole lines rather than scrolling. The Range x100 bass caveat lives
+    // in that control's own tooltip.
     mangle->setNote (
-        "Fold turns a peak back on itself instead of flattening it, so the harmonics keep "
-        "changing as you push rather than settling into a square wave. At 0 it is exactly a "
-        "straight wire.\n\n"
-        "Range x100 is a BASS tool: measured aliasing stays below -175 dB on 40-160 Hz "
-        "fundamentals and reaches -46 dB by 2.6 kHz, because a folder's harmonics run to "
-        "roughly the fold gain times the fundamental. Clean on a sub or a reese; on a lead it "
-        "will alias, which may be what you are after.\n\n"
-        "Bit crushing, downsampling, rectification and feedback are planned for this page.");
+        "Chain order: Rectify, then Fold, then the saturation, with Feedback wrapping all of "
+        "it. Crush and Downsample come last at the host's rate, deliberately un-antialiased -- "
+        "there the artefacts are the instrument, not a defect. Both are wet-only.");
+
+    mangle->addBreak();
+
+    mangle->addKnob (ids::feedback, "Feedback",
+        "Routes the output back into the drive stage through a short delay.\n\n"
+        "Turn it up and the plugin starts sustaining and screaming: energy keeps circulating "
+        "after the note has stopped, and the whole nonlinear chain is inside the loop, so it "
+        "does not sound like a delay -- it sounds like the plugin has come alive.\n\n"
+        "It cannot run away. There is a soft clip inside the loop that bounds whatever comes "
+        "back regardless of level, it is not defeatable, and the amount is capped below unity "
+        "on top of that. Every combination of feedback, delay, drive and fold has been swept "
+        "and stays bounded.");
+
+    mangle->addKnob (ids::feedbackTime, "FB Time",
+        "How long the loop takes. The circulating signal repeats at this period, so the "
+        "resonance it settles on is 1/time -- shown in the readout.\n\n"
+        "Short (under 2 ms) is a metallic, pitched ring. Long (20 ms and up) is a stuttering "
+        "repeat. Sweeping it while feedback is high is the trick worth knowing: the pitch "
+        "slides with it.\n\n"
+        "Measured by autocorrelation: the output repeats at the set delay to within a sample, "
+        "with a correlation of 0.99.");
+
+    mangle->addBreak();
+
+    mangle->addKnob (ids::crush, "Crush",
+        "Bit-depth reduction, from 16 bits down to 1. Off at zero, exactly.\n\n"
+        "This is the one stage in the plugin that is deliberately NOT antialiased and does "
+        "not run oversampled. Everywhere else, aliasing is a defect to suppress; in a bit "
+        "crusher it is the instrument. An antialiased quantiser just sounds like a slightly "
+        "noisy version of the input -- the harsh ringing character you actually want comes "
+        "from the folded-back images.\n\n"
+        "Measured: takes a chain sitting at -236 dB of aliasing up to -26 dB. On purpose.");
+
+    mangle->addKnob (ids::downsample, "Downsample",
+        "Sample-rate reduction by holding each sample for longer. Off at 1x, exactly.\n\n"
+        "At 8x on a 48 kHz session the signal behaves as though it were running at 6 kHz, "
+        "with all the gritty ringing that implies. Fractional ratios work, so it sweeps "
+        "smoothly rather than jumping between whole divisions.\n\n"
+        "Like Crush, it runs at the host's rate with no antialiasing, for the same reason. "
+        "Both are wet-only, so the Mix control blends against a clean dry path.");
 
     pages_[2] = std::move (mangle);
 

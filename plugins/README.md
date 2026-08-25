@@ -18,7 +18,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 
 | Code | Folder | Product name | Type | Status |
 |------|--------|--------------|------|--------|
-| `Tzem` | [`Emberdrive`](Emberdrive/) | Tezla Emberdrive | Effect — saturation, wavefolder, 3-band limiter | v0.2.0, builds and validates |
+| `Tzem` | [`Emberdrive`](Emberdrive/) | Tezla Emberdrive | Effect — saturation, destruction, 3-band limiter | v0.3.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 

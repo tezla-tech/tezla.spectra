@@ -13,7 +13,8 @@ namespace
 // bumping it on a live parameter is indistinguishable from renaming it.
 constexpr int kSchemaV1 = 1;
 constexpr int kSchemaV2 = 2;
-constexpr int kStateSchemaVersion = kSchemaV2;
+constexpr int kSchemaV3 = 3;
+constexpr int kStateSchemaVersion = kSchemaV3;
 constexpr auto kStateTypeName = "EmberdriveState";
 constexpr double kBypassFadeSeconds = 0.010;
 
@@ -237,6 +238,54 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::expAdaa, kSchemaV2 }, "Antialiasing", true));
 
+    // ---- schema version 3: the rest of the mangle page ---------------------
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::rectify, kSchemaV3 }, "Rectify",
+        juce::NormalisableRange<float> { 0.0f, 100.0f }, 0.0f,
+        formatted ("%", 0)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::crush, kSchemaV3 }, "Crush",
+        juce::NormalisableRange<float> { 0.0f, 100.0f }, 0.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            if (value <= 0.0f)
+                return juce::String ("Off");
+
+            // Show the depth it is actually quantising to, not the percentage.
+            const double bits = 16.0 - (value / 100.0) * 15.0;
+            return juce::String (bits, 1) + " bit";
+        })));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::downsample, kSchemaV3 }, "Downsample",
+        skewedRange (1.0f, 64.0f, 6.0f), 1.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            if (value < 1.005f)
+                return juce::String ("Off");
+
+            return juce::String (value, value < 10.0f ? 2 : 1) + " x";
+        })));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::feedback, kSchemaV3 }, "Feedback",
+        juce::NormalisableRange<float> { 0.0f, 95.0f }, 0.0f,
+        formatted ("%", 0)));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::feedbackTime, kSchemaV3 }, "FB Time",
+        skewedRange (0.1f, 50.0f, 6.0f), 8.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            // A feedback loop repeats at its delay period, so the resonance it
+            // settles on is 1/delay. Showing both saves the arithmetic -- but
+            // it has to fit the readout, so no padding and no brackets.
+            const juce::String time = value < 10.0f ? juce::String (value, 1) : juce::String (juce::roundToInt (value));
+            return time + "ms " + juce::String (juce::roundToInt (1000.0f / value)) + "Hz";
+        })));
+
     return layout;
 }
 
@@ -354,6 +403,13 @@ void EmberdriveProcessor::pullParameters()
     expert.stereoLink     = value (ids::expStereoLink) / 100.0;
     expert.detectorRms    = value (ids::expDetectorRms) / 100.0;
     expert.adaaEnabled    = value (ids::expAdaa) > 0.5;
+
+    // ---- the rest of mangle ----------------------------------------------
+    parameters_.rectify    = value (ids::rectify) / 100.0;
+    parameters_.crush      = value (ids::crush) / 100.0;
+    parameters_.downsample = value (ids::downsample);
+    parameters_.feedback   = value (ids::feedback) / 100.0;
+    parameters_.feedbackMs = value (ids::feedbackTime);
 }
 
 void EmberdriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -527,10 +583,11 @@ void EmberdriveProcessor::setStateInformation (const void* data, int sizeInBytes
     if (! tree.isValid())
         return;
 
-    // Version 1 projects predate the mangle, multiband and expert parameters.
-    // Nothing to migrate: every one of them defaults to neutral, so a version 1
-    // project reopens sounding exactly as it did. A version from the future is
-    // refused rather than half-loaded.
+    // Version 1 projects predate the mangle, multiband and expert parameters;
+    // version 2 predates rectify, crush, downsample and feedback. Nothing to
+    // migrate in either case: every added parameter defaults to neutral, so an
+    // older project reopens sounding exactly as it did. A version from the
+    // future is refused rather than half-loaded.
     const int version = tree.getProperty ("schemaVersion", 1);
     if (version > kStateSchemaVersion)
         return;
@@ -619,12 +676,40 @@ const Preset& presetAt (int index)
                p.bands[1].driveTrimDb =   6.0;
                p.bands[2].driveTrimDb =   0.0;
                return p; }() },
+
+        // The XP-era bitcrusher, near enough. Rate reduction into bit
+        // reduction, no saturation to speak of, mixed in parallel so the
+        // bottom end survives.
+        { "Bitcrush",
+          [] { Parameters p; p.driveDb = 3.0;  p.character = 0.2;  p.toneTilt = 0.1;
+               p.ceilingDb = -0.3; p.kneeDb = 2.0;  p.attackMs = 1.0;  p.releaseMs = 80.0;
+               p.mix = 0.8; p.autoTrim = true;
+               p.crush = 0.55; p.downsample = 7.0;
+               return p; }() },
+
+        // Octave-up ghost over the original, for mid-bass and leads.
+        { "Octave ghost",
+          [] { Parameters p; p.driveDb = 10.0; p.character = 0.6;  p.toneTilt = 0.15;
+               p.ceilingDb = -0.3; p.kneeDb = 6.0;  p.attackMs = 4.0;  p.releaseMs = 150.0;
+               p.mix = 0.6; p.autoTrim = true;
+               p.rectify = 0.75;
+               return p; }() },
+
+        // The loop doing what it does. Short delay, high feedback: the plugin
+        // sustains and rings on after the note has gone.
+        { "Screamer",
+          [] { Parameters p; p.driveDb = 16.0; p.character = 0.8;  p.toneTilt = 0.2;
+               p.ceilingDb = -0.5; p.kneeDb = 8.0;  p.attackMs = 2.0;  p.releaseMs = 100.0;
+               p.mix = 1.0; p.autoTrim = true;
+               p.feedback = 0.72; p.feedbackMs = 3.2;
+               p.foldAmount = 0.3; p.foldRange = 1.0;
+               return p; }() },
     };
 
     return presets[juce::jlimit (0, static_cast<int> (std::size (presets)) - 1, index)];
 }
 
-constexpr int kNumPresets = 8;
+constexpr int kNumPresets = 11;
 } // namespace
 
 int EmberdriveProcessor::getNumPrograms() { return kNumPresets; }
@@ -681,6 +766,12 @@ void EmberdriveProcessor::setCurrentProgram (int index)
         set (bandDriveIds[band], static_cast<float> (preset.bands[b].driveTrimDb));
         set (bandStateIds[band], static_cast<float> (static_cast<int> (preset.bands[b].state)));
     }
+
+    set (ids::rectify,      static_cast<float> (preset.rectify * 100.0));
+    set (ids::crush,        static_cast<float> (preset.crush * 100.0));
+    set (ids::downsample,   static_cast<float> (preset.downsample));
+    set (ids::feedback,     static_cast<float> (preset.feedback * 100.0));
+    set (ids::feedbackTime, static_cast<float> (preset.feedbackMs));
 
     // Presets never turn the expert panel on: it exists for deliberate hands-on
     // work, and a preset silently overriding Character would be a surprise.

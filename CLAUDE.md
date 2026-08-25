@@ -279,6 +279,11 @@ squarely the plugin's problem, not the host's, for two reasons:
 
 Every plugin must satisfy these before it is considered done:
 
+- **Aliasing is a defect everywhere except where it is the instrument.** Bit
+  crushing and sample-rate reduction are the documented exception: their whole
+  character comes from folded-back images, so they run at the host rate with no
+  oversampling and no ADAA, and a test asserts their aliasing *rises*. Anything
+  else that generates harmonics is antialiased.
 - **Aliasing:** a 1 kHz → 20 kHz sine sweep at maximum drive shows no
   inharmonic component above −60 dBFS in the audible band. Measure it, don't
   assume it — `tezla-measure` exists for exactly this.
@@ -311,7 +316,14 @@ Every plugin must satisfy these before it is considered done:
   oversampling control silently inert on load, and no test caught it because the
   measurement and the reference were wrong in the same way.
 - **Silence in, silence out** (barring intentional noise/hiss features, which
-  must be defeatable).
+  must be defeatable). A feedback path must not be able to self-start from
+  nothing.
+- **Any stage permanently in the signal path needs a bit-exact bypass at its
+  neutral setting**, not merely a transparent one. "Almost identity" means every
+  existing project changes the day the plugin updates.
+- **A feedback loop around a nonlinearity needs a bound that cannot be
+  defeated** — a soft clip inside the loop, plus a cap below unity on the amount
+  — and a test that sweeps the whole parameter space rather than sampling it.
 
 ---
 

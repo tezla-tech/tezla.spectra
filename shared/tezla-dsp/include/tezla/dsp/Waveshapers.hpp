@@ -142,6 +142,50 @@ private:
     bool   negligible_    { true };
 };
 
+/// Blends the signal toward full-wave rectification.
+///
+///   f(x) = (1 - a) * x + a * |x|
+///
+/// At a = 1 every negative half cycle is flipped up, which doubles the
+/// fundamental frequency: an octave-up ghost that tracks whatever note is
+/// playing, without any pitch tracking. Partway between, the two halves of the
+/// waveform become progressively less alike, which is a very direct way of
+/// generating even harmonics -- a different route to the same place the valve
+/// end of Character reaches by biasing the curve.
+///
+/// Rectification also produces a large DC offset, by construction: the mean of
+/// |x| is not zero. The DC blocker downstream is not optional with this in the
+/// path.
+class Rectifier
+{
+public:
+    explicit Rectifier (double amount = 0.0) noexcept { setAmount (amount); }
+
+    /// 0 is a straight wire, 1 is full-wave rectification.
+    void setAmount (double amount) noexcept { amount_ = std::clamp (amount, 0.0, 1.0); }
+
+    [[nodiscard]] double getAmount() const noexcept { return amount_; }
+
+    [[nodiscard]] double evaluate (double x) const noexcept
+    {
+        return (1.0 - amount_) * x + amount_ * std::abs (x);
+    }
+
+    /// Antiderivative, F1(0) = 0.
+    ///
+    /// The integral of |x| is x*|x|/2 -- which is x^2/2 for positive x and
+    /// -x^2/2 for negative, joining smoothly at the origin. Writing it that way
+    /// rather than as a branch keeps it continuous for ADAA, which straddles
+    /// the origin constantly on any signal that crosses zero.
+    [[nodiscard]] double antiderivative (double x) const noexcept
+    {
+        return (1.0 - amount_) * 0.5 * x * x + amount_ * 0.5 * x * std::abs (x);
+    }
+
+private:
+    double amount_ { 0.0 };
+};
+
 /// Hard clip, kept for measurement baselines rather than for musical use.
 /// Its aliasing figures are the numbers everything else is compared against.
 class HardClip

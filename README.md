@@ -20,7 +20,7 @@ adjectives: see [its README](plugins/Emberdrive/README.md).
 
 | Plugin | Type | Status |
 |---|---|---|
-| **[Emberdrive](plugins/Emberdrive/)** | Tube/tape saturation → soft-knee limiter, wavefolder, 3-band | v0.2.0 — 83 tests pass, 47/47 on Steinberg's validator |
+| **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band | v0.3.0 — 100 tests pass, 47/47 on Steinberg's validator |
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

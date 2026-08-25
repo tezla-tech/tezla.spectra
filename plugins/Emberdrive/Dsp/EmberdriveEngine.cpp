@@ -62,6 +62,13 @@ constexpr double kMasterKneeDb = 1.0;
 /// to, and catching that is the master's only job. At the user's Speed it
 /// overshot by 2 dB where a single band overshot by 1.
 constexpr double kMasterAttackMs = 0.2;
+
+/// Longest feedback delay, and therefore how much delay line to allocate.
+constexpr double kMaxFeedbackSeconds = 0.050;
+
+/// Hard ceiling on the feedback amount. Together with the soft clip in the loop
+/// this is what makes runaway impossible rather than merely unlikely.
+constexpr double kMaxFeedback = 0.95;
 } // namespace
 
 double Engine::biasForCharacter() const noexcept
@@ -90,9 +97,11 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     const double oversampledRate = getOversampledRate();
 
     channels_.assign (static_cast<std::size_t> (numChannels_), ChannelState {});
-    dry_.assign (static_cast<std::size_t> (numChannels_),
-                 std::vector<double> (static_cast<std::size_t> (maxBlockSize_ * factor), 0.0));
+    dryInput_.assign (static_cast<std::size_t> (numChannels_),
+                      std::vector<double> (static_cast<std::size_t> (maxBlockSize_), 0.0));
     workPointers_.assign (static_cast<std::size_t> (numChannels_), nullptr);
+
+    const int maxFeedbackSamples = static_cast<int> (std::ceil (kMaxFeedbackSeconds * oversampledRate)) + 2;
 
     const double dcHz = parameters_.expert.enabled
                       ? std::clamp (parameters_.expert.dcBlockerHz, 1.0, 40.0) : kDcBlockerHz;
@@ -103,8 +112,15 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     for (auto& channel : channels_)
     {
         channel.splitter.prepare (oversampledRate);
+        // The dry delay only ever has to cover the oversampler's own latency,
+        // which is a whole number of base-rate samples by design.
+        channel.dryDelay.prepare (oversampler_.getLatencySamples() + 2);
+
         for (auto& band : channel.bands)
+        {
             band.dcBlocker.prepare (oversampledRate, dcHz);
+            band.feedbackDelay.prepare (maxFeedbackSamples);
+        }
     }
 
     // Everything time-based is set from the actual running rate, so the plugin
@@ -119,9 +135,13 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
 
     masterGainComputer_.setKneeDb (kMasterKneeDb);
 
-    driveGain_ .prepare (oversampledRate, kSmoothingSeconds);
-    foldGain_  .prepare (oversampledRate, kSmoothingSeconds);
-    mix_       .prepare (oversampledRate, kSmoothingSeconds);
+    driveGain_     .prepare (oversampledRate, kSmoothingSeconds);
+    foldGain_      .prepare (oversampledRate, kSmoothingSeconds);
+    rectifyAmount_ .prepare (oversampledRate, kSmoothingSeconds);
+    feedbackAmount_.prepare (oversampledRate, kSmoothingSeconds);
+    // Mix now runs at base rate: it applies after the oversampled block,
+    // because crush and downsample are wet-only and live out there.
+    mix_       .prepare (sampleRate_,     kSmoothingSeconds);
     outputGain_.prepare (sampleRate_,     kSmoothingSeconds);
     bias_      .prepare (oversampledRate, kSmoothingSeconds);
     tone_      .prepare (oversampledRate, kSmoothingSeconds);
@@ -149,24 +169,31 @@ void Engine::reset()
         channel.splitter.reset();
         channel.masterDetectorMeanSquare = 0.0;
 
+        channel.downsampler.reset();
+        channel.dryDelay.reset();
+
         for (auto& band : channel.bands)
         {
+            band.rectifier.reset();
             band.folder.reset();
             band.saturator.reset();
             band.dcBlocker.reset();
+            band.feedbackDelay.reset();
             band.detectorMeanSquare = 0.0;
         }
     }
 
-    for (auto& buffer : dry_)
+    for (auto& buffer : dryInput_)
         std::fill (buffer.begin(), buffer.end(), 0.0);
 
     // Smoothed values jump to where they are heading. Without this, reset()
     // leaves the ramps part-way through, two runs of the same material do not
     // match, and the first 20 ms after a transport restart is not what the
     // settings say it should be.
-    driveGain_ .setCurrentAndTarget (driveGain_ .getTarget());
-    foldGain_  .setCurrentAndTarget (foldGain_  .getTarget());
+    driveGain_     .setCurrentAndTarget (driveGain_     .getTarget());
+    foldGain_      .setCurrentAndTarget (foldGain_      .getTarget());
+    rectifyAmount_ .setCurrentAndTarget (rectifyAmount_ .getTarget());
+    feedbackAmount_.setCurrentAndTarget (feedbackAmount_.getTarget());
     mix_       .setCurrentAndTarget (mix_       .getTarget());
     outputGain_.setCurrentAndTarget (outputGain_.getTarget());
     bias_      .setCurrentAndTarget (bias_      .getTarget());
@@ -227,6 +254,21 @@ void Engine::updateDerivedParameters()
     foldGain_.setTarget (std::clamp (parameters_.foldAmount, 0.0, 1.0)
                          * std::max (parameters_.foldRange, 1.0));
 
+    rectifyAmount_.setTarget (std::clamp (parameters_.rectify, 0.0, 1.0));
+    feedbackAmount_.setTarget (std::clamp (parameters_.feedback, 0.0, kMaxFeedback));
+
+    // Delay is in oversampled samples, derived from the running rate, so the
+    // pitch a feedback loop settles on is the same at every session rate.
+    feedbackDelaySamples_ = std::max (1, static_cast<int> (std::llround (
+        std::clamp (parameters_.feedbackMs, 0.1, kMaxFeedbackSeconds * 1000.0)
+        * 0.001 * getOversampledRate())));
+
+    for (auto& channel : channels_)
+    {
+        channel.bitcrusher.setAmount (parameters_.crush);
+        channel.downsampler.setRatio (parameters_.downsample);
+    }
+
     gainComputer_.setCeilingDb (parameters_.ceilingDb);
     gainComputer_.setKneeDb (parameters_.kneeDb);
     masterGainComputer_.setCeilingDb (parameters_.ceilingDb);
@@ -278,6 +320,7 @@ void Engine::updateFilters()
 
     shaper_.setBias (bias_.getCurrent());
     folder_.setGain (foldGain_.getCurrent());
+    rectifier_.setAmount (rectifyAmount_.getCurrent());
 
     const double tapeAmount = expert.enabled ? 1.0 : 1.0 - std::clamp (parameters_.character, 0.0, 1.0);
 
@@ -318,6 +361,7 @@ double Engine::measureStageGain (double driveGain) const noexcept
     {
         const double phase = 2.0 * std::numbers::pi * static_cast<double> (i) / static_cast<double> (numPoints);
         double value = driveGain * referenceAmplitude * std::sin (phase);
+        value = rectifier_.evaluate (value);
         value = folder_.evaluate (value);
         value = h * shaper_.evaluate (value / h);
         sumOfSquares += value * value;
@@ -371,29 +415,35 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
     // several transcendentals, and these are set-and-forget controls. The
     // smoothing still runs at sample rate, so the trajectory is continuous --
     // it is only sampled at block boundaries.
-    const bool voicingMoving = bias_.isSmoothing() || tone_.isSmoothing() || foldGain_.isSmoothing();
+    const bool voicingMoving = bias_.isSmoothing() || tone_.isSmoothing()
+                            || foldGain_.isSmoothing() || rectifyAmount_.isSmoothing();
     bias_.skip (oversampledSamples);
     tone_.skip (oversampledSamples);
     foldGain_.skip (oversampledSamples);
+    rectifyAmount_.skip (oversampledSamples);
     if (voicingMoving)
         updateFilters();
+
+    // The input has to be copied before upsampling: upsample() reads these
+    // buffers and downsample() writes back over them.
+    for (int channel = 0; channel < activeChannels; ++channel)
+    {
+        const auto c = static_cast<std::size_t> (channel);
+        std::copy (channels[channel], channels[channel] + numSamples, dryInput_[c].begin());
+    }
 
     double* const* work = oversampler_.upsample (channels, numSamples);
 
     for (int channel = 0; channel < activeChannels; ++channel)
-    {
-        const auto c = static_cast<std::size_t> (channel);
-        std::copy (work[channel], work[channel] + oversampledSamples, dry_[c].begin());
-        workPointers_[c] = work[channel];
-    }
+        workPointers_[static_cast<std::size_t> (channel)] = work[channel];
 
     double blockGainReductionDb = 0.0;
     std::array<double, kNumBands> blockBandReductionDb {};
 
     for (int i = 0; i < oversampledSamples; ++i)
     {
-        const double drive = driveGain_.next();
-        const double mix   = mix_.next();
+        const double drive    = driveGain_.next();
+        const double feedback = feedbackAmount_.next();
 
         // ---- voicing and band split ---------------------------------------
         double bandSignal[kMaxChannels][kNumBands] {};
@@ -431,9 +481,28 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
             {
                 auto& bandState = channels_[static_cast<std::size_t> (channel)].bands[b];
 
-                double x = bandSignal[channel][band] * drive * bandTrimGain_[b];
+                double x = bandSignal[channel][band];
 
-                // Fold first: it creates the harmonics, and the saturator that
+                // Feedback, injected before the drive stage so the loop passes
+                // through the whole nonlinear chain.
+                //
+                // The tanh is the safety, and it is not optional or defeatable:
+                // it bounds whatever comes back to +/-1 no matter how loud the
+                // loop has become, and the feedback amount is separately capped
+                // below 1. Between them, runaway is impossible rather than
+                // merely unlikely -- and the saturator's own compression is what
+                // makes the loop settle into oscillation instead of screaming.
+                if (feedback > 0.0)
+                    x += feedback * std::tanh (bandState.feedbackDelay.at (feedbackDelaySamples_));
+
+                x *= drive * bandTrimGain_[b];
+
+                // Rectify first: it is a source transformation, doubling the
+                // fundamental, and the stages after it work on that instead of
+                // on the original note.
+                x = useAdaa ? bandState.rectifier.process (x, rectifier_) : rectifier_.evaluate (x);
+
+                // Fold next: it creates the harmonics, and the saturator that
                 // follows rounds off the corners the folder leaves behind.
                 x = useAdaa ? bandState.folder.process (x, folder_) : folder_.evaluate (x);
 
@@ -443,8 +512,13 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
                 // Asymmetry makes even harmonics, which is the point of the
                 // valve end of the Character control -- and it also makes DC,
                 // which grows with drive and would otherwise eat headroom and
-                // thump on bypass.
+                // thump on bypass. Rectification makes far more of it.
                 x = bandState.dcBlocker.process (x);
+
+                // Tapped here, before the auto-trim, so the loop gain does not
+                // change when the trim does.
+                bandState.feedbackDelay.push (x);
+
                 x *= bandAutoTrim_[b];
 
                 shaped[channel] = x;
@@ -508,19 +582,40 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
         }
 
         for (int channel = 0; channel < activeChannels; ++channel)
-        {
-            const auto c = static_cast<std::size_t> (channel);
-            workPointers_[c][i] = dry_[c][static_cast<std::size_t> (i)] * (1.0 - mix) + summed[channel] * mix;
-        }
+            workPointers_[static_cast<std::size_t> (channel)][i] = summed[channel];
     }
 
     oversampler_.downsample (channels, numSamples);
 
+    // ---- base rate: rate reduction, bit reduction, mix, output -------------
+    //
+    // Crush and downsample deliberately run out here rather than inside the
+    // oversampled block. Everywhere else in this plugin aliasing is a defect to
+    // be suppressed; in a bit crusher it is the instrument, and an antialiased
+    // one just sounds like a slightly noisy version of the input.
+    //
+    // They are wet-only, which is why the mix moved out here too: the dry path
+    // is delayed by the oversampler's latency instead of being carried through
+    // the oversampled block alongside the wet one.
+    const int latency = oversampler_.getLatencySamples();
+
     for (int i = 0; i < numSamples; ++i)
     {
+        const double mix  = mix_.next();
         const double gain = outputGain_.next();
+
         for (int channel = 0; channel < activeChannels; ++channel)
-            channels[channel][i] *= gain;
+        {
+            auto& state = channels_[static_cast<std::size_t> (channel)];
+
+            state.dryDelay.push (dryInput_[static_cast<std::size_t> (channel)][static_cast<std::size_t> (i)]);
+            const double dry = state.dryDelay.at (latency);
+
+            double wet = state.downsampler.process (channels[channel][i]);
+            wet = state.bitcrusher.process (wet);
+
+            channels[channel][i] = (dry * (1.0 - mix) + wet * mix) * gain;
+        }
     }
 
     gainReductionDb_ = blockGainReductionDb;

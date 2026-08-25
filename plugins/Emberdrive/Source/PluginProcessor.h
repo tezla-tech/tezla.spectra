@@ -54,6 +54,13 @@ inline constexpr auto expDcHz       = "expDcHz";
 inline constexpr auto expStereoLink = "expStereoLink";
 inline constexpr auto expDetectorRms = "expDetectorRms";
 inline constexpr auto expAdaa       = "expAdaa";
+
+// Added in schema version 3: the rest of the MANGLE page.
+inline constexpr auto rectify       = "rectify";
+inline constexpr auto crush         = "crush";
+inline constexpr auto downsample    = "downsample";
+inline constexpr auto feedback      = "feedback";
+inline constexpr auto feedbackTime  = "feedbackTime";
 } // namespace ids
 
 class EmberdriveProcessor final : public juce::AudioProcessor

@@ -33,10 +33,12 @@
 
 #include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Biquad.hpp>
+#include <tezla/dsp/Bitcrusher.hpp>
 #include <tezla/dsp/Crossover.hpp>
 #include <tezla/dsp/DcBlocker.hpp>
 #include <tezla/dsp/EnvelopeFollower.hpp>
 #include <tezla/dsp/GainComputer.hpp>
+#include <tezla/dsp/HalfbandFir.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
 #include <tezla/dsp/Waveshapers.hpp>
@@ -96,6 +98,14 @@ struct Parameters
     // ---- mangle -----------------------------------------------------------
     double foldAmount { 0.0 };    ///< 0 .. 1
     double foldRange  { 1.0 };    ///< 1, 10 or 100 -- the multiplier on fold gain
+    double rectify    { 0.0 };    ///< 0 .. 1, blend toward full-wave rectification
+    double feedback   { 0.0 };    ///< 0 .. 0.95, output fed back into the drive stage
+    double feedbackMs { 8.0 };    ///< 0.1 .. 50, the loop's delay
+
+    /// These two run at the host's rate, after the oversampled block, because
+    /// with a bit crusher the aliasing is the instrument rather than a defect.
+    double crush      { 0.0 };    ///< 0 .. 1, 0 is bypassed exactly
+    double downsample { 1.0 };    ///< 1 .. 64, 1 is bypassed exactly
 
     // ---- multiband --------------------------------------------------------
     bool   multiband       { false };
@@ -168,9 +178,11 @@ private:
     /// Everything that has to exist once per band, per channel.
     struct BandChannelState
     {
+        dsp::Adaa1<dsp::Rectifier>   rectifier;
         dsp::Adaa1<dsp::SineFolder>  folder;
         dsp::Adaa1<dsp::BiasedTanh>  saturator;
         dsp::DcBlocker<double>       dcBlocker;
+        dsp::DelayLine               feedbackDelay;
         double                       detectorMeanSquare { 0.0 };
     };
 
@@ -180,12 +192,22 @@ private:
         dsp::ThreeBandSplitter<double> splitter;
         std::array<BandChannelState, kNumBands> bands {};
         double masterDetectorMeanSquare { 0.0 };
+
+        // Base-rate stages, after the oversampled block.
+        dsp::Downsampler downsampler;
+        dsp::Bitcrusher  bitcrusher;
+
+        // The dry path is delayed here rather than mixed inside the oversampled
+        // block, because crush and downsample have to be wet-only and they run
+        // outside it.
+        dsp::DelayLine dryDelay;
     };
 
     std::vector<ChannelState> channels_;
-    std::vector<std::vector<double>> dry_;     ///< oversampled dry copy
+    std::vector<std::vector<double>> dryInput_;   ///< base-rate copy of the input
     std::vector<double*> workPointers_;
 
+    dsp::Rectifier   rectifier_;
     dsp::SineFolder  folder_;
     dsp::BiasedTanh  shaper_ { 0.0 };
 
@@ -202,6 +224,8 @@ private:
     dsp::SmoothedValue<double> mix_;
     dsp::SmoothedValue<double> outputGain_;
     dsp::SmoothedValue<double> foldGain_;
+    dsp::SmoothedValue<double> rectifyAmount_;
+    dsp::SmoothedValue<double> feedbackAmount_;
 
     // Smoothed, advanced once per block.
     dsp::SmoothedValue<double> bias_;
@@ -211,7 +235,8 @@ private:
     std::array<double, kNumBands> bandAutoTrim_ {};
     std::array<bool,   kNumBands> bandAudible_  {};
 
-    double detectorCoefficient_ { 0.0 };
+    int    feedbackDelaySamples_ { 0 };   ///< at the oversampled rate
+    double detectorCoefficient_  { 0.0 };
     double gainReductionDb_     { 0.0 };
     std::array<double, kNumBands> bandGainReductionDb_ {};
 };

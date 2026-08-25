@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <tezla/dsp/Adaa.hpp>
+#include <tezla/dsp/Bitcrusher.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Waveshapers.hpp>
 #include <tezla/measure/Harmonics.hpp>
@@ -164,5 +165,156 @@ TEZLA_TEST (folder_aliasing_at_each_range_setting)
             CHECK (report.thdDb < -100.0);
             CHECK (report.audibleAliasingDb < -100.0);
         }
+    }
+}
+
+TEZLA_TEST (rectifier_at_zero_is_a_straight_wire)
+{
+    const Rectifier rectifier { 0.0 };
+
+    for (const double x : { -3.0, -0.7, 0.0, 0.7, 3.0 })
+    {
+        CHECK (rectifier.evaluate (x) == x);
+        CHECK (rectifier.antiderivative (x) == 0.5 * x * x);
+    }
+}
+
+TEZLA_TEST (rectifier_at_full_is_absolute_value)
+{
+    const Rectifier rectifier { 1.0 };
+
+    for (const double x : { -3.0, -0.7, 0.0, 0.7, 3.0 })
+        CHECK_NEAR (rectifier.evaluate (x), std::abs (x), 1.0e-15);
+}
+
+TEZLA_TEST (rectifier_antiderivative_is_the_integral_of_the_rectifier)
+{
+    // Including across the origin, where the two halves of x*|x|/2 join. ADAA
+    // straddles that point constantly on any signal that crosses zero.
+    for (const double amount : { 0.0, 0.35, 0.8, 1.0 })
+    {
+        const Rectifier rectifier { amount };
+        constexpr double step = 1.0e-7;
+
+        for (const double x : { -1.5, -0.2, -1.0e-5, 1.0e-5, 0.2, 1.5 })
+        {
+            const double numerical = (rectifier.antiderivative (x + step)
+                                    - rectifier.antiderivative (x - step)) / (2.0 * step);
+            CHECK_NEAR (numerical, rectifier.evaluate (x), 1.0e-5);
+        }
+    }
+}
+
+TEZLA_TEST (rectifier_produces_an_octave_up)
+{
+    // The point of the control: full-wave rectification doubles the
+    // fundamental, so the second harmonic becomes the loudest thing present.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = binExactFrequency (500.0, fs, fftSize);
+    const auto input = sine (frequency, 0.5, fs, fftSize);
+
+    std::vector<double> output (input.size());
+    const Rectifier rectifier { 1.0 };
+    for (std::size_t i = 0; i < input.size(); ++i)
+        output[i] = rectifier.evaluate (input[i]);
+
+    const auto report = analyseHarmonics (output, fs, frequency);
+
+    // The original fundamental all but disappears and the octave dominates.
+    CHECK (report.harmonicsDb[0] > 10.0);
+}
+
+TEZLA_TEST (bitcrusher_at_zero_is_bit_exact)
+{
+    Bitcrusher crusher;
+    crusher.setAmount (0.0);
+
+    for (const double x : { -0.9, -0.123456789, 0.0, 0.3333333, 0.9 })
+        CHECK (crusher.process (x) == x);
+}
+
+TEZLA_TEST (bitcrusher_quantises_to_the_stated_depth)
+{
+    Bitcrusher crusher;
+
+    // Full crush is one bit: three possible output values.
+    crusher.setAmount (1.0);
+    CHECK_NEAR (crusher.getBits(), 1.0, 1.0e-12);
+
+    std::vector<double> distinct;
+    for (int i = 0; i <= 1000; ++i)
+    {
+        const double y = crusher.process (-1.0 + 2.0 * static_cast<double> (i) / 1000.0);
+        if (std::none_of (distinct.begin(), distinct.end(),
+                          [y] (double v) { return std::abs (v - y) < 1.0e-9; }))
+            distinct.push_back (y);
+    }
+    CHECK (distinct.size() <= 3);
+
+    // And a mid setting has more steps than a heavy one, but still far fewer
+    // than the input.
+    crusher.setAmount (0.5);
+    CHECK (crusher.getBits() > 8.0);
+    CHECK (crusher.getBits() < 9.0);
+}
+
+TEZLA_TEST (downsampler_at_one_is_bit_exact)
+{
+    Downsampler downsampler;
+    downsampler.setRatio (1.0);
+
+    for (const double x : { -0.9, -0.123456789, 0.0, 0.3333333, 0.9 })
+        CHECK (downsampler.process (x) == x);
+}
+
+TEZLA_TEST (downsampler_holds_for_the_stated_number_of_samples)
+{
+    Downsampler downsampler;
+    downsampler.setRatio (4.0);
+    downsampler.reset();
+
+    std::vector<double> input (40);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = static_cast<double> (i);
+
+    std::vector<double> output (input.size());
+    for (std::size_t i = 0; i < input.size(); ++i)
+        output[i] = downsampler.process (input[i]);
+
+    // Count how many times the output actually changes: at a ratio of 4 it
+    // should be about a quarter of the samples.
+    int changes = 0;
+    for (std::size_t i = 1; i < output.size(); ++i)
+        if (output[i] != output[i - 1])
+            ++changes;
+
+    CHECK (changes >= 8);
+    CHECK (changes <= 11);
+}
+
+TEZLA_TEST (downsampler_ratio_is_continuous)
+{
+    // Fractional ratios have to work, or automating the control jumps between
+    // integer divisions instead of sweeping.
+    for (const double ratio : { 1.5, 2.7, 6.25, 13.9 })
+    {
+        Downsampler downsampler;
+        downsampler.setRatio (ratio);
+        downsampler.reset();
+
+        int changes = 0;
+        double previous = 0.0;
+        for (int i = 0; i < 2000; ++i)
+        {
+            const double y = downsampler.process (static_cast<double> (i));
+            if (i > 0 && y != previous)
+                ++changes;
+            previous = y;
+        }
+
+        const double measuredRatio = 2000.0 / static_cast<double> (changes);
+        CHECK_NEAR (measuredRatio, ratio, ratio * 0.05);
     }
 }

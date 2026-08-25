@@ -1,13 +1,14 @@
 # Emberdrive
 
-Tube and tape saturation into a soft-knee limiter, with a wavefolder for
-destruction and an optional three-band split. Built for drum busses, sub bass
+Tube and tape saturation into a soft-knee limiter, with a full destruction
+section — wavefolder, rectifier, bit crusher, rate reducer and feedback — and an
+optional three-band split. Built for drum busses, sub bass
 and reeses — analogue weight and grit that survives brutal input levels and
 holds together below 60 Hz.
 
 - **Format:** VST3, 64-bit, Windows x64
 - **Plugin code:** `Tzem` · **Vendor:** Tezla Tech
-- **Version:** 0.2.0
+- **Version:** 0.3.0
 
 ---
 
@@ -29,10 +30,16 @@ in --+------------------------------------------------------- dry --+
          [ /oversampled ]
 ```
 
-Everything nonlinear — the fold, the saturation *and* the limiters — runs inside
-the oversampled section. The dry/wet mix happens in there too, against the
-upsampled input rather than the original, so both sides carry identical delay
-and partial mix settings cannot comb.
+Everything nonlinear runs inside the oversampled section — **except Crush and
+Downsample, deliberately.** Everywhere else in this plugin aliasing is a defect
+to suppress; in a bit crusher it is the instrument, and an antialiased quantiser
+just sounds like a slightly noisy version of the input. Those two run at the
+host's own rate with the artefacts left alone.
+
+Because they are wet-only, the dry/wet mix happens after them at base rate, with
+the dry path delayed by exactly the oversampler's latency — which is a whole
+number of base-rate samples by design, so the two sides stay sample-aligned and
+partial mix settings cannot comb.
 
 ---
 
@@ -58,8 +65,17 @@ and partial mix settings cannot comb.
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
-| **Fold** | 0 … 100 % | 0 % | A wavefolder between Drive and the saturation. A clipper flattens a peak and stops; a folder turns it back on itself, so the harmonics keep changing as you push instead of converging on a square wave. At 0 it is *exactly* a straight wire. |
+| **Fold** | 0 … 100 % | 0 % | A wavefolder. A clipper flattens a peak and stops; a folder turns it back on itself, so the harmonics keep changing as you push instead of converging on a square wave. At 0 it is *exactly* a straight wire. |
 | **Range** | ×1 / ×10 / ×100 | ×1 | The multiplier on Fold. ×1 is a musical folder, ×10 is aggressive, ×100 folds a full-scale signal about 32 times per half cycle. See the measurements below — ×100 is a bass tool. |
+| **Rectify** | 0 … 100 % | 0 % | Blends toward full-wave rectification. Flipping the negative half cycles up doubles the fundamental, giving an octave-up ghost that tracks the note with no pitch tracking involved. Sits first, so Fold and the saturation work on the octave. |
+| **Feedback** | 0 … 95 % | 0 % | Routes the output back into the drive stage through a short delay, with the whole nonlinear chain inside the loop. Sustains and screams. **Cannot run away** — see below. |
+| **FB Time** | 0.1 … 50 ms | 8 ms | The loop period. The signal repeats at this rate, so the resonance is 1/time — the readout shows both. Short is a metallic ring, long is a stuttering repeat. |
+| **Crush** | Off … 1 bit | Off | Bit-depth reduction, 16 bits down to 1. Not antialiased, on purpose. |
+| **Downsample** | Off … ×64 | Off | Sample-and-hold rate reduction. At ×8 on a 48 kHz session the signal behaves as if running at 6 kHz. Fractional ratios work, so it sweeps rather than stepping. |
+
+Chain order on this page: **Rectify → Fold → saturation**, with **Feedback**
+wrapping all of it, and **Downsample → Crush** last at the host's rate. Crush and
+Downsample are wet-only.
 
 ### BANDS
 
@@ -166,6 +182,55 @@ At Range ×100 with drive, THD reaches **+14 dB** — the harmonics are five tim
 louder than the note that made them, and the output no longer resembles the
 input in any useful sense. That is the point of the control.
 
+### The rest of the mangle section
+
+| Stage | Measured |
+|---|---|
+| **Rectify** at 30 % | Octave (2nd harmonic) at −14.8 dB relative to the fundamental |
+| **Rectify** at 60 % | Octave within 4 dB of the fundamental |
+| **Rectify** at 100 % | The original fundamental is cancelled to the numerical floor — the octave *is* the signal. The raw ratio reads +210 dB, which is an artefact of dividing by a fundamental that no longer exists, not a gain. |
+| **Crush** at 8.4 bits | Takes a chain sitting at −236 dB of aliasing up to **−26 dB** |
+| **Downsample** at ×12 | Same chain up to **−10 dB** |
+
+Those last two numbers are the feature working, not failing. A bit crusher
+without folded-back images sounds like a slightly noisy version of the input.
+There is a test asserting the aliasing *rises*, so a future change that quietly
+starts antialiasing them shows up as a failure.
+
+### Feedback, and why it cannot run away
+
+A feedback loop wrapped around a nonlinearity with 30 dB of drive in it is
+exactly the arrangement that blows up. Three things stop it, and none are
+defeatable:
+
+1. A **soft clip inside the loop** bounds whatever returns to ±1 regardless of
+   how loud the loop has become.
+2. The **feedback amount is capped below unity** (95 %) on top of that.
+3. The **saturator's own compression** is what makes the loop settle into
+   oscillation rather than screaming — its incremental gain falls below 1 as
+   the level rises.
+
+Swept across every combination of feedback (including a deliberately
+out-of-range 200 %), delay from 0.1 to 50 ms, drive at 0 and +30 dB, with fold
+and rectify running: **always finite, always bounded.** Silence in stays silent
+— the loop cannot self-start from nothing.
+
+It repeats at the delay you set. Measured by autocorrelation rather than by
+hunting for a spectral peak, because spectrally the loop imposes a comb of
+1/delay on whatever is circulating, and at delays like 4 ms those sidebands land
+exactly on the sustained tone's own harmonics and become invisible:
+
+| FB Time | Strongest repeat | Expected | Correlation |
+|---|---|---|---|
+| 2 ms | 97 samples | 96 | 0.99 |
+| 4 ms | 193 samples | 192 | 0.99 |
+| 8 ms | 385 samples | 384 | 0.99 |
+
+The one-sample offset is the ADAA half-sample delay plus rounding.
+
+Tail energy 0.5 s after a 50 ms burst has finished: **−100 dB without feedback,
+−2.9 dB with it at 90 %.**
+
 ### Multiband
 
 - The three bands sum flat to within 0.15 dB at every crossover point and at all
@@ -212,6 +277,9 @@ sound and a broken one.
 | Clean sub, dirty top | Multiband doing its job: low band at −18 dB trim, mid at +6. |
 | Folded reese | The folder at a musical setting — metallic and hollow, still tracking the note. |
 | Annihilate | Fold ×10 into heavy drive into multiband. On purpose. |
+| Bitcrush | The XP-era bitcrusher, near enough — ×7 rate reduction into 8-bit, in parallel so the bottom survives. |
+| Octave ghost | Rectify at 75 % blended under the original, for mid-bass and leads. |
+| Screamer | Short delay, 72 % feedback — the plugin sustains and rings on after the note has gone. |
 
 Presets never switch the expert panel on: it is for deliberate hands-on work,
 and a preset silently overriding Character would be a surprise.
@@ -223,21 +291,8 @@ and a preset silently overriding Character would be a surprise.
 **Done in v0.2.0** — multiband, the wavefolder with its ×1/×10/×100 range, and
 the expert panel.
 
-**Next, on the MANGLE page.** All four were considered for v0.2.0 and deferred
-so the folder could be finished and measured properly first:
-
-- **Crush** — bit-depth reduction. Deliberately *outside* the oversampled
-  section, unlike everything else here: with a bit crusher the aliasing is the
-  instrument, not a defect, and antialiasing it would remove the entire point.
-- **Downsample** — sample-rate reduction, for the gritty ringing artefacts that
-  sit so well on a reese. Same reasoning: no oversampling, no ADAA.
-- **Rectify** — blends toward full-wave rectification, giving an octave-up ghost
-  that tracks the note. Stacks with Fold for genuinely alien textures, and is
-  cheap to antialias properly.
-- **Feedback** — routes the output back into the drive stage through a short
-  delay, for self-oscillating scream that tracks pitch as the delay changes.
-  The most unpredictable of the four; needs a hard safety limiter that cannot be
-  defeated, or it will run away.
+**Done in v0.3.0** — Rectify, Crush, Downsample and Feedback. The MANGLE page is
+complete.
 
 **Later** — cabinet and amp voicings (the `Ferrite` / `Anvil` lane in the plugin
 registry), a hand-drawn panel, minimum-phase IIR polyphase oversampling as a
@@ -269,3 +324,12 @@ low-latency option, per-band Character, and a second saturation curve family.
 - The low band passes through an allpass matching the second crossover. Without
   it the three bands no longer sum flat, and the symptom is not an obvious bug
   but "multiband mode sounds a bit odd".
+- The rectifier's antiderivative is `x·|x|/2`, written without a branch so it
+  stays continuous across the origin. ADAA straddles that point constantly on
+  any signal that crosses zero.
+- The feedback tap is taken after the DC blocker but *before* the auto-trim, so
+  changing the trim does not change the loop gain.
+- Every stage on the MANGLE page has an exact bypass at its neutral setting —
+  bit-exact, not "close enough". They sit permanently in the path, so anything
+  less would mean existing projects changed the day the plugin updated. There is
+  a test asserting bit equality for all four at once.

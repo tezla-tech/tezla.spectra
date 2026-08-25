@@ -807,3 +807,292 @@ TEZLA_TEST (oversampling_mode_applies_on_the_very_first_call)
         CHECK (engine.getLatencySamples() == reference.latency);
     }
 }
+
+// ============================================================================
+//  Phase 3: rectify, crush, downsample, feedback
+// ============================================================================
+
+TEZLA_TEST (new_mangle_stages_are_bypassed_at_their_zero_settings)
+{
+    // All four sit permanently in the path. Each one's neutral setting has to
+    // be a true bypass, or existing projects change when the plugin updates.
+    constexpr double fs = 48000.0;
+    const auto input = measure::sine (220.0, 0.4, fs, 16384);
+
+    Parameters neutral;
+    neutral.driveDb = 9.0;
+
+    const auto reference = run (neutral, input, fs);
+
+    Parameters withStages = neutral;
+    withStages.rectify    = 0.0;
+    withStages.feedback   = 0.0;
+    withStages.feedbackMs = 25.0;    // set, but inert while feedback is 0
+    withStages.crush      = 0.0;
+    withStages.downsample = 1.0;
+
+    const auto result = run (withStages, input, fs);
+
+    for (std::size_t i = 0; i < reference.size(); ++i)
+        CHECK (reference[i] == result[i]);
+}
+
+TEZLA_TEST (rectify_adds_an_octave_through_the_whole_engine)
+{
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = measure::binExactFrequency (300.0, fs, fftSize);
+    const auto input = measure::sine (frequency, 0.3, fs, 2 * fftSize);
+
+    double previousSecond = -400.0;
+
+    std::printf ("        %-10s %10s %10s\n", "rectify", "h2 (octave)", "THD");
+
+    for (const double rectify : { 0.0, 0.3, 0.6, 1.0 })
+    {
+        Parameters parameters;
+        parameters.driveDb   = 0.0;
+        parameters.character = 0.0;      // symmetric, so h2 can only come from rectify
+        parameters.ceilingDb = 24.0;
+        parameters.kneeDb    = 0.0;
+        parameters.rectify   = rectify;
+        parameters.autoTrim  = true;
+
+        const auto report = measure::analyseHarmonics (tail (run (parameters, input, fs), fftSize), fs, frequency);
+
+        std::printf ("        %-10.1f %10.2f %10.2f\n", rectify, report.harmonicsDb[0], report.thdDb);
+
+        CHECK (report.harmonicsDb[0] > previousSecond);
+        previousSecond = report.harmonicsDb[0];
+    }
+
+    // Fully rectified, the octave is louder than what is left of the original.
+    CHECK (previousSecond > 0.0);
+}
+
+TEZLA_TEST (crush_and_downsample_are_wet_only)
+{
+    // They live outside the oversampled block, which is also outside the
+    // dry/wet mix. A fully dry setting must be untouched by either.
+    constexpr double fs = 48000.0;
+
+    std::vector<double> input (16384);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.4 * std::sin (2.0 * std::numbers::pi * 220.0 * static_cast<double> (i) / fs);
+
+    Parameters parameters;
+    parameters.mix        = 0.0;
+    parameters.crush      = 1.0;
+    parameters.downsample = 32.0;
+    parameters.driveDb    = 24.0;
+
+    const auto output = run (parameters, input, fs);
+    const int latency = latencyOf (parameters, fs);
+
+    double worstError = 0.0;
+    for (std::size_t i = static_cast<std::size_t> (latency) + 512; i < input.size(); ++i)
+        worstError = std::max (worstError, std::abs (output[i] - input[i - static_cast<std::size_t> (latency)]));
+
+    CHECK (worstError < 1.0e-9);
+}
+
+TEZLA_TEST (crush_and_downsample_alias_on_purpose)
+{
+    // The one place in this plugin where more aliasing is the correct outcome.
+    // If a future change quietly starts antialiasing these, the bit crusher
+    // stops sounding like a bit crusher and this test says so.
+    constexpr double fs = 48000.0;
+    constexpr std::size_t fftSize = 32768;
+
+    const double frequency = measure::binExactFrequency (1000.0, fs, fftSize);
+    const auto input = measure::sine (frequency, 0.5, fs, 2 * fftSize);
+
+    Parameters clean;
+    clean.ceilingDb = 24.0;
+    clean.kneeDb    = 0.0;
+    clean.autoTrim  = false;
+
+    const auto reference = measure::analyseHarmonics (tail (run (clean, input, fs), fftSize), fs, frequency);
+    CHECK (reference.audibleAliasingDb < -100.0);
+
+    Parameters crushed = clean;
+    crushed.crush = 0.8;
+    const auto crushedReport = measure::analyseHarmonics (tail (run (crushed, input, fs), fftSize), fs, frequency);
+
+    Parameters reduced = clean;
+    reduced.downsample = 12.0;
+    const auto reducedReport = measure::analyseHarmonics (tail (run (reduced, input, fs), fftSize), fs, frequency);
+
+    std::printf ("        clean %.1f dB, crushed %.1f dB, downsampled %.1f dB\n",
+                 reference.audibleAliasingDb, crushedReport.audibleAliasingDb,
+                 reducedReport.audibleAliasingDb);
+
+    CHECK (crushedReport.audibleAliasingDb > reference.audibleAliasingDb + 40.0);
+    CHECK (reducedReport.audibleAliasingDb > reference.audibleAliasingDb + 40.0);
+}
+
+TEZLA_TEST (feedback_cannot_run_away_at_any_setting)
+{
+    // The guarantee. A feedback loop through a nonlinearity with drive in it is
+    // exactly the arrangement that blows up, so this sweeps the whole parameter
+    // space rather than sampling a couple of points.
+    constexpr double fs = 48000.0;
+
+    std::vector<double> impulseTrain (48000, 0.0);
+    for (std::size_t i = 0; i < impulseTrain.size(); i += 4800)
+        impulseTrain[i] = 1.0;
+
+    for (const double feedback : { 0.3, 0.6, 0.9, 0.95, 2.0 })      // 2.0 must clamp
+        for (const double delayMs : { 0.1, 1.0, 8.0, 50.0 })
+            for (const double driveDb : { 0.0, 30.0 })
+            {
+                Parameters parameters;
+                parameters.driveDb    = driveDb;
+                parameters.feedback   = feedback;
+                parameters.feedbackMs = delayMs;
+                parameters.character  = 1.0;
+                parameters.foldAmount = 1.0;
+                parameters.foldRange  = 10.0;       // everything at once
+                parameters.rectify    = 0.5;
+
+                const auto output = run (parameters, impulseTrain, fs);
+
+                for (const double sample : output)
+                {
+                    CHECK (std::isfinite (sample));
+                    CHECK (std::abs (sample) < 8.0);
+                }
+            }
+}
+
+TEZLA_TEST (feedback_leaves_silence_silent)
+{
+    // A resonant loop that self-starts from nothing would make the plugin
+    // unusable on a track with rests in it.
+    constexpr double fs = 48000.0;
+
+    Parameters parameters;
+    parameters.feedback   = 0.95;
+    parameters.feedbackMs = 4.0;
+    parameters.driveDb    = 30.0;
+
+    const auto output = run (parameters, std::vector<double> (24000, 0.0), fs);
+
+    for (const double sample : output)
+        CHECK (std::abs (sample) < 1.0e-12);
+}
+
+TEZLA_TEST (feedback_sustains_after_the_input_stops)
+{
+    // What the control is for: energy keeps circulating once the note has gone.
+    constexpr double fs = 48000.0;
+
+    std::vector<double> burst (48000, 0.0);
+    for (std::size_t i = 0; i < 2400; ++i)
+        burst[i] = 0.5 * std::sin (2.0 * std::numbers::pi * 110.0 * static_cast<double> (i) / fs);
+
+    const auto tailEnergyDb = [&] (double feedback)
+    {
+        Parameters parameters;
+        parameters.driveDb    = 12.0;
+        parameters.feedback   = feedback;
+        parameters.feedbackMs = 6.0;
+        parameters.ceilingDb  = 0.0;
+        parameters.kneeDb     = 0.0;
+
+        const auto output = run (parameters, burst, fs);
+
+        // Well after the burst has finished.
+        double sumOfSquares = 0.0;
+        for (std::size_t i = 24000; i < output.size(); ++i)
+            sumOfSquares += output[i] * output[i];
+
+        return dsp::gainToDb (std::sqrt (sumOfSquares / 24000.0));
+    };
+
+    const double without = tailEnergyDb (0.0);
+    const double with    = tailEnergyDb (0.9);
+
+    std::printf ("        tail after the burst: %.1f dB without feedback, %.1f dB with\n",
+                 without, with);
+
+    CHECK (without < -80.0);          // nothing left once the note stops
+    CHECK (with > without + 30.0);    // and plenty left with the loop running
+}
+
+TEZLA_TEST (feedback_repeats_at_the_delay_time)
+{
+    // What makes the loop playable rather than just noisy: the circulating
+    // signal repeats at the delay period, so the resonance moves with the
+    // control.
+    //
+    // Measured by autocorrelation rather than by looking for a spectral peak.
+    // Spectrally the loop imposes a comb of 1/delay on whatever is circulating,
+    // which shows up as sidebands around the sustained tone -- and at delays
+    // like 4 ms those sidebands land exactly on the tone's own harmonics and
+    // become invisible. Autocorrelation asks the question directly: does the
+    // output repeat itself after this many samples?
+    constexpr double fs = 48000.0;
+
+    const auto bestLag = [&] (double delayMs, int searchFrom, int searchTo)
+    {
+        Parameters parameters;
+        parameters.driveDb    = 18.0;
+        parameters.feedback   = 0.9;
+        parameters.feedbackMs = delayMs;
+        parameters.ceilingDb  = 0.0;
+        parameters.kneeDb     = 0.0;
+
+        // A short burst of a frequency that is not commensurate with any of the
+        // delays under test, so nothing lines up by accident.
+        std::vector<double> excitation (48000, 0.0);
+        for (std::size_t i = 0; i < 1200; ++i)
+            excitation[i] = 0.5 * std::sin (2.0 * std::numbers::pi * 733.0 * static_cast<double> (i) / fs);
+
+        const auto output = run (parameters, excitation, fs);
+
+        const std::size_t analysisStart = 24000;
+        const std::size_t analysisLength = 12000;
+
+        double bestScore = -2.0;
+        int bestLagSamples = 0;
+
+        for (int lag = searchFrom; lag <= searchTo; ++lag)
+        {
+            double correlation = 0.0, energyA = 0.0, energyB = 0.0;
+            for (std::size_t i = 0; i < analysisLength; ++i)
+            {
+                const double a = output[analysisStart + i];
+                const double b = output[analysisStart + i + static_cast<std::size_t> (lag)];
+                correlation += a * b;
+                energyA += a * a;
+                energyB += b * b;
+            }
+
+            const double denominator = std::sqrt (energyA * energyB);
+            const double score = denominator > 1.0e-20 ? correlation / denominator : 0.0;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestLagSamples = lag;
+            }
+        }
+
+        return std::pair { bestLagSamples, bestScore };
+    };
+
+    for (const double delayMs : { 2.0, 4.0, 8.0 })
+    {
+        const int expected = static_cast<int> (std::llround (delayMs * 0.001 * fs));
+        const auto [lag, score] = bestLag (delayMs, expected / 2, expected * 2);
+
+        std::printf ("        %.0f ms delay: strongest repeat at %d samples (expected %d), r = %.2f\n",
+                     delayMs, lag, expected, score);
+
+        // Within a couple of percent, and genuinely periodic rather than noise.
+        CHECK (std::abs (lag - expected) <= std::max (2, expected / 40));
+        CHECK (score > 0.5);
+    }
+}
