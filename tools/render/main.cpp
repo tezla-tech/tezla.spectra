@@ -12,11 +12,17 @@
 // audio through both builds and compare. Everything else is an argument.
 //
 //   tezla-render <samples> <blockSize> <out.raw> [id=value ...]
+//   tezla-render params
 //
 // Output is raw little-endian doubles, interleaved stereo, so a diff is a
 // byte comparison and needs no parser. Parameters are set by their string ID
 // in the plugin's own units -- `focus=8000`, `modDepth1=-0.4` -- so a check
 // reads the way the plugin does rather than in normalised fractions.
+//
+// `params` prints the whole parameter list: index, ID, name, default and range.
+// CLAUDE.md section 8 says these are frozen forever, and until now the only way
+// to check that after a refactor was to read two files side by side. Diffing two
+// dumps says it in one line.
 
 #include <cstdio>
 #include <cmath>
@@ -54,14 +60,17 @@ double source (std::size_t index)
 
 int main (int argc, char** argv)
 {
-    if (argc < 4)
+    const bool dumpParameters = argc >= 2 && juce::String (argv[1]) == "params";
+
+    if (argc < 4 && ! dumpParameters)
     {
-        std::printf ("usage: tezla-render <samples> <blockSize> <out.raw>\n");
+        std::printf ("usage: tezla-render <samples> <blockSize> <out.raw> [id=value ...]\n"
+                     "       tezla-render params\n");
         return 2;
     }
 
-    const int totalSamples = std::atoi (argv[1]);
-    const int blockSize    = std::max (1, std::atoi (argv[2]));
+    const int totalSamples = dumpParameters ? 0 : std::atoi (argv[1]);
+    const int blockSize    = dumpParameters ? 1 : std::max (1, std::atoi (argv[2]));
 
     juce::ScopedJuceInitialiser_GUI juceInit;
 
@@ -71,6 +80,37 @@ int main (int argc, char** argv)
     {
         std::fprintf (stderr, "the plugin would not instantiate\n");
         return 1;
+    }
+
+    if (dumpParameters)
+    {
+        int index = 0;
+
+        for (auto* candidate : processor->getParameters())
+        {
+            const auto* ranged = dynamic_cast<const juce::RangedAudioParameter*> (candidate);
+
+            if (ranged == nullptr)
+            {
+                std::printf ("%3d  <not ranged>  %s\n", index++, candidate->getName (64).toRawUTF8());
+                continue;
+            }
+
+            const auto& range = ranged->getNormalisableRange();
+
+            // The default in the parameter's own units, not normalised: that is
+            // the number a project reopening depends on.
+            std::printf ("%3d  %-16s  %-28s  default %-12g range %g .. %g  steps %g\n",
+                         index++,
+                         ranged->paramID.toRawUTF8(),
+                         ranged->getName (64).toRawUTF8(),
+                         static_cast<double> (ranged->convertFrom0to1 (ranged->getDefaultValue())),
+                         static_cast<double> (range.start),
+                         static_cast<double> (range.end),
+                         static_cast<double> (range.interval));
+        }
+
+        return 0;
     }
 
     // Parameters before prepareToPlay, so the engine is built for them.

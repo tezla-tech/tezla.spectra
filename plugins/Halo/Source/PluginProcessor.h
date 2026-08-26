@@ -9,6 +9,7 @@
 
 #include <tezla/ui/AbCompare.hpp>
 #include <tezla/ui/ModulationIds.hpp>
+#include <tezla/ui/ModulationParameters.hpp>
 
 #include "HaloEngine.hpp"
 
@@ -89,32 +90,13 @@ static_assert (ui::modIds::numLfos == dsp::Modulation::kNumLfos,
                "and on how many LFOs");
 } // namespace ids
 
-/// Note divisions for a tempo-synced LFO, as cycles per beat.
+/// The note divisions a synced LFO can choose, shared with Emberdrive.
 ///
 /// **Append-only, like the destination list below**: a choice parameter stores
 /// an index, so inserting a division silently retunes every synced LFO in every
-/// saved project.
-///
-/// A 4/4 bar is four beats, so one cycle a bar is 0.25 cycles per beat. A
-/// triplet fits three in the space of two, hence 1.5x; a dotted note lasts one
-/// and a half times as long, hence 2/3.
-namespace division
-{
-struct Entry { const char* name; double cyclesPerBeat; };
-
-inline constexpr Entry entries[] {
-    { "8 bars", 0.03125 }, { "4 bars", 0.0625 }, { "2 bars", 0.125 },
-    { "1 bar",  0.25 },    { "1/2",    0.5 },    { "1/4",    1.0 },
-    { "1/8",    2.0 },     { "1/16",   4.0 },    { "1/32",   8.0 },
-    { "1/2 T",  0.75 },    { "1/4 T",  1.5 },    { "1/8 T",  3.0 },
-    { "1/2 D",  1.0 / 3.0 }, { "1/4 D", 2.0 / 3.0 }, { "1/8 D", 4.0 / 3.0 }
-};
-
-inline constexpr int count = static_cast<int> (std::size (entries));
-
-/// The default: one cycle a bar, which is where a sweep usually wants to be.
-inline constexpr int defaultIndex = 3;
-} // namespace division
+/// saved project. Both plugins must agree on the order for the same reason they
+/// must agree on the parameter IDs, so there is one table and this names it.
+namespace division = ui::modulation;
 
 /// Everything a modulation source can be pointed at.
 ///

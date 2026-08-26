@@ -108,6 +108,123 @@ no separate manual; the tooltips are the manual.
 
 ---
 
+## MOD — three LFOs and a level follower
+
+The same modulation layer Halo has, on the same shared components: a collapsible
+strip under the tabs holding three tempo-syncable LFOs and a level follower, and
+eight assignments made by arming a source and dragging the ring that appears
+around any knob. Halo's README describes how it works; the differences here are
+what it can be pointed at, and what measuring it turned up.
+
+**Twenty-nine destinations** — every continuous control on all four pages.
+Choices and switches are excluded by construction: the fold range, the band
+states, oversampling and the Expert and Multiband enables reconfigure the signal
+path rather than adjust it.
+
+What it is for on this material:
+
+- **ENV into Drive** — a saturator that bites harder the harder it is hit, or,
+  at negative depth, one that stays clean on the peaks and dirties the quiet.
+- **ENV into Fold at negative depth** — the wavefolder backs off exactly when
+  the transient would have made it scream.
+- **LFO into FB Time, synced** — the feedback loop's resonance sweeping on the
+  bar. The delay tap is an integer number of samples, so this steps rather than
+  glides; measured, it stays inside the range the control's own static settings
+  already cover, and on the MANGLE page that is the character rather than a
+  defect.
+- **LFO into Low/Mid Hz** — the crossover moving under a multiband drive, which
+  is a very different thing from moving the drive.
+
+### What measuring it found
+
+Two real bugs, both older than modulation, and both found because chunking made
+them visible.
+
+**The output depended on the host's buffer size.** Emberdrive's voicing — four
+biquads, the shaper bias and the auto-trim — is far too expensive to rebuild per
+sample: the auto-trim alone probes the whole nonlinear chain 512 times per band.
+It was rebuilt once per `process()` call instead, so a host handing over 64
+samples rebuilt eight times as often as one handing over 512, and the same
+automation settled along a different path. Measured, the two disagreed by **0.296
+of full scale** while a parameter was moving. A bounce did not match what was
+heard, and nothing said so.
+
+The rebuild is on a timer counted in samples now, and the sample loop is cut at
+the boundary rather than at the call boundary — which is the part that matters,
+because rebuilding once per call cannot be made block-size independent however
+the timer is arranged. Block sizes 64, 100 and 512 now agree **exactly**, and
+`emberdrive_settles_the_same_way_at_any_host_block_size` fails if that stops
+being true.
+
+**The DC blocker forgot its state on every change.** `DcBlocker::prepare` resets,
+and the engine called it every time the expert DC corner moved. A first-order
+highpass whose memory has been zeroed puts out `x` instead of
+`x - x[n-1] + R·y[n-1]` — a step the size of the previous sample. DC Block is a
+continuous, automatable parameter, so this was already there: automating it
+ticked once per change, quietly. `retune()` now moves the coefficient and leaves
+the memory alone.
+
+### How they were found
+
+Modulation updates the engine every 32 samples, so anything reaching the signal
+path unsmoothed lands exactly on a multiple of 32 and nowhere else. Comparing the
+roughness on those samples with the roughness between them finds it whatever the
+signal happens to be doing — the signal does not know where the boundaries are.
+An unmodulated reference reads 1.006.
+
+All twenty-nine destinations were swept one at a time, twice, once with Expert on
+and once off:
+
+| Destination | before | after |
+|---|---|---|
+| `expDcHz` | **4.15** | 1.00 |
+| `expBias` | **2.16** | 0.78 |
+| `rectify` | **1.36** | 1.07 |
+| everything else | 0.93 – 1.03 | 0.93 – 1.03 |
+
+`feedbackTime` reads 1.33–1.46 and stays there. That one is the delay tap
+snapping between whole samples, and it is the control working rather than a
+defect: static settings at 5, 8, 12 and 20 ms already span −36 to −60 dB at the
+chunk rate, and the sweep lands at −49.6, inside that range. An interpolating
+delay would smooth it and would change the sound of every project already using
+Feedback, so it stays as it is.
+
+The voicing interval was picked by measurement, not by argument:
+
+| interval | seam ratio on a modulated Bias |
+|---|---|
+| 10 ms | 2.16 |
+| 5 ms | 1.75 |
+| **2.5 ms** | at the noise floor |
+| 1.25 ms | at the noise floor, and 18% more CPU for nothing |
+
+### What it costs
+
+Sixty seconds of stereo at 48 kHz, one core, Release:
+
+| | time |
+|---|---|
+| Nothing assigned | 3.68 s |
+| One slot | 4.19 s |
+| All eight slots, all four sources | 6.23 s |
+
+Idle is **faster than before modulation existed** (3.97 s), because the auto-trim
+probe used to run on every parameter push whether or not anything had changed;
+it now runs only when something actually moved. The cost scales with how much
+modulation you use, which is the right shape: eight busy slots on twenty
+instances is not a project anyone has.
+
+### What it costs when you are not using it
+
+| Check | Result |
+|---|---|
+| Nothing assigned, against a build from before modulation existed | **byte-identical**, 96 000 samples |
+| A slot assigned with its depth at exactly 0 | **byte-identical** |
+| Modulation running, host block size 512 against 64 | **byte-identical** |
+| Existing parameter list | all 40 unchanged; the 45 new ones appended at index 40 |
+
+---
+
 ## Oversampling
 
 Auto targets roughly the same ~192 kHz internal rate at every session rate, so

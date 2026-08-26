@@ -59,6 +59,12 @@ struct BandParameters
 {
     double    driveTrimDb { 0.0 };          ///< -24 .. +24, relative to the global drive
     BandState state       { BandState::On };
+
+    /// So the engine can tell whether anything actually moved. What it is for:
+    /// rebuilding the voicing -- four biquads and a 512-point probe of the
+    /// nonlinear chain per band -- is far too expensive to do on every push, and
+    /// a push arrives every 32 samples once modulation is running.
+    bool operator== (const BandParameters&) const = default;
 };
 
 /// Direct access to the constants the analogue modelling normally derives from
@@ -77,6 +83,12 @@ struct ExpertParameters
     double stereoLink     { 1.0 };      ///< 0 = independent channels, 1 = fully linked
     double detectorRms    { 0.0 };      ///< 0 = peak detector, 1 = RMS
     bool   adaaEnabled    { true };     ///< off to hear what antialiasing is doing
+
+    /// So the engine can tell whether anything actually moved. What it is for:
+    /// rebuilding the voicing -- four biquads and a 512-point probe of the
+    /// nonlinear chain per band -- is far too expensive to do on every push, and
+    /// a push arrives every 32 samples once modulation is running.
+    bool operator== (const ExpertParameters&) const = default;
 };
 
 struct Parameters
@@ -114,6 +126,12 @@ struct Parameters
     std::array<BandParameters, kNumBands> bands {};
 
     ExpertParameters expert {};
+
+    /// So the engine can tell whether anything actually moved. What it is for:
+    /// rebuilding the voicing -- four biquads and a 512-point probe of the
+    /// nonlinear chain per band -- is far too expensive to do on every push, and
+    /// a push arrives every 32 samples once modulation is running.
+    bool operator== (const Parameters&) const = default;
 };
 
 class Engine
@@ -245,6 +263,17 @@ private:
     std::array<bool,   kNumBands> bandAudible_  {};
 
     int    feedbackDelaySamples_ { 0 };   ///< at the oversampled rate
+
+    /// The voicing rebuild timer, counted in samples at the internal rate so it
+    /// is independent of both the session rate and the host's block size.
+    int    voicingIntervalSamples_ { 1 };
+    int    voicingCountdown_       { 0 };
+
+    /// Whether a parameter has moved since the voicing was last rebuilt. The
+    /// smoothers cannot answer this on their own: the auto-trim reads Drive's
+    /// *target*, which arrives instantly, so a Drive change with everything else
+    /// still would otherwise never be picked up.
+    bool   voicingDirty_ { true };
     double detectorCoefficient_  { 0.0 };
     double gainReductionDb_     { 0.0 };
     std::array<double, kNumBands> bandGainReductionDb_ {};

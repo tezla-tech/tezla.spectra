@@ -33,6 +33,22 @@ public:
         r_ = std::exp (-twoPi * cutoffHz / static_cast<Float>(sampleRate_));
     }
 
+    /// Moves the corner while audio is flowing, keeping the filter's memory.
+    ///
+    /// prepare() resets, which is right when the graph is being built and wrong
+    /// once samples are running through it. The state here *is* the last input
+    /// and the last output: zeroing them makes the next sample come out as `x`
+    /// instead of `x - x[n-1] + R*y[n-1]`, which is a step the size of the
+    /// previous sample. Once, on a knob turn, that is a tick. Under modulation
+    /// it is a tick every chunk -- measured at four times the signal's own
+    /// roughness on Emberdrive's expert DC control, which is a continuous,
+    /// automatable parameter and had this problem before modulation existed.
+    void retune (double sampleRate, Float cutoffHz) noexcept
+    {
+        sampleRate_ = sampleRate > 0.0 ? sampleRate : 44100.0;
+        setCutoff (cutoffHz);
+    }
+
     void reset() noexcept
     {
         previousInput_  = Float{};

@@ -3,9 +3,12 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/BypassMixer.hpp>
+#include <tezla/dsp/Modulation.hpp>
 #include <tezla/dsp/VuMeter.hpp>
 
 #include <tezla/ui/AbCompare.hpp>
+#include <tezla/ui/ModulationIds.hpp>
+#include <tezla/ui/ModulationParameters.hpp>
 
 #include "EmberdriveEngine.hpp"
 
@@ -64,7 +67,115 @@ inline constexpr auto crush         = "crush";
 inline constexpr auto downsample    = "downsample";
 inline constexpr auto feedback      = "feedback";
 inline constexpr auto feedbackTime  = "feedbackTime";
+
+// Added in schema version 4: modulation. Appended for the same reason, and
+// every default is neutral -- every slot's source is Off, so nothing else here
+// can reach the signal path in a project saved before they existed.
+//
+// References to the shared table rather than a second copy of it. Both plugins
+// have to spell forty-five names identically, because the MOD strip and the
+// assignment rings are shared components that look them up by string; a plugin
+// that spelt one differently would get a control that silently did nothing.
+inline constexpr auto envAttack      = ui::modIds::envAttack;
+inline constexpr auto envRelease     = ui::modIds::envRelease;
+inline constexpr auto envSensitivity = ui::modIds::envSensitivity;
+
+inline constexpr auto& modSource      = ui::modIds::source;
+inline constexpr auto& modDestination = ui::modIds::destination;
+inline constexpr auto& modDepth       = ui::modIds::depth;
+
+inline constexpr auto& lfoWave     = ui::modIds::lfoWave;
+inline constexpr auto& lfoRate     = ui::modIds::lfoRate;
+inline constexpr auto& lfoSync     = ui::modIds::lfoSync;
+inline constexpr auto& lfoDivision = ui::modIds::lfoDivision;
+inline constexpr auto& lfoPhase    = ui::modIds::lfoPhase;
+inline constexpr auto& lfoSmooth   = ui::modIds::lfoSmooth;
 } // namespace ids
+
+/// Everything a modulation source can be pointed at.
+///
+/// **This list is append-only, forever, exactly like a parameter ID.** A
+/// modulation slot stores its destination as an *index* into it, so inserting an
+/// entry silently repoints every saved modulation in every project that uses the
+/// plugin -- the same failure as renumbering a parameter, and easier to cause
+/// because a list of names looks like an ordinary array. New destinations go on
+/// the end. See CLAUDE.md section 8.
+///
+/// Only continuous controls appear. Choices and switches are excluded because
+/// they reconfigure rather than adjust: oversampling changes the internal rate,
+/// the fold range and the band states restructure the signal path, and Bypass
+/// and the Expert/Multiband enables are modes rather than sound.
+///
+namespace dest
+{
+enum Index : int
+{
+    drive = 0,
+    character,
+    tone,
+    mix,
+    output,
+    ceiling,
+    knee,
+    speed,
+    release,
+    foldAmount,
+    rectify,
+    crush,
+    downsample,
+    feedback,
+    feedbackTime,
+    crossoverLow,
+    crossoverHigh,
+    bandLowDrive,
+    bandMidDrive,
+    bandHighDrive,
+    expBias,
+    expHeadBumpHz,
+    expHeadBumpDb,
+    expGapLossHz,
+    expGapLossDb,
+    expHeadroom,
+    expDcHz,
+    expStereoLink,
+    expDetectorRms,
+
+    count   ///< always last
+};
+
+/// The parameter each destination drives, in the same order. Checked against
+/// the enum at construction rather than trusted.
+inline constexpr const char* parameterIds[] {
+    ids::drive, ids::character, ids::tone, ids::mix, ids::output,
+    ids::ceiling, ids::knee, ids::speed, ids::release,
+    ids::foldAmount, ids::rectify, ids::crush, ids::downsample, ids::feedback,
+    ids::feedbackTime, ids::crossoverLow, ids::crossoverHigh,
+    ids::bandLowDrive, ids::bandMidDrive, ids::bandHighDrive,
+    ids::expBias, ids::expHeadBumpHz, ids::expHeadBumpDb,
+    ids::expGapLossHz, ids::expGapLossDb, ids::expHeadroom,
+    ids::expDcHz, ids::expStereoLink, ids::expDetectorRms
+};
+
+static_assert (static_cast<int> (std::size (parameterIds)) == count,
+               "every destination needs its parameter, and in the same order");
+
+/// What a slot's target reads as in the host and on the panel. Short, because
+/// it appears in a combo box that shares a row with three other controls.
+inline constexpr const char* displayNames[] {
+    "Drive", "Character", "Tone", "Mix", "Output",
+    "Ceiling", "Knee", "Speed", "Release",
+    "Fold", "Rectify", "Crush", "Downsample", "Feedback", "FB Time",
+    "Low/Mid Hz", "Mid/High Hz", "Low Drive", "Mid Drive", "High Drive",
+    "Bias", "Bump Hz", "Bump dB", "Gap Hz", "Gap dB", "Headroom",
+    "DC Block", "St Link", "Detector"
+};
+
+static_assert (static_cast<int> (std::size (displayNames)) == count,
+               "every destination needs a name, and in the same order");
+
+static_assert (count <= dsp::Modulation::kMaxDestinations,
+               "the matrix has a fixed destination array so that it never allocates");
+} // namespace dest
 
 class EmberdriveProcessor final : public juce::AudioProcessor
 {
@@ -123,11 +234,32 @@ public:
     /// rather than making the user work it out.
     [[nodiscard]] juce::String describeOversampling() const;
 
+    /// The modulation sources and slots, shared with the editor so the strip can
+    /// draw what they are doing.
+    [[nodiscard]] dsp::Modulation& getModulation() noexcept { return modulation_; }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     template <typename FloatType>
     void processInternal (juce::AudioBuffer<FloatType>& buffer);
+
+    /// Runs the engine over one span, having pushed the parameters for it.
+    void processSpan (int offset, int numSamples, int numChannels);
+
+    /// Reads every modulatable parameter once per block: the raw value, and the
+    /// normalised one modulation is added to.
+    void readBaseParameters();
+
+    /// Pushes the LFO and slot settings into the matrix. Once per block --
+    /// these are controls, not audio.
+    void updateModulationSettings();
+
+    /// Turns the matrix's normalised offsets back into parameter values.
+    /// A destination nothing points at keeps its base value *exactly*, which is
+    /// what makes an unmodulated control bit-identical to one that could not be
+    /// modulated at all.
+    void applyModulation();
 
     void pullParameters();
     void updateLatency (int engineLatencySamples);
@@ -157,6 +289,38 @@ private:
     int reportedLatency_ { 0 };
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
+
+    // ---- modulation ---------------------------------------------------------
+
+    /// How much audio each modulation update covers.
+    ///
+    /// 32 samples is a ~1.5 kHz update rate at 48 kHz, far above anything an
+    /// LFO does, and the engine's own smoothers round off whatever is left.
+    /// Shorter costs a parameter push per span for nothing; longer makes a fast
+    /// square arrive as a staircase.
+    static constexpr int kModulationChunkSamples = 32;
+
+    dsp::Modulation modulation_;
+
+    /// The parameter behind each destination, resolved once at construction.
+    std::array<juce::RangedAudioParameter*, dest::count> destinationParameters_ {};
+
+    /// And its raw value, from the same place pullParameters() always read it.
+    ///
+    /// Both, deliberately. The base value has to be the *exact* float the plugin
+    /// used before modulation existed, and recovering it as
+    /// convertFrom0to1(getValue()) is a round trip through normalised space --
+    /// which on a skewed range need not come back to the same bits. The
+    /// normalised value is only ever used to add an offset to.
+    std::array<std::atomic<float>*, dest::count> destinationRaw_ {};
+
+    /// Per block: what each destination reads with nothing modulating it, and
+    /// the same value normalised, which is the space offsets are added in.
+    std::array<double, dest::count> baseValues_ {};
+    std::array<double, dest::count> baseNormalised_ {};
+
+    /// Per chunk: what the engine is actually given.
+    std::array<double, dest::count> destinationValues_ {};
 
     dsp::VuMeter inputMeter_[Engine::kMaxChannels];
     dsp::VuMeter outputMeter_[Engine::kMaxChannels];

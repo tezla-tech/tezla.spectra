@@ -1096,3 +1096,92 @@ TEZLA_TEST (feedback_repeats_at_the_delay_time)
         CHECK (score > 0.5);
     }
 }
+
+TEZLA_TEST (emberdrive_settles_the_same_way_at_any_host_block_size)
+{
+    // The voicing -- four biquads, the shaper bias and the auto-trim -- is far
+    // too expensive to rebuild per sample: the trim alone probes the whole
+    // nonlinear chain 512 times per band. It used to be rebuilt once per
+    // process() call instead, which made two things wrong at once.
+    //
+    // The output depended on the host's buffer size: a host on 64-sample blocks
+    // rebuilt eight times as often as one on 512, so the same automation settled
+    // along a different path and a bounce did not match what was heard.
+    //
+    // And modulation, which calls the engine every 32 samples, ran that probe
+    // forty-eight times per output sample -- measured at 3.3x the CPU with eight
+    // slots assigned, on a plugin meant to run twenty at a time.
+    //
+    // The rebuild is on a timer counted in samples now, carrying its remainder,
+    // so it lands at the same absolute position however the block is cut up.
+    const auto settle = [] (int blockSize)
+    {
+        constexpr double rate = 48000.0;
+        constexpr int total = 24576;
+
+        Engine engine;
+        engine.prepare (rate, 1024, 1);
+
+        Parameters parameters;
+        parameters.driveDb = 0.0;
+        parameters.toneTilt = 0.0;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        // Now move everything the voicing depends on, at once.
+        parameters.driveDb  = 18.0;
+        parameters.toneTilt = 0.6;
+        parameters.foldAmount = 0.4;
+        parameters.rectify = 0.3;
+
+        std::vector<double> output;
+        output.reserve (static_cast<std::size_t> (total));
+
+        std::vector<double> block (static_cast<std::size_t> (blockSize));
+
+        for (int written = 0; written < total; written += blockSize)
+        {
+            const int span = std::min (blockSize, total - written);
+
+            for (int i = 0; i < span; ++i)
+            {
+                const double t = static_cast<double> (written + i) / rate;
+                block[static_cast<std::size_t> (i)] =
+                    0.5 * std::sin (2.0 * std::numbers::pi * 110.0 * t)
+                  + 0.2 * std::sin (2.0 * std::numbers::pi * 1300.0 * t);
+            }
+
+            double* pointers[1] { block.data() };
+            engine.setParameters (parameters);
+            engine.process (pointers, 1, span);
+
+            for (int i = 0; i < span; ++i)
+                output.push_back (block[static_cast<std::size_t> (i)]);
+        }
+
+        return output;
+    };
+
+    const auto small = settle (64);
+    const auto large = settle (512);
+    const auto odd   = settle (100);          // deliberately not a power of two
+
+    CHECK (small.size() == large.size());
+
+    double worstAgainstLarge = 0.0;
+    double worstAgainstOdd = 0.0;
+
+    for (std::size_t i = 0; i < small.size(); ++i)
+    {
+        worstAgainstLarge = std::max (worstAgainstLarge, std::abs (small[i] - large[i]));
+        worstAgainstOdd   = std::max (worstAgainstOdd,   std::abs (small[i] - odd[i]));
+    }
+
+    // Reverting the timer takes these to about 0.05 -- five percent of full
+    // scale, which is what "the bounce does not match" sounds like.
+    // Exactly zero, measured. Rebuilding once per call instead -- which is what
+    // this did until the loop was cut at the voicing boundary -- takes them to
+    // 0.296 and 0.310, a third of full scale.
+    CHECK (worstAgainstLarge < 1.0e-9);
+    CHECK (worstAgainstOdd < 1.0e-9);
+}

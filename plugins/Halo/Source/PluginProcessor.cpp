@@ -293,115 +293,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout HaloProcessor::createParamet
 
     // ---- schema version 4: modulation ---------------------------------------
     //
-    // Eight slots rather than a depth per source per knob. This plugin has
-    // twenty continuous controls and Emberdrive has thirty; a full matrix would
-    // be eighty and a hundred and twenty depth parameters, several hundred
-    // entries in a host's list, and that many IDs frozen before the UI had been
-    // used in anger.
+    // Defined in shared/tezla-ui rather than here, because Emberdrive declares
+    // the same forty-five. Two copies of a frozen table would have to be kept in
+    // step by eye, and a difference between them -- a rate range that stops at
+    // 16 Hz in one plugin and 20 in the other -- would read as a bug in the LFO
+    // rather than as a typo in a table.
+    //
+    // The destination list stays here. It is the part that genuinely differs
+    // between the two, and its order is this plugin's own permanent commitment.
     {
-        juce::StringArray sourceNames { "Off", "LFO 1", "LFO 2", "LFO 3", "Env" };
-
         juce::StringArray destinationNames;
+
         for (const auto* name : dest::displayNames)
             destinationNames.add (name);
 
-        for (int slot = 0; slot < dsp::Modulation::kNumSlots; ++slot)
-        {
-            const auto i = static_cast<std::size_t> (slot);
-            const auto number = juce::String (slot + 1);
-
-            layout.add (std::make_unique<Choice> (
-                juce::ParameterID { ids::modSource[i], kSchemaV4 },
-                "Mod " + number + " Source", sourceNames, 0));
-
-            layout.add (std::make_unique<Choice> (
-                juce::ParameterID { ids::modDestination[i], kSchemaV4 },
-                "Mod " + number + " Target", destinationNames, 0));
-
-            layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::modDepth[i], kSchemaV4 },
-                "Mod " + number + " Depth",
-                juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f,
-                Attributes().withStringFromValueFunction ([] (float value, int)
-                {
-                    if (value == 0.0f) return juce::String ("Off");
-                    return juce::String (juce::roundToInt (value * 100.0f)) + " %";
-                })
-                .withValueFromStringFunction ([] (const juce::String& text)
-                {
-                    const auto trimmed = text.trim();
-                    if (trimmed.startsWithIgnoreCase ("off")) return 0.0f;
-                    return juce::jlimit (-1.0f, 1.0f, trimmed.getFloatValue() * 0.01f);
-                })));
-        }
+        ui::modulation::addParameters (layout, kSchemaV4, destinationNames);
     }
-
-    {
-        juce::StringArray waveNames { "Sine", "Triangle", "Saw up", "Saw down",
-                                      "Square", "Sample & hold", "Smooth random" };
-
-        juce::StringArray divisionNames;
-        for (const auto& entry : division::entries)
-            divisionNames.add (entry.name);
-
-        for (int index = 0; index < dsp::Modulation::kNumLfos; ++index)
-        {
-            const auto i = static_cast<std::size_t> (index);
-            const auto number = juce::String (index + 1);
-
-            layout.add (std::make_unique<Choice> (
-                juce::ParameterID { ids::lfoWave[i], kSchemaV4 },
-                "LFO " + number + " Wave", waveNames, 0));
-
-            layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::lfoRate[i], kSchemaV4 },
-                "LFO " + number + " Rate",
-                // Skewed so 1 Hz sits mid-travel: nearly everything musical is
-                // under 8 Hz, and a linear 0.01-20 range spends most of itself
-                // above where anyone sets it.
-                skewedRange (0.01f, 20.0f, 1.0f), 1.0f,
-                formatted ("Hz", 2)));
-
-            layout.add (std::make_unique<Boolean> (
-                juce::ParameterID { ids::lfoSync[i], kSchemaV4 },
-                "LFO " + number + " Sync", false));
-
-            layout.add (std::make_unique<Choice> (
-                juce::ParameterID { ids::lfoDivision[i], kSchemaV4 },
-                "LFO " + number + " Division", divisionNames, division::defaultIndex));
-
-            layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::lfoPhase[i], kSchemaV4 },
-                "LFO " + number + " Phase",
-                juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f,
-                Attributes().withStringFromValueFunction ([] (float value, int)
-                {
-                    return juce::String (juce::roundToInt (value * 360.0f)) + juce::String::fromUTF8 (" \xc2\xb0");
-                })
-                .withValueFromStringFunction ([] (const juce::String& text)
-                {
-                    return juce::jlimit (0.0f, 1.0f, text.getFloatValue() / 360.0f);
-                })));
-
-            layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::lfoSmooth[i], kSchemaV4 },
-                "LFO " + number + " Smooth",
-                juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f,
-                percentAttributes()));
-        }
-    }
-
-    layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::envAttack, kSchemaV4 }, "Env Attack",
-        skewedRange (0.5f, 200.0f, 15.0f), 10.0f, formatted ("ms", 1)));
-
-    layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::envRelease, kSchemaV4 }, "Env Release",
-        skewedRange (5.0f, 2000.0f, 200.0f), 150.0f, formatted ("ms", 0)));
-
-    layout.add (std::make_unique<Parameter> (
-        juce::ParameterID { ids::envSensitivity, kSchemaV4 }, "Env Sensitivity",
-        juce::NormalisableRange<float> { -48.0f, 6.0f }, -12.0f, formatted ("dB", 1)));
 
     return layout;
 }
@@ -552,50 +459,11 @@ void HaloProcessor::applyModulation()
 
 void HaloProcessor::updateModulationSettings()
 {
-    const auto value = [this] (const char* id)
-    {
-        return state_.getRawParameterValue (id)->load();
-    };
-
-    for (int index = 0; index < dsp::Modulation::kNumLfos; ++index)
-    {
-        const auto i = static_cast<std::size_t> (index);
-        auto& lfo = modulation_.lfo (index);
-
-        lfo.setWave (static_cast<dsp::Lfo::Wave> (
-            juce::jlimit (0, dsp::Lfo::kNumWaves - 1, static_cast<int> (value (ids::lfoWave[i])))));
-        lfo.setRateHz (static_cast<double> (value (ids::lfoRate[i])));
-        lfo.setPhaseOffset (static_cast<double> (value (ids::lfoPhase[i])));
-        lfo.setSmooth (static_cast<double> (value (ids::lfoSmooth[i])));
-
-        const int chosen = juce::jlimit (0, division::count - 1,
-                                         static_cast<int> (value (ids::lfoDivision[i])));
-
-        modulation_.setLfoSync (index, value (ids::lfoSync[i]) > 0.5f,
-                                division::entries[static_cast<std::size_t> (chosen)].cyclesPerBeat);
-    }
-
-    auto& follower = modulation_.levelFollower();
-    follower.setAttackMs (static_cast<double> (value (ids::envAttack)));
-    follower.setReleaseMs (static_cast<double> (value (ids::envRelease)));
-    follower.setSensitivityDb (static_cast<double> (value (ids::envSensitivity)));
-
-    for (int slot = 0; slot < dsp::Modulation::kNumSlots; ++slot)
-    {
-        const auto i = static_cast<std::size_t> (slot);
-
-        dsp::Modulation::Slot settings;
-        settings.source = static_cast<dsp::Modulation::Source> (
-            juce::jlimit (0, dsp::Modulation::kNumSources - 1,
-                          static_cast<int> (value (ids::modSource[i]))));
-        settings.destination = juce::jlimit (0, dest::count - 1,
-                                             static_cast<int> (value (ids::modDestination[i])));
-        settings.depth = static_cast<double> (value (ids::modDepth[i]));
-
-        modulation_.setSlot (slot, settings);
-    }
+    // Shared with Emberdrive, for the same reason the parameters are: the two
+    // plugins have to read forty-five identically named controls in identical
+    // units, and a difference would be silent.
+    ui::modulation::pushSettings (state_, modulation_, dest::count);
 }
-
 void HaloProcessor::pullParameters()
 {
     const auto value = [this] (const char* id)

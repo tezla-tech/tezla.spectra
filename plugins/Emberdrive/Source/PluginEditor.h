@@ -3,6 +3,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/ModRing.hpp>
+#include <tezla/ui/ModStrip.hpp>
+#include <tezla/ui/ModulationView.hpp>
 #include <tezla/ui/Palette.hpp>
 
 #include "PluginProcessor.h"
@@ -48,9 +51,14 @@ public:
 /// that is this plugin's only documentation.
 struct Knob
 {
+    juce::String id;
     juce::Slider slider;
     juce::Label  label;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+
+    /// Null for a knob nothing can be pointed at -- Bypass and the mode
+    /// switches, which reconfigure rather than adjust.
+    std::unique_ptr<ui::ModRing> ring;
 };
 
 /// One page of the control surface. Holds its own knobs and lays them out on a
@@ -69,6 +77,16 @@ public:
     /// A line of guidance shown under the grid. For the things that are too
     /// important to leave in a tooltip nobody hovers over.
     void setNote (const juce::String& note) { note_ = note; }
+
+    /// Gives every knob that is a modulation destination a ring around it.
+    ///
+    /// Called once, after the page is built: the rings are added last so they
+    /// sit above the knobs they overlay, and they stay out of the way until a
+    /// source is armed.
+    void attachModulation (ui::ModulationView& view);
+
+    /// Re-reads what modulation is doing and repaints the rings that moved.
+    void refreshModulation();
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -120,12 +138,24 @@ private:
     void buildPages();
     void showPage (int index);
 
+    /// Finds the MOD strip the room it needs when it opens, and gives it back
+    /// when it closes. The window grows rather than the pages shrinking: the
+    /// EXPERT page already fills its grid, and taking 96 px out of it would
+    /// crop the controls rather than tighten them.
+    void updateStripSpace();
+
     EmberdriveProcessor& processor_;
 
     juce::TooltipWindow tooltips_ { this, 500 };
 
     ui::Palette palette_;
     std::unique_ptr<ui::HeaderBar> header_;
+    std::unique_ptr<ui::ModulationView> modulation_;
+    std::unique_ptr<ui::ModStrip> modStrip_;
+
+    /// How much height the strip is currently being given, so opening and
+    /// closing it is a delta rather than a recomputation of the whole window.
+    int stripHeight_ { ui::ModStrip::getCollapsedHeight() };
 
     static constexpr int kNumPages = 4;
     std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;

@@ -345,6 +345,20 @@ Every plugin must satisfy these before it is considered done:
   — not against "have parameters been set yet". Getting this wrong made the
   oversampling control silently inert on load, and no test caught it because the
   measurement and the reference were wrong in the same way.
+- **`prepare()` also resets, so it is never how a parameter change is applied.**
+  A filter's state is meaningful — a first-order highpass's memory *is* its last
+  input and output — and zeroing it mid-stream steps the output by the whole
+  previous sample. Give anything with a continuous, automatable control a
+  state-preserving way to move it (`DcBlocker::retune`), and reserve `prepare`
+  for building the graph. Emberdrive's expert DC corner had this bug from the
+  day it shipped; it ticked once per change and nothing measured it.
+- **Anything too expensive to recompute per sample gets a timer counted in
+  samples, and the sample loop is cut at the timer's boundary** — not at the
+  callback's. Rebuilding "once per block" makes the output depend on the host's
+  buffer size, and no arrangement of a per-call timer fixes that. Measured on
+  Emberdrive, whose voicing costs four biquads and a 512-point probe per band:
+  64-sample and 512-sample blocks disagreed by **0.296 of full scale** while a
+  parameter settled. Cutting the loop at the boundary took that to exactly zero.
 - **Silence in, silence out** (barring intentional noise/hiss features, which
   must be defeatable). A feedback path must not be able to self-start from
   nothing.

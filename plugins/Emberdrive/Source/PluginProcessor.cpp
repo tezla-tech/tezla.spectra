@@ -29,7 +29,8 @@ namespace
 constexpr int kSchemaV1Frozen = 3;
 constexpr int kSchemaV2 = 2;
 constexpr int kSchemaV3 = 3;
-constexpr int kStateSchemaVersion = 3;
+constexpr int kSchemaV4 = 4;
+constexpr int kStateSchemaVersion = kSchemaV4;
 constexpr auto kStateTypeName = "EmberdriveState";
 
 /// A skew that puts the useful part of a range in the middle of the travel.
@@ -300,6 +301,24 @@ juce::AudioProcessorValueTreeState::ParameterLayout EmberdriveProcessor::createP
             return time + "ms " + juce::String (juce::roundToInt (1000.0f / value)) + "Hz";
         })));
 
+    // ---- schema version 4: modulation ---------------------------------------
+    //
+    // Defined in shared/tezla-ui rather than here, because Halo declares the
+    // same forty-five. Two copies of a frozen table would have to be kept in
+    // step by eye, and a difference between them would read as a bug in the LFO
+    // rather than as a typo in a table.
+    //
+    // The destination list stays here. It is the part that genuinely differs
+    // between the two, and its order is this plugin's own permanent commitment.
+    {
+        juce::StringArray destinationNames;
+
+        for (const auto* name : dest::displayNames)
+            destinationNames.add (name);
+
+        ui::modulation::addParameters (layout, kSchemaV4, destinationNames);
+    }
+
     return layout;
 }
 
@@ -310,6 +329,19 @@ EmberdriveProcessor::EmberdriveProcessor()
       state_ (*this, nullptr, kStateTypeName, createParameterLayout())
 {
     bypassParameter_ = dynamic_cast<juce::AudioParameterBool*> (state_.getParameter (ids::bypass));
+
+    // Resolved once, so the audio thread never looks a parameter up by string.
+    // A null here would be a destination naming a parameter that does not
+    // exist, which the static_assert on the table's length cannot catch.
+    for (int index = 0; index < dest::count; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        destinationParameters_[i] = state_.getParameter (dest::parameterIds[i]);
+        destinationRaw_[i] = state_.getRawParameterValue (dest::parameterIds[i]);
+
+        jassert (destinationParameters_[i] != nullptr);
+        jassert (destinationRaw_[i] != nullptr);
+    }
 }
 
 bool EmberdriveProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -327,6 +359,12 @@ void EmberdriveProcessor::prepareToPlay (double sampleRate, int maximumExpectedS
     sampleRate_ = sampleRate;
 
     const int numChannels = juce::jlimit (1, Engine::kMaxChannels, getTotalNumOutputChannels());
+
+    modulation_.prepare (sampleRate);
+
+    // Base values before pullParameters(), which now reads the modulated ones.
+    readBaseParameters();
+    applyModulation();
 
     pullParameters();
     engine_.prepare (sampleRate, maximumExpectedSamplesPerBlock, numChannels);
@@ -368,6 +406,70 @@ void EmberdriveProcessor::updateLatency (int engineLatencySamples)
     bypassMixer_.reset (bypassed);
 }
 
+void EmberdriveProcessor::processSpan (int offset, int numSamples, int numChannels)
+{
+    pullParameters();
+
+    if (engine_.setParameters (parameters_))
+        updateLatency (engine_.getLatencySamples());
+
+    double* pointers[Engine::kMaxChannels] {};
+    for (int channel = 0; channel < numChannels; ++channel)
+        pointers[channel] = channelPointers_[static_cast<std::size_t> (channel)] + offset;
+
+    engine_.process (pointers, numChannels, numSamples);
+}
+
+void EmberdriveProcessor::readBaseParameters()
+{
+    for (int index = 0; index < dest::count; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        auto* parameter = destinationParameters_[i];
+
+        if (parameter == nullptr || destinationRaw_[i] == nullptr)
+            continue;
+
+        // The raw value straight from where pullParameters() has always read
+        // it, so an unmodulated destination hands over the identical float --
+        // and the normalised one alongside, which is the only thing an offset
+        // is ever added to.
+        baseValues_[i]     = static_cast<double> (destinationRaw_[i]->load());
+        baseNormalised_[i] = static_cast<double> (parameter->getValue());
+    }
+}
+
+void EmberdriveProcessor::applyModulation()
+{
+    for (int index = 0; index < dest::count; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        const double offset = modulation_.offsetFor (index);
+
+        // Exactly zero, not nearly: a destination nothing points at, or one
+        // whose slot sits at the centre of its depth control, hands over the
+        // base value untouched. That is what keeps every bit-exact neutral
+        // setting in this plugin bit-exact once modulation exists.
+        if (offset == 0.0 || destinationParameters_[i] == nullptr)
+        {
+            destinationValues_[i] = baseValues_[i];
+            continue;
+        }
+
+        const double moved = std::clamp (baseNormalised_[i] + offset, 0.0, 1.0);
+        destinationValues_[i] = static_cast<double> (
+            destinationParameters_[i]->convertFrom0to1 (static_cast<float> (moved)));
+    }
+}
+
+void EmberdriveProcessor::updateModulationSettings()
+{
+    // Shared with Halo, for the same reason the parameters are: the two plugins
+    // have to read forty-five identically named controls in identical units, and
+    // a difference would be silent.
+    ui::modulation::pushSettings (state_, modulation_, dest::count);
+}
+
 void EmberdriveProcessor::pullParameters()
 {
     const auto value = [this] (const char* id)
@@ -375,39 +477,47 @@ void EmberdriveProcessor::pullParameters()
         return static_cast<double> (state_.getRawParameterValue (id)->load());
     };
 
-    parameters_.driveDb     = value (ids::drive);
-    parameters_.character   = value (ids::character);
-    parameters_.toneTilt    = value (ids::tone);
-    parameters_.ceilingDb   = value (ids::ceiling);
-    parameters_.kneeDb      = value (ids::knee);
-    parameters_.attackMs    = value (ids::speed);
-    parameters_.releaseMs   = value (ids::release);
+    /// A modulatable control, after modulation. With nothing pointed at it this
+    /// is the identical float `value()` would have returned, which is what makes
+    /// the unmodulated plugin bit-identical to the one before this existed.
+    const auto moved = [this] (int destination)
+    {
+        return destinationValues_[static_cast<std::size_t> (destination)];
+    };
+
+    parameters_.driveDb     = moved (dest::drive);
+    parameters_.character   = moved (dest::character);
+    parameters_.toneTilt    = moved (dest::tone);
+    parameters_.ceilingDb   = moved (dest::ceiling);
+    parameters_.kneeDb      = moved (dest::knee);
+    parameters_.attackMs    = moved (dest::speed);
+    parameters_.releaseMs   = moved (dest::release);
     parameters_.autoRelease = value (ids::autoRelease) > 0.5;
-    parameters_.mix         = value (ids::mix) / 100.0;
-    parameters_.outputDb    = value (ids::output);
+    parameters_.mix         = moved (dest::mix) / 100.0;
+    parameters_.outputDb    = moved (dest::output);
     parameters_.autoTrim    = value (ids::autoTrim) > 0.5;
 
     parameters_.oversampling = static_cast<dsp::OversamplingMode> (
         juce::jlimit (0, 4, static_cast<int> (value (ids::oversampling))));
 
     // ---- mangle ----------------------------------------------------------
-    parameters_.foldAmount = value (ids::foldAmount) / 100.0;
+    parameters_.foldAmount = moved (dest::foldAmount) / 100.0;
 
     static constexpr double kFoldRanges[] = { 1.0, 10.0, 100.0 };
     parameters_.foldRange = kFoldRanges[juce::jlimit (0, 2, static_cast<int> (value (ids::foldRange)))];
 
     // ---- multiband -------------------------------------------------------
     parameters_.multiband       = value (ids::multiband) > 0.5;
-    parameters_.crossoverLowHz  = value (ids::crossoverLow);
-    parameters_.crossoverHighHz = value (ids::crossoverHigh);
+    parameters_.crossoverLowHz  = moved (dest::crossoverLow);
+    parameters_.crossoverHighHz = moved (dest::crossoverHigh);
 
-    const char* bandDriveIds[kNumBands] { ids::bandLowDrive, ids::bandMidDrive, ids::bandHighDrive };
+    const int bandDriveDests[kNumBands] { dest::bandLowDrive, dest::bandMidDrive, dest::bandHighDrive };
     const char* bandStateIds[kNumBands] { ids::bandLowState, ids::bandMidState, ids::bandHighState };
 
     for (int band = 0; band < kNumBands; ++band)
     {
         const auto b = static_cast<std::size_t> (band);
-        parameters_.bands[b].driveTrimDb = value (bandDriveIds[band]);
+        parameters_.bands[b].driveTrimDb = moved (bandDriveDests[band]);
         parameters_.bands[b].state = static_cast<BandState> (
             juce::jlimit (0, 2, static_cast<int> (value (bandStateIds[band]))));
     }
@@ -415,23 +525,23 @@ void EmberdriveProcessor::pullParameters()
     // ---- expert ----------------------------------------------------------
     auto& expert = parameters_.expert;
     expert.enabled        = value (ids::expertEnabled) > 0.5;
-    expert.bias           = value (ids::expBias);
-    expert.headBumpHz     = value (ids::expHeadBumpHz);
-    expert.headBumpDb     = value (ids::expHeadBumpDb);
-    expert.gapLossHz      = value (ids::expGapLossHz);
-    expert.gapLossDb      = value (ids::expGapLossDb);
-    expert.shaperHeadroom = value (ids::expHeadroom);
-    expert.dcBlockerHz    = value (ids::expDcHz);
-    expert.stereoLink     = value (ids::expStereoLink) / 100.0;
-    expert.detectorRms    = value (ids::expDetectorRms) / 100.0;
+    expert.bias           = moved (dest::expBias);
+    expert.headBumpHz     = moved (dest::expHeadBumpHz);
+    expert.headBumpDb     = moved (dest::expHeadBumpDb);
+    expert.gapLossHz      = moved (dest::expGapLossHz);
+    expert.gapLossDb      = moved (dest::expGapLossDb);
+    expert.shaperHeadroom = moved (dest::expHeadroom);
+    expert.dcBlockerHz    = moved (dest::expDcHz);
+    expert.stereoLink     = moved (dest::expStereoLink) / 100.0;
+    expert.detectorRms    = moved (dest::expDetectorRms) / 100.0;
     expert.adaaEnabled    = value (ids::expAdaa) > 0.5;
 
     // ---- the rest of mangle ----------------------------------------------
-    parameters_.rectify    = value (ids::rectify) / 100.0;
-    parameters_.crush      = value (ids::crush) / 100.0;
-    parameters_.downsample = value (ids::downsample);
-    parameters_.feedback   = value (ids::feedback) / 100.0;
-    parameters_.feedbackMs = value (ids::feedbackTime);
+    parameters_.rectify    = moved (dest::rectify) / 100.0;
+    parameters_.crush      = moved (dest::crush) / 100.0;
+    parameters_.downsample = moved (dest::downsample);
+    parameters_.feedback   = moved (dest::feedback) / 100.0;
+    parameters_.feedbackMs = moved (dest::feedbackTime);
 }
 
 void EmberdriveProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -458,10 +568,6 @@ void EmberdriveProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     if (numSamples <= 0 || numChannels <= 0)
         return;
 
-    pullParameters();
-    if (engine_.setParameters (parameters_))
-        updateLatency (engine_.getLatencySamples());
-
     if (scratch_.getNumSamples() < numSamples || scratch_.getNumChannels() < numChannels)
     {
         scratch_.setSize (numChannels, numSamples, false, true, true);
@@ -486,7 +592,55 @@ void EmberdriveProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
         dryPointers_[static_cast<std::size_t> (channel)] = dryScratch_.getReadPointer (channel);
     }
 
-    engine_.process (channelPointers_.data(), numChannels, numSamples);
+    // ---- parameters, and modulation if there is any -------------------------
+    //
+    // Read here rather than at the top of the block, because the level follower
+    // needs the dry input and the dry copy is only made above.
+    readBaseParameters();
+    updateModulationSettings();
+
+    if (! modulation_.isActive())
+    {
+        // The path the plugin has always taken: one push, one call. Nothing
+        // here rounds, converts or re-derives anything, so with nothing
+        // assigned the output is what it was before modulation existed --
+        // byte for byte, and there is a test that says so.
+        applyModulation();
+        processSpan (0, numSamples, numChannels);
+    }
+    else
+    {
+        // Short spans, so a source moving at 20 Hz arrives as a curve rather
+        // than as a staircase.
+        const auto position = getPlayHead() != nullptr ? getPlayHead()->getPosition()
+                                                       : juce::nullopt;
+
+        const bool hasTransport = position.hasValue() && position->getBpm().hasValue()
+                               && position->getPpqPosition().hasValue()
+                               && *position->getBpm() > 0.0;
+
+        const double ppqStart = hasTransport ? *position->getPpqPosition() : 0.0;
+
+        // How far the transport moves per sample, so a source stays locked to
+        // the grid *within* a block and not only at its edges.
+        const double ppqPerSample = hasTransport
+            ? *position->getBpm() / (60.0 * sampleRate_) : 0.0;
+
+        for (int offset = 0; offset < numSamples; offset += kModulationChunkSamples)
+        {
+            const int span = juce::jmin (kModulationChunkSamples, numSamples - offset);
+
+            const double* inputs[Engine::kMaxChannels] {};
+            for (int channel = 0; channel < numChannels; ++channel)
+                inputs[channel] = dryPointers_[static_cast<std::size_t> (channel)] + offset;
+
+            modulation_.advance (span, inputs, numChannels, hasTransport,
+                                 ppqStart + ppqPerSample * offset);
+
+            applyModulation();
+            processSpan (offset, span, numChannels);
+        }
+    }
 
     // Latency-matched, crossfaded, and shared by every plugin so there is one
     // copy of this to get right. See BypassMixer.hpp for what it used to do.
