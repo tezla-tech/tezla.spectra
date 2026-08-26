@@ -5,6 +5,8 @@
 #include <tezla/dsp/BypassMixer.hpp>
 #include <tezla/dsp/VuMeter.hpp>
 
+#include <tezla/ui/AbCompare.hpp>
+
 #include "EmberdriveEngine.hpp"
 
 namespace tezla::emberdrive
@@ -115,6 +117,8 @@ public:
 
     MeterValues& getMeterValues() noexcept { return meters_; }
 
+    [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
+
     /// What Auto is doing right now, so the tooltip can say it in plain words
     /// rather than making the user work it out.
     [[nodiscard]] juce::String describeOversampling() const;
@@ -151,6 +155,8 @@ private:
     // tested now; see BypassMixer.hpp.
     dsp::BypassMixer bypassMixer_;
     int reportedLatency_ { 0 };
+
+    ui::AbCompare abCompare_ { state_, { ids::bypass } };
 
     dsp::VuMeter inputMeter_[Engine::kMaxChannels];
     dsp::VuMeter outputMeter_[Engine::kMaxChannels];

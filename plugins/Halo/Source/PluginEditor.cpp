@@ -23,6 +23,9 @@ constexpr int kValueHeight = 18;
 /// right however tall the window is.
 constexpr int kMaxCellHeight = 132;
 
+/// Reserved for the page note, whether or not the grid would have left room.
+constexpr int kNoteHeight = 34;
+
 constexpr float kMeterFloorDb = -60.0f;
 constexpr float kMeterTopDb   = 6.0f;
 
@@ -170,16 +173,12 @@ void ControlPage::addBreak()
 
 void ControlPage::paint (juce::Graphics& g)
 {
-    if (note_.isEmpty())
-        return;
-
-    auto area = getLocalBounds().reduced (10, 4).withTop (gridBottom_ + 10);
-    if (area.getHeight() < 20)
+    if (note_.isEmpty() || noteArea_.getHeight() <= 0)
         return;
 
     g.setColour (kDimText);
     g.setFont (juce::FontOptions (11.5f));
-    g.drawFittedText (note_, area, juce::Justification::topLeft, 6, 1.0f);
+    g.drawFittedText (note_, noteArea_, juce::Justification::topLeft, 6, 1.0f);
 }
 
 void ControlPage::resized()
@@ -188,6 +187,17 @@ void ControlPage::resized()
         return;
 
     auto bounds = getLocalBounds().reduced (4, 2);
+
+    // The note gets its space reserved before the grid takes any, rather than
+    // living on whatever is left over. Twice now it has silently disappeared
+    // because the grid grew and the remainder fell below the threshold paint()
+    // needed -- and a note that vanishes when the window is a little short is
+    // worse than no note, because it is there when you write it and gone when
+    // someone uses it.
+    if (! note_.isEmpty())
+        noteArea_ = bounds.removeFromBottom (kNoteHeight).reduced (6, 0);
+    else
+        noteArea_ = {};
 
     const int rows = (static_cast<int> (cells_.size()) + columns_ - 1) / columns_;
     const int cellWidth  = bounds.getWidth() / columns_;
@@ -231,7 +241,6 @@ void ControlPage::resized()
         }
     }
 
-    gridBottom_ = bounds.getY() + rows * cellHeight;
 }
 
 // ============================================================================
@@ -239,6 +248,33 @@ void ControlPage::resized()
 HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     : juce::AudioProcessorEditor (&processorToUse), halo_ (processorToUse)
 {
+    // Halo's own accent, over the house dark panel. Bypass keeps the shared
+    // warning orange whatever the accent is, so its state reads the same in
+    // every plugin.
+    palette_.accent       = kGlow;
+    palette_.accentBright = kGlowBright;
+    palette_.secondary    = kHarmonics;
+
+    header_ = std::make_unique<ui::HeaderBar> (halo_.getValueTreeState(), "HALO",
+                                               "harmonic exciter", ids::bypass, palette_);
+
+    auto& ab = halo_.getAbCompare();
+    header_->onSwapRequested = [&ab] { ab.swapSlots(); };
+    header_->onCopyRequested = [&ab] { ab.copyToOtherSlot(); };
+    ab.onChanged = [this]
+    {
+        auto& compare = halo_.getAbCompare();
+        header_->setActiveSlot (compare.isSlotB());
+        header_->setOtherSlotFilled (compare.otherSlotFilled());
+    };
+    header_->setActiveSlot (ab.isSlotB());
+    header_->setOtherSlotFilled (ab.otherSlotFilled());
+    addAndMakeVisible (*header_);
+
+    spectrum_ = std::make_unique<ui::SpectrumDisplay> (palette_);
+    spectrum_->prepare (halo_.getSampleRate() > 0.0 ? halo_.getSampleRate() : 48000.0);
+    addAndMakeVisible (*spectrum_);
+
     buildPages();
 
     static const char* pageNames[kNumPages] { "MAIN", "SHAPE" };
@@ -282,8 +318,8 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     showPage (0);
 
     setResizable (true, true);
-    setResizeLimits (720, 470, 1440, 940);
-    setSize (820, 530);
+    setResizeLimits (760, 620, 1520, 1240);
+    setSize (860, 690);
 
     startTimerHz (30);
 }
@@ -437,13 +473,6 @@ void HaloEditor::buildPages()
         "host-rate exciter effectively does.\n\n"
         "The status line below says what Auto is doing right now.");
 
-    shape->addToggle (ids::bypass, "Bypass",
-        "Latency-matched and crossfaded over 10 ms, so switching it neither clicks nor "
-        "shifts the timing.\n\n"
-        "The bypassed path is delayed by exactly the latency the host is told about. "
-        "Without that the bypassed signal would arrive earlier and sound tighter for "
-        "reasons that have nothing to do with the plugin, and every A/B would be a lie.");
-
     shape->setNote (
         "Floor and Ceiling shape the harmonics only -- the dry signal never passes through either of them, "
         "so nothing here can thin your sub.");
@@ -486,32 +515,32 @@ void HaloEditor::timerCallback()
     harmonicsMeter_.repaint();
 
     statusLabel_.setText (halo_.describeOversampling(), juce::dontSendNotification);
+
+    if (spectrum_ != nullptr)
+    {
+        auto& state = halo_.getValueTreeState();
+
+        spectrum_->setFocusFrequency (state.getRawParameterValue (ids::focus)->load(),
+                                      state.getRawParameterValue (ids::bandMode)->load() < 0.5f);
+        spectrum_->setDimmed (state.getRawParameterValue (ids::bypass)->load() > 0.5f);
+        spectrum_->update (halo_.getInputCapture(), halo_.getOutputCapture());
+    }
 }
 
 void HaloEditor::paint (juce::Graphics& g)
 {
+    // The header draws itself now -- it is a component rather than a painted
+    // strip, because it holds the two controls a user reaches for while
+    // listening.
     g.fillAll (kBackground);
-
-    auto bounds = getLocalBounds();
-    auto header = bounds.removeFromTop (44);
-
-    g.setColour (kPanel);
-    g.fillRect (header);
-
-    g.setColour (kGlow);
-    g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
-    g.drawText ("HALO", header.reduced (16, 0), juce::Justification::centredLeft);
-
-    g.setColour (kDimText);
-    g.setFont (juce::FontOptions (11.0f));
-    g.drawText (juce::String::fromUTF8 ("TEZLA TECH  \xc2\xb7  harmonic exciter"),
-                header.reduced (16, 0), juce::Justification::centredRight);
 }
 
 void HaloEditor::resized()
 {
     auto bounds = getLocalBounds();
-    bounds.removeFromTop (44);
+
+    if (header_ != nullptr)
+        header_->setBounds (bounds.removeFromTop (ui::HeaderBar::getPreferredHeight()));
 
     auto tabStrip = bounds.removeFromTop (30);
     const int tabWidth = juce::jmin (110, tabStrip.getWidth() / kNumPages);
@@ -519,10 +548,16 @@ void HaloEditor::resized()
     for (auto& tab : tabs_)
         tab.setBounds (tabStrip.removeFromLeft (tabWidth).reduced (2, 3));
 
-    auto footer = bounds.removeFromBottom (40);
-    statusLabel_.setBounds (footer.reduced (16, 4));
+    auto footer = bounds.removeFromBottom (38);
+    statusLabel_.setBounds (footer.reduced (16, 2));
 
-    auto meterArea = bounds.removeFromRight (110).reduced (10, 12);
+    // The controls take what they need and no more -- two rows of capped cells
+    // plus the page note. Everything left over goes to the spectrum, which is
+    // the part that benefits from height. Giving the pages the remainder instead
+    // left a band of empty panel between the note and the status line.
+    auto controls = bounds.removeFromTop (juce::jmin (300, juce::jmax (200, bounds.getHeight() - 170)));
+
+    auto meterArea = controls.removeFromRight (110).reduced (10, 12);
     const int meterWidth = meterArea.getWidth() / 3;
 
     const auto layoutMeter = [] (LevelMeter& meter, juce::Label& label, juce::Rectangle<int> area)
@@ -536,7 +571,10 @@ void HaloEditor::resized()
     layoutMeter (outputMeter_,    outputMeterLabel_,    meterArea);
 
     for (auto& page : pages_)
-        page->setBounds (bounds.reduced (8, 4));
+        page->setBounds (controls.reduced (8, 4));
+
+    if (spectrum_ != nullptr)
+        spectrum_->setBounds (bounds.reduced (12, 4));
 }
 
 } // namespace tezla::halo

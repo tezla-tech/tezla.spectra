@@ -2,6 +2,10 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/Palette.hpp>
+#include <tezla/ui/SpectrumDisplay.hpp>
+
 #include "PluginProcessor.h"
 
 namespace tezla::halo
@@ -101,7 +105,7 @@ private:
     std::vector<std::unique_ptr<Toggle>> toggles_;
     std::vector<Cell> cells_;
     juce::String note_;
-    int gridBottom_ { 0 };
+    juce::Rectangle<int> noteArea_;
 };
 
 class HaloEditor final : public juce::AudioProcessorEditor,
@@ -122,6 +126,10 @@ private:
     HaloProcessor& halo_;
 
     juce::TooltipWindow tooltips_ { this, 500 };
+
+    ui::Palette palette_;
+    std::unique_ptr<ui::HeaderBar> header_;
+    std::unique_ptr<ui::SpectrumDisplay> spectrum_;
 
     static constexpr int kNumPages = 2;
     std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;

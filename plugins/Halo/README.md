@@ -71,7 +71,9 @@ integral, exact at both asymptotes and within 0.14% everywhere.
 | **Auto Trim** | Holds output level steady as harmonics are added, so you judge brightness rather than loudness. Exactly 1.0 when nothing is being added. |
 | **Input** | Level trim before everything. Both paths see it, so it is not a drive control. |
 | **Oversampling** | Auto / Off / ×2 / ×4 / ×8. Auto lands near 192 kHz internally whatever the session rate. |
-| **Bypass** | Latency-matched and crossfaded over 10 ms. |
+
+Bypass is not on this page — it lives in the header, where it is reachable from
+any tab. See **Global controls** below.
 
 Both Floor and Ceiling shape the **harmonics only**. The dry signal passes
 through a delay line and nothing else, so nothing here can thin the sub.
@@ -174,25 +176,46 @@ each is now pinned by a test:
 
 ## Roadmap
 
-**v2 — the multiband enhancer.** Four bands, matching what Calf's Multiband
-Enhancer offers and adding what it does not:
+Halo stays what it is: a focused exciter and bass enhancer with one band and a
+side. The multiband enhancer is **not** a phase 2 of this plugin -- it is a
+bigger plugin of its own, with four bands, per-band width and considerably more
+signal complexity and CPU than belongs in a tool you reach for on a single
+channel. It is reserved in the registry as `Prism`.
 
-- A `FourBandSplitter`: a binary tree split at `f2`, then `f1` and `f3`, with the
-  low pair passed through the `f3` allpass and the high pair through the `f1`
-  allpass so all four sum to an allpass. The cross-compensation is the part that
-  is easy to leave out and hard to hear as a bug.
-- Per-band Drive, Colour, Amount and solo.
-- Per-band stereo width, which is the "stereo base" half of Calf's plugin, plus
-  a mono-below control for the sub band.
+What might still land here:
 
-**v3 — Precision mode.** Chebyshev harmonic synthesis (Le Brun, JAES 1979)
-driving harmonics 2 to 5 independently. Exact under ADAA and provably
-band-limited to `N ×` the band, which supports a zero-aliasing claim rather than
-a small one. It interacts well with Track, which already presents the generator
-with a normalised signal.
+**Precision mode.** Chebyshev harmonic synthesis (Le Brun, JAES 1979) driving
+harmonics 2 to 5 independently, so the recipe is chosen rather than inherited
+from the shape of a curve. `T_n(cos x) = cos(n x)`, so feeding a unit-amplitude
+sine through the nth Chebyshev polynomial produces exactly the nth harmonic and
+nothing else. It needs the input normalised to unit amplitude to be exact, which
+Track already does at its top setting.
 
-**Known duplication.** The editor's `LevelMeter`, `WrappingLabel` and
-`ControlPage` are Halo's own copies of Emberdrive's, because `CLAUDE.md` §3
-allows cross-plugin sharing only through `shared/tezla-dsp` and a plugin folder
-has to stay deletable. They should become a `shared/tezla-ui` target when plugin
-#3 arrives — three copies is where this stops being acceptable.
+**Known duplication, now resolved.** The editor's meter, note and page
+components were Halo's own copies of Emberdrive's. The header, palette, A/B and
+spectrum display now live in `shared/tezla-ui` and compile into every plugin
+target; the remaining page and meter classes should follow when a third plugin
+needs them.
+
+---
+
+## Global controls
+
+The header carries the two controls reached for while listening, so they work
+from any tab:
+
+- **BYPASS** lights orange when engaged. Latency-matched and crossfaded over
+  10 ms -- see `shared/tezla-dsp/include/tezla/dsp/BypassMixer.hpp` for why that
+  is not a detail.
+- **A / B** holds two complete settings and swaps between them; **COPY** puts
+  the current one into the other slot. Every parameter moves except bypass, and
+  both slots are saved with the project.
+
+## Spectrum
+
+Input and output drawn over each other, so the excitation is visible rather than
+inferred: the output curve lifting away from the input above the Focus line *is*
+the effect. The Focus frequency is marked and the side being worked on is shaded.
+
+The analysis is framework-free and lives in `shared/tezla-dsp`, so the same code
+can drive a standalone analyser later without a GUI framework attached.

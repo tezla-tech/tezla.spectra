@@ -560,6 +560,7 @@ void EmberdriveProcessor::getStateInformation (juce::MemoryBlock& destData)
     // Versioned, so a future layout change can migrate old projects rather than
     // silently resetting them.
     state.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
+    state.appendChild (abCompare_.toValueTree(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -585,6 +586,7 @@ void EmberdriveProcessor::setStateInformation (const void* data, int sizeInBytes
         return;
 
     state_.replaceState (tree);
+    abCompare_.restoreFromValueTree (tree.getChildWithName ("abCompare"));
 }
 
 namespace

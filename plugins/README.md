@@ -32,6 +32,7 @@ something else in the meantime:
 |------|------|--------------|
 | `Ferrite` | `Tzfe` | Plugin #2 — the tape machine proper: wow, flutter, hysteresis, head bump |
 | `Anvil` | `Tzan` | Plugin #3 — amp and cabinet distortion, the Steinberg Warp lane |
+| `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
 
 ---
 

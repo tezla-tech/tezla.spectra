@@ -15,6 +15,11 @@
 
 include_guard(GLOBAL)
 
+# Where the repository root is, as seen from this file. Everything shared is
+# addressed relative to it rather than to whichever plugin folder happens to be
+# calling.
+get_filename_component(TEZLA_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+
 function(tezla_add_plugin)
     set(_flags   IS_SYNTH NEEDS_MIDI_INPUT)
     set(_single  NAME PRODUCT_NAME PLUGIN_CODE DESCRIPTION VERSION)
@@ -84,7 +89,15 @@ function(tezla_add_plugin)
         EDITOR_WANTS_KEYBOARD_FOCUS FALSE
         COPY_PLUGIN_AFTER_BUILD   ${TEZLA_COPY_AFTER_BUILD})
 
-    target_sources(${ARG_NAME} PRIVATE ${ARG_SOURCES} ${ARG_DSP_SOURCES})
+    # The shared UI compiles into every plugin target rather than into a library
+    # of its own. JUCE's module defines are generated per plugin target by
+    # juce_add_plugin, so a separate static library would have to have them
+    # reconstructed by hand and would drift the first time one changed. Compiled
+    # in, these sources inherit the plugin's configuration exactly.
+    file(GLOB _tezla_ui_sources CONFIGURE_DEPENDS
+        "${TEZLA_ROOT_DIR}/shared/tezla-ui/Source/*.cpp")
+
+    target_sources(${ARG_NAME} PRIVATE ${ARG_SOURCES} ${ARG_DSP_SOURCES} ${_tezla_ui_sources})
 
     target_compile_definitions(${ARG_NAME} PUBLIC
         JUCE_WEB_BROWSER=0
@@ -99,6 +112,7 @@ function(tezla_add_plugin)
 
     target_include_directories(${ARG_NAME} PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}"
+        "${TEZLA_ROOT_DIR}/shared/tezla-ui/include"
         ${ARG_INCLUDE_DIRS})
 
     target_link_libraries(${ARG_NAME} PRIVATE

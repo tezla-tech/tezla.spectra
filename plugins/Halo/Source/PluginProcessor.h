@@ -3,7 +3,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/BypassMixer.hpp>
+#include <tezla/dsp/SpectrumAnalyser.hpp>
 #include <tezla/dsp/VuMeter.hpp>
+
+#include <tezla/ui/AbCompare.hpp>
 
 #include "HaloEngine.hpp"
 
@@ -87,6 +90,13 @@ public:
 
     MeterValues& getMeterValues() noexcept { return meters_; }
 
+    /// What went in and what came out, for the spectrum display. The audio
+    /// thread only writes to these; the editor reads them on its timer.
+    [[nodiscard]] const dsp::SpectrumCapture& getInputCapture()  const noexcept { return inputCapture_; }
+    [[nodiscard]] const dsp::SpectrumCapture& getOutputCapture() const noexcept { return outputCapture_; }
+
+    [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
+
     /// What Auto is doing right now, so the tooltip can say it in plain words
     /// rather than making the user work it out.
     [[nodiscard]] juce::String describeOversampling() const;
@@ -96,6 +106,11 @@ private:
 
     template <typename FloatType>
     void processInternal (juce::AudioBuffer<FloatType>& buffer);
+
+    /// Real-time safe: sums to mono into a preallocated scratch and hands it to
+    /// the capture, which is a copy and one atomic store.
+    void captureMonoSum (const double* const* channels, int numChannels,
+                         int numSamples, dsp::SpectrumCapture& capture) noexcept;
 
     void pullParameters();
     void updateLatency (int engineLatencySamples);
@@ -123,6 +138,15 @@ private:
     // tested now; see BypassMixer.hpp.
     dsp::BypassMixer bypassMixer_;
     int reportedLatency_ { 0 };
+
+    // Mono sums, because the display draws one curve per side of the plugin
+    // rather than one per channel. Two curves already say what the plugin did;
+    // four would only say it twice.
+    dsp::SpectrumCapture inputCapture_;
+    dsp::SpectrumCapture outputCapture_;
+    std::vector<double> captureScratch_;
+
+    ui::AbCompare abCompare_ { state_, { ids::bypass } };
 
     dsp::VuMeter inputMeter_[Engine::kMaxChannels];
     dsp::VuMeter outputMeter_[Engine::kMaxChannels];

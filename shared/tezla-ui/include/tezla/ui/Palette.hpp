@@ -1,0 +1,38 @@
+#pragma once
+
+// The house colours, and the one knob each plugin turns.
+//
+// Every plugin shares the same dark panel, the same dim label grey and the same
+// meter behaviour; what distinguishes one from another is its accent. Emberdrive
+// glows ember orange, Halo glows gold. Passing a Palette rather than hard-coding
+// colours in each editor is what lets the shared components below carry a
+// plugin's identity without knowing which plugin they are in.
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+namespace tezla::ui
+{
+
+struct Palette
+{
+    juce::Colour background { 0xff141416 };
+    juce::Colour panel      { 0xff1d1d20 };
+    juce::Colour text       { 0xffd8d5cf };
+    juce::Colour dimText    { 0xff86837e };
+
+    /// The plugin's own colour. Knobs, meters and the header rule use it.
+    juce::Colour accent       { 0xffd8722c };
+    juce::Colour accentBright { 0xfff2a03d };
+
+    /// A second colour for a reading that is not a level -- gain reduction on a
+    /// compressor, added harmonics on an exciter. Deliberately not the accent,
+    /// so the two cannot be confused at a glance.
+    juce::Colour secondary { 0xff54c7c0 };
+
+    /// Bypass is the same warning orange in every plugin, whatever the accent.
+    /// It is the one control whose state a user must be able to read from across
+    /// the room, and a per-plugin colour would make it a guess.
+    juce::Colour bypassGlow { 0xffff7a18 };
+};
+
+} // namespace tezla::ui

@@ -235,6 +235,26 @@ void ControlPage::resized()
 EmberdriveEditor::EmberdriveEditor (EmberdriveProcessor& processorToUse)
     : juce::AudioProcessorEditor (&processorToUse), processor_ (processorToUse)
 {
+    palette_.accent       = kEmber;
+    palette_.accentBright = kEmberBright;
+    palette_.secondary    = kReduction;
+
+    header_ = std::make_unique<ui::HeaderBar> (processor_.getValueTreeState(), "EMBERDRIVE",
+                                               "saturation + limiter", ids::bypass, palette_);
+
+    auto& ab = processor_.getAbCompare();
+    header_->onSwapRequested = [&ab] { ab.swapSlots(); };
+    header_->onCopyRequested = [&ab] { ab.copyToOtherSlot(); };
+    ab.onChanged = [this]
+    {
+        auto& compare = processor_.getAbCompare();
+        header_->setActiveSlot (compare.isSlotB());
+        header_->setOtherSlotFilled (compare.otherSlotFilled());
+    };
+    header_->setActiveSlot (ab.isSlotB());
+    header_->setOtherSlotFilled (ab.otherSlotFilled());
+    addAndMakeVisible (*header_);
+
     buildPages();
 
     static const char* pageNames[kNumPages] { "MAIN", "BANDS", "MANGLE", "EXPERT" };
@@ -369,12 +389,6 @@ void EmberdriveEditor::buildPages()
         "Short peaks recover at your Release setting; sustained material recovers "
         "about six times slower. Stops a bass line pumping while still letting "
         "snares breathe. Costs nothing.");
-
-    main->addToggle (ids::bypass, "Bypass",
-        "True bypass, delayed to match the plugin's own latency and crossfaded over "
-        "10 ms.\n\n"
-        "Both of those matter for honest A/B: an undelayed bypass sounds tighter for "
-        "reasons that have nothing to do with the plugin, and an abrupt switch clicks.");
 
     pages_[0] = std::move (main);
 
@@ -642,28 +656,17 @@ void EmberdriveEditor::timerCallback()
 
 void EmberdriveEditor::paint (juce::Graphics& g)
 {
+    // The header draws itself now: it is a component holding bypass and A/B,
+    // the two controls a user reaches for while listening.
     g.fillAll (kBackground);
-
-    auto bounds = getLocalBounds();
-    auto header = bounds.removeFromTop (44);
-
-    g.setColour (kPanel);
-    g.fillRect (header);
-
-    g.setColour (kEmber);
-    g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
-    g.drawText ("EMBERDRIVE", header.reduced (16, 0), juce::Justification::centredLeft);
-
-    g.setColour (kDimText);
-    g.setFont (juce::FontOptions (11.0f));
-    g.drawText ("TEZLA TECH  -  saturation + limiter", header.reduced (16, 0),
-                juce::Justification::centredRight);
 }
 
 void EmberdriveEditor::resized()
 {
     auto bounds = getLocalBounds();
-    bounds.removeFromTop (44);
+
+    if (header_ != nullptr)
+        header_->setBounds (bounds.removeFromTop (ui::HeaderBar::getPreferredHeight()));
 
     auto tabStrip = bounds.removeFromTop (30);
     const int tabWidth = juce::jmin (110, tabStrip.getWidth() / kNumPages);

@@ -210,6 +210,12 @@ void HaloProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamples
 
     dryScratch_.setSize (numChannels, maximumExpectedSamplesPerBlock, false, true, true);
 
+    // Two windows of the largest transform the display uses, so a frame is
+    // always available even if the editor is a little late asking for one.
+    inputCapture_.prepare (1 << 14);
+    outputCapture_.prepare (1 << 14);
+    captureScratch_.assign (static_cast<std::size_t> (maximumExpectedSamplesPerBlock), 0.0);
+
     updateLatency (engine_.getLatencySamples());
 }
 
@@ -259,6 +265,27 @@ void HaloProcessor::pullParameters()
         juce::jlimit (0, 4, static_cast<int> (value (ids::oversampling))));
 }
 
+void HaloProcessor::captureMonoSum (const double* const* channels, int numChannels,
+                                    int numSamples, dsp::SpectrumCapture& capture) noexcept
+{
+    if (numChannels <= 0 || numSamples <= 0
+        || captureScratch_.size() < static_cast<std::size_t> (numSamples))
+        return;
+
+    const double scale = 1.0 / static_cast<double> (numChannels);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        double sum = 0.0;
+        for (int channel = 0; channel < numChannels; ++channel)
+            sum += channels[channel][i];
+
+        captureScratch_[static_cast<std::size_t> (i)] = sum * scale;
+    }
+
+    capture.push (captureScratch_.data(), numSamples);
+}
+
 template <typename FloatType>
 void HaloProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
 {
@@ -301,12 +328,20 @@ void HaloProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
         dryPointers_[static_cast<std::size_t> (channel)] = dryScratch_.getReadPointer (channel);
     }
 
+    // Captured before the engine runs, from the dry copy, so the input curve is
+    // genuinely the input and not something that has already been through the
+    // input trim's smoother mid-ramp.
+    captureMonoSum (dryPointers_.data(), numChannels, numSamples, inputCapture_);
+
     engine_.process (channelPointers_.data(), numChannels, numSamples);
 
     // Latency-matched, crossfaded, and shared by every plugin so there is one
     // copy of this to get right. See BypassMixer.hpp for what it used to do.
     bypassMixer_.setBypassed (bypassParameter_ != nullptr && bypassParameter_->get());
     bypassMixer_.process (channelPointers_.data(), dryPointers_.data(), numChannels, numSamples);
+
+    captureMonoSum (const_cast<const double* const*> (channelPointers_.data()),
+                    numChannels, numSamples, outputCapture_);
 
     for (int channel = 0; channel < numChannels; ++channel)
     {
@@ -389,6 +424,7 @@ void HaloProcessor::getStateInformation (juce::MemoryBlock& destData)
     // Versioned, so a future layout change can migrate old projects rather than
     // silently resetting them.
     state.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
+    state.appendChild (abCompare_.toValueTree(), nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -412,6 +448,7 @@ void HaloProcessor::setStateInformation (const void* data, int sizeInBytes)
         return;
 
     state_.replaceState (tree);
+    abCompare_.restoreFromValueTree (tree.getChildWithName ("abCompare"));
 }
 
 namespace
