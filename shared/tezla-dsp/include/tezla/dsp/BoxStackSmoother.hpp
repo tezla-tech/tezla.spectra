@@ -68,7 +68,7 @@ public:
     /// Allocates for the longest total support that will ever be asked for.
     void prepare (int maximumLength)
     {
-        capacity_ = std::max (kNumStages, maximumLength);
+        capacity_ = std::max (1, maximumLength);
 
         // Worst case for one stage is the whole support in a single box, which
         // cannot happen with the split below but costs nothing to allow for.
@@ -104,7 +104,12 @@ public:
     /// attack should not call this every chunk.
     void setLength (int length) noexcept
     {
-        const int wanted = std::clamp (length, kNumStages, capacity_);
+        // One, not kNumStages. Four boxes of length 1 have a support of 1 and
+        // pass their input straight through, which is exactly what a limiter
+        // with no look-ahead needs -- clamping the floor to the stage count
+        // instead gave a support of 4 and three samples of latency that the
+        // plugin would then have reported as zero.
+        const int wanted = std::clamp (length, 1, capacity_);
 
         if (wanted == length_)
             return;
@@ -194,7 +199,7 @@ private:
 
     std::array<Stage, kNumStages> stages_ {};
 
-    int capacity_    { kNumStages };
+    int capacity_    { 1 };
     int length_      { 0 };
     int sinceResync_ { 0 };
 };
