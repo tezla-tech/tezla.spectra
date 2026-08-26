@@ -31,7 +31,23 @@ follower, assignable to any continuous control by arming a source and dragging
 a ring on the knob. With nothing assigned a plugin is byte-for-byte what it was
 before the feature existed, which is a test rather than an intention.
 
-Building it found three bugs older than the feature, all in Emberdrive and all
+The third, **Capstone**, is the last plug: a true-peak brickwall limiter and a
+clipper in the same slot. Its ceiling is a theorem rather than a setting --
+every stage after the gain computer can only make the gain smaller, so the
+clamp at the end has nothing left to do, measured at 6.1e-15. Set to Strict it
+holds the ceiling on everything measured here, where a sample-peak limiter is
+3.01 dB over on a tone at a quarter of the sample rate. The clipper shaves
+transient tips so the limiter is not asked to duck the whole mix, which is how
+a drum bus gets loud without pumping. See
+[its README](plugins/Capstone/README.md).
+
+Building *that* found a test that proved nothing. Capstone's 972-case ceiling
+sweep passed with the limiter deliberately broken, because the clamp at the end
+holds the ceiling whatever reaches it -- every peak reading landed exactly on
+the ceiling while the clamp removed 1.02 of full scale. The sweep now measures
+what the clamp had to do, and goes red on that break.
+
+Building the modulation layer found three bugs older than the feature, all in Emberdrive and all
 invisible until something moved a parameter faster than a hand can: its output
 depended on the host's buffer size by a third of full scale while any parameter
 was settling, its auto-trim compensated a gain the signal had not reached yet
@@ -47,8 +63,9 @@ are fixed and all three are pinned by tests.
 |---|---|---|
 | **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band, modulation | v0.4.0 — 47/47 on Steinberg's validator |
 | **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.3.0 — 47/47 on Steinberg's validator |
+| **[Capstone](plugins/Capstone/)** | True-peak brickwall limiter and clipper for the end of the chain | v0.1.0 — 47/47 on Steinberg's validator |
 
-227 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+269 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

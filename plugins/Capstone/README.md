@@ -189,6 +189,9 @@ and nothing about this plugin suggests twenty.
 | Hold, any value | adds no latency |
 | Silence in, everything on | silence out |
 | Tests | 269 pass on x86-64 and ARM64 under qemu |
+| Steinberg validator | **47/47** |
+| Reported latency, checked through the JUCE layer | 53 samples at 1 ms + Standard; 314 at 5 ms + Strict + clip ×4 |
+| Plugin inert (preset "Clean") | **bit-exact** through the real processor |
 
 ---
 
@@ -209,3 +212,22 @@ and nothing about this plugin suggests twenty.
   transcription error checkable; `test_TruePeakDetector.cpp` checks both.
 - **No modulation layer.** A limiter does not want LFOs. The shared MOD strip
   can be added later at the cost of an afternoon if that turns out to be wrong.
+
+---
+
+## Presets
+
+Nine, each a complete parameter set — loading one never leaves a stale control
+behind.
+
+| Preset | For |
+|---|---|
+| Clean (bit-exact) | The reference. Both stages off, no drive, no trim — the thing to A/B everything else against. |
+| Master: transparent | A ceiling and nothing else. Long look-ahead, slow release, wide knee, Strict. |
+| Master: −1 dBTP delivery | The usual streaming ceiling, with Strict making the number true rather than approximately true. |
+| Drum bus: clip and catch | The clipper shaves 2 dB above the ceiling so the limiter never ducks the whole kit. |
+| Drum bus: 0 ms hard | No look-ahead at all: the clipper is the whole limiter. Zero latency, no pumping. |
+| Sub bass: hold it down | Long release so the gain cannot move inside a 40 Hz cycle. Linked, so the sub stays centred. |
+| Reese: weight | Soft clip above the ceiling for grit the limiter alone will not add. |
+| Safety: catch the extremes | Ceiling at +3 dB, hard knee. Passes the mix untouched and only catches the accident. |
+| Loud: drum and bass master | 12 dB of drive into a clipper, then a fast limiter. The starting point for a dubstep master. |

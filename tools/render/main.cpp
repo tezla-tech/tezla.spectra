@@ -165,6 +165,14 @@ int main (int argc, char** argv)
     processor->setPlayConfigDetails (2, 2, kSampleRate, blockSize);
     processor->prepareToPlay (kSampleRate, blockSize);
 
+    // What the plugin tells the host. Printed rather than left to a DAW,
+    // because a wrong number here is invisible until something is out of time
+    // -- and a plugin that reports zero while delaying the audio is worse than
+    // one that reports too much.
+    std::fprintf (stderr, "latency: %d samples (%.3f ms)\n",
+                  processor->getLatencySamples(),
+                  1000.0 * processor->getLatencySamples() / kSampleRate);
+
     juce::AudioBuffer<double> buffer (2, blockSize);
     juce::MidiBuffer midi;
 
