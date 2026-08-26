@@ -7,12 +7,14 @@
 //   tezla-measure imd             [--fs 48000] [--freq 3000] [--drive 0.8]
 //   tezla-measure naive-exciter   [--fs 48000] [--freq 5000]
 //   tezla-measure halo            [--fs 48000]
+//   tezla-measure capstone        [--fs 48000]
 //
 // New commands get added here as plugins need them. Anything that measures a
 // nonlinearity belongs in this tool, not in a DAW screenshot.
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -21,11 +23,13 @@
 
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Decibels.hpp>
+#include <tezla/dsp/TruePeakDetector.hpp>
 #include <tezla/dsp/Version.hpp>
 #include <tezla/measure/Fft.hpp>
 #include <tezla/measure/Harmonics.hpp>
 #include <tezla/measure/Signals.hpp>
 
+#include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
 
@@ -714,6 +718,291 @@ int runChebyshev (const Args& args)
     return 0;
 }
 
+
+// ---------------------------------------------------------------------------
+// Capstone: the four numbers the limiter's claims rest on.
+//
+//   1. true peak at the output, per detector setting
+//   2. clipper aliasing, per oversampling factor
+//   3. distortion against look-ahead -- what the attack control actually costs
+//   4. CPU, on one core, so "20 of these in a project" is a measured claim
+// ---------------------------------------------------------------------------
+
+/// Renders a signal through a configured engine in host-sized blocks.
+std::vector<std::vector<double>> renderCapstone (tezla::capstone::Engine& engine,
+                                                 std::vector<std::vector<double>> input,
+                                                 int blockSize)
+{
+    const int channels = static_cast<int> (input.size());
+    const int total = static_cast<int> (input[0].size());
+
+    for (int offset = 0; offset < total; )
+    {
+        const int span = std::min (blockSize, total - offset);
+        double* pointers[2] { nullptr, nullptr };
+
+        for (int c = 0; c < channels; ++c)
+            pointers[c] = input[static_cast<std::size_t> (c)].data() + offset;
+
+        engine.process (pointers, channels, span);
+        offset += span;
+    }
+
+    return input;
+}
+
+double capstoneTruePeak (const std::vector<std::vector<double>>& x, int from)
+{
+    double peak = 0.0;
+
+    for (const auto& channel : x)
+    {
+        tezla::dsp::TruePeakDetector detector;
+        detector.prepare (tezla::dsp::TruePeakDetector::kMaxFactor);
+        detector.setFactor (16);
+        detector.reset();
+
+        for (std::size_t i = 0; i < channel.size(); ++i)
+        {
+            const double reading = detector.process (channel[i]);
+
+            if (static_cast<int> (i) >= from)
+                peak = std::max (peak, reading);
+        }
+    }
+
+    return peak;
+}
+
+int runCapstone (const Args& args)
+{
+    using namespace tezla;
+
+    const double sampleRate = args.sampleRate;
+    constexpr double ceilingDb = -1.0;
+
+    std::printf ("Capstone -- true-peak brickwall limiter and clipper, at %.0f Hz\n\n", sampleRate);
+
+    // ---- 1. true peak at the output -----------------------------------------
+
+    std::printf ("True peak at the output, ceiling %.1f dBFS\n", ceilingDb);
+    std::printf ("  Content dense near Nyquist, which is where a sample meter is worst.\n\n");
+    std::printf ("  %-10s %-7s %14s %14s\n", "detector", "ratio", "sample peak", "true peak");
+
+    const char* detectorNames[] = { "Off", "Standard", "Strict" };
+    int detectorIndex = 0;
+
+    for (const auto mode : { dsp::TruePeakMode::Off, dsp::TruePeakMode::Standard,
+                             dsp::TruePeakMode::Strict })
+    {
+        capstone::Engine engine;
+        engine.prepare (sampleRate, 512, 2);
+
+        capstone::Parameters parameters;
+        parameters.ceilingDb = ceilingDb;
+        parameters.thresholdDb = -12.0;
+        parameters.clipOn = false;
+        parameters.limitOn = true;
+        parameters.attackMs = 1.0;
+        parameters.truePeak = mode;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        std::vector<std::vector<double>> x (2, std::vector<double> (20000));
+
+        for (int i = 0; i < 20000; ++i)
+        {
+            const double v = 0.90 * ((i / 3) % 2 != 0 ? 1.0 : -1.0);
+            x[0][static_cast<std::size_t> (i)] = v;
+            x[1][static_cast<std::size_t> (i)] = v;
+        }
+
+        const auto y = renderCapstone (engine, x, 128);
+
+        double samplePeak = 0.0;
+
+        for (const auto& channel : y)
+            for (std::size_t i = 2000; i < channel.size(); ++i)
+                samplePeak = std::max (samplePeak, std::abs (channel[i]));
+
+        std::printf ("  %-10s x%-6d %11.3f dB %11.3f dB\n",
+                     detectorNames[detectorIndex++],
+                     dsp::truePeakFactorFor (mode, sampleRate),
+                     dsp::gainToDb (samplePeak, -200.0) - ceilingDb,
+                     dsp::gainToDb (capstoneTruePeak (y, 2000), -200.0) - ceilingDb);
+    }
+
+    std::printf ("\n  Both columns relative to the ceiling. Read them together: Off holds the\n");
+    std::printf ("  samples exactly on the ceiling and reconstructs 1.5 dB above it, while\n");
+    std::printf ("  Strict deliberately holds the samples 1.5 dB *below* the ceiling so that\n");
+    std::printf ("  what the converter actually produces lands on it. That is the trade --\n");
+    std::printf ("  a true-peak limiter is quieter on the meter and correct in the air.\n\n");
+
+    // ---- 2. clipper aliasing --------------------------------------------------
+
+    constexpr std::size_t fftSize = 1 << 14;
+    const double frequency = measure::binExactFrequency (1000.0, sampleRate, fftSize);
+
+    std::printf ("Clipper aliasing, hard corner, driven 12 dB into it\n\n");
+    std::printf ("  %-12s %20s %20s\n", "oversampling", "audible aliasing", "THD");
+
+    const std::pair<const char*, dsp::OversamplingMode> modes[] {
+        { "Off", dsp::OversamplingMode::Off },
+        { "x2",  dsp::OversamplingMode::X2 },
+        { "x4",  dsp::OversamplingMode::X4 },
+        { "x8",  dsp::OversamplingMode::X8 }
+    };
+
+    for (const auto& [name, mode] : modes)
+    {
+        capstone::Engine engine;
+        engine.prepare (sampleRate, 1024, 2);
+
+        capstone::Parameters parameters;
+        parameters.clipOn = true;
+        parameters.clipThresholdDb = -12.0;
+        parameters.clipShape = 0.0;
+        parameters.clipOversampling = mode;
+        parameters.limitOn = false;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        std::vector<std::vector<double>> x (2, std::vector<double> (2 * fftSize));
+
+        for (std::size_t i = 0; i < 2 * fftSize; ++i)
+        {
+            const double v = 0.9 * std::sin (2.0 * 3.14159265358979323846 * frequency
+                                             * static_cast<double> (i) / sampleRate);
+            x[0][i] = v;
+            x[1][i] = v;
+        }
+
+        const auto y = renderCapstone (engine, x, 512);
+
+        // The second half only: the first carries the oversampler's fill, and
+        // the DFT treats its block as circular.
+        std::vector<double> settled (y[0].begin() + static_cast<long> (fftSize), y[0].end());
+        const auto report = measure::analyseHarmonics (settled, sampleRate, frequency);
+
+        std::printf ("  %-12s %17.1f dB %17.1f dB\n", name, report.audibleAliasingDb, report.thdDb);
+    }
+
+    std::printf ("\n  The house target is nothing inharmonic above -60 dB in the audible band.\n");
+    std::printf ("  Auto picks x%d at this rate.\n\n", dsp::autoOversamplingFactor (sampleRate));
+
+    // ---- 3. distortion against look-ahead -------------------------------------
+
+    std::printf ("What look-ahead buys, on a 60 Hz tone limited 12 dB\n\n");
+    std::printf ("  %-12s %14s %16s %14s\n", "attack", "latency", "THD", "gain reduction");
+
+    for (const double attackMs : { 0.0, 0.05, 0.2, 1.0, 5.0, 20.0 })
+    {
+        capstone::Engine engine;
+        engine.prepare (sampleRate, 1024, 2);
+
+        capstone::Parameters parameters;
+        parameters.ceilingDb = -0.3;
+        parameters.thresholdDb = -12.0;
+        parameters.clipOn = false;
+        parameters.limitOn = true;
+        parameters.lookaheadOn = attackMs > 0.0;
+        parameters.attackMs = attackMs;
+        parameters.holdMs = 0.0;
+        parameters.releaseMs = 50.0;
+        parameters.truePeak = dsp::TruePeakMode::Off;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        // A low tone is the hard case: the gain has to move slowly enough not
+        // to distort a cycle that lasts 800 samples.
+        const double low = measure::binExactFrequency (60.0, sampleRate, fftSize);
+
+        std::vector<std::vector<double>> x (2, std::vector<double> (2 * fftSize));
+
+        for (std::size_t i = 0; i < 2 * fftSize; ++i)
+        {
+            const double v = 0.9 * std::sin (2.0 * 3.14159265358979323846 * low
+                                             * static_cast<double> (i) / sampleRate);
+            x[0][i] = v;
+            x[1][i] = v;
+        }
+
+        const auto y = renderCapstone (engine, x, 512);
+
+        std::vector<double> settled (y[0].begin() + static_cast<long> (fftSize), y[0].end());
+        const auto report = measure::analyseHarmonics (settled, sampleRate, low);
+
+        std::printf ("  %8.2f ms %11d sm %13.1f dB %11.2f dB\n",
+                     attackMs, engine.getLatencySamples(), report.thdDb,
+                     engine.getLimiterReductionDb());
+    }
+
+    std::printf ("\n  Zero look-ahead cannot bring the gain down before the peak, so it cuts\n");
+    std::printf ("  the waveform instead. That is what the Clip stage is for -- it does the\n");
+    std::printf ("  same job deliberately, band-limited, and with a shape control.\n\n");
+
+    // ---- 4. CPU ---------------------------------------------------------------
+
+    std::printf ("CPU, one core, 60 seconds of stereo audio in 128-sample blocks\n\n");
+    std::printf ("  %-34s %12s %12s\n", "setting", "seconds", "x realtime");
+
+    const auto timeIt = [&] (const char* name, const capstone::Parameters& parameters)
+    {
+        capstone::Engine engine;
+        engine.prepare (sampleRate, 128, 2);
+        engine.setParameters (parameters);
+        engine.reset();
+
+        const int blocks = static_cast<int> (60.0 * sampleRate / 128.0);
+
+        std::vector<double> left (128), right (128);
+
+        for (int i = 0; i < 128; ++i)
+        {
+            left[static_cast<std::size_t> (i)] = 0.7 * std::sin (0.05 * i);
+            right[static_cast<std::size_t> (i)] = 0.7 * std::cos (0.07 * i);
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+
+        for (int b = 0; b < blocks; ++b)
+        {
+            double* pointers[2] { left.data(), right.data() };
+            engine.process (pointers, 2, 128);
+        }
+
+        const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;
+
+        std::printf ("  %-34s %10.3f s %11.0fx\n", name, elapsed.count(), 60.0 / elapsed.count());
+    };
+
+    {
+        capstone::Parameters parameters;
+        parameters.clipOn = false;
+        parameters.limitOn = true;
+        parameters.truePeak = dsp::TruePeakMode::Off;
+        timeIt ("limit only, sample peak", parameters);
+
+        parameters.truePeak = dsp::TruePeakMode::Standard;
+        timeIt ("limit only, Standard", parameters);
+
+        parameters.truePeak = dsp::TruePeakMode::Strict;
+        timeIt ("limit only, Strict", parameters);
+
+        parameters.truePeak = dsp::TruePeakMode::Standard;
+        parameters.clipOn = true;
+        parameters.clipOversampling = dsp::OversamplingMode::Auto;
+        timeIt ("clip Auto + limit Standard", parameters);
+
+        parameters.clipOversampling = dsp::OversamplingMode::X8;
+        parameters.truePeak = dsp::TruePeakMode::Strict;
+        timeIt ("clip x8 + limit Strict (worst)", parameters);
+    }
+
+    std::printf ("\n  Twenty instances need 20x realtime or better with headroom to spare.\n");
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -726,6 +1015,7 @@ void printUsage()
     std::printf ("  imd             [--fs --freq]  two-tone intermodulation (3 kHz default)\n");
     std::printf ("  naive-exciter   [--fs --freq]  host-rate baseline to beat (5 kHz default)\n");
     std::printf ("  chebyshev       [--fs --freq]  precision mode: selection, fundamental, index\n");
+    std::printf ("  capstone        [--fs]  limiter true peak, clipper aliasing, look-ahead, CPU\n");
 }
 
 } // namespace
@@ -750,6 +1040,7 @@ int main (int argc, char** argv)
     if (command == "naive-exciter")   return runNaiveExciter (args);
     if (command == "halo")            return runHalo (args);
     if (command == "chebyshev")       return runChebyshev (args);
+    if (command == "capstone")        return runCapstone (args);
 
     printUsage();
     return 1;

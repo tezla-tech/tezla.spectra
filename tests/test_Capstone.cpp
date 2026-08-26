@@ -180,7 +180,8 @@ TEZLA_TEST (capstone_holds_its_ceiling_across_the_parameter_space)
     for (const bool clipOn : { false, true })
     for (const double attackMs : { 0.0, 1.0, 20.0 })
     for (const double kneeDb : { 0.0, 12.0 })
-    for (const int truePeak : { 1, 4, 16 })
+    for (const auto truePeak : { dsp::TruePeakMode::Off, dsp::TruePeakMode::Standard,
+                                 dsp::TruePeakMode::Strict })
     for (const int blockSize : { 1, 64, 512 })
     {
         ++combinations;
@@ -196,7 +197,7 @@ TEZLA_TEST (capstone_holds_its_ceiling_across_the_parameter_space)
         parameters.clipOversampling = dsp::OversamplingMode::X2;
         parameters.attackMs = attackMs;
         parameters.kneeDb = kneeDb;
-        parameters.truePeakFactor = truePeak;
+        parameters.truePeak = truePeak;
         parameters.limitOn = true;
 
         // Hold off and a fast release on purpose. Hold widens the minimum
@@ -271,7 +272,7 @@ TEZLA_TEST (capstone_output_is_independent_of_the_host_block_size)
         parameters.attackMs = 2.0;
         parameters.holdMs = 10.0;
         parameters.releaseMs = 80.0;
-        parameters.truePeakFactor = 4;
+        parameters.truePeak = dsp::TruePeakMode::Standard;
         engine.setParameters (parameters);
         engine.reset();
     };
@@ -313,7 +314,7 @@ TEZLA_TEST (capstone_true_peak_mode_controls_the_reconstructed_peak)
     // rate, offset 45 degrees, where every sample reads 1/sqrt(2) of the true
     // peak. 1 is the case that matters more in practice: dense content near
     // Nyquist, where the ITU's own ratio of 4 is measurably not a guarantee.
-    const auto measure = [&] (int signal, int factor)
+    const auto measure = [&] (int signal, dsp::TruePeakMode mode)
     {
         capstone::Engine engine;
         engine.prepare (kRate, 512, 2);
@@ -324,7 +325,7 @@ TEZLA_TEST (capstone_true_peak_mode_controls_the_reconstructed_peak)
         parameters.clipOn = false;
         parameters.limitOn = true;
         parameters.attackMs = 1.0;
-        parameters.truePeakFactor = factor;
+        parameters.truePeak = mode;
         engine.setParameters (parameters);
         engine.reset();
 
@@ -348,17 +349,17 @@ TEZLA_TEST (capstone_true_peak_mode_controls_the_reconstructed_peak)
     // Every sample sits exactly on the ceiling and the waveform between them
     // goes 3 dB past it. Measured +3.011 against the formula's 3.0103 -- the
     // detector is not approximating here, it is missing the peak entirely.
-    CHECK (measure (0, 1) > 2.9);
-    CHECK (measure (0, 4) < 0.05);
-    CHECK (measure (0, 16) < 0.01);
+    CHECK (measure (0, dsp::TruePeakMode::Off) > 2.9);
+    CHECK (measure (0, dsp::TruePeakMode::Standard) < 0.05);
+    CHECK (measure (0, dsp::TruePeakMode::Strict) < 0.01);
 
     // And the case that decides the default. On dense near-Nyquist content the
     // sample meter is +1.51 dB over, Standard brings it to +0.26, and only
     // Strict holds the ceiling. Standard agreeing with every other dBTP meter
     // is worth having; it is still not a guarantee, and the tooltip says so.
-    const double sampleOver   = measure (1, 1);
-    const double standardOver = measure (1, 4);
-    const double strictOver   = measure (1, 16);
+    const double sampleOver   = measure (1, dsp::TruePeakMode::Off);
+    const double standardOver = measure (1, dsp::TruePeakMode::Standard);
+    const double strictOver   = measure (1, dsp::TruePeakMode::Strict);
 
     CHECK (sampleOver > 1.0);
     CHECK (standardOver > 0.1);
@@ -377,7 +378,7 @@ TEZLA_TEST (capstone_reports_the_latency_it_actually_has)
     parameters.clipOn = false;
     parameters.limitOn = true;
     parameters.lookaheadOn = false;
-    parameters.truePeakFactor = 1;
+    parameters.truePeak = dsp::TruePeakMode::Off;
     engine.setParameters (parameters);
 
     // Look-ahead off, sample peak, no clipper: exactly zero, not nearly.
@@ -390,8 +391,9 @@ TEZLA_TEST (capstone_reports_the_latency_it_actually_has)
     CHECK (engine.getLatencySamples() == 0);
 
     // The ITU filter costs its group delay whatever the look-ahead is doing.
-    parameters.truePeakFactor = 4;
+    parameters.truePeak = dsp::TruePeakMode::Standard;
     engine.setParameters (parameters);
+    CHECK (engine.getTruePeakFactor() == 4);        // 48 kHz, so the ITU ratio
     CHECK (engine.getLatencySamples() == 6);
 
     // And the look-ahead is the attack, in samples, at this rate.
@@ -403,7 +405,7 @@ TEZLA_TEST (capstone_reports_the_latency_it_actually_has)
     // Measured rather than taken on trust: an impulse through the limiter with
     // no gain reduction comes out exactly latency samples later.
     parameters.clipOn = false;
-    parameters.truePeakFactor = 1;
+    parameters.truePeak = dsp::TruePeakMode::Off;
     parameters.attackMs = 2.0;
     parameters.ceilingDb = 6.0;         // high enough that nothing is limited
     engine.setParameters (parameters);
@@ -444,7 +446,7 @@ TEZLA_TEST (capstone_is_silent_on_silence)
     parameters.limitOn = true;
     parameters.attackMs = 5.0;
     parameters.autoRelease = true;
-    parameters.truePeakFactor = 16;
+    parameters.truePeak = dsp::TruePeakMode::Strict;
     parameters.outputDb = 12.0;
     engine.setParameters (parameters);
     engine.reset();

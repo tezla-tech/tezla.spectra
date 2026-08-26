@@ -106,8 +106,10 @@ struct Parameters
     /// peaks, which is wider and looser.
     double stereoLink { 1.0 };        ///< 0 .. 1
 
-    /// 1 = sample peak, 4 = the ITU filter, 16 = strict. See TruePeakDetector.
-    int truePeakFactor { 4 };
+    /// Off / Standard / Strict. The interpolation ratio behind each follows the
+    /// host rate -- see dsp::truePeakFactorFor -- so the *accuracy* is what the
+    /// control picks, not the arithmetic.
+    dsp::TruePeakMode truePeak { dsp::TruePeakMode::Standard };
 
     // ---- global --------------------------------------------------------------
 
@@ -150,6 +152,14 @@ public:
     [[nodiscard]] int getClipOversamplingFactor() const noexcept
     {
         return parameters_.clipOn ? oversampler_.getFactor() : 1;
+    }
+
+    /// The interpolation ratio the true-peak detector is actually running, as
+    /// opposed to the mode the control is set to. The tooltip reads this rather
+    /// than the mode, because at 192 kHz Standard is not oversampling at all.
+    [[nodiscard]] int getTruePeakFactor() const noexcept
+    {
+        return dsp::truePeakFactorFor (parameters_.truePeak, sampleRate_);
     }
 
     // ---- metering, read from the message thread, written once per block ------

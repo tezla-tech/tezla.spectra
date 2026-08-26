@@ -124,7 +124,7 @@ bool Engine::setParameters (const Parameters& parameters)
     limiter_.setReleaseMs (parameters_.releaseMs);
     limiter_.setAutoRelease (parameters_.autoRelease);
     limiter_.setStereoLink (parameters_.stereoLink);
-    limiter_.setTruePeakFactor (parameters_.truePeakFactor);
+    limiter_.setTruePeakFactor (dsp::truePeakFactorFor (parameters_.truePeak, sampleRate_));
 
     const int wantedFactor = clipFactorFor (parameters_);
 

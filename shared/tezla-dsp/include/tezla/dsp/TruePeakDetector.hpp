@@ -57,6 +57,57 @@
 
 namespace tezla::dsp {
 
+/// What the panel offers, as opposed to an interpolation ratio.
+enum class TruePeakMode
+{
+    /// Sample peak. Cheapest, agrees with a peak meter, and wrong about what a
+    /// converter will produce -- measured at 1.5 dB low on dense near-Nyquist
+    /// content and 3.01 dB low on a sine at a quarter of the sample rate.
+    Off = 0,
+
+    /// The Recommendation's own ratio: ~192 kHz effective. Agrees with every
+    /// other dBTP meter, including where they are all slightly high.
+    Standard,
+
+    /// ~768 kHz effective. The one to believe.
+    Strict
+};
+
+/// The interpolation ratio behind each mode. Fixed, and deliberately not scaled
+/// by the host rate.
+///
+/// Scaling it is the obvious move and it is wrong here, which was found by
+/// measuring rather than by arguing. The Recommendation does allow the ratio to
+/// fall at higher rates -- 4x at 48 kHz, 2x at 96, 1x at 192 -- and CLAUDE.md
+/// section 6 applies exactly that logic to oversampling. It rests on the
+/// metered content being band-limited to about 20 kHz, so that a 192 kHz
+/// session already carries the resolution a 48 kHz one has to interpolate for.
+///
+/// A limiter cannot assume that. The under-read bound is -20log10(cos(pi.f/n))
+/// with f normalised to the *sample rate*, so for content near Nyquist the
+/// ratio alone sets the worst case whatever the rate is. Built the scaled way
+/// and measured on near-Nyquist content at 192 kHz, Standard fell to a ratio of
+/// 1 and read **1.506 dB** under the true peak -- identical to Off, the setting
+/// it exists to improve on.
+///
+/// And the case is not hypothetical: Capstone's own clip stage runs before the
+/// limiter, and at 192 kHz the house policy turns its oversampling off, so it
+/// puts harmonics right up against Nyquist by design.
+///
+/// So Strict costs what it costs -- about four times Standard, measured -- and
+/// the control says so rather than quietly buying the CPU back.
+[[nodiscard]] inline int truePeakFactorFor (TruePeakMode mode, double) noexcept
+{
+    switch (mode)
+    {
+        case TruePeakMode::Off:      return 1;
+        case TruePeakMode::Standard: return 4;
+        case TruePeakMode::Strict:   return 16;
+    }
+
+    return 1;
+}
+
 class TruePeakDetector
 {
 public:
