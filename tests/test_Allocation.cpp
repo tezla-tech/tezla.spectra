@@ -5,7 +5,9 @@
 #include <new>
 #include <vector>
 
+#include <tezla/dsp/BoxStackSmoother.hpp>
 #include <tezla/dsp/Oversampler.hpp>
+#include <tezla/dsp/RunningMinimum.hpp>
 
 #include <cmath>
 
@@ -249,4 +251,34 @@ TEZLA_TEST (neither_engine_allocates_while_processing)
 
         CHECK (counter.count() == 0);
     }
+}
+
+TEZLA_TEST (limiter_smoothing_stages_do_not_allocate_while_running)
+{
+    // Both of these have their window set from a control -- attack and hold --
+    // so setLength() is reachable from the audio thread, not only from
+    // prepare(). RunningMinimum::setLength rebuilds its deque and
+    // BoxStackSmoother::setLength rebuilds four running sums; both do that work
+    // inside the capacity prepare() allocated, and this is what says so.
+    dsp::RunningMinimum minimum;
+    dsp::BoxStackSmoother smoother;
+
+    minimum.prepare (4096);
+    smoother.prepare (4096);
+
+    AllocationCounter counter;
+
+    for (const int length : { 64, 2048, 7, 4096, 300, 1 })
+    {
+        minimum.setLength (length + 128);
+        smoother.setLength (length);
+
+        for (int i = 0; i < 512; ++i)
+            (void) smoother.process (minimum.process (i % 97 == 0 ? 0.2 : 1.0));
+    }
+
+    minimum.reset();
+    smoother.reset();
+
+    CHECK (counter.count() == 0);
 }
