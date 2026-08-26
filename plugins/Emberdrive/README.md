@@ -137,8 +137,8 @@ What it is for on this material:
 
 ### What measuring it found
 
-Two real bugs, both older than modulation, and both found because chunking made
-them visible.
+Three real bugs, all older than modulation, and all found because modulation
+moves a parameter faster than a hand can.
 
 **The output depended on the host's buffer size.** Emberdrive's voicing — four
 biquads, the shaper bias and the auto-trim — is far too expensive to rebuild per
@@ -155,6 +155,17 @@ because rebuilding once per call cannot be made block-size independent however
 the timer is arranged. Block sizes 64, 100 and 512 now agree **exactly**, and
 `emberdrive_settles_the_same_way_at_any_host_block_size` fails if that stops
 being true.
+
+**Auto-trim compensated a gain the signal had not reached yet.** It measures
+what the saturator does to a reference sine and divides it back out, so you judge
+tone rather than loudness — but it measured Drive's *target*, which arrives
+instantly, while Drive itself ramps over 20 ms. Moving Drive down raised the trim
+while the gain was still high, and the difference came straight out of the
+output. Nobody noticed because a knob only moves that fast when a hand slips; a
+level follower pointed at Drive does it on every transient, which is the first
+thing anyone will try. Measured on the built plugin, the *Mod: reverse bite*
+preset took a limiter set to −0.3 dBFS to **+1.3 dBFS**. It reads −3.3 dBFS now,
+and `auto_trim_does_not_overshoot_when_drive_moves_down` fails if it goes back.
 
 **The DC blocker forgot its state on every change.** `DcBlocker::prepare` resets,
 and the engine called it every time the expert DC corner moved. A first-order
@@ -397,9 +408,17 @@ sound and a broken one.
 | Bitcrush | The XP-era bitcrusher, near enough — ×7 rate reduction into 8-bit, in parallel so the bottom survives. |
 | Octave ghost | Rectify at 75 % blended under the original, for mid-bass and leads. |
 | Screamer | Short delay, 72 % feedback — the plugin sustains and rings on after the note has gone. |
+| Mod: drive follows | The level follower into Drive: a saturator that bites harder the harder it is hit. |
+| Mod: reverse bite | The same follower with the sign flipped — clean on the peaks, dirty underneath them. A compressor made of harmonics rather than of gain. |
+| Mod: fold wobble | A synced triangle sweeping Fold on the eighth. Fold is the control whose character changes most across its travel, so this turns one setting into a phrase. |
 
 Presets never switch the expert panel on: it is for deliberate hands-on work,
 and a preset silently overriding Character would be a surprise.
+
+**Every preset writes all forty-five modulation parameters**, including the ones
+it leaves neutral. A preset is a complete parameter set or it is a trap: without
+that, loading Clean after a modulated patch would leave the LFOs still driving
+whatever they had been pointed at.
 
 ---
 
@@ -410,6 +429,10 @@ the expert panel.
 
 **Done in v0.3.0** — Rectify, Crush, Downsample and Feedback. The MANGLE page is
 complete.
+
+**Done in v0.4.0** — the modulation layer, and the two bugs finding it turned
+up: the output no longer depends on the host's buffer size, and the expert DC
+corner no longer resets the filter it is tuning.
 
 **Later** — cabinet and amp voicings (the `Ferrite` / `Anvil` lane in the plugin
 registry), a hand-drawn panel, minimum-phase IIR polyphase oversampling as a

@@ -760,6 +760,11 @@ struct Preset
 {
     const char* name;
     Parameters  parameters;
+
+    /// What, if anything, is moving. Default-constructed means nothing is --
+    /// which is what every preset written before modulation existed carries, and
+    /// what stops one of them leaving the last patch's assignments behind.
+    ui::modulation::Settings modulation {};
 };
 
 const Preset& presetAt (int index)
@@ -860,12 +865,66 @@ const Preset& presetAt (int index)
                p.feedback = 0.72; p.feedbackMs = 3.2;
                p.foldAmount = 0.3; p.foldRange = 1.0;
                return p; }() },
+
+        // ---- modulation -----------------------------------------------------
+        //
+        // Appended, never inserted, for the same reason a parameter ID is: a
+        // host stores which program is selected as an *index*, so putting these
+        // anywhere but the end would silently repoint every saved preset choice.
+
+        // A saturator that bites harder the harder it is hit. Static drive gives
+        // you one answer for the whole performance; this gives the hits their
+        // own. Fast attack so it lands on the transient, long release so it does
+        // not chatter between hits in a break.
+        { "Mod: drive follows",
+          [] { Parameters p; p.driveDb = 6.0;  p.character = 0.5;  p.toneTilt = 0.12;
+               p.ceilingDb = -1.0; p.kneeDb = 9.0;  p.attackMs = 18.0; p.releaseMs = 140.0;
+               p.autoRelease = true; p.mix = 0.85; p.autoTrim = true; return p; }(),
+          [] { ui::modulation::Settings m;
+               m.envAttackMs = 4.0;
+               m.envReleaseMs = 260.0;
+               m.envSensitivityDb = -10.0;
+               m.slots[0] = { 4, dest::drive, 0.30 };
+               return m; }() },
+
+        // The same follower with the sign flipped, which is the half nobody
+        // expects: clean on the peaks and dirty underneath them. A compressor
+        // made of harmonics rather than of gain -- the loud parts stay open and
+        // the quiet parts fill in.
+        { "Mod: reverse bite",
+          [] { Parameters p; p.driveDb = 20.0; p.character = 0.75; p.toneTilt = 0.2;
+               p.ceilingDb = -0.3; p.kneeDb = 12.0; p.attackMs = 1.5;  p.releaseMs = 110.0;
+               p.mix = 1.0; p.autoTrim = true; return p; }(),
+          [] { ui::modulation::Settings m;
+               m.envAttackMs = 2.0;
+               m.envReleaseMs = 160.0;
+               m.envSensitivityDb = -8.0;
+               m.slots[0] = { 4, dest::drive, -0.35 };
+               return m; }() },
+
+        // The folder on the grid. Fold is the control whose character changes
+        // most across its travel, so sweeping it on the eighth turns one setting
+        // into a phrase. Triangle rather than sine: the turnaround is where the
+        // interesting part is, and a triangle spends less time sitting in it.
+        { "Mod: fold wobble",
+          [] { Parameters p; p.driveDb = 8.0;  p.character = 0.65; p.toneTilt = 0.18;
+               p.ceilingDb = -0.3; p.kneeDb = 10.0; p.attackMs = 2.0;  p.releaseMs = 120.0;
+               p.mix = 1.0; p.autoTrim = true;
+               p.foldAmount = 0.25; p.foldRange = 1.0;
+               return p; }(),
+          [] { ui::modulation::Settings m;
+               m.lfos[0].wave = 1;          // triangle
+               m.lfos[0].sync = true;
+               m.lfos[0].division = 6;      // an eighth
+               m.lfos[0].smooth = 0.2;
+               m.slots[0] = { 1, dest::foldAmount, 0.35 };
+               return m; }() },
     };
 
     return presets[juce::jlimit (0, static_cast<int> (std::size (presets)) - 1, index)];
 }
 
-constexpr int kNumPresets = 11;
+constexpr int kNumPresets = 14;
 } // namespace
 
 int EmberdriveProcessor::getNumPrograms() { return kNumPresets; }
@@ -932,6 +991,12 @@ void EmberdriveProcessor::setCurrentProgram (int index)
     // Presets never turn the expert panel on: it exists for deliberate hands-on
     // work, and a preset silently overriding Character would be a surprise.
     set (ids::expertEnabled, 0.0f);
+
+    // Every preset writes all forty-five, including the ones that leave them
+    // neutral. A preset is a complete parameter set or it is a trap: without
+    // this, loading "Clean" after a modulated patch would leave the LFOs still
+    // driving whatever they were pointed at.
+    ui::modulation::applyPreset (state_, presetAt (index).modulation);
 }
 
 juce::AudioProcessorEditor* EmberdriveProcessor::createEditor()

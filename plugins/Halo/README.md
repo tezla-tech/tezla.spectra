@@ -372,6 +372,29 @@ each is now pinned by a test:
 
 ---
 
+## Presets
+
+Small and opinionated, aimed at the work this plugin exists for rather than at
+filling a list. Each one is a complete parameter set, so loading a preset never
+leaves a stale control — or a stale modulation assignment — behind.
+
+| Preset | For |
+|---|---|
+| Clean | Proof it can get out of the way. If this does not sound like bypass, something is wrong. |
+| Air | Second-harmonic sheen well above the presence region, with the very top kept out of it. |
+| Drum bus | Punch high, so the harmonics arrive on the hits and leave the sustain alone. |
+| Sub translate | The reason BELOW mode exists — a 40 Hz sub that survives a phone speaker. |
+| Reese edge | Edge in the mids with the sub not moving at all. |
+| Mix sheen | Mastering: barely there, level-independent, and honest about it. |
+| Cheb: octave lock | One octave up and nothing else — the thing no curve-based exciter can be asked for. |
+| Cheb: sub bloom | Where the high orders are free: a 40 Hz sub's 8th harmonic is 320 Hz, so the whole series is exact. |
+| Cheb: reese teeth | The wreckage end. Index past 1 clamps the input, so this stops being a chosen series and becomes a distortion. |
+| Mod: reese bloom | The level follower into H3 and H5 — grit that arrives with the note and leaves with it. No static setting can do this: turn the harmonics up enough for the attack and the sustain is a wall. |
+| Mod: bar sweep | A synced saw sweeping Focus, one cycle a bar. The reset is the musical event, so it lands on the downbeat. |
+| Mod: octave pulse | A synced sine on H2 in BELOW mode. The sub underneath is untouched at every point in the cycle, because the octave is a chosen harmonic rather than the top of a series. |
+
+---
+
 ## Roadmap
 
 Halo stays what it is: a focused exciter and bass enhancer with one band and a

@@ -467,7 +467,14 @@ void Engine::updateAutoTrim()
     // Each band drives the stage by a different amount, so each needs its own
     // trim -- otherwise turning a band's drive up makes it louder rather than
     // dirtier, which is the thing auto-trim exists to prevent.
-    const double drive = driveGain_.getTarget();
+    //
+    // The *smoothed* drive, not the target. Drive ramps over 20 ms and the
+    // target arrives instantly, so trimming for the target compensates a gain
+    // the signal has not reached yet: a downward move raised the trim while the
+    // drive was still high and let 20 ms of extra level through. Measured with a
+    // level follower pulling Drive down by a third of its range, that overshot
+    // to +1.3 dBFS through a limiter set to -0.3.
+    const double drive = driveGain_.getCurrent();
     for (int band = 0; band < kNumBands; ++band)
     {
         const auto b = static_cast<std::size_t> (band);
@@ -536,8 +543,13 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
         // rebuilding once per call cannot, however the timer is arranged.
         if (voicingCountdown_ <= 0)
         {
+            // Drive is in here because the auto-trim follows it, even though
+            // nothing else in the voicing does. Leaving it out left the trim
+            // frozen at wherever the ramp had reached when the parameter last
+            // changed, which is worse than trimming for the target was.
             const bool moving = bias_.isSmoothing() || tone_.isSmoothing()
-                             || foldGain_.isSmoothing() || rectifyAmount_.isSmoothing();
+                             || foldGain_.isSmoothing() || rectifyAmount_.isSmoothing()
+                             || driveGain_.isSmoothing();
 
             if (moving || voicingDirty_)
             {

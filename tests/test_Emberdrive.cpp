@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 #include <tezla/dsp/Decibels.hpp>
@@ -1184,4 +1185,85 @@ TEZLA_TEST (emberdrive_settles_the_same_way_at_any_host_block_size)
     // 0.296 and 0.310, a third of full scale.
     CHECK (worstAgainstLarge < 1.0e-9);
     CHECK (worstAgainstOdd < 1.0e-9);
+}
+
+TEZLA_TEST (auto_trim_does_not_overshoot_when_drive_moves_down)
+{
+    // Auto-trim measures what the saturator does to a reference sine and
+    // divides it back out, so the user judges tone rather than loudness. It has
+    // to measure the drive the signal is *actually* seeing: drive ramps over
+    // 20 ms and its target arrives instantly, so trimming for the target
+    // compensates a gain that has not happened yet.
+    //
+    // Downward is the dangerous direction. The trim rises immediately while the
+    // drive is still high, and the difference comes straight out of the output.
+    // Nobody noticed because a knob only moves that fast when a hand slips --
+    // but a level follower pointed at Drive does it on every transient, which is
+    // the first thing anyone will try.
+    //
+    // Measured on the built plugin before the fix: a follower pulling Drive down
+    // by a third of its range took a limiter set to -0.3 dBFS to +1.3.
+    constexpr double rate = 48000.0;
+    constexpr int blockSize = 64;
+
+    const auto peakAfterDriveStep = [&] (double fromDb, double toDb)
+    {
+        Engine engine;
+        engine.prepare (rate, blockSize, 1);
+
+        Parameters parameters;
+        parameters.driveDb   = fromDb;
+        parameters.character = 0.7;
+        parameters.ceilingDb = -0.3;
+        parameters.kneeDb    = 12.0;
+        parameters.autoTrim  = true;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        std::vector<double> block (static_cast<std::size_t> (blockSize));
+        int index = 0;
+
+        const auto run = [&] (int blocks)
+        {
+            double peak = 0.0;
+
+            for (int b = 0; b < blocks; ++b)
+            {
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const double t = static_cast<double> (index++) / rate;
+                    block[static_cast<std::size_t> (i)] =
+                        0.7 * std::sin (2.0 * std::numbers::pi * 80.0 * t);
+                }
+
+                double* pointers[1] { block.data() };
+                engine.setParameters (parameters);
+                engine.process (pointers, 1, blockSize);
+
+                for (const double x : block)
+                    peak = std::max (peak, std::abs (x));
+            }
+
+            return peak;
+        };
+
+        run (200);                          // settle at the high drive
+        parameters.driveDb = toDb;
+
+        // Split either side of the 20 ms ramp. Comparing the transient with the
+        // *settled* level at the new drive is the only honest test: dropping
+        // drive legitimately makes the output louder, because there is less for
+        // the limiter to take off. Auto-trim compensates the saturator's gain,
+        // not the gain reduction.
+        const double transient = run (24);  // 32 ms, covering the ramp
+        const double settledLow = run (200);
+
+        return std::pair { transient, settledLow };
+    };
+
+    const auto [transient, settledLow] = peakAfterDriveStep (22.0, 8.0);
+
+    // Reverting to driveGain_.getTarget() takes the ratio to about 1.9.
+    CHECK (transient < settledLow * 1.05);
+    CHECK (settledLow > 0.1);               // the instrument is reading something
 }

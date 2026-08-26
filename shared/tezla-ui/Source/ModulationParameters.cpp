@@ -165,6 +165,45 @@ void addParameters (juce::AudioProcessorValueTreeState::ParameterLayout& layout,
         juce::NormalisableRange<float> { -48.0f, 6.0f }, -12.0f, formatted ("dB", 1)));
 }
 
+void applyPreset (juce::AudioProcessorValueTreeState& state, const Settings& settings)
+{
+    const auto set = [&state] (const char* id, double value)
+    {
+        if (auto* parameter = state.getParameter (id))
+            parameter->setValueNotifyingHost (
+                parameter->convertTo0to1 (static_cast<float> (value)));
+    };
+
+    for (int index = 0; index < dsp::Modulation::kNumLfos; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        const auto& lfo = settings.lfos[i];
+
+        set (modIds::lfoWave[i],     lfo.wave);
+        set (modIds::lfoRate[i],     lfo.rateHz);
+        set (modIds::lfoSync[i],     lfo.sync ? 1.0 : 0.0);
+        set (modIds::lfoDivision[i], lfo.division);
+        set (modIds::lfoPhase[i],    lfo.phase);
+        set (modIds::lfoSmooth[i],   lfo.smooth);
+    }
+
+    set (modIds::envAttack,      settings.envAttackMs);
+    set (modIds::envRelease,     settings.envReleaseMs);
+    set (modIds::envSensitivity, settings.envSensitivityDb);
+
+    for (int slot = 0; slot < dsp::Modulation::kNumSlots; ++slot)
+    {
+        const auto i = static_cast<std::size_t> (slot);
+        const auto& assignment = settings.slots[i];
+
+        // Depth first and source last, so the matrix never sees a live slot
+        // pointed at whatever the previous preset happened to choose.
+        set (modIds::depth[i],       assignment.depth);
+        set (modIds::destination[i], assignment.destination);
+        set (modIds::source[i],      assignment.source);
+    }
+}
+
 void pushSettings (juce::AudioProcessorValueTreeState& state,
                    dsp::Modulation& modulation,
                    int numDestinations)

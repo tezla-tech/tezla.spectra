@@ -11,13 +11,18 @@
 // feature existed, and the only honest way to check it is to render the same
 // audio through both builds and compare. Everything else is an argument.
 //
-//   tezla-render <samples> <blockSize> <out.raw> [id=value ...]
+//   tezla-render <samples> <blockSize> <out.raw> [id=value | preset=N ...]
 //   tezla-render params
 //
 // Output is raw little-endian doubles, interleaved stereo, so a diff is a
 // byte comparison and needs no parser. Parameters are set by their string ID
 // in the plugin's own units -- `focus=8000`, `modDepth1=-0.4` -- so a check
 // reads the way the plugin does rather than in normalised fractions.
+//
+// `preset=N` selects a factory program, in argument order, so
+// `preset=11 preset=0` is "load a modulated preset, then load Clean" -- which is
+// how the claim that a preset is a *complete* parameter set gets checked rather
+// than asserted.
 //
 // `params` prints the whole parameter list: index, ID, name, default and range.
 // CLAUDE.md section 8 says these are frozen forever, and until now the only way
@@ -127,6 +132,14 @@ int main (int argc, char** argv)
 
         const auto id = assignment.substring (0, equals);
         const float value = assignment.substring (equals + 1).getFloatValue();
+
+        if (id == "preset")
+        {
+            processor->setCurrentProgram (juce::roundToInt (value));
+            std::printf ("  preset %d (%s)\n", juce::roundToInt (value),
+                         processor->getProgramName (juce::roundToInt (value)).toRawUTF8());
+            continue;
+        }
 
         auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (
             [&]() -> juce::AudioProcessorParameter*

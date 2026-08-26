@@ -753,6 +753,11 @@ struct Preset
 {
     const char* name;
     Parameters  parameters;
+
+    /// What, if anything, is moving. Default-constructed means nothing is --
+    /// which is what every preset written before modulation existed carries, and
+    /// what stops one of them leaving the last patch's assignments behind.
+    ui::modulation::Settings modulation {};
 };
 
 const Preset& presetAt (int index)
@@ -834,13 +839,76 @@ const Preset& presetAt (int index)
                p.harmonics = { 0.0, 1.0, 0.0, 0.8, 0.0, 0.6, 0.0 };
                p.floorOn = true; p.floorHz = 250.0; p.ceilingHz = 11000.0;
                p.amountDb = -6.0; return p; }() },
+
+        // ---- modulation -----------------------------------------------------
+        //
+        // Appended, never inserted, for the same reason a parameter ID is: a
+        // host stores which program is selected as an *index*, so putting these
+        // anywhere but the end would silently repoint every saved preset choice.
+        //
+        // Each one exists to show a different thing modulation is for, rather
+        // than to fill the list.
+
+        // The level follower doing what it is actually good at: grit that
+        // arrives with the note and leaves with it. On a held reese the third
+        // and fifth bloom on the attack and settle back, which no static setting
+        // can do -- turn the harmonics up enough for the attack and the sustain
+        // is a wall.
+        { "Mod: reese bloom",
+          [] { Parameters p; p.generator = Generator::Chebyshev;
+               p.focusHz = 800.0; p.chebIndex = 0.85;
+               p.harmonics = { 0.25, 0.8, 0.0, 0.55, 0.0, 0.3, 0.0 };
+               p.floorOn = true; p.floorHz = 280.0; p.ceilingHz = 10000.0;
+               p.amountDb = -10.0; return p; }(),
+          [] { ui::modulation::Settings m;
+               m.envAttackMs = 6.0;
+               m.envReleaseMs = 220.0;
+               m.envSensitivityDb = -14.0;
+               m.slots[0] = { 4, dest::harm3, 0.40 };
+               m.slots[1] = { 4, dest::harm5, 0.32 };
+               return m; }() },
+
+        // A sweep that lands on the grid. Saw up rather than a sine, because the
+        // reset is the musical event -- it arrives on the downbeat and climbs
+        // away from it. Synced, so a loop repeats identically and a bounce
+        // matches what you heard.
+        { "Mod: bar sweep",
+          [] { Parameters p; p.focusHz = 700.0; p.drive = 0.55; p.colour = 0.3;
+               p.track = 0.7; p.punch = 0.2;
+               p.floorOn = true; p.floorHz = 200.0; p.ceilingHz = 12000.0;
+               p.width = 1.25; p.amountDb = -3.0; return p; }(),
+          [] { ui::modulation::Settings m;
+               m.lfos[0].wave = 2;          // saw up
+               m.lfos[0].sync = true;
+               m.lfos[0].division = 3;      // one cycle a bar
+               m.lfos[0].smooth = 0.12;     // takes the corner off the reset
+               m.slots[0] = { 1, dest::focus, 0.45 };
+               return m; }() },
+
+        // The thing only the Chebyshev generator can be asked for: one octave,
+        // and only when you want it. The sub underneath is untouched at every
+        // point in the cycle, because the octave is a chosen harmonic rather
+        // than the top of a series.
+        { "Mod: octave pulse",
+          [] { Parameters p; p.generator = Generator::Chebyshev;
+               p.bandMode = BandMode::Below; p.focusHz = 140.0;
+               p.harmonics = { 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+               p.floorOn = true; p.floorHz = 75.0; p.ceilingHz = 1600.0;
+               p.amountDb = -8.0; return p; }(),
+          [] { ui::modulation::Settings m;
+               m.lfos[1].wave = 0;          // sine
+               m.lfos[1].sync = true;
+               m.lfos[1].division = 4;      // a half bar
+               m.lfos[1].phase = 0.75;      // at the bottom on the downbeat
+               m.slots[0] = { 2, dest::harm2, 0.28 };
+               return m; }() },
     };
 
     static constexpr int count = static_cast<int> (std::size (presets));
     return presets[static_cast<std::size_t> (juce::jlimit (0, count - 1, index))];
 }
 
-constexpr int kNumPresets = 9;
+constexpr int kNumPresets = 12;
 } // namespace
 
 int HaloProcessor::getNumPrograms() { return kNumPresets; }
@@ -884,6 +952,12 @@ void HaloProcessor::setCurrentProgram (int index)
 
     for (std::size_t i = 0; i < preset.harmonics.size(); ++i)
         set (ids::harmonics[i], static_cast<float> (preset.harmonics[i]));
+
+    // Every preset writes all forty-five, including the ones that leave them
+    // neutral. A preset is a complete parameter set or it is a trap: without
+    // this, loading "Clean" after a modulated patch would leave the LFOs still
+    // driving whatever they were pointed at.
+    ui::modulation::applyPreset (state_, presetAt (currentProgram_).modulation);
 }
 
 juce::AudioProcessorEditor* HaloProcessor::createEditor()

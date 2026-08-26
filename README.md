@@ -31,11 +31,13 @@ follower, assignable to any continuous control by arming a source and dragging
 a ring on the knob. With nothing assigned a plugin is byte-for-byte what it was
 before the feature existed, which is a test rather than an intention.
 
-Building it found two bugs older than the feature, both in Emberdrive and both
-invisible until something moved a parameter faster than a knob does: its output
+Building it found three bugs older than the feature, all in Emberdrive and all
+invisible until something moved a parameter faster than a hand can: its output
 depended on the host's buffer size by a third of full scale while any parameter
-was settling, and its DC blocker threw away its own state every time the expert
-corner moved. Both are fixed and both are pinned by tests.
+was settling, its auto-trim compensated a gain the signal had not reached yet
+(a level follower on Drive took a limiter set to −0.3 dBFS to +1.3), and its DC
+blocker threw away its own state every time the expert corner moved. All three
+are fixed and all three are pinned by tests.
 
 ---
 
@@ -43,10 +45,10 @@ corner moved. Both are fixed and both are pinned by tests.
 
 | Plugin | Type | Status |
 |---|---|---|
-| **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band, modulation | v0.3.0 — 47/47 on Steinberg's validator |
-| **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.2.0 — 47/47 on Steinberg's validator |
+| **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band, modulation | v0.4.0 — 47/47 on Steinberg's validator |
+| **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.3.0 — 47/47 on Steinberg's validator |
 
-226 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+227 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

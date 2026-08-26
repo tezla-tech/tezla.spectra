@@ -3,7 +3,7 @@ tezla_add_plugin(
     PRODUCT_NAME    "Tezla Halo"
     PLUGIN_CODE     Tzha
     DESCRIPTION     "Harmonic exciter and bass enhancer"
-    VERSION         0.2.0
+    VERSION         0.3.0
     VST3_CATEGORIES Fx EQ Distortion
     SOURCES
         Source/PluginProcessor.cpp

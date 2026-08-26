@@ -3,7 +3,7 @@ tezla_add_plugin(
     PRODUCT_NAME    "Tezla Emberdrive"
     PLUGIN_CODE     Tzem
     DESCRIPTION     "Saturation, wavefolder, bit crusher, feedback and three-band limiter"
-    VERSION         0.3.0
+    VERSION         0.4.0
     VST3_CATEGORIES Fx Distortion Dynamics
     SOURCES
         Source/PluginProcessor.cpp

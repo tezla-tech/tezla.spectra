@@ -13,6 +13,8 @@
 // differs, and its order is that plugin's own permanent commitment; see
 // CLAUDE.md section 8.
 
+#include <array>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/Modulation.hpp>
@@ -67,6 +69,48 @@ inline constexpr int defaultDivision = 3;
 void addParameters (juce::AudioProcessorValueTreeState::ParameterLayout& layout,
                     int schemaVersion,
                     const juce::StringArray& destinationNames);
+
+/// One LFO, as a factory preset sets it.
+struct LfoPreset
+{
+    int    wave     { 0 };                  ///< dsp::Lfo::Wave
+    double rateHz   { 1.0 };
+    bool   sync     { false };
+    int    division { defaultDivision };
+    double phase    { 0.0 };
+    double smooth   { 0.0 };
+};
+
+/// One assignment. `source` is 0 for an unused slot, matching
+/// dsp::Modulation::Source.
+struct SlotPreset
+{
+    int    source      { 0 };
+    int    destination { 0 };
+    double depth       { 0.0 };
+};
+
+/// The modulation half of a factory preset.
+///
+/// A default-constructed one is "no modulation at all", and applying it is how
+/// every preset that predates this feature stops leaving the last patch's
+/// assignments behind. A preset is a complete parameter set or it is a trap.
+struct Settings
+{
+    std::array<LfoPreset, dsp::Modulation::kNumLfos>   lfos {};
+    std::array<SlotPreset, dsp::Modulation::kNumSlots> slots {};
+
+    double envAttackMs      { 10.0 };
+    double envReleaseMs     { 150.0 };
+    double envSensitivityDb { -12.0 };
+};
+
+/// Writes every modulation parameter from a preset -- including the ones it
+/// leaves neutral, which is the point.
+///
+/// Through the parameters rather than into the matrix, so the host sees the
+/// change, the editor follows and undo works.
+void applyPreset (juce::AudioProcessorValueTreeState& state, const Settings& settings);
 
 /// Pushes every LFO, follower and slot setting into the matrix. Once per block:
 /// these are controls, not audio.
