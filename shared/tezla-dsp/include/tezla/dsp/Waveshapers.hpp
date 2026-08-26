@@ -293,4 +293,129 @@ public:
     }
 };
 
+/// Adjustable-knee clipper, and the shape control of a mastering clipper.
+///
+///   knee = 0    hard clip at +/-1, the corner exactly at the threshold
+///   knee = 1    tanh, bending from the origin and asymptotic to +/-1
+///
+/// Between the two the curve is the identity up to |x| = t (where t = 1 - knee)
+/// and a tanh from there on, scaled so the slopes agree at the join:
+///
+///   f(x) = x                                            |x| <= t
+///        = sign(x) * ( t + (1-t) * tanh((|x|-t)/(1-t)) ) |x| >  t
+///
+/// Three properties earn it the job. It is *exactly* the identity below the
+/// knee, so a signal that never reaches the threshold is passed through bit for
+/// bit. It reaches +/-1 exactly at knee 0 and asymptotically after that, so the
+/// shape control changes the sound and not the level. And it is C1 everywhere,
+/// because tanh'(0) = 1 makes the outer slope 1 at the join -- a corner there
+/// would be a second clipper, audible as a rasp that no amount of oversampling
+/// removes.
+class SoftClip
+{
+public:
+    explicit SoftClip (double knee = 0.0) noexcept { setKnee (knee); }
+
+    /// 0 = hard corner, 1 = tanh. Anything between is a knee starting at
+    /// 1 - knee.
+    void setKnee (double knee) noexcept
+    {
+        knee_  = std::clamp (knee, 0.0, 1.0);
+        t_     = 1.0 - knee_;
+        width_ = knee_;                       // 1 - t, the tanh's scale
+        hard_  = width_ < 1.0e-9;
+    }
+
+    [[nodiscard]] double getKnee() const noexcept { return knee_; }
+
+    /// Where the curve stops being the identity, in linear units.
+    [[nodiscard]] double getThreshold() const noexcept { return t_; }
+
+    [[nodiscard]] double evaluate (double x) const noexcept
+    {
+        const double absX = std::abs (x);
+
+        if (absX <= t_)
+            return x;
+
+        if (hard_)
+            return x < 0.0 ? -1.0 : 1.0;
+
+        const double outer = t_ + width_ * std::tanh ((absX - t_) / width_);
+        return x < 0.0 ? -outer : outer;
+    }
+
+    /// First antiderivative, with F(0) = 0. Even, because f is odd.
+    [[nodiscard]] double antiderivative (double x) const noexcept
+    {
+        const double absX = std::abs (x);
+
+        if (absX <= t_)
+            return 0.5 * x * x;
+
+        if (hard_)
+            return absX - 0.5;
+
+        const double u = (absX - t_) / width_;
+
+        // The constant is fixed by matching t*t + 0 + C to t*t/2 at the join.
+        return t_ * absX + width_ * width_ * logCosh (u) - 0.5 * t_ * t_;
+    }
+
+    // ---- the part worth antialiasing ----------------------------------------
+    //
+    // f(x) = x + g(x). The x is linear and generates no harmonics; every
+    // harmonic the clipper makes comes from g, and g is *exactly zero* below
+    // the knee.
+    //
+    // That distinction is not cosmetic. ADAA replaces f(x[n]) by the average of
+    // f over the segment from x[n-1] to x[n], and for a linear f that average
+    // is the midpoint -- a half-sample averager, which is a lowpass. Run the
+    // whole curve through ADAA and a clean signal well under the threshold
+    // comes out 0.47 dB down at 20 kHz at x4 from 48 kHz, for nothing.
+    // Band-limiting g instead and adding x back leaves the clean signal
+    // untouched to the bit, and band-limits precisely the part that needed it.
+    //
+    // What it costs: the linear and nonlinear parts end up half an oversampled
+    // sample apart. That is a phase error on the harmonics alone, at 192 kHz or
+    // above, against a measurable dip across the whole top octave. Not a close
+    // trade.
+
+    [[nodiscard]] double excess (double x) const noexcept
+    {
+        return std::abs (x) <= t_ ? 0.0 : evaluate (x) - x;
+    }
+
+    [[nodiscard]] double excessAntiderivative (double x) const noexcept
+    {
+        return std::abs (x) <= t_ ? 0.0 : antiderivative (x) - 0.5 * x * x;
+    }
+
+private:
+    double knee_  { 0.0 };
+    double t_     { 1.0 };
+    double width_ { 0.0 };
+    bool   hard_  { true };
+};
+
+/// Adaa1 adaptor: band-limits the clipper's excess rather than the whole curve.
+///
+/// Exists so `Adaa1<SoftClipExcess>` reads as what it is. Below the knee both
+/// the value and the antiderivative are exactly zero, so ADAA returns exactly
+/// zero -- including through its midpoint fallback -- and the caller's `x` is
+/// returned unchanged.
+struct SoftClipExcess
+{
+    SoftClip clip;
+
+    void setKnee (double knee) noexcept { clip.setKnee (knee); }
+
+    [[nodiscard]] double evaluate (double x) const noexcept { return clip.excess (x); }
+
+    [[nodiscard]] double antiderivative (double x) const noexcept
+    {
+        return clip.excessAntiderivative (x);
+    }
+};
+
 } // namespace tezla::dsp

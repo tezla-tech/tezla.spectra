@@ -562,6 +562,20 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   example: the obvious reading was "this platform does not support the feature,
   so skip the test there", and the actual answer was "this platform was never
   implemented, so implement it".
+- **A passing test is worth nothing until it has been seen to fail.** Break the
+  thing it covers, watch it go red, put it back. This is not ceremony; it is the
+  only way to tell a test from a decoration, and it has already caught one here.
+  Capstone's ceiling sweep -- 972 combinations, the plugin's whole selling point
+  -- passed with the limiter's minimum window deliberately halved against the
+  smoother's support, because the clamp at the end of `LimiterCore::process`
+  holds the ceiling whatever reaches it. Every peak reading landed exactly on
+  the ceiling while the clamp was removing **1.02 of full scale**: the limiter
+  had silently become a clipper and no peak measurement could say so.
+- **A guard at the end of a chain makes every measurement of the guarded
+  quantity true.** So measure what the guard had to *do*, not what came out
+  after it. `LimiterCore::getClampExcess()` exists for exactly that, and it is
+  the assertion with teeth: a correct chain leaves it 6.1e-15, a broken one 1.02.
+  The same applies to any clamp, saturator or safety limiter placed last.
 
 ---
 

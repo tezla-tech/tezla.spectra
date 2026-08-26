@@ -62,6 +62,17 @@ public:
     static constexpr double kMaxAttackMs = 20.0;
     static constexpr double kMaxHoldMs   = 100.0;
 
+    /// The most latency any setting of the controls can produce, at a given
+    /// rate. Callers size their own delay lines from this, so it has to be
+    /// derived from the same constants prepare() uses rather than guessed.
+    [[nodiscard]] static int maximumLatencySamples (double sampleRate) noexcept
+    {
+        const double rate = sampleRate > 0.0 ? sampleRate : 44100.0;
+
+        return static_cast<int> (std::lround (kMaxAttackMs * 0.001 * rate))
+             + TruePeakDetector::kDesignedTaps / 2;
+    }
+
     void prepare (double sampleRate, int numChannels)
     {
         sampleRate_  = sampleRate > 0.0 ? sampleRate : 44100.0;
@@ -105,6 +116,7 @@ public:
         }
 
         gainReductionDb_ = 0.0;
+        clampExcess_     = 0.0;
     }
 
     // ---- controls -----------------------------------------------------------
@@ -187,6 +199,19 @@ public:
 
     [[nodiscard]] double getCeilingDb() const noexcept { return ceilingDb_; }
 
+    /// The most the final clamp had to remove in the last block, in linear
+    /// units. Always >= 0.
+    ///
+    /// This is the number that says whether the guarantee is actually working,
+    /// and it exists because checking the output peak does not. The clamp makes
+    /// the ceiling true unconditionally -- so a ceiling test alone passes even
+    /// with the minimum window deliberately misaligned by half the smoother's
+    /// support, which was measured here and is why this is not a comment.
+    /// A correct chain lands around 1e-14, which is the rounding the header
+    /// describes; a broken one leaves the clamp clipping real signal, which
+    /// reads correctly on a peak meter and sounds like distortion.
+    [[nodiscard]] double getClampExcess() const noexcept { return clampExcess_; }
+
     // ---- audio --------------------------------------------------------------
 
     void process (double* const* channels, int numChannels, int numSamples) noexcept
@@ -198,6 +223,7 @@ public:
 
         const int active = std::min (numChannels, numChannels_);
         double blockReductionDb = 0.0;
+        double blockClampExcess = 0.0;
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -233,8 +259,14 @@ public:
 
                 // The clamp that turns a few ULP into exactly. It is doing
                 // nothing audible: everything above it is already correct to
-                // -280 dBFS.
-                channels[channel][i] = std::clamp (smoothed * delayed, -ceilingGain_, ceilingGain_);
+                // -280 dBFS -- and how far above is recorded rather than
+                // assumed, because this clamp is strong enough to hide a broken
+                // chain from every peak measurement there is.
+                const double raw = smoothed * delayed;
+
+                blockClampExcess = std::max (blockClampExcess, std::abs (raw) - ceilingGain_);
+
+                channels[channel][i] = std::clamp (raw, -ceilingGain_, ceilingGain_);
 
                 if (++state.writePosition >= static_cast<int> (state.delay.size()))
                     state.writePosition = 0;
@@ -244,6 +276,7 @@ public:
         }
 
         gainReductionDb_ = blockReductionDb;
+        clampExcess_     = std::max (0.0, blockClampExcess);
     }
 
 private:
@@ -316,6 +349,7 @@ private:
     double ceilingGain_ { 0.966 };
 
     double gainReductionDb_ { 0.0 };
+    double clampExcess_     { 0.0 };
 };
 
 } // namespace tezla::dsp

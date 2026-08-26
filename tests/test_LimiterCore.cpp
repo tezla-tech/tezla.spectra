@@ -62,13 +62,27 @@ std::vector<double> nastySignal (int length, double scale, std::uint64_t seed)
     return x;
 }
 
-/// Runs a configured limiter over a signal and returns how far the output ever
-/// went above the ceiling, in linear units.
-double worstOvershoot (LimiterCore& limiter, double ceilingDb, const std::vector<double>& left,
-                       const std::vector<double>& right)
+/// What one run of the limiter is worth checking for.
+struct RunResult
+{
+    /// How far the delivered output ever went above the ceiling, in linear
+    /// units. Always <= 0 in practice, because of the clamp -- which is
+    /// exactly why it is not the interesting number.
+    double overshoot { 0.0 };
+
+    /// How much the final clamp had to remove. This is the one that tests the
+    /// chain: see LimiterCore::getClampExcess().
+    double clampExcess { 0.0 };
+};
+
+/// Runs a configured limiter over a signal in mixed block sizes.
+RunResult runLimiter (LimiterCore& limiter, double ceilingDb, const std::vector<double>& left,
+                      const std::vector<double>& right)
 {
     std::vector<double> a = left;
     std::vector<double> b = right;
+
+    RunResult result;
 
     // Deliberately not one call: a limiter that only held the ceiling when
     // handed the whole signal at once would be useless in a host.
@@ -84,18 +98,19 @@ double worstOvershoot (LimiterCore& limiter, double ceilingDb, const std::vector
             limiter.process (chunk, 2, span);
             offset += span;
 
+            result.clampExcess = std::max (result.clampExcess, limiter.getClampExcess());
+
             if (offset >= total)
                 break;
         }
     }
 
     const double ceiling = dbToGain (ceilingDb);
-    double worst = 0.0;
 
-    for (const double v : a) worst = std::max (worst, std::abs (v) - ceiling);
-    for (const double v : b) worst = std::max (worst, std::abs (v) - ceiling);
+    for (const double v : a) result.overshoot = std::max (result.overshoot, std::abs (v) - ceiling);
+    for (const double v : b) result.overshoot = std::max (result.overshoot, std::abs (v) - ceiling);
 
-    return worst;
+    return result;
 }
 } // namespace
 
@@ -113,6 +128,7 @@ TEZLA_TEST (limiter_never_exceeds_the_ceiling_anywhere_in_its_parameter_space)
     const auto right = nastySignal (5400, 3.1, 0x13198a2e03707344ULL);
 
     double worst = 0.0;
+    double worstClampExcess = 0.0;
     int combinations = 0;
 
     for (const double ceilingDb : { -0.3, -6.0, 3.0 })
@@ -135,12 +151,27 @@ TEZLA_TEST (limiter_never_exceeds_the_ceiling_anywhere_in_its_parameter_space)
         limiter.setTruePeakFactor (1);
         limiter.reset();
 
-        worst = std::max (worst, worstOvershoot (limiter, ceilingDb, left, right));
+        const auto result = runLimiter (limiter, ceilingDb, left, right);
+
+        worst = std::max (worst, result.overshoot);
+        worstClampExcess = std::max (worstClampExcess, result.clampExcess);
         ++combinations;
     }
 
     // Not "small". None: the clamp at the end of the chain makes it exact.
     CHECK (worst <= 0.0);
+
+    // And this is the assertion that has any teeth, because the line above has
+    // none on its own. The clamp holds the ceiling whatever the chain feeding
+    // it does, so a ceiling check alone passes even when the guarantee is
+    // broken -- measured here by halving the minimum window against the
+    // smoother's support, which left the clamp removing 1.02 of full scale
+    // while every peak reading stayed exactly on the ceiling.
+    //
+    // 6.1e-15 is what a correct chain leaves for it: the accumulated rounding
+    // in the smoother's running sums, at -285 dBFS. The bound is two orders
+    // above that and eleven below anything audible.
+    CHECK (worstClampExcess < 1.0e-12);
 
     // 3 ceilings x 3 knees x 4 attacks x 2 holds x 3 releases x 2 auto x 2 link.
     // Asserted so a loop accidentally collapsing to one case would show up as a
@@ -171,7 +202,7 @@ TEZLA_TEST (limiter_holds_the_ceiling_with_the_true_peak_detector_in_front)
         limiter.setTruePeakFactor (factor);
         limiter.reset();
 
-        worst = std::max (worst, worstOvershoot (limiter, ceilingDb, left, right));
+        worst = std::max (worst, runLimiter (limiter, ceilingDb, left, right).overshoot);
     }
 
     CHECK (worst <= 0.0);
