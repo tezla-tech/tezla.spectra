@@ -101,6 +101,21 @@ constexpr double kButterworthQ2 = 1.30656296;
 /// it reads as "this setting is louder" and not as a compressor.
 constexpr double kAutoTrimSeconds = 0.25;
 
+/// How much audio the auto-trim measures before it updates, in milliseconds.
+///
+/// Fixed in time rather than "whatever block the host handed us", and this is
+/// not a detail. The target is 1/sqrt(1 + wet/dry), a *nonlinear* function of
+/// the ratio, so averaging it over a noisy short window does not land where
+/// averaging it over a long one does. Measured: a 512-sample host buffer and a
+/// 32-sample one differed by 0.19 of full scale with the Chebyshev generator
+/// running, and it did not converge -- the same project bounced at two buffer
+/// sizes came out at two levels.
+///
+/// Ten milliseconds is long enough to hold a 100 Hz cycle, which is what stops
+/// the ratio rippling, and short enough to be twenty-five times inside the
+/// trim's own quarter-second time constant.
+constexpr double kTrimWindowMs = 10.0;
+
 /// Below this the block is silence as far as the trim and the meter are
 /// concerned, and both hold their previous value rather than dividing by it.
 constexpr double kTrimSilenceEnergy = 1.0e-18;
@@ -166,7 +181,15 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     outputGain_ .prepare (sampleRate_, kSmoothingSeconds);
     widthAmount_.prepare (sampleRate_, kSmoothingSeconds);
 
+    // Short: the value it follows is already averaged over a quarter of a
+    // second, so this only has to take the corners off the window's steps.
+    autoTrimSmoothed_.prepare (sampleRate_, 0.005);
+
     envelopeFloor_ = dsp::dbToGain (kEnvelopeFloorDb, -200.0);
+
+    // Base rate: the trim is applied in the recombine loop, which runs there.
+    trimWindowSamples_ = std::max (1, static_cast<int> (
+        std::lround (kTrimWindowMs * 0.001 * sampleRate_)));
 
     setOversamplingFactor (oversampler_.getFactor());
 }
@@ -274,6 +297,11 @@ void Engine::reset()
     controlCountdown_ = 0;
     autoTrimGain_     = 1.0;
     harmonicsDb_      = kAmountSilenceDb;
+    autoTrimSmoothed_.setCurrentAndTarget (1.0);
+
+    trimDryEnergy_ = 0.0;
+    trimWetEnergy_ = 0.0;
+    trimSamples_   = 0;
 
     // Smoothers snap to their targets rather than being left mid-ramp: two runs
     // of the same audio from a fresh reset must produce the same output, and a
@@ -699,20 +727,25 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
     // output is the input to the last bit.
     const int latency = oversampler_.getLatencySamples();
 
-    // The trim from the previous block. Deriving it from this block's energies
-    // and applying it to the same block would be circular; at a quarter-second
-    // time constant one block of lag is nothing.
-    const double trim = (parameters_.autoTrim && ! listen) ? autoTrimGain_ : 1.0;
-
-    double dryEnergy = 0.0;
-    double wetEnergy = 0.0;
+    // Applied per sample through its own smoother rather than held constant for
+    // the call. Two reasons, and the second is why it changed: a gain that steps
+    // once a block is a small zipper, and a gain read once a call makes the
+    // output depend on how the caller carved the audio up. Deriving it from the
+    // block it is applied to would still be circular, and it is not -- the
+    // window that feeds it closes on its own schedule below.
+    const bool applyTrim = parameters_.autoTrim && ! listen;
 
     const bool stereo = activeChannels == 2;
 
     for (int i = 0; i < numSamples; ++i)
     {
         const double amount = amountGain_.next();
-        const double gain   = outputGain_.next() * trim;
+
+        // Advanced whether or not it is used, so switching Auto Trim on does
+        // not step from wherever it was left. Multiplying by exactly 1.0 when
+        // it is off keeps that path bit-exact.
+        const double smoothedTrim = autoTrimSmoothed_.next();
+        const double gain   = outputGain_.next() * (applyTrim ? smoothedTrim : 1.0);
         const double widen  = widthAmount_.next();
 
         // ---- width, on the harmonics alone ----------------------------------
@@ -748,34 +781,54 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
             const double delayed = state.dryDelay.at (latency);
             const double wet = channels[channel][i] * amount;
 
-            dryEnergy += delayed * delayed;
-            wetEnergy += wet * wet;
+            trimDryEnergy_ += delayed * delayed;
+            trimWetEnergy_ += wet * wet;
 
             channels[channel][i] = (listen ? wet : delayed + wet) * gain;
         }
+
+        // Counted per sample, not per call, so the window closes at the same
+        // absolute sample position however the caller carved the audio up. One
+        // comparison a sample buys exact independence from the host's buffer
+        // size -- and from the modulation chunking, which is what turned this up.
+        if (++trimSamples_ >= trimWindowSamples_)
+        {
+            updateAutoTrim();
+
+            trimDryEnergy_ = 0.0;
+            trimWetEnergy_ = 0.0;
+            trimSamples_   = 0;
+        }
     }
 
-    // ---- metering and auto trim ---------------------------------------------
-    if (wetEnergy <= 0.0)
+}
+
+void Engine::updateAutoTrim() noexcept
+{
+    if (trimWetEnergy_ <= 0.0)
     {
         // Nothing is being added, so there is nothing to compensate for. Set
         // rather than approach: an exponential that merely tends towards 1
         // would leave the "bypassed from the front panel" case a hair off.
         autoTrimGain_ = 1.0;
+        autoTrimSmoothed_.setTarget (1.0);
         harmonicsDb_  = kAmountSilenceDb;
+        return;
     }
-    else if (dryEnergy > kTrimSilenceEnergy)
-    {
-        const double ratio = wetEnergy / dryEnergy;
-        harmonicsDb_ = 10.0 * std::log10 (ratio);
 
-        // Harmonics and source share no partials, so they sum in power. Undoing
-        // that is one square root rather than a loudness model.
-        const double target = 1.0 / std::sqrt (1.0 + ratio);
-        const double coefficient = 1.0 - std::exp (-static_cast<double> (numSamples)
-                                                   / (kAutoTrimSeconds * sampleRate_));
-        autoTrimGain_ += coefficient * (target - autoTrimGain_);
-    }
+    if (trimDryEnergy_ <= kTrimSilenceEnergy)
+        return;
+
+    const double ratio = trimWetEnergy_ / trimDryEnergy_;
+    harmonicsDb_ = 10.0 * std::log10 (ratio);
+
+    // Harmonics and source share no partials, so they sum in power. Undoing
+    // that is one square root rather than a loudness model.
+    const double target = 1.0 / std::sqrt (1.0 + ratio);
+    const double coefficient = 1.0 - std::exp (-static_cast<double> (trimWindowSamples_)
+                                               / (kAutoTrimSeconds * sampleRate_));
+    autoTrimGain_ += coefficient * (target - autoTrimGain_);
+    autoTrimSmoothed_.setTarget (autoTrimGain_);
 }
 
 } // namespace tezla::halo

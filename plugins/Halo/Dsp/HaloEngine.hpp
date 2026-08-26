@@ -171,6 +171,9 @@ private:
     void updateDerivedParameters();
     void updateFilters();
 
+    /// Auto-trim and the harmonics meter, over one fixed-duration window.
+    void updateAutoTrim() noexcept;
+
     /// Maps the 0..1 Drive control onto the generator's gain.
     [[nodiscard]] static double driveGainFor (double drive) noexcept;
 
@@ -315,6 +318,16 @@ private:
     double builtLimitHz_   { 0.0 };
 
     double autoTrimGain_ { 1.0 };
+    dsp::SmoothedValue<double> autoTrimSmoothed_;
+
+    /// Auto-trim measures over a window of fixed *duration*, accumulated across
+    /// however many calls it takes. Per call, the answer depended on the host's
+    /// buffer size -- and on the modulation chunking, which is what turned this
+    /// up. See kTrimWindowMs.
+    double trimDryEnergy_    { 0.0 };
+    double trimWetEnergy_    { 0.0 };
+    int    trimSamples_      { 0 };
+    int    trimWindowSamples_ { 1 };
     double harmonicsDb_  { kAmountSilenceDb };
 
     bool floorActive_   { false };

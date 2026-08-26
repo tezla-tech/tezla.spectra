@@ -1221,3 +1221,70 @@ TEZLA_TEST (halo_generator_switch_does_not_click)
     // failing to be one.
     CHECK (worstRatio < 1.2);
 }
+
+TEZLA_TEST (halo_output_does_not_depend_on_the_host_block_size)
+{
+    // The same audio, cut up differently, has to come out the same -- bit for
+    // bit, not nearly. A plugin whose output depends on the buffer size sounds
+    // different on someone else's machine and bounces differently from what was
+    // heard, and neither is discoverable without a test like this one.
+    //
+    // It was not true. Auto Trim measured over whatever block the host handed
+    // over, and its target is 1/sqrt(1 + wet/dry) -- a *nonlinear* function of
+    // the ratio, so averaging it over a noisy short window does not land where
+    // averaging it over a long one does. Measured at 0.19 of full scale between
+    // a 512-sample buffer and a 32-sample one with the Chebyshev generator, and
+    // it did not converge. The trim now measures over a fixed 10 ms window and
+    // is applied per sample through its own smoother, which also takes out a
+    // per-block step in the output gain.
+    //
+    // 17 is in the list deliberately: nothing here may assume a power of two.
+    const auto run = [] (int blockSize, bool autoTrim, Generator generator)
+    {
+        Engine engine;
+        engine.prepare (48000.0, 2048, 1);
+
+        auto parameters = defaultParameters();
+        parameters.autoTrim  = autoTrim;
+        parameters.generator = generator;
+        parameters.drive     = 0.7;
+        parameters.bandMode  = BandMode::Below;
+        parameters.focusHz   = 900.0;
+        parameters.harmonics.fill (0.6);
+
+        engine.setParameters (parameters);
+        engine.reset();
+
+        std::vector<double> buffer (16384);
+        for (std::size_t i = 0; i < buffer.size(); ++i)
+            buffer[i] = 0.5 * std::sin (0.06 * static_cast<double> (i))
+                      + 0.2 * std::sin (0.31 * static_cast<double> (i));
+
+        for (std::size_t offset = 0; offset < buffer.size();
+             offset += static_cast<std::size_t> (blockSize))
+        {
+            const int numSamples = static_cast<int> (
+                std::min (static_cast<std::size_t> (blockSize), buffer.size() - offset));
+
+            engine.setParameters (parameters);
+            double* pointer = buffer.data() + offset;
+            engine.process (&pointer, 1, numSamples);
+        }
+
+        return buffer;
+    };
+
+    for (const auto generator : { Generator::Curve, Generator::Chebyshev })
+        for (const bool autoTrim : { false, true })
+        {
+            const auto reference = run (512, autoTrim, generator);
+
+            for (const int blockSize : { 32, 17, 1024 })
+            {
+                const auto other = run (blockSize, autoTrim, generator);
+
+                for (std::size_t i = 0; i < reference.size(); ++i)
+                    CHECK (reference[i] == other[i]);
+            }
+        }
+}
