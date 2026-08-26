@@ -8,6 +8,7 @@
 #include <tezla/dsp/BoxStackSmoother.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/RunningMinimum.hpp>
+#include <tezla/dsp/TruePeakDetector.hpp>
 
 #include <cmath>
 
@@ -279,6 +280,30 @@ TEZLA_TEST (limiter_smoothing_stages_do_not_allocate_while_running)
 
     minimum.reset();
     smoother.reset();
+
+    CHECK (counter.count() == 0);
+}
+
+TEZLA_TEST (true_peak_detector_changes_factor_without_allocating)
+{
+    // Off / Standard / Strict is a control on the panel, so setFactor() is
+    // reachable from the audio thread. Switching between the ITU table and a
+    // designed filter rewrites every coefficient, and this says it does that
+    // inside what prepare() allocated.
+    dsp::TruePeakDetector detector;
+    detector.prepare (dsp::TruePeakDetector::kMaxFactor);
+
+    AllocationCounter counter;
+
+    for (const int factor : { 1, 4, 16, 8, 4, 1, 16 })
+    {
+        detector.setFactor (factor);
+
+        for (int i = 0; i < 256; ++i)
+            (void) detector.process (0.1 * static_cast<double> (i % 7));
+    }
+
+    detector.reset();
 
     CHECK (counter.count() == 0);
 }
