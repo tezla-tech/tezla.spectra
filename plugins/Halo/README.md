@@ -140,6 +140,91 @@ bit-exact rather than merely inaudible.
 
 ---
 
+## MOD — three LFOs and a level follower
+
+Everything above is static once set, and on this material the interesting
+settings are the ones that move: harmonics that bloom with the note, a Focus
+that sweeps on the bar, an octave that comes and goes on the half-bar. The MOD
+strip under the tabs adds four sources and eight assignments.
+
+It is closed by default and costs 24 px there, which still shows all four
+sources and what they are set to. Open it takes 120 px and the window grows to
+find it rather than taking the room out of the spectrum.
+
+### The sources
+
+**LFO 1–3.** Sine, triangle, saw up, saw down, square, sample & hold and smooth
+random. Each has a rate, a phase offset, a smoothing amount, and a SYNC switch
+with a note division from 8 bars down to 1/32, triplets and dotted values
+included.
+
+Synced, the phase is **taken from the host's song position every block rather
+than accumulated from a clock**. There is nothing to drift, so bar 33 is the
+same phase as bar 1, a loop repeats identically, and a bounce matches what you
+heard. The random waveforms are hashed from *which* cycle it is rather than
+drawn in sequence, so they repeat with the loop too. Without a transport — a
+standalone, or a stopped host — an LFO free-runs at its rate setting instead of
+freezing.
+
+**ENV — the level follower.** Attack, release and a sensitivity that says what
+input level reads as full travel, over a 40 dB range.
+
+This is a level detector, not an envelope generator. There is **no MIDI and no
+note trigger anywhere in Halo**; the audio is what moves it, exactly as it is
+for a compressor's detector or an auto-wah. Halo already contained one — Punch
+is a fast follower minus a slow one, hard-wired to a single destination. This
+unhardwires it.
+
+### Assigning
+
+Click a source to arm it. Every knob that can be modulated grows a ring in that
+source's colour; drag one up or down to set how far the source moves that
+control. Up is positive, down inverts it — a follower at negative depth into
+Amount is a compressor made of harmonics rather than of gain. Shift is a fine
+drag. Double-clicking a ring, or dragging it back to zero, gives the slot back.
+
+With nothing armed, a knob that something is pointed at keeps a thin ring
+showing how far it can move, in the colour of whichever source owns it, with a
+dot riding it where modulation has the control right now. A glance at the page
+then says what is moving without arming anything.
+
+One ring at a time is deliberate. The CHEBYSHEV page puts nine controls in seven
+columns; four concentric rings on a 100 px knob would be a texture rather than a
+reading.
+
+### What it costs when you are not using it
+
+Nothing, and that is measured rather than intended:
+
+| Check | Result |
+|---|---|
+| Nothing assigned, against a build from before modulation existed | **byte-identical**, 96 000 samples |
+| A slot assigned with its depth at exactly 0 | **byte-identical** to the same slot at Off |
+| Modulation running, host block size 512 against 64 | **byte-identical** |
+
+The first two hold because the matrix reports itself inactive until a slot has
+both a source and a non-zero depth, and the whole per-chunk path is skipped when
+it is — one block, one parameter push, the same samples. A depth of exactly zero
+multiplies by exactly zero, which puts modulation on the same list as Amount,
+Punch and Width: neutral means bit-exact, not nearly.
+
+Modulation never writes to a parameter. The parameter is the base value and a
+source adds an offset downstream; the knob shows where you set it and the ring
+shows where modulation has moved it. Writing back would fight host automation
+and feed into recorded automation lanes.
+
+### Some things to try
+
+- **ENV into H3 and H5** on the CHEBYSHEV page — grit that blooms on the attack
+  of a reese note and settles back, instead of sitting on it constantly.
+- **ENV into Amount at negative depth** — harmonics that back off when you play
+  hard.
+- **LFO 1 into Focus, synced to 1 bar, saw up** — a sweep that lands on the grid.
+- **LFO 2 into H2 in BELOW mode, synced to 1/2** — an octave that comes and goes
+  on the half-bar without touching the sub underneath it.
+
+---
+
 ## Measured
 
 `tezla-measure selftest` passes before any of these are trusted.
@@ -304,11 +389,15 @@ reaches `n·B`, so at a ~96 kHz internal Nyquist a 120 Hz bass band allows
 harmonic 800 and a full-bandwidth treble band allows about 4. High-order
 synthesis is nearly free on the material this plugin exists for.
 
+**Modulation is built** — see MOD above. Three LFOs and a level follower, eight
+assignments, and no MIDI: a note-triggered ADSR would mean adding MIDI input to
+a bus effect, which is deliberately not in scope.
+
 **Known duplication, now resolved.** The editor's meter, note and page
-components were Halo's own copies of Emberdrive's. The header, palette, A/B and
-spectrum display now live in `shared/tezla-ui` and compile into every plugin
-target; the remaining page and meter classes should follow when a third plugin
-needs them.
+components were Halo's own copies of Emberdrive's. The header, palette, A/B,
+spectrum display, MOD strip and assignment rings now live in `shared/tezla-ui`
+and compile into every plugin target; the remaining page and meter classes
+should follow when a third plugin needs them.
 
 ---
 

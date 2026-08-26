@@ -8,6 +8,7 @@
 #include <tezla/dsp/VuMeter.hpp>
 
 #include <tezla/ui/AbCompare.hpp>
+#include <tezla/ui/ModulationIds.hpp>
 
 #include "HaloEngine.hpp"
 
@@ -58,30 +59,34 @@ inline constexpr const char* harmonics[] {
 // Added at schema version 4: modulation. Appended for the same reason, and
 // every default is neutral -- every slot's source is Off, so nothing else here
 // can reach the signal path in a project saved before they existed.
-inline constexpr auto envAttack      = "envAttack";
-inline constexpr auto envRelease     = "envRelease";
-inline constexpr auto envSensitivity = "envSensitivity";
+//
+// These are references to the shared table rather than a second copy of it. The
+// MOD strip and the assignment rings are shared components that look these names
+// up by string, so a plugin that spelt one of them differently would get a
+// control that silently did nothing -- and the two plugins would have to be
+// compared by eye to find out. Declaring them once removes that possibility
+// instead of documenting it. They are frozen exactly like every ID above.
+inline constexpr auto envAttack      = ui::modIds::envAttack;
+inline constexpr auto envRelease     = ui::modIds::envRelease;
+inline constexpr auto envSensitivity = ui::modIds::envSensitivity;
 
 /// Eight modulation slots: what drives it, what it drives, and how much.
-/// Written out rather than generated, for the same reason the harmonics are.
-inline constexpr const char* modSource[] {
-    "modSrc1", "modSrc2", "modSrc3", "modSrc4", "modSrc5", "modSrc6", "modSrc7", "modSrc8"
-};
-inline constexpr const char* modDestination[] {
-    "modDst1", "modDst2", "modDst3", "modDst4", "modDst5", "modDst6", "modDst7", "modDst8"
-};
-inline constexpr const char* modDepth[] {
-    "modDepth1", "modDepth2", "modDepth3", "modDepth4",
-    "modDepth5", "modDepth6", "modDepth7", "modDepth8"
-};
+inline constexpr auto& modSource      = ui::modIds::source;
+inline constexpr auto& modDestination = ui::modIds::destination;
+inline constexpr auto& modDepth       = ui::modIds::depth;
 
 /// Three LFOs, six controls each.
-inline constexpr const char* lfoWave[]     { "lfo1Wave",   "lfo2Wave",   "lfo3Wave" };
-inline constexpr const char* lfoRate[]     { "lfo1Rate",   "lfo2Rate",   "lfo3Rate" };
-inline constexpr const char* lfoSync[]     { "lfo1Sync",   "lfo2Sync",   "lfo3Sync" };
-inline constexpr const char* lfoDivision[] { "lfo1Div",    "lfo2Div",    "lfo3Div" };
-inline constexpr const char* lfoPhase[]    { "lfo1Phase",  "lfo2Phase",  "lfo3Phase" };
-inline constexpr const char* lfoSmooth[]   { "lfo1Smooth", "lfo2Smooth", "lfo3Smooth" };
+inline constexpr auto& lfoWave     = ui::modIds::lfoWave;
+inline constexpr auto& lfoRate     = ui::modIds::lfoRate;
+inline constexpr auto& lfoSync     = ui::modIds::lfoSync;
+inline constexpr auto& lfoDivision = ui::modIds::lfoDivision;
+inline constexpr auto& lfoPhase    = ui::modIds::lfoPhase;
+inline constexpr auto& lfoSmooth   = ui::modIds::lfoSmooth;
+
+static_assert (ui::modIds::numSlots == dsp::Modulation::kNumSlots,
+               "the shared ID table and the matrix have to agree on how many slots there are");
+static_assert (ui::modIds::numLfos == dsp::Modulation::kNumLfos,
+               "and on how many LFOs");
 } // namespace ids
 
 /// Note divisions for a tempo-synced LFO, as cycles per beat.

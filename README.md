@@ -26,6 +26,12 @@ the harmonics rather than pick a curve and take what comes: ask for the 5th and
 every other component measures 123 dB below it. See
 [its README](plugins/Halo/README.md).
 
+Both are gaining a **modulation layer**: three tempo-syncable LFOs and a level
+follower, assignable to any continuous control by arming a source and dragging
+a ring on the knob. With nothing assigned a plugin is byte-for-byte what it was
+before the feature existed, which is a test rather than an intention. It is in
+Halo now; Emberdrive is next.
+
 ---
 
 ## Status
@@ -33,9 +39,9 @@ every other component measures 123 dB below it. See
 | Plugin | Type | Status |
 |---|---|---|
 | **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band | v0.3.0 — 47/47 on Steinberg's validator |
-| **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis | v0.2.0 — 47/47 on Steinberg's validator |
+| **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.2.0 — 47/47 on Steinberg's validator |
 
-183 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+223 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

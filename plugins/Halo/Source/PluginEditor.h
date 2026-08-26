@@ -3,6 +3,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/ModRing.hpp>
+#include <tezla/ui/ModStrip.hpp>
+#include <tezla/ui/ModulationView.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/SpectrumDisplay.hpp>
 
@@ -72,6 +75,16 @@ public:
     /// broken plugin rather than as a mode.
     void setControlEnabled (const char* parameterId, bool enabled);
 
+    /// Gives every knob that is a modulation destination a ring around it.
+    ///
+    /// Called once, after the page is built: the rings are added last so they
+    /// sit above the knobs they overlay, and they stay out of the way until a
+    /// source is armed.
+    void attachModulation (ui::ModulationView& view);
+
+    /// Re-reads what modulation is doing and repaints the rings that moved.
+    void refreshModulation();
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -82,6 +95,11 @@ private:
         juce::Slider slider;
         juce::Label  label;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+
+        /// Null for a knob nothing can be pointed at -- there are none on Halo
+        /// today, but the destination list excludes switches by construction and
+        /// a future control could land here.
+        std::unique_ptr<ui::ModRing> ring;
     };
 
     struct Choice
@@ -131,6 +149,12 @@ private:
     void buildPages();
     void showPage (int index);
 
+    /// Finds the MOD strip the room it needs when it opens, and gives it back
+    /// when it closes. The window grows rather than the spectrum shrinking:
+    /// squeezing 96 px out of the analyser would leave it too short to read, and
+    /// the strip is a panel the user opened on purpose.
+    void updateStripSpace();
+
     /// Greys the controls the current generator does not use, and updates the
     /// note that says what the other one is doing instead.
     void updateForGenerator();
@@ -142,6 +166,12 @@ private:
     ui::Palette palette_;
     std::unique_ptr<ui::HeaderBar> header_;
     std::unique_ptr<ui::SpectrumDisplay> spectrum_;
+    std::unique_ptr<ui::ModulationView> modulation_;
+    std::unique_ptr<ui::ModStrip> modStrip_;
+
+    /// How much height the strip is currently being given, so opening and
+    /// closing it is a delta rather than a recomputation of the whole window.
+    int stripHeight_ { ui::ModStrip::getCollapsedHeight() };
 
     static constexpr int kNumPages = 3;
     std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;

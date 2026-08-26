@@ -396,10 +396,45 @@ existing work:
 | `PLUGIN_CODE` | `Tzem` for Emberdrive | Same. |
 | `BUNDLE_ID` | `tech.tezla.<Name>` | Reverse-DNS of the **domain**, not the project. The domain has not changed, so neither does this. |
 | Parameter string IDs | e.g. `drive` | Renaming one resets that parameter in every project that uses it. |
+| Choice-parameter option lists | `dest::`, `division::` | A choice parameter stores an **index**, not a name. Inserting or reordering an entry silently repoints every saved use of it. |
 
 A rename touches URLs, titles, the CMake `project()` and prose. It does not
 touch plugin identity. If the manufacturer code ever genuinely has to change,
 that is a **new plugin** with a migration path, not a rename.
+
+### Lists that are append-only, for the same reason
+
+The last row of that table is newly easy to break, because an option list looks
+like an ordinary array and nothing about `const char* names[]` says "frozen".
+Three exist today:
+
+- **`dest::` — the modulation destination list**, in each plugin's
+  `PluginProcessor.h`. A modulation slot stores its destination as an index into
+  it. Insert an entry and every saved modulation in every project points one
+  control to the left; the plugin still loads, still runs, and quietly modulates
+  the wrong thing.
+- **`division::` — the tempo-sync note values.** Same mechanism: a synced LFO
+  stores which division it chose, not what it means.
+- Any choice parameter's `StringArray` — `Generator`, `Mode`, the oversampling
+  factors. These are already frozen and have been since they shipped.
+
+The rules:
+
+- **New entries go on the end. Always.** Even when the order reads badly. The
+  UI can sort what it displays; the stored index cannot be sorted.
+- **A destination list holds continuous controls only**, and is built that way
+  by construction rather than by care — choices and switches reconfigure rather
+  than adjust, and modulating one means a filter rebuild or a crossfade per
+  chunk. `oversampling`, `generator` and `bandMode` are excluded for that reason
+  even though they are parameters like any other.
+- **The list and its parameter IDs are checked against each other at compile
+  time**, with a `static_assert` per array. A destination whose parameter was
+  renamed is otherwise a null pointer that silently modulates nothing.
+- **The modulation parameter IDs themselves live in one place** —
+  `shared/tezla-ui/include/tezla/ui/ModulationIds.hpp` — because the MOD strip
+  and the assignment rings are shared components that look them up by string.
+  A plugin that spelt one differently would get a control that did nothing, and
+  finding it would mean comparing two plugins by eye.
 
 ---
 

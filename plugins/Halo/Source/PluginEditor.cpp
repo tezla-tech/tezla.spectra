@@ -33,6 +33,13 @@ constexpr float kMeterTopDb   = 6.0f;
 /// being added relative to the source. Anything above about -6 dB is a lot.
 constexpr float kHarmonicsFloorDb = -60.0f;
 constexpr float kHarmonicsTopDb   = 0.0f;
+
+/// The window, with the MOD strip closed. The minimum grows by whatever the
+/// strip takes when it is opened; see updateStripSpace().
+constexpr int kMinWidth  = 760;
+constexpr int kMinHeight = 620;
+constexpr int kMaxWidth  = 1520;
+constexpr int kMaxHeight = 1240;
 } // namespace
 
 float LevelMeter::positionFor (float db) const noexcept
@@ -205,6 +212,30 @@ void ControlPage::addBreak()
         cells_.push_back ({ Cell::Kind::gap, 0 });
 }
 
+void ControlPage::attachModulation (ui::ModulationView& view)
+{
+    for (auto& knob : knobs_)
+    {
+        const int destination = view.destinationFor (knob->id);
+
+        if (destination < 0)
+            continue;
+
+        knob->ring = std::make_unique<ui::ModRing> (view, knob->slider, destination,
+                                                    knob->label.getText());
+        addAndMakeVisible (*knob->ring);
+    }
+
+    resized();
+}
+
+void ControlPage::refreshModulation()
+{
+    for (auto& knob : knobs_)
+        if (knob->ring != nullptr)
+            knob->ring->refresh();
+}
+
 void ControlPage::paint (juce::Graphics& g)
 {
     if (note_.isEmpty() || noteArea_.getHeight() <= 0)
@@ -253,6 +284,12 @@ void ControlPage::resized()
                 auto& knob = *knobs_[static_cast<std::size_t> (cells_[i].index)];
                 knob.label.setBounds (cell.removeFromTop (kLabelHeight));
                 knob.slider.setBounds (cell.reduced (4, 0));
+
+                // Exactly over the knob, so the ring can ask the LookAndFeel
+                // where the rotary is in the same coordinates the slider does.
+                if (knob.ring != nullptr)
+                    knob.ring->setBounds (knob.slider.getBounds());
+
                 break;
             }
             case Cell::Kind::choice:
@@ -330,6 +367,21 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
 
     buildPages();
 
+    // The rings and the strip both talk to this rather than to each other. It is
+    // given the destination table because the order of that table is frozen
+    // forever -- a slot stores an index into it -- and that is the plugin's
+    // commitment to make, not a shared component's.
+    modulation_ = std::make_unique<ui::ModulationView> (
+        halo_.getValueTreeState(), halo_.getModulation(),
+        dest::parameterIds, dest::count, palette_);
+
+    for (auto& page : pages_)
+        page->attachModulation (*modulation_);
+
+    modStrip_ = std::make_unique<ui::ModStrip> (*modulation_);
+    modStrip_->onHeightChanged = [this] { updateStripSpace(); };
+    addAndMakeVisible (*modStrip_);
+
     static const char* pageNames[kNumPages] { "MAIN", "SHAPE", "CHEBYSHEV" };
     for (int i = 0; i < kNumPages; ++i)
     {
@@ -372,7 +424,7 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     showPage (0);
 
     setResizable (true, true);
-    setResizeLimits (760, 620, 1520, 1240);
+    setResizeLimits (kMinWidth, kMinHeight, kMaxWidth, kMaxHeight);
     setSize (860, 690);
 
     startTimerHz (30);
@@ -612,6 +664,30 @@ void HaloEditor::buildPages()
         addChildComponent (*page);
 }
 
+void HaloEditor::updateStripSpace()
+{
+    if (modStrip_ == nullptr)
+        return;
+
+    const int wanted = modStrip_->getPreferredHeight();
+    const int delta = wanted - stripHeight_;
+
+    if (delta == 0)
+        return;
+
+    stripHeight_ = wanted;
+
+    // The minimum moves with the strip. Without this, opening it on a window
+    // already at the minimum height would take the 96 px out of the spectrum,
+    // which is the one thing this was meant not to do.
+    const int minimumHeight = kMinHeight + (wanted - ui::ModStrip::getCollapsedHeight());
+
+    setResizeLimits (kMinWidth, minimumHeight, kMaxWidth, kMaxHeight);
+    setSize (getWidth(), juce::jlimit (minimumHeight, kMaxHeight, getHeight() + delta));
+
+    resized();
+}
+
 void HaloEditor::updateForGenerator()
 {
     const bool chebyshev =
@@ -671,6 +747,13 @@ void HaloEditor::timerCallback()
     statusLabel_.setText (halo_.describeOversampling(), juce::dontSendNotification);
     updateForGenerator();
 
+    if (modStrip_ != nullptr)
+        modStrip_->refresh();
+
+    // Only the page you are looking at. Refreshing the other two would repaint
+    // rings nobody can see.
+    pages_[static_cast<std::size_t> (currentPage_)]->refreshModulation();
+
     if (spectrum_ != nullptr)
     {
         auto& state = halo_.getValueTreeState();
@@ -706,6 +789,12 @@ void HaloEditor::resized()
     tabStrip.removeFromLeft (12);
     for (auto& tab : tabs_)
         tab.setBounds (tabStrip.removeFromLeft (tabWidth).reduced (2, 3));
+
+    // Directly under the tabs, above everything it can assign. Closed it is a
+    // 24 px bar; open it takes its own height and the window has already grown
+    // to cover it.
+    if (modStrip_ != nullptr)
+        modStrip_->setBounds (bounds.removeFromTop (modStrip_->getPreferredHeight()));
 
     auto footer = bounds.removeFromBottom (38);
     statusLabel_.setBounds (footer.reduced (16, 2));
