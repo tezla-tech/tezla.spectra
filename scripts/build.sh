@@ -6,10 +6,11 @@
 #  arm64 + x86_64 by default. On Linux it is mainly how the framework-free DSP
 #  gets built and measured without a DAW.
 #
-#    ./scripts/build.sh                     DSP core + tests only, no JUCE
+#    ./scripts/build.sh                     all plugins, Release
 #    ./scripts/build.sh Emberdrive          one plugin
 #    ./scripts/build.sh Emberdrive,Foo      a list
 #    ./scripts/build.sh ALL --install       everything, installed for the user
+#    ./scripts/build.sh NONE --test         DSP core + tests only, no JUCE
 #    ./scripts/build.sh --list              show available plugins
 #
 #  Options:
@@ -31,7 +32,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${repo_root}/build"
-plugins="NONE"
+
+# ALL, matching build.bat. The two scripts disagreeing on what no arguments
+# means is a trap: it makes "the same command" build everything on Windows and
+# nothing on Linux, and CLAUDE.md documents the Windows behaviour as the
+# contract. NONE is still one word away.
+plugins="ALL"
 config="Release"
 run_tests=0
 do_install=0
@@ -119,9 +125,27 @@ fi
 
 # -------------------------------------------------------------- report ------
 echo
+
+# Only report what *this* run selected. Searching the whole build folder finds
+# bundles left behind by earlier configurations, so a run that built nothing
+# happily printed two plugins as "Built:" -- which is the build script telling
+# you something it did not check.
+selected=()
+if [[ "${plugins}" == "ALL" ]]; then
+    for dir in "${repo_root}"/plugins/*/; do
+        [[ -f "${dir}CMakeLists.txt" ]] && selected+=("$(basename "${dir}")")
+    done
+elif [[ "${plugins}" != "NONE" ]]; then
+    IFS=',' read -ra selected <<< "${plugins}"
+fi
+
 bundles=()
-while IFS= read -r line; do bundles+=("${line}"); done < <(
-    find "${build_dir}" -maxdepth 8 \( -name "*.vst3" -o -name "*.component" \) 2>/dev/null | sort)
+for name in "${selected[@]:-}"; do
+    [[ -z "${name}" ]] && continue
+    while IFS= read -r line; do bundles+=("${line}"); done < <(
+        find "${build_dir}/plugins/${name}" -maxdepth 6 \
+             \( -name "*.vst3" -o -name "*.component" \) 2>/dev/null | sort)
+done
 
 if [[ ${#bundles[@]} -eq 0 ]]; then
     echo "Done (no plugin targets were selected)."

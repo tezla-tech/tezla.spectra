@@ -480,7 +480,7 @@ scripts\build.bat NONE -test
 ```
 
 ```bash
-./scripts/build.sh --test          # Linux/macOS, for CI or DSP work
+./scripts/build.sh NONE --test     # Linux/macOS, for CI or DSP work
 ```
 
 Measurement tools:

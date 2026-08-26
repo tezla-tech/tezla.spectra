@@ -60,8 +60,12 @@ your DAW and rescan.
 ./scripts/build.sh --config Debug         # debug build
 ./scripts/build.sh --clean                # wipe build/ first
 ./scripts/build.sh --native               # this Mac's architecture only
-./scripts/build.sh                        # DSP + tests only, no JUCE, seconds
+./scripts/build.sh                        # every plugin, Release
+./scripts/build.sh NONE --test            # DSP + tests only, no JUCE, seconds
 ```
+
+The no-argument form builds everything, matching `build.bat` on Windows. `NONE`
+is the word that turns the plugins off when you only want the DSP measured.
 
 **`--native` halves your build time while iterating.** By default the build is
 universal (arm64 + x86_64), which compiles everything twice. You only need that
