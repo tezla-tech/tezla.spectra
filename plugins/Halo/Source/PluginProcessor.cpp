@@ -300,6 +300,19 @@ HaloProcessor::HaloProcessor()
       state_ (*this, nullptr, kStateTypeName, createParameterLayout())
 {
     bypassParameter_ = dynamic_cast<juce::AudioParameterBool*> (state_.getParameter (ids::bypass));
+
+    // Resolved once, so the audio thread never looks a parameter up by string.
+    // A null here would be a destination naming a parameter that does not
+    // exist, which the static_assert on the table's length cannot catch.
+    for (int index = 0; index < dest::count; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        destinationParameters_[i] = state_.getParameter (dest::parameterIds[i]);
+        destinationRaw_[i] = state_.getRawParameterValue (dest::parameterIds[i]);
+
+        jassert (destinationParameters_[i] != nullptr);
+        jassert (destinationRaw_[i] != nullptr);
+    }
 }
 
 bool HaloProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -318,6 +331,10 @@ void HaloProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamples
 
     const int numChannels = juce::jlimit (1, Engine::kMaxChannels, getTotalNumOutputChannels());
 
+    modulation_.prepare (sampleRate);
+
+    readBaseParameters();
+    applyModulation();
     pullParameters();
     engine_.prepare (sampleRate, maximumExpectedSamplesPerBlock, numChannels);
     engine_.setParameters (parameters_);
@@ -339,6 +356,12 @@ void HaloProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamples
     outputCapture_.prepare (1 << 14);
     captureScratch_.assign (static_cast<std::size_t> (maximumExpectedSamplesPerBlock), 0.0);
 
+    // Sized for x8 whatever factor is running, so updateLatency() -- which is
+    // reached from the audio thread when the oversampling parameter moves --
+    // only has to change a length.
+    bypassMixer_.prepare (sampleRate, dsp::Oversampler::latencyForFactor (8),
+                          juce::jmax (1, getTotalNumOutputChannels()));
+
     updateLatency (engine_.getLatencySamples());
 }
 
@@ -351,9 +374,74 @@ void HaloProcessor::updateLatency (int engineLatencySamples)
     // so switching bypass does not shift the timing.
     const bool bypassed = bypassParameter_ != nullptr && bypassParameter_->get();
 
-    bypassMixer_.prepare (sampleRate_, reportedLatency_,
-                          juce::jmax (1, getTotalNumOutputChannels()));
+    // setLatency, not prepare: the latency follows the oversampling factor, and
+    // the factor is a parameter -- so this runs from the audio thread. prepare()
+    // allocates and is called from prepareToPlay, sized for x8.
+    bypassMixer_.setLatency (reportedLatency_);
     bypassMixer_.reset (bypassed);
+}
+
+void HaloProcessor::processSpan (int offset, int numSamples, int numChannels)
+{
+    pullParameters();
+
+    if (engine_.setParameters (parameters_))
+        updateLatency (engine_.getLatencySamples());
+
+    double* pointers[Engine::kMaxChannels] {};
+    for (int channel = 0; channel < numChannels; ++channel)
+        pointers[channel] = channelPointers_[static_cast<std::size_t> (channel)] + offset;
+
+    engine_.process (pointers, numChannels, numSamples);
+}
+
+void HaloProcessor::readBaseParameters()
+{
+    for (int index = 0; index < dest::count; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        auto* parameter = destinationParameters_[i];
+
+        if (parameter == nullptr || destinationRaw_[i] == nullptr)
+            continue;
+
+        // The raw value straight from where pullParameters() has always read
+        // it, so an unmodulated destination hands over the identical float --
+        // and the normalised one alongside, which is the only thing an offset
+        // is ever added to.
+        baseValues_[i]     = static_cast<double> (destinationRaw_[i]->load());
+        baseNormalised_[i] = static_cast<double> (parameter->getValue());
+    }
+}
+
+void HaloProcessor::applyModulation()
+{
+    for (int index = 0; index < dest::count; ++index)
+    {
+        const auto i = static_cast<std::size_t> (index);
+        const double offset = modulation_.offsetFor (index);
+
+        // Exactly zero, not nearly: a destination nothing points at, or one
+        // whose slot sits at the centre of its depth control, hands over the
+        // base value untouched. That is what keeps every bit-exact neutral
+        // setting in this plugin bit-exact once modulation exists.
+        if (offset == 0.0 || destinationParameters_[i] == nullptr)
+        {
+            destinationValues_[i] = baseValues_[i];
+            continue;
+        }
+
+        const double moved = std::clamp (baseNormalised_[i] + offset, 0.0, 1.0);
+        destinationValues_[i] = static_cast<double> (
+            destinationParameters_[i]->convertFrom0to1 (static_cast<float> (moved)));
+    }
+}
+
+void HaloProcessor::updateModulationSettings()
+{
+    // Nothing is wired to these yet -- the parameters arrive with the MOD
+    // strip. Until then the matrix stays inactive and the plugin runs its
+    // original path, which is exactly what the byte-identical test checks.
 }
 
 void HaloProcessor::pullParameters()
@@ -368,30 +456,36 @@ void HaloProcessor::pullParameters()
         return state_.getRawParameterValue (id)->load() > 0.5f;
     };
 
+    /// A modulatable control, after modulation.
+    const auto moved = [this] (int destination)
+    {
+        return destinationValues_[static_cast<std::size_t> (destination)];
+    };
+
     parameters_.bandMode  = value (ids::bandMode) < 0.5 ? BandMode::Above : BandMode::Below;
-    parameters_.focusHz   = value (ids::focus);
-    parameters_.drive     = value (ids::drive);
-    parameters_.colour    = value (ids::colour);
-    parameters_.track     = value (ids::track);
-    parameters_.punch     = value (ids::punch);
+    parameters_.focusHz   = moved (dest::focus);
+    parameters_.drive     = moved (dest::drive);
+    parameters_.colour    = moved (dest::colour);
+    parameters_.track     = moved (dest::track);
+    parameters_.punch     = moved (dest::punch);
     parameters_.floorOn   = flag (ids::floorOn);
-    parameters_.floorHz   = value (ids::floorHz);
+    parameters_.floorHz   = moved (dest::floorHz);
     parameters_.ceilingOn = flag (ids::ceilingOn);
-    parameters_.ceilingHz = value (ids::ceilingHz);
-    parameters_.width     = value (ids::width);
-    parameters_.amountDb  = value (ids::amount);
+    parameters_.ceilingHz = moved (dest::ceilingHz);
+    parameters_.width     = moved (dest::width);
+    parameters_.amountDb  = moved (dest::amount);
     parameters_.listen    = flag (ids::listen);
     parameters_.autoTrim  = flag (ids::autoTrim);
-    parameters_.inputDb   = value (ids::input);
-    parameters_.outputDb  = value (ids::output);
+    parameters_.inputDb   = moved (dest::input);
+    parameters_.outputDb  = moved (dest::output);
 
     parameters_.generator = value (ids::generator) < 0.5 ? Generator::Curve
                                                         : Generator::Chebyshev;
-    parameters_.chebIndex = value (ids::chebIndex);
-    parameters_.chebTilt  = value (ids::chebTilt);
+    parameters_.chebIndex = moved (dest::chebIndex);
+    parameters_.chebTilt  = moved (dest::chebTilt);
 
     for (std::size_t i = 0; i < parameters_.harmonics.size(); ++i)
-        parameters_.harmonics[i] = value (ids::harmonics[i]);
+        parameters_.harmonics[i] = moved (dest::harm2 + static_cast<int> (i));
 
     parameters_.oversampling = static_cast<dsp::OversamplingMode> (
         juce::jlimit (0, 4, static_cast<int> (value (ids::oversampling))));
@@ -432,10 +526,6 @@ void HaloProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     if (numSamples <= 0 || numChannels <= 0)
         return;
 
-    pullParameters();
-    if (engine_.setParameters (parameters_))
-        updateLatency (engine_.getLatencySamples());
-
     if (scratch_.getNumSamples() < numSamples || scratch_.getNumChannels() < numChannels)
     {
         scratch_.setSize (numChannels, numSamples, false, true, true);
@@ -465,7 +555,54 @@ void HaloProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     // input trim's smoother mid-ramp.
     captureMonoSum (dryPointers_.data(), numChannels, numSamples, inputCapture_);
 
-    engine_.process (channelPointers_.data(), numChannels, numSamples);
+    // ---- parameters, and modulation if there is any -------------------------
+    readBaseParameters();
+    updateModulationSettings();
+
+    if (! modulation_.isActive())
+    {
+        // The path the plugin has always taken: one push, one call. Nothing
+        // here rounds, converts or re-derives anything, so with nothing
+        // assigned the output is what it was before modulation existed --
+        // byte for byte, and there is a test that says so.
+        applyModulation();
+        processSpan (0, numSamples, numChannels);
+    }
+    else
+    {
+        // Short spans, so a source moving at 20 Hz arrives as a curve rather
+        // than as a staircase. The engine is bit-identical across span sizes,
+        // which is what makes this safe to do at all -- see
+        // halo_output_does_not_depend_on_the_host_block_size.
+        const auto position = getPlayHead() != nullptr ? getPlayHead()->getPosition()
+                                                       : juce::nullopt;
+
+        const bool hasTransport = position.hasValue() && position->getBpm().hasValue()
+                               && position->getPpqPosition().hasValue()
+                               && *position->getBpm() > 0.0;
+
+        const double ppqStart = hasTransport ? *position->getPpqPosition() : 0.0;
+
+        // How far the transport moves per sample, so a source stays locked to
+        // the grid *within* a block and not only at its edges.
+        const double ppqPerSample = hasTransport
+            ? *position->getBpm() / (60.0 * sampleRate_) : 0.0;
+
+        for (int offset = 0; offset < numSamples; offset += kModulationChunkSamples)
+        {
+            const int span = juce::jmin (kModulationChunkSamples, numSamples - offset);
+
+            const double* inputs[Engine::kMaxChannels] {};
+            for (int channel = 0; channel < numChannels; ++channel)
+                inputs[channel] = dryPointers_[static_cast<std::size_t> (channel)] + offset;
+
+            modulation_.advance (span, inputs, numChannels, hasTransport,
+                                 ppqStart + ppqPerSample * offset);
+
+            applyModulation();
+            processSpan (offset, span, numChannels);
+        }
+    }
 
     // Latency-matched, crossfaded, and shared by every plugin so there is one
     // copy of this to get right. See BypassMixer.hpp for what it used to do.

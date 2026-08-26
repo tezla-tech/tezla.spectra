@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/BypassMixer.hpp>
+#include <tezla/dsp/Modulation.hpp>
 #include <tezla/dsp/SpectrumAnalyser.hpp>
 #include <tezla/dsp/VuMeter.hpp>
 
@@ -55,6 +56,55 @@ inline constexpr const char* harmonics[] {
     "harm2", "harm3", "harm4", "harm5", "harm6", "harm7", "harm8"
 };
 } // namespace ids
+
+/// Everything a modulation source can be pointed at.
+///
+/// **This list is append-only, forever, exactly like a parameter ID.** A
+/// modulation slot stores its destination as an *index* into it, so inserting
+/// an entry silently repoints every saved modulation in every project that uses
+/// the plugin -- the same failure as renumbering a parameter, and easier to
+/// cause because a list of names looks like an ordinary array. New destinations
+/// go on the end. See CLAUDE.md section 8.
+///
+/// Only continuous controls appear. Choices and switches are excluded because
+/// they reconfigure rather than adjust: oversampling changes the internal rate,
+/// the generator runs a crossfade, the band mode resets filters, and Listen and
+/// Bypass are monitoring rather than sound.
+namespace dest
+{
+enum Index : int
+{
+    focus = 0,
+    drive,
+    colour,
+    track,
+    punch,
+    width,
+    amount,
+    floorHz,
+    ceilingHz,
+    input,
+    output,
+    harm2, harm3, harm4, harm5, harm6, harm7, harm8,
+    chebIndex,
+    chebTilt,
+
+    count   ///< always last
+};
+
+/// The parameter each destination drives, in the same order. Checked against
+/// the enum at construction rather than trusted.
+inline constexpr const char* parameterIds[] {
+    ids::focus, ids::drive, ids::colour, ids::track, ids::punch, ids::width,
+    ids::amount, ids::floorHz, ids::ceilingHz, ids::input, ids::output,
+    ids::harmonics[0], ids::harmonics[1], ids::harmonics[2], ids::harmonics[3],
+    ids::harmonics[4], ids::harmonics[5], ids::harmonics[6],
+    ids::chebIndex, ids::chebTilt
+};
+
+static_assert (static_cast<int> (std::size (parameterIds)) == count,
+               "every destination needs its parameter, and in the same order");
+} // namespace dest
 
 class HaloProcessor final : public juce::AudioProcessor
 {
@@ -117,6 +167,10 @@ public:
 
     [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
 
+    /// The modulation sources and slots, shared with the editor so the strip can
+    /// draw what they are doing.
+    [[nodiscard]] dsp::Modulation& getModulation() noexcept { return modulation_; }
+
     /// What Auto is doing right now, so the tooltip can say it in plain words
     /// rather than making the user work it out.
     [[nodiscard]] juce::String describeOversampling() const;
@@ -126,6 +180,23 @@ private:
 
     template <typename FloatType>
     void processInternal (juce::AudioBuffer<FloatType>& buffer);
+
+    /// Runs the engine over one span, having pushed the parameters for it.
+    void processSpan (int offset, int numSamples, int numChannels);
+
+    /// Reads every parameter once per block: the raw value, and the normalised
+    /// one modulation is added to.
+    void readBaseParameters();
+
+    /// Pushes the LFO and slot settings into the matrix. Once per block --
+    /// these are controls, not audio.
+    void updateModulationSettings();
+
+    /// Turns the matrix's normalised offsets back into parameter values.
+    /// A destination nothing points at keeps its base value *exactly*, which is
+    /// what makes an unmodulated control bit-identical to one that could not be
+    /// modulated at all.
+    void applyModulation();
 
     /// Real-time safe: sums to mono into a preallocated scratch and hands it to
     /// the capture, which is a copy and one atomic store.
@@ -167,6 +238,38 @@ private:
     std::vector<double> captureScratch_;
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
+
+    // ---- modulation ---------------------------------------------------------
+
+    /// How much audio each modulation update covers.
+    ///
+    /// 32 samples is a ~1.5 kHz update rate at 48 kHz, far above anything an
+    /// LFO does, and the engine's own 20 ms smoothers round off whatever is
+    /// left. Shorter costs a parameter push per span for nothing; longer makes
+    /// a fast square arrive as a staircase.
+    static constexpr int kModulationChunkSamples = 32;
+
+    dsp::Modulation modulation_;
+
+    /// The parameter behind each destination, resolved once at construction.
+    std::array<juce::RangedAudioParameter*, dest::count> destinationParameters_ {};
+
+    /// And its raw value, from the same place pullParameters() always read it.
+    ///
+    /// Both, deliberately. The base value has to be the *exact* float the
+    /// plugin used before modulation existed, and recovering it as
+    /// convertFrom0to1(getValue()) is a round trip through normalised space --
+    /// which on a skewed range need not come back to the same bits. The
+    /// normalised value is only ever used to add an offset to.
+    std::array<std::atomic<float>*, dest::count> destinationRaw_ {};
+
+    /// Per block: what each destination reads with nothing modulating it, and
+    /// the same value normalised, which is the space offsets are added in.
+    std::array<double, dest::count> baseValues_ {};
+    std::array<double, dest::count> baseNormalised_ {};
+
+    /// Per chunk: what the engine is actually given.
+    std::array<double, dest::count> destinationValues_ {};
 
     dsp::VuMeter inputMeter_[Engine::kMaxChannels];
     dsp::VuMeter outputMeter_[Engine::kMaxChannels];

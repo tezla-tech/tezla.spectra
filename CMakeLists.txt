@@ -62,6 +62,7 @@ set(TEZLA_PLUGINS "ALL" CACHE STRING
 option(TEZLA_BUILD_TESTS      "Build the framework-free DSP unit tests"       ON)
 option(TEZLA_BUILD_TOOLS      "Build the offline measurement tools"           ON)
 option(TEZLA_BUILD_STANDALONE "Also build a standalone app for each plugin"   OFF)
+option(TEZLA_BUILD_RENDER     "Also build an offline renderer for each plugin" OFF)
 option(TEZLA_COPY_AFTER_BUILD "Copy built VST3 bundles to the system VST3 folder" OFF)
 option(TEZLA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"           OFF)
 option(TEZLA_ENABLE_AVX2      "Build with AVX2 (needs a 2013-or-newer CPU)"   OFF)

@@ -128,6 +128,31 @@ function(tezla_add_plugin)
 
     set_target_properties(${ARG_NAME} PROPERTIES FOLDER "Plugins")
 
+    # An offline renderer for the plugin's *JUCE layer*.
+    #
+    # tezla-measure exercises the engines, which leaves the wrapper untested --
+    # parameter plumbing, block handling, bypass mixing and modulation all live
+    # above the engine and none of it is reachable from a framework-free test.
+    # This runs the real processor over a test signal and writes raw doubles, so
+    # two builds can be compared with cmp.
+    #
+    # Off by default: it links the whole plugin again, which is not free.
+    if(TEZLA_BUILD_RENDER)
+        juce_add_console_app(${ARG_NAME}Render PRODUCT_NAME "tezla-render-${ARG_NAME}")
+
+        target_sources(${ARG_NAME}Render PRIVATE "${TEZLA_ROOT_DIR}/tools/render/main.cpp")
+
+        target_link_libraries(${ARG_NAME}Render PRIVATE
+            ${ARG_NAME}
+            tezla::compiler-options
+            juce::juce_audio_utils
+            juce::juce_dsp
+            PUBLIC
+            juce::juce_recommended_config_flags)
+
+        set_target_properties(${ARG_NAME}Render PROPERTIES FOLDER "Tools")
+    endif()
+
     # The DSP half is also compiled into the test build, where it is measured
     # without JUCE anywhere near it. Expose it for tests/CMakeLists.txt.
     if(ARG_DSP_SOURCES)

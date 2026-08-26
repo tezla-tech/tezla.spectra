@@ -40,23 +40,46 @@ public:
     ///
     /// `latencySamples` is what the host has been told, and is the delay the dry
     /// path is given.
-    void prepare (double sampleRate, int latencySamples, int numChannels)
+    /// Allocates for `maxLatencySamples`, whatever latency is in use now.
+    ///
+    /// The latency follows the oversampling factor, and the factor is a
+    /// parameter -- so re-preparing when it moves would allocate on the audio
+    /// thread, which CLAUDE.md 2.2 forbids. Size for the worst case here and
+    /// call setLatency() from then on.
+    void prepare (double sampleRate, int maxLatencySamples, int numChannels)
     {
-        sampleRate_ = sampleRate > 0.0 ? sampleRate : 44100.0;
-        latency_    = std::max (latencySamples, 0);
-        channels_   = std::max (numChannels, 1);
+        sampleRate_    = sampleRate > 0.0 ? sampleRate : 44100.0;
+        channels_      = std::max (numChannels, 1);
+        maxLatency_    = std::max (maxLatencySamples, 0);
+
+        lines_.assign (static_cast<std::size_t> (channels_),
+                       std::vector<double> (static_cast<std::size_t> (maxLatency_) + 1, 0.0));
+
+        setLatency (maxLatency_);
+
+        fadeStep_ = 1.0 / std::max (1.0, kFadeSeconds * sampleRate_);
+
+        reset (bypassed_);
+    }
+
+    /// Changes the delay without touching memory. Safe from the audio thread,
+    /// which is the point of prepare() sizing for the worst case.
+    void setLatency (int latencySamples) noexcept
+    {
+        latency_ = std::clamp (latencySamples, 0, maxLatency_);
 
         // One position per sample of delay, plus one to write into. Any longer
         // and the arithmetic below would have to carry a second pointer; any
         // shorter and the write would clobber a sample still owed to the output.
         length_ = static_cast<std::size_t> (latency_) + 1;
 
-        lines_.assign (static_cast<std::size_t> (channels_), std::vector<double> (length_, 0.0));
+        for (auto& line : lines_)
+            std::fill (line.begin(), line.end(), 0.0);
 
-        fadeStep_ = 1.0 / std::max (1.0, kFadeSeconds * sampleRate_);
-
-        reset (bypassed_);
+        write_ = 0;
     }
+
+    [[nodiscard]] int getLatency() const noexcept { return latency_; }
 
     /// Clears the delay and jumps the crossfade to its end state, so a transport
     /// restart does not fade in from wherever the fade happened to be.
@@ -131,6 +154,7 @@ public:
 private:
     double sampleRate_ { 44100.0 };
     int    latency_    { 0 };
+    int    maxLatency_ { 0 };
     int    channels_   { 1 };
 
     std::vector<std::vector<double>> lines_;

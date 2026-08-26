@@ -343,6 +343,12 @@ void EmberdriveProcessor::prepareToPlay (double sampleRate, int maximumExpectedS
 
     dryScratch_.setSize (numChannels, maximumExpectedSamplesPerBlock, false, true, true);
 
+    // Sized for x8 whatever factor is running, so updateLatency() -- which is
+    // reached from the audio thread when the oversampling parameter moves --
+    // only has to change a length.
+    bypassMixer_.prepare (sampleRate, dsp::Oversampler::latencyForFactor (8),
+                          juce::jmax (1, getTotalNumOutputChannels()));
+
     updateLatency (engine_.getLatencySamples());
 }
 
@@ -355,8 +361,10 @@ void EmberdriveProcessor::updateLatency (int engineLatencySamples)
     // so switching bypass does not shift the timing.
     const bool bypassed = bypassParameter_ != nullptr && bypassParameter_->get();
 
-    bypassMixer_.prepare (sampleRate_, reportedLatency_,
-                          juce::jmax (1, getTotalNumOutputChannels()));
+    // setLatency, not prepare: the latency follows the oversampling factor, and
+    // the factor is a parameter -- so this runs from the audio thread. prepare()
+    // allocates and is called from prepareToPlay, sized for x8.
+    bypassMixer_.setLatency (reportedLatency_);
     bypassMixer_.reset (bypassed);
 }
 
