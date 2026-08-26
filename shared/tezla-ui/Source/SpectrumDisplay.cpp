@@ -58,6 +58,54 @@ void SpectrumDisplay::setFocusFrequency (double hz, bool aboveMode)
     repaint();
 }
 
+void SpectrumDisplay::setHarmonicLimits (bool floorOn, double floorHz,
+                                         bool ceilingOn, double ceilingHz)
+{
+    if (floorOn == floorOn_ && ceilingOn == ceilingOn_
+        && std::abs (floorHz - floorHz_) < 0.5
+        && std::abs (ceilingHz - ceilingHz_) < 0.5)
+        return;
+
+    floorOn_   = floorOn;
+    floorHz_   = floorHz;
+    ceilingOn_ = ceilingOn;
+    ceilingHz_ = ceilingHz;
+    repaint();
+}
+
+void SpectrumDisplay::drawMarker (juce::Graphics& g, juce::Rectangle<float> area, double hz,
+                                  const juce::String& label, juce::Colour colour, bool dashed) const
+{
+    const float x = xFor (area, hz);
+
+    if (dashed)
+    {
+        // Dashed, so the harmonic limits cannot be mistaken for Focus. Focus
+        // decides what gets excited; these two decide where the result is
+        // allowed to land, and they are different kinds of boundary.
+        const float dashes[] { 3.0f, 3.0f };
+        g.setColour (colour);
+        g.drawDashedLine ({ x, area.getY() + 15.0f, x, area.getBottom() }, dashes, 2, 1.0f);
+    }
+    else
+    {
+        g.setColour (colour);
+        g.drawVerticalLine (juce::roundToInt (x), area.getY(), area.getBottom());
+    }
+
+    // The label goes on whichever side has room, so a marker near an edge does
+    // not print half off the graph.
+    // Below the legend row, and flipped to the inside near an edge. Drawn level
+    // with the legend, CEIL at 16 kHz printed straight through the word OUT.
+    const bool toTheLeft = x > area.getRight() - 46.0f;
+    const juce::Rectangle<float> labelArea { toTheLeft ? x - 44.0f : x + 3.0f,
+                                             area.getY() + 15.0f, 42.0f, 11.0f };
+
+    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+    g.drawText (label, labelArea,
+                toTheLeft ? juce::Justification::centredRight : juce::Justification::centredLeft);
+}
+
 float SpectrumDisplay::xFor (juce::Rectangle<float> area, double hz) const
 {
     const double clamped = juce::jlimit (lowHz_, highHz_, hz);
@@ -74,7 +122,8 @@ float SpectrumDisplay::yFor (juce::Rectangle<float> area, float db) const
     return area.getBottom() - area.getHeight() * position;
 }
 
-void SpectrumDisplay::drawGrid (juce::Graphics& g, juce::Rectangle<float> area) const
+void SpectrumDisplay::drawGrid (juce::Graphics& g, juce::Rectangle<float> area,
+                                juce::Rectangle<float> axis) const
 {
     g.setColour (palette_.dimText.withAlpha (0.16f));
     g.setFont (juce::FontOptions (9.0f));
@@ -94,8 +143,8 @@ void SpectrumDisplay::drawGrid (juce::Graphics& g, juce::Rectangle<float> area) 
         const auto label = hz >= 1000.0 ? juce::String (hz / 1000.0, hz < 10000.0 ? 1 : 0) + "k"
                                         : juce::String (juce::roundToInt (hz));
 
-        g.setColour (palette_.dimText.withAlpha (0.42f));
-        g.drawText (label, juce::Rectangle<float> (x - 16.0f, area.getBottom() - 11.0f, 32.0f, 11.0f),
+        g.setColour (palette_.dimText.withAlpha (0.5f));
+        g.drawText (label, juce::Rectangle<float> (x - 16.0f, axis.getY(), 32.0f, axis.getHeight()),
                     juce::Justification::centred);
     }
 
@@ -151,6 +200,63 @@ void SpectrumDisplay::drawCurve (juce::Graphics& g, juce::Rectangle<float> area,
     g.strokePath (path, juce::PathStrokeType (fill ? 1.6f : 1.1f));
 }
 
+void SpectrumDisplay::drawAddedRegion (juce::Graphics& g, juce::Rectangle<float> area) const
+{
+    const auto& input = inputAnalyser_.getMagnitudesDb();
+    const auto& output = outputAnalyser_.getMagnitudesDb();
+
+    if (input.size() != output.size() || input.size() < 2)
+        return;
+
+    // Built as a run of closed quadrilaterals rather than one path, because the
+    // output only stands above the input in places and the gaps between those
+    // places are not part of the answer.
+    juce::Path added;
+    bool inRun = false;
+    std::size_t runStart = 0;
+
+    const auto closeRun = [&] (std::size_t runEnd)
+    {
+        if (runEnd <= runStart)
+            return;
+
+        added.startNewSubPath (xFor (area, outputAnalyser_.getBinFrequency (runStart)),
+                               yFor (area, output[runStart]));
+
+        for (std::size_t i = runStart + 1; i <= runEnd; ++i)
+            added.lineTo (xFor (area, outputAnalyser_.getBinFrequency (i)), yFor (area, output[i]));
+
+        for (std::size_t i = runEnd + 1; i-- > runStart;)
+            added.lineTo (xFor (area, inputAnalyser_.getBinFrequency (i)), yFor (area, input[i]));
+
+        added.closeSubPath();
+    };
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+    {
+        // A tenth of a dB of headroom, so bins where nothing is happening do not
+        // shimmer with the last digit of the analysis.
+        const bool above = output[i] > input[i] + 0.1f;
+
+        if (above && ! inRun)
+        {
+            inRun = true;
+            runStart = i;
+        }
+        else if (! above && inRun)
+        {
+            closeRun (i - 1);
+            inRun = false;
+        }
+    }
+
+    if (inRun)
+        closeRun (input.size() - 1);
+
+    g.setColour (palette_.secondary.withAlpha (0.28f));
+    g.fillPath (added);
+}
+
 void SpectrumDisplay::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
@@ -161,14 +267,18 @@ void SpectrumDisplay::paint (juce::Graphics& g)
     g.setColour (palette_.panel.brighter (0.22f));
     g.drawRoundedRectangle (bounds.reduced (0.5f), 3.0f, 1.0f);
 
-    // Room at the bottom for the frequency labels, and a little inset elsewhere
-    // so a curve pinned at 0 dB is not drawn on top of the border.
-    auto plot = bounds.reduced (4.0f, 3.0f).withTrimmedBottom (11.0f);
+    // The frequency labels get a strip of their own below the plot. Drawn
+    // inside it they sat on top of the trace, which reaches the bottom of the
+    // graph wherever there is no signal -- which is most of it on sparse
+    // material.
+    auto inner = bounds.reduced (4.0f, 3.0f);
+    auto axis = inner.removeFromBottom (12.0f);
+    auto plot = inner;
 
     if (! ready_ || plot.getWidth() < 8.0f || plot.getHeight() < 8.0f)
         return;
 
-    drawGrid (g, plot);
+    drawGrid (g, plot, axis);
 
     // The Focus marker, and which side of it is being worked on. Without it the
     // control and the picture are two separate things the user has to relate in
@@ -189,11 +299,28 @@ void SpectrumDisplay::paint (juce::Graphics& g)
     const auto outputColour = dimmed_ ? palette_.dimText.withAlpha (0.45f)
                                       : palette_.accentBright;
 
-    // Input underneath and unfilled, output on top and filled: the eye reads the
-    // filled one as the subject and the outline as the reference, which is the
-    // right way round for "what did this do to my signal".
+    // What is shaded is the gap between the two curves, not the area under the
+    // output. The gap *is* the plugin: everything Halo does shows up as output
+    // standing above input, so filling it draws the effect itself rather than
+    // leaving it to be inferred from the distance between two lines.
+    if (! dimmed_)
+        drawAddedRegion (g, plot);
+
+    // Output first, input over the top. The other order hides the input
+    // entirely: the two agree everywhere the plugin is not doing something, so
+    // whichever is drawn second is the only one visible -- and the input is the
+    // reference the eye needs to see the output depart from.
+    drawCurve (g, plot, outputAnalyser_.getMagnitudesDb(), outputColour, false);
     drawCurve (g, plot, inputAnalyser_.getMagnitudesDb(), inputColour, false);
-    drawCurve (g, plot, outputAnalyser_.getMagnitudesDb(), outputColour, true);
+
+    // Harmonic limits over the top of the curves, so they stay readable.
+    const auto limitColour = palette_.secondary.withAlpha (dimmed_ ? 0.25f : 0.6f);
+
+    if (floorOn_)
+        drawMarker (g, plot, floorHz_, "FLOOR", limitColour, true);
+
+    if (ceilingOn_)
+        drawMarker (g, plot, ceilingHz_, "CEIL", limitColour, true);
 
     // A legend in one row at the top right, so the two names cannot overlap each
     // other however the window is sized.

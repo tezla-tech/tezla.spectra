@@ -213,9 +213,28 @@ from any tab:
 
 ## Spectrum
 
-Input and output drawn over each other, so the excitation is visible rather than
-inferred: the output curve lifting away from the input above the Focus line *is*
-the effect. The Focus frequency is marked and the side being worked on is shaded.
+Input and output drawn over each other, and **the gap between them shaded** —
+because that gap is the plugin. Everything Halo does shows up as the output
+standing above the input, so filling it draws the effect itself rather than
+leaving it to be worked out from the distance between two lines.
+
+Three things are marked, and each is only drawn when it is doing something:
+
+- **Focus**, as a solid line in the accent colour, with the side being excited
+  shaded.
+- **FLOOR** and **CEIL**, dashed and in the harmonics colour, showing where the
+  generated content is allowed to live. Dashed rather than solid so they cannot
+  be mistaken for Focus: Focus decides what gets excited, these two decide where
+  the result may land, and they are different kinds of boundary.
 
 The analysis is framework-free and lives in `shared/tezla-dsp`, so the same code
 can drive a standalone analyser later without a GUI framework attached.
+
+`tezla-ui-preview` renders the display offscreen against synthetic audio. This
+repository is developed in a container with no sound card, so a plugin
+standalone only ever draws a flat line at the floor — enough to check a layout
+and useless for checking what the picture says. Rendering it with a known signal
+found three faults the empty display had hidden: the axis labels were printed on
+top of the trace, the input curve was completely invisible because the output
+was drawn over it, and the CEIL marker's label printed straight through the word
+OUT.

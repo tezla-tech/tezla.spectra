@@ -39,10 +39,19 @@ public:
     /// Marks the Focus frequency, so the control and the picture agree.
     void setFocusFrequency (double hz, bool aboveMode);
 
+    /// Marks where the generated harmonics are allowed to live. Each end is only
+    /// drawn when its filter is switched in, so the picture shows what is
+    /// actually happening rather than what could be.
+    void setHarmonicLimits (bool floorOn, double floorHz, bool ceilingOn, double ceilingHz);
+
     void paint (juce::Graphics&) override;
 
 private:
-    void drawGrid (juce::Graphics&, juce::Rectangle<float> area) const;
+    void drawGrid (juce::Graphics&, juce::Rectangle<float> area,
+                   juce::Rectangle<float> axis) const;
+    void drawMarker (juce::Graphics&, juce::Rectangle<float> area, double hz,
+                     const juce::String& label, juce::Colour colour, bool dashed) const;
+    void drawAddedRegion (juce::Graphics&, juce::Rectangle<float> area) const;
     void drawCurve (juce::Graphics&, juce::Rectangle<float> area,
                     const std::vector<float>& bins, juce::Colour colour,
                     bool fill) const;
@@ -59,6 +68,11 @@ private:
     double highHz_   { 20000.0 };
     double focusHz_  { 3000.0 };
     bool   aboveMode_ { true };
+
+    bool   floorOn_    { false };
+    double floorHz_    { 200.0 };
+    bool   ceilingOn_  { true };
+    double ceilingHz_  { 16000.0 };
     bool   dimmed_   { false };
     bool   ready_    { false };
 

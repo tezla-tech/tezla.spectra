@@ -522,6 +522,10 @@ void HaloEditor::timerCallback()
 
         spectrum_->setFocusFrequency (state.getRawParameterValue (ids::focus)->load(),
                                       state.getRawParameterValue (ids::bandMode)->load() < 0.5f);
+        spectrum_->setHarmonicLimits (state.getRawParameterValue (ids::floorOn)->load() > 0.5f,
+                                      state.getRawParameterValue (ids::floorHz)->load(),
+                                      state.getRawParameterValue (ids::ceilingOn)->load() > 0.5f,
+                                      state.getRawParameterValue (ids::ceilingHz)->load());
         spectrum_->setDimmed (state.getRawParameterValue (ids::bypass)->load() > 0.5f);
         spectrum_->update (halo_.getInputCapture(), halo_.getOutputCapture());
     }

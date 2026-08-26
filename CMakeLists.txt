@@ -124,6 +124,11 @@ if(_tezla_selected)
     foreach(_name IN LISTS _tezla_selected)
         add_subdirectory("plugins/${_name}")
     endforeach()
+
+    # Draws the shared UI components offscreen so they can be checked against
+    # synthetic audio. Needs JUCE, so it only exists when plugins are being
+    # built; TezlaPlugin.cmake is what defines TEZLA_ROOT_DIR.
+    add_subdirectory(tools/ui-preview)
 else()
     message(STATUS "Tezla: building DSP core only (no plugins selected, JUCE not fetched)")
 endif()
