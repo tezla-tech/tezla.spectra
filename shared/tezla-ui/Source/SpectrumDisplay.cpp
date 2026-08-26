@@ -5,7 +5,82 @@ namespace tezla::ui
 
 SpectrumDisplay::SpectrumDisplay (Palette palette) : palette_ (palette)
 {
-    setInterceptsMouseClicks (false, false);
+}
+
+juce::MouseCursor SpectrumDisplay::getMouseCursor()
+{
+    // The Focus line is drawn here, so it should be draggable here. Reading a
+    // frequency off a graph and then going to find the knob that sets it is work
+    // the display can do instead.
+    return onFocusDragged != nullptr ? juce::MouseCursor::LeftRightResizeCursor
+                                     : juce::MouseCursor::NormalCursor;
+}
+
+juce::Rectangle<float> SpectrumDisplay::plotArea() const
+{
+    auto inner = getLocalBounds().toFloat().reduced (4.0f, 3.0f);
+    inner.removeFromBottom (12.0f);
+    return inner;
+}
+
+double SpectrumDisplay::frequencyAt (int x) const
+{
+    const auto area = plotArea();
+
+    if (area.getWidth() <= 0.0f)
+        return focusHz_;
+
+    const double position = juce::jlimit (0.0, 1.0,
+        static_cast<double> (static_cast<float> (x) - area.getX()) / area.getWidth());
+
+    return lowHz_ * std::exp (position * std::log (highHz_ / lowHz_));
+}
+
+void SpectrumDisplay::mouseDown (const juce::MouseEvent& event)
+{
+    if (onFocusDragged == nullptr)
+        return;
+
+    dragging_ = true;
+    onFocusDragged (frequencyAt (event.x), DragPhase::began);
+    onFocusDragged (frequencyAt (event.x), DragPhase::moved);
+    repaint();
+}
+
+void SpectrumDisplay::mouseDrag (const juce::MouseEvent& event)
+{
+    if (dragging_ && onFocusDragged != nullptr)
+        onFocusDragged (frequencyAt (event.x), DragPhase::moved);
+}
+
+void SpectrumDisplay::mouseUp (const juce::MouseEvent&)
+{
+    if (! dragging_)
+        return;
+
+    dragging_ = false;
+    repaint();
+
+    if (onFocusDragged != nullptr)
+        onFocusDragged (focusHz_, DragPhase::ended);
+}
+
+void SpectrumDisplay::mouseEnter (const juce::MouseEvent&)
+{
+    if (onFocusDragged == nullptr)
+        return;
+
+    hovered_ = true;
+    repaint();
+}
+
+void SpectrumDisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (! hovered_)
+        return;
+
+    hovered_ = false;
+    repaint();
 }
 
 void SpectrumDisplay::prepare (double sampleRate, int fftOrder, int numBins)
@@ -291,8 +366,19 @@ void SpectrumDisplay::paint (juce::Graphics& g)
     g.setColour (palette_.accent.withAlpha (0.055f));
     g.fillRect (shaded);
 
-    g.setColour (palette_.accent.withAlpha (0.45f));
+    // Brighter and thicker while the pointer is over the graph, so it is obvious
+    // that the line is the thing that will move.
+    const bool active = hovered_ || dragging_;
+
+    g.setColour (palette_.accent.withAlpha (active ? 0.95f : 0.45f));
     g.drawVerticalLine (juce::roundToInt (focusX), plot.getY(), plot.getBottom());
+
+    if (active)
+    {
+        g.setColour (palette_.accent.withAlpha (0.35f));
+        g.drawVerticalLine (juce::roundToInt (focusX) - 1, plot.getY(), plot.getBottom());
+        g.drawVerticalLine (juce::roundToInt (focusX) + 1, plot.getY(), plot.getBottom());
+    }
 
     const auto inputColour  = dimmed_ ? palette_.dimText.withAlpha (0.35f)
                                       : palette_.dimText.withAlpha (0.75f);
@@ -322,17 +408,50 @@ void SpectrumDisplay::paint (juce::Graphics& g)
     if (ceilingOn_)
         drawMarker (g, plot, ceilingHz_, "CEIL", limitColour, true);
 
-    // A legend in one row at the top right, so the two names cannot overlap each
-    // other however the window is sized.
-    auto legend = plot.removeFromTop (13.0f).removeFromRight (76.0f);
-    g.setFont (juce::FontOptions (9.5f));
+    // The frequency in words while dragging, because reading it off the axis is
+    // exactly the work this gesture exists to save.
+    //
+    // It takes the whole top row, and the legend below gives it up: the two
+    // would otherwise print through each other anywhere Focus sits between
+    // roughly 4 and 10 kHz, which is the same collision the CEIL label already
+    // had. Nothing is lost -- during a drag the number is what is being read,
+    // and IN/OUT is a static key that comes back the moment the mouse is
+    // released.
+    auto legend = plot.removeFromTop (13.0f);
 
-    auto outArea = legend.removeFromRight (34.0f);
-    g.setColour (outputColour);
-    g.drawText ("OUT", outArea, juce::Justification::centredRight);
+    if (dragging_)
+    {
+        const auto label = focusHz_ >= 1000.0
+            ? juce::String (focusHz_ / 1000.0, focusHz_ < 10000.0 ? 2 : 1) + " kHz"
+            : juce::String (juce::roundToInt (focusHz_)) + " Hz";
 
-    g.setColour (inputColour);
-    g.drawText ("IN", legend.removeFromRight (24.0f), juce::Justification::centredRight);
+        const bool toTheLeft = focusX > plot.getRight() - 60.0f;
+        auto chip = juce::Rectangle<float> (toTheLeft ? focusX - 60.0f : focusX + 2.0f,
+                                            legend.getY(), 58.0f, legend.getHeight());
+
+        // Opaque, so the number is legible over a curve, a grid line or a
+        // marker label rather than tangled with it.
+        g.setColour (palette_.background.withAlpha (0.92f));
+        g.fillRoundedRectangle (chip, 2.0f);
+
+        g.setColour (palette_.accentBright);
+        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        g.drawText (label, chip.reduced (4.0f, 0.0f),
+                    toTheLeft ? juce::Justification::centredRight : juce::Justification::centredLeft);
+    }
+    else
+    {
+        // A legend in one row at the top right, so the two names cannot overlap
+        // each other however the window is sized.
+        legend = legend.removeFromRight (76.0f);
+        g.setFont (juce::FontOptions (9.5f));
+
+        g.setColour (outputColour);
+        g.drawText ("OUT", legend.removeFromRight (34.0f), juce::Justification::centredRight);
+
+        g.setColour (inputColour);
+        g.drawText ("IN", legend.removeFromRight (24.0f), juce::Justification::centredRight);
+    }
 }
 
 } // namespace tezla::ui

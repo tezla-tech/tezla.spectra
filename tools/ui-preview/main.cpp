@@ -10,7 +10,10 @@
 // telling the truth" gets settled here rather than on the user's machine. It is
 // the same argument tezla-measure makes about DSP, applied to drawing.
 //
-//   tezla-ui-preview spectrum out.png
+//   tezla-ui-preview spectrum   out.png     the display against synthetic audio
+//   tezla-ui-preview focus-drag out.png     the same, mid-drag, with the gesture
+//                                           driven through the component and the
+//                                           frequencies it reported printed
 
 #include <cmath>
 #include <numbers>
@@ -52,6 +55,157 @@ double excited (double t)
     return value;
 }
 
+/// Renders whatever the display currently holds and writes it out.
+int writeSnapshot (tezla::ui::SpectrumDisplay& display, const juce::File& destination)
+{
+    const auto image = display.createComponentSnapshot (display.getLocalBounds(), false, 2.0f);
+
+    destination.deleteFile();
+    std::unique_ptr<juce::FileOutputStream> stream (destination.createOutputStream());
+
+    if (stream == nullptr)
+    {
+        std::fprintf (stderr, "could not write %s\n", destination.getFullPathName().toRawUTF8());
+        return 1;
+    }
+
+    juce::PNGImageFormat png;
+    if (! png.writeImageToStream (image, *stream))
+    {
+        std::fprintf (stderr, "could not encode the image\n");
+        return 1;
+    }
+
+    std::printf ("wrote %s (%d x %d)\n", destination.getFullPathName().toRawUTF8(),
+                 image.getWidth(), image.getHeight());
+    return 0;
+}
+
+/// Feeds the display a run of frames so the ballistics settle.
+void feed (tezla::ui::SpectrumDisplay& display,
+           tezla::dsp::SpectrumCapture& input,
+           tezla::dsp::SpectrumCapture& output,
+           std::size_t& index,
+           int frames)
+{
+    constexpr int blockSize = 512;
+    std::vector<double> inputBlock (blockSize), outputBlock (blockSize);
+
+    for (int frame = 0; frame < frames; ++frame)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const double t = static_cast<double> (index) / kSampleRate;
+            inputBlock[static_cast<std::size_t> (i)]  = source (t);
+            outputBlock[static_cast<std::size_t> (i)] = excited (t);
+            ++index;
+        }
+
+        input.push (inputBlock.data(), blockSize);
+        output.push (outputBlock.data(), blockSize);
+        display.update (input, output);
+    }
+}
+
+tezla::ui::Palette housePalette()
+{
+    tezla::ui::Palette palette;
+    palette.accent       = juce::Colour (0xffd9b24a);
+    palette.accentBright = juce::Colour (0xfff2d888);
+    palette.secondary    = juce::Colour (0xff54c7c0);
+    return palette;
+}
+
+/// A mouse event at a pixel, built the way JUCE builds one, so the component
+/// under test sees exactly what it would see from a real pointer.
+juce::MouseEvent eventAt (juce::Component& component, int x, int y)
+{
+    auto source = juce::Desktop::getInstance().getMainMouseSource();
+    const juce::Point<float> position { static_cast<float> (x), static_cast<float> (y) };
+
+    return { source, position, juce::ModifierKeys::currentModifiers, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+             &component, &component, juce::Time::getCurrentTime(), position,
+             juce::Time::getCurrentTime(), 1, false };
+}
+
+/// Drives a drag across the display and prints what it asked for at each step,
+/// then checks the answer round-trips: the frequency reported for a pixel must
+/// put the Focus line back on that pixel, or the line and the pointer disagree.
+int renderFocusDrag (const juce::File& destination)
+{
+    auto palette = housePalette();
+
+    tezla::ui::SpectrumDisplay display { palette };
+    display.setSize (820, 260);
+    display.prepare (kSampleRate);
+    display.setFocusFrequency (3000.0, true);
+    display.setHarmonicLimits (true, 220.0, true, 16000.0);
+
+    double lastHz = 0.0;
+    int began = 0, moved = 0, ended = 0;
+
+    display.onFocusDragged = [&] (double hz, tezla::ui::SpectrumDisplay::DragPhase phase)
+    {
+        using Phase = tezla::ui::SpectrumDisplay::DragPhase;
+
+        if (phase == Phase::began) ++began;
+        else if (phase == Phase::ended) ++ended;
+        else { ++moved; lastHz = hz; display.setFocusFrequency (hz, true); }
+    };
+
+    tezla::dsp::SpectrumCapture input, output;
+    input.prepare (1 << 14);
+    output.prepare (1 << 14);
+    std::size_t index = 0;
+    feed (display, input, output, index, 120);
+
+    display.mouseEnter (eventAt (display, 400, 130));
+
+    int worstPixel = 0;
+    std::printf ("  %-6s %10s   %s\n", "x", "reported", "line lands at x");
+
+    display.mouseDown (eventAt (display, 60, 130));
+
+    for (const int x : { 60, 150, 300, 450, 600, 750, 812 })
+    {
+        display.mouseDrag (eventAt (display, x, 130));
+
+        // Where the display would now draw the line, found by bisecting its own
+        // mapping -- the only honest way to ask a private transform a question.
+        int landed = x;
+        for (int candidate = 0; candidate < display.getWidth(); ++candidate)
+        {
+            if (display.frequencyAt (candidate) >= lastHz)
+            {
+                landed = candidate;
+                break;
+            }
+        }
+
+        worstPixel = std::max (worstPixel, std::abs (landed - x));
+        std::printf ("  %-6d %8.1f Hz   %d\n", x, lastHz, landed);
+    }
+
+    display.mouseUp (eventAt (display, 812, 130));
+
+    std::printf ("\n  gestures: %d began, %d moved, %d ended\n", began, moved, ended);
+    std::printf ("  worst pointer-to-line error: %d px\n", worstPixel);
+
+    const bool ok = began == 1 && ended == 1 && moved >= 7 && worstPixel <= 2;
+    std::printf ("  %s\n\n", ok ? "PASS" : "FAIL");
+
+    // Redrawn mid-drag, so the readout and the thickened line are in the picture
+    // rather than only in the code. Parked at 700 px deliberately: that is where
+    // the readout would print straight through the IN/OUT legend if the two were
+    // still sharing the top row.
+    display.mouseDown (eventAt (display, 700, 130));
+    display.mouseDrag (eventAt (display, 700, 130));
+    feed (display, input, output, index, 4);
+
+    const int result = writeSnapshot (display, destination);
+    return result != 0 ? result : (ok ? 0 : 1);
+}
+
 int renderSpectrum (const juce::File& destination)
 {
     tezla::ui::Palette palette;
@@ -89,27 +243,7 @@ int renderSpectrum (const juce::File& destination)
         display.update (input, output);
     }
 
-    const auto image = display.createComponentSnapshot (display.getLocalBounds(), false, 2.0f);
-
-    destination.deleteFile();
-    std::unique_ptr<juce::FileOutputStream> stream (destination.createOutputStream());
-
-    if (stream == nullptr)
-    {
-        std::fprintf (stderr, "could not write %s\n", destination.getFullPathName().toRawUTF8());
-        return 1;
-    }
-
-    juce::PNGImageFormat png;
-    if (! png.writeImageToStream (image, *stream))
-    {
-        std::fprintf (stderr, "could not encode the image\n");
-        return 1;
-    }
-
-    std::printf ("wrote %s (%d x %d)\n", destination.getFullPathName().toRawUTF8(),
-                 image.getWidth(), image.getHeight());
-    return 0;
+    return writeSnapshot (display, destination);
 }
 } // namespace
 
@@ -117,7 +251,7 @@ int main (int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::printf ("usage: tezla-ui-preview spectrum <out.png>\n");
+        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag> <out.png>\n");
         return 2;
     }
 
@@ -128,6 +262,9 @@ int main (int argc, char** argv)
 
     if (what == "spectrum")
         return renderSpectrum (destination);
+
+    if (what == "focus-drag")
+        return renderFocusDrag (destination);
 
     std::fprintf (stderr, "unknown preview '%s'\n", argv[1]);
     return 2;
