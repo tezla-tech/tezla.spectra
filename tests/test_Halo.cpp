@@ -830,9 +830,12 @@ TEZLA_TEST (halo_chebyshev_puts_the_harmonic_where_it_was_asked_for)
 
         const auto index = static_cast<std::size_t> (harmonic);
 
+        // 90 dB, not 40. The measured worst case through the whole chain is
+        // 123 dB, so a threshold of 40 would sleep through the loss of the
+        // third envelope pole -- which is worth 37 to 55 dB on its own.
         for (int n = 1; n <= 8; ++n)
             if (n != harmonic)
-                CHECK (levels[static_cast<std::size_t> (n)] < levels[index] - 40.0);
+                CHECK (levels[static_cast<std::size_t> (n)] < levels[index] - 90.0);
     }
 }
 
@@ -864,7 +867,7 @@ TEZLA_TEST (halo_chebyshev_leaves_the_fundamental_alone)
         for (int n = 2; n <= 8; ++n)
             loudest = std::max (loudest, levels[static_cast<std::size_t> (n)]);
 
-        CHECK (levels[1] < loudest - 40.0);
+        CHECK (levels[1] < loudest - 100.0);
     }
 }
 

@@ -237,6 +237,23 @@ private:
     double meanSquareA_ { 0.0 };   ///< first of two cascaded averaging poles
     double meanSquare_  { 0.0 };
     double envelope_   { 0.0 };
+
+    /// A third averaging pole, for the Chebyshev generator only.
+    ///
+    /// Two poles leave the mean square of a tone rippling at twice its
+    /// frequency, about 87 dB down at 400 Hz. The Curve generator does not care;
+    /// Chebyshev divides by this number, so the ripple amplitude-modulates the
+    /// normalised band and puts energy straight back at the fundamental -- the
+    /// one thing the mode claims is absent. Measured, the leak tracked the
+    /// ripple at exactly 12 dB per octave of tone frequency, which is two poles
+    /// and confirms where it comes from: -64 dB at 100 Hz, and 100 Hz is
+    /// precisely the material this mode is for.
+    ///
+    /// A third pole costs one multiply-add and buys another 43 dB. It is not
+    /// shared with the Curve path, which would change a sound that is already
+    /// measured and shipped.
+    double chebMeanSquare_ { 0.0 };
+    double chebEnvelope_   { 0.0 };
     double punchFast_  { 0.0 };
     double punchSlow_  { 0.0 };
 

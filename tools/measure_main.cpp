@@ -12,6 +12,7 @@
 // nonlinearity belongs in this tool, not in a DAW screenshot.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include <tezla/dsp/Biquad.hpp>
+#include <tezla/dsp/Decibels.hpp>
 #include <tezla/dsp/Version.hpp>
 #include <tezla/measure/Fft.hpp>
 #include <tezla/measure/Harmonics.hpp>
@@ -535,6 +537,168 @@ int runHalo (const Args& args)
     return 0;
 }
 
+/// Chebyshev precision mode, end to end.
+///
+/// Three questions, and the answer to the third is the interesting one.
+/// Does asking for a harmonic give you that harmonic? Does the fundamental stay
+/// out of the wet path? And what does the crazy end of Index actually cost --
+/// which is a number worth having before shipping a control that invites people
+/// to go there.
+int runChebyshev (const Args& args)
+{
+    using namespace tezla::measure;
+    using namespace tezla::halo;
+
+    constexpr std::size_t fftSize = 32768;
+    const double sampleRate = args.sampleRate;
+
+    // Absolute levels, not levels relative to the fundamental. analyseHarmonics
+    // scales everything to the fundamental, and here the fundamental is the
+    // thing being claimed absent -- dividing by it turns every figure into noise
+    // about noise.
+    const auto levels = [] (const std::vector<double>& signal, double rate, double fundamentalHz)
+    {
+        const auto spectrum = fftOfReal (signal);
+        const double binWidth = rate / static_cast<double> (signal.size());
+        const auto bin = static_cast<std::size_t> (std::llround (fundamentalHz / binWidth));
+
+        std::vector<double> db (9, -400.0);
+
+        for (int n = 0; n <= 8; ++n)
+        {
+            const std::size_t centre = bin * static_cast<std::size_t> (n);
+            double power = 0.0;
+
+            for (std::size_t k = (centre > 0 ? centre - 1 : 0);
+                 k <= centre + 1 && k < signal.size() / 2; ++k)
+                power += std::norm (spectrum[k]);
+
+            const double amplitude = 2.0 * std::sqrt (power) / static_cast<double> (signal.size());
+            db[static_cast<std::size_t> (n)] = tezla::dsp::gainToDb (amplitude, -400.0);
+        }
+
+        return db;
+    };
+
+    /// A Chebyshev run on the low band, harmonics soloed.
+    const auto measure = [&] (const std::array<double, 7>& gains, double index, double toneHz)
+    {
+        Parameters parameters;
+        parameters.generator = Generator::Chebyshev;
+        parameters.harmonics = gains;
+        parameters.chebIndex = index;
+        parameters.bandMode  = BandMode::Below;
+        parameters.focusHz   = toneHz * 2.2;
+        parameters.ceilingOn = false;
+        parameters.listen    = true;
+        parameters.autoTrim  = false;
+
+        const double frequency = binExactFrequency (toneHz, sampleRate, fftSize);
+        const auto output = runHalo (parameters,
+                                     settlingSine (frequency, 0.5, sampleRate, fftSize),
+                                     sampleRate);
+        const std::vector<double> settled (output.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                           output.end());
+        return levels (settled, sampleRate, frequency);
+    };
+
+    std::printf ("Halo -- Chebyshev precision mode at %.0f Hz\n", sampleRate);
+    std::printf ("Le Brun, Digital Waveshaping Synthesis, JAES 27(4), 1979.\n\n");
+
+    const double tone = args.frequencyOr (400.0);
+
+    std::printf ("One harmonic requested at a time, %.0f Hz tone, harmonics soloed.\n", tone);
+    std::printf ("Absolute dBFS -- DC and the fundamental are what must not be there.\n\n");
+    std::printf ("  %-9s %8s %8s", "asked for", "DC", "H1");
+    for (int n = 2; n <= 8; ++n)
+        std::printf (" %7s%d", "H", n);
+    std::printf ("\n");
+
+    for (int harmonic = 2; harmonic <= 8; ++harmonic)
+    {
+        std::array<double, 7> gains {};
+        gains[static_cast<std::size_t> (harmonic - 2)] = 1.0;
+
+        const auto db = measure (gains, 1.0, tone);
+
+        std::printf ("  H%-8d", harmonic);
+        for (int n = 0; n <= 8; ++n)
+            std::printf (" %8.1f", db[static_cast<std::size_t> (n)]);
+        std::printf ("\n");
+    }
+
+    std::printf ("\nIndex, with every harmonic up. 1.0 is the exact point; above it the input\n");
+    std::printf ("clamps and this stops being harmonic synthesis. Fundamental and DC are\n");
+    std::printf ("relative to the loudest harmonic.\n\n");
+    std::printf ("  %-8s %14s %14s\n", "index", "fundamental", "DC");
+
+    for (const double index : { 0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
+    {
+        const std::array<double, 7> gains { 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7 };
+        const auto db = measure (gains, index, tone);
+
+        double loudest = -400.0;
+        for (int n = 2; n <= 8; ++n)
+            loudest = std::max (loudest, db[static_cast<std::size_t> (n)]);
+
+        // Index 0 is exactly the zero function, so there is no harmonic to be
+        // relative to. Printing 0.0 dB there is a division by nothing dressed up
+        // as a measurement.
+        if (loudest < -300.0)
+        {
+            std::printf ("  %6.2f   %14s %14s\n", index, "silent", "silent");
+            continue;
+        }
+
+        std::printf ("  %6.2f   %14.1f %14.1f\n", index,
+                     db[1] - loudest, db[0] - loudest);
+    }
+
+    std::printf ("\nSweep debris: a 1 k -> 18 k sweep, worst inharmonic below 900 Hz, dBFS.\n");
+    std::printf ("A sweep rather than a tone, because fold-back from a harmonically related\n");
+    std::printf ("signal lands on that signal's own harmonics and hides there.\n\n");
+    std::printf ("  %-14s %16s\n", "oversampling", "worst below 900 Hz");
+
+    for (const auto mode : { tezla::dsp::OversamplingMode::Auto, tezla::dsp::OversamplingMode::Off })
+    {
+        Parameters parameters;
+        parameters.generator    = Generator::Chebyshev;
+        parameters.harmonics    = { 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8 };
+        parameters.oversampling = mode;
+        parameters.focusHz      = 1000.0;
+        parameters.ceilingOn    = false;
+        parameters.listen       = true;
+        parameters.autoTrim     = false;
+
+        const auto preroll = static_cast<std::size_t> (sampleRate * kHaloSettleSeconds);
+        const auto sweep = linearSweep (1000.0, 18000.0, 0.7, sampleRate, preroll + fftSize);
+        const auto output = runHalo (parameters, sweep, sampleRate);
+        const std::vector<double> settled (output.end() - static_cast<std::ptrdiff_t> (fftSize),
+                                           output.end());
+
+        const auto spectrum = fftOfReal (settled);
+        const double binWidth = sampleRate / static_cast<double> (fftSize);
+
+        double worst = 0.0;
+        for (std::size_t k = static_cast<std::size_t> (20.0 / binWidth);
+             k < static_cast<std::size_t> (900.0 / binWidth); ++k)
+            worst = std::max (worst, 2.0 * std::abs (spectrum[k]) / static_cast<double> (fftSize));
+
+        std::printf ("  %-14s %16.1f\n",
+                     mode == tezla::dsp::OversamplingMode::Auto ? "Auto" : "Off",
+                     tezla::dsp::gainToDb (worst, -400.0));
+    }
+
+    std::printf ("\nThe band limit is what makes these figures: content above\n");
+    std::printf ("internalNyquist / n is removed before the polynomial, so nothing folds.\n");
+    std::printf ("With oversampling off the internal Nyquist here is %.0f kHz, so eight\n",
+                 sampleRate * 0.0005);
+    std::printf ("harmonics may only be asked of content below %.1f kHz -- the limit is doing\n",
+                 sampleRate * 0.0005 / 8.0);
+    std::printf ("more of the work than the oversampler is.\n");
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -546,6 +710,7 @@ void printUsage()
     std::printf ("  halo            [--fs]  exciter aliasing and harmonic content\n");
     std::printf ("  imd             [--fs --freq]  two-tone intermodulation (3 kHz default)\n");
     std::printf ("  naive-exciter   [--fs --freq]  host-rate baseline to beat (5 kHz default)\n");
+    std::printf ("  chebyshev       [--fs --freq]  precision mode: selection, fundamental, index\n");
 }
 
 } // namespace
@@ -569,6 +734,7 @@ int main (int argc, char** argv)
     if (command == "imd")             return runImd (args);
     if (command == "naive-exciter")   return runNaiveExciter (args);
     if (command == "halo")            return runHalo (args);
+    if (command == "chebyshev")       return runChebyshev (args);
 
     printUsage();
     return 1;

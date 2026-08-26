@@ -239,9 +239,11 @@ void Engine::reset()
         channel.dryDelay.reset();
     }
 
-    meanSquareA_ = 0.0;
-    meanSquare_  = 0.0;
-    envelope_    = 0.0;
+    meanSquareA_    = 0.0;
+    meanSquare_     = 0.0;
+    envelope_       = 0.0;
+    chebMeanSquare_ = 0.0;
+    chebEnvelope_   = 0.0;
     punchFast_  = 0.0;
     punchSlow_  = 0.0;
 
@@ -573,6 +575,10 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
         meanSquare_  += envelopeCoefficient_ * (meanSquareA_ - meanSquare_);
         envelope_     = std::sqrt (2.0 * meanSquare_);
 
+        // A third pole, for the Chebyshev path alone. See chebMeanSquare_.
+        chebMeanSquare_ += envelopeCoefficient_ * (meanSquare_ - chebMeanSquare_);
+        chebEnvelope_    = std::sqrt (2.0 * chebMeanSquare_);
+
         punchFast_ = followEnvelope (punchFast_, linkedPeak, punchFastAttack_, punchFastRelease_);
         punchSlow_ = followEnvelope (punchSlow_, linkedPeak, punchSlowAttack_, punchSlowRelease_);
 
@@ -626,8 +632,8 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
         // would come out as a -90 dBFS constant that then rides the envelope on
         // the way down. A real zero below the floor is what makes silence in
         // silence out, rather than a slow thump.
-        const double chebDivisor = std::max (envelope_, envelopeFloor_);
-        const double chebScale   = envelope_ > envelopeFloor_ ? envelope_ : 0.0;
+        const double chebDivisor = std::max (chebEnvelope_, envelopeFloor_);
+        const double chebScale   = chebEnvelope_ > envelopeFloor_ ? chebEnvelope_ : 0.0;
 
         for (int channel = 0; channel < activeChannels; ++channel)
         {
