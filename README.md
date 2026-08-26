@@ -19,7 +19,12 @@ adding a copy of the source — which is what every exciter built on the classic
 highpass-distort-blend structure does, and why their blend controls double as
 EQs. Its wet path measures −271 dB at the fundamental. Because there is no
 source in that path, it can widen the harmonics on their own and leave the sub
-exactly where it was. See [its README](plugins/Halo/README.md).
+exactly where it was.
+
+It also has a **Chebyshev precision mode** (Le Brun, JAES 1979) where you name
+the harmonics rather than pick a curve and take what comes: ask for the 5th and
+every other component measures 123 dB below it. See
+[its README](plugins/Halo/README.md).
 
 ---
 
@@ -28,9 +33,9 @@ exactly where it was. See [its README](plugins/Halo/README.md).
 | Plugin | Type | Status |
 |---|---|---|
 | **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band | v0.3.0 — 47/47 on Steinberg's validator |
-| **[Halo](plugins/Halo/)** | Harmonic exciter and bass enhancer | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis | v0.2.0 — 47/47 on Steinberg's validator |
 
-155 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+183 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

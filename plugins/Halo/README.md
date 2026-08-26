@@ -1,10 +1,18 @@
 # Tezla Halo
 
-A harmonic exciter and bass enhancer. Code `Tzha`, version 0.1.0.
+A harmonic exciter and bass enhancer. Code `Tzha`, version 0.2.0.
 
 It adds harmonics that were not in the source, and — unlike the structure
 every exciter since 1979 has used — it does not also add a copy of the source
 while doing it.
+
+Two generators sit behind one panel and answer that differently:
+
+- **Curve** picks a shape and takes the series that falls out of it, with the
+  linear term removed analytically. Its wet path measures **−271 dB** at the
+  fundamental.
+- **Chebyshev** picks the series and derives the shape. Ask for the 5th and you
+  get the 5th: every other component measures **123 dB** below it.
 
 ---
 
@@ -52,6 +60,7 @@ integral, exact at both asymptotes and within 0.14% everywhere.
 
 | Control | What it does |
 |---|---|
+| **Generator** | **Curve** or **Chebyshev** — two different instruments behind one panel. See below. Drive, Colour and Track grey out in Chebyshev mode, because it replaces all three. |
 | **Mode** | Which side of Focus gets excited. **Above** is the classic exciter. **Below** is a bass enhancer: harmonics of a 40 Hz sub land at 80 and 120 Hz, where a phone or a laptop can actually reproduce them, and the ear supplies the fundamental it cannot hear. |
 | **Focus** | Where the band starts or ends. A 24 dB/octave Linkwitz-Riley split, so it is decisive rather than a tilt. |
 | **Drive** | How hard the band is pushed into the generator. Sets the *recipe* — how far up the harmonic series the energy goes — not the level. At 0 the generator is exactly the zero function. |
@@ -78,6 +87,29 @@ any tab. See **Global controls** below.
 
 Both Floor and Ceiling shape the **harmonics only**. The dry signal passes
 through a delay line and nothing else, so nothing here can thin the sub.
+
+### CHEBYSHEV
+
+Precision mode. Chebyshev harmonic synthesis, Le Brun, *Digital Waveshaping
+Synthesis*, JAES 27(4), 1979.
+
+| Control | What it does |
+|---|---|
+| **H2 … H8** | Level of each harmonic, Off to +20 dB. At Index = Exact, asking for the 5th gives you the 5th and nothing else — measured through the whole plugin, every other component sits **123 dB** below it. |
+| **Index** | Le Brun's waveshaping index. **Exact** (1.0) is the point the mode is built around. Below it the harmonics blend into one another and the recipe breathes with the material; Off is a true zero. Above it the input clamps and this stops being synthesis. |
+| **Tilt** | One knob across all seven levels, pivoting on the 5th. 4 dB per step at full deflection, 24 dB end to end. Flat multiplies by exactly one. |
+
+Every other exciter, Halo's own Curve mode included, picks a *shape* and accepts
+whatever series falls out of it. This picks the series and derives the shape.
+Because `T_n(cos t) = cos(n t)`, a unit-amplitude sine through the nth Chebyshev
+polynomial is exactly the nth harmonic — so a weighted sum of them is a recipe
+written in numbers.
+
+The precondition is unit amplitude, and Halo already had it: Track at 100%
+divides the band by `sqrt(2·meanSquare)`, which for a sine is its amplitude.
+Track is pinned there in this mode for that reason.
+
+---
 
 ### Why Width is on the harmonics only
 
@@ -145,6 +177,35 @@ Listen on, Drive 0.7, Focus 2 kHz, Ceiling off, dB relative to the input tone.
 H1 is the fundamental leaking into the wet path — the thing a conventional
 exciter mixes back at close to full level.
 
+### Chebyshev: what you asked for, and what else arrived
+
+400 Hz tone, one harmonic requested at a time, harmonics soloed, Index Exact.
+Absolute dBFS — the requested harmonic is at −6.4 in every row.
+
+| Asked for | DC | H1 | worst other harmonic |
+|---|---|---|---|
+| H2 | −316.6 | −266.6 | −149.1 |
+| H3 | −298.7 | −137.0 | −143.1 |
+| H5 | −287.6 | −147.7 | −133.5 |
+| H8 | −305.5 | −235.8 | −129.9 |
+
+So the worst contaminant anywhere is **123 dB** below the harmonic that was
+asked for, and within 0.2 dB of that at 44.1, 48, 96 and 192 kHz.
+
+Sweep debris — a 1 k → 18 k sweep, worst inharmonic below 900 Hz — is **−92.6 to
+−98.5 dBFS** with Auto oversampling at every session rate.
+
+The fundamental holds at −128 to −147 dB relative to the loudest harmonic at
+*every* Index setting, not only at the exact point. That is not free: away from
+Index 1 the odd polynomials put energy back at the fundamental by construction —
+`T_3(a·cos t) = 3a(a²−1)·cos t + a³·cos 3t`, so at Index 0.6 the fundamental
+would be five times the third harmonic. It is cancelled, the same way the Curve
+generator cancels its describing function.
+
+Above Index 1 the input clamps, the composite stops being a polynomial, and it
+aliases like the distortion it has become — around −60 dB on a bass band. That
+is the crazy end and it is meant to sound like one.
+
 ### Everything else
 
 | Check | Result |
@@ -202,6 +263,27 @@ each is now pinned by a test:
 7. **The measurement lead-in was a sample count, not a duration**, so at 192 kHz
    the envelope was still settling inside the window and reported 60 dB of
    aliasing that did not exist.
+8. **ADAA was wrong for the Chebyshev generator** — the opposite of the answer
+   everywhere else here. A degree-n polynomial on a band-limited signal is
+   already exactly band-limited, so there is nothing to remove; measured, ADAA
+   changed the audible aliasing by 0.2 dB and moved the fundamental from −292 dB
+   to −42 dB, because its difference quotient averages the curve over a segment
+   in *x* and the map from time to x is nonlinear. The antiderivative it would
+   need is not written at all rather than left to be reached for.
+9. **The band envelope's own ripple was leaking a fundamental.** Chebyshev mode
+   divides by that envelope, so the residual ripple at twice the tone frequency
+   amplitude-modulated the normalised band and put energy straight back where
+   the mode claims there is none: −64 dB at 100 Hz, which is exactly the
+   material it is for. Sweeping the tone found the cause outright — the leak
+   tracked at 11.8 to 12.0 dB per octave, which is two poles, and the envelope
+   is two cascaded poles. A third pole on the Chebyshev path alone, one
+   multiply-add, bought 37 to 55 dB.
+10. **Three tests passed with the feature they covered deleted.** The
+    click test needed the bar set by the signal itself *and* the switch swept
+    across a cycle; the aliasing test cannot see a missing band limit at a
+    96 kHz internal Nyquist, so a second test forces oversampling off where it
+    can; and a DC test read a non-zero mean from a window holding a fraction of
+    a cycle, which looks exactly like the fault it was testing for.
 
 ---
 
@@ -215,12 +297,12 @@ channel. It is reserved in the registry as `Prism`.
 
 What might still land here:
 
-**Precision mode.** Chebyshev harmonic synthesis (Le Brun, JAES 1979) driving
-harmonics 2 to 5 independently, so the recipe is chosen rather than inherited
-from the shape of a curve. `T_n(cos x) = cos(n x)`, so feeding a unit-amplitude
-sine through the nth Chebyshev polynomial produces exactly the nth harmonic and
-nothing else. It needs the input normalised to unit amplitude to be exact, which
-Track already does at its top setting.
+**Precision mode is built** — see CHEBYSHEV above. It went to harmonics 2 to 8
+rather than the 2 to 5 originally sketched, because the limit turns out to
+depend on the band rather than on the method: `T_n` of a band topping out at B
+reaches `n·B`, so at a ~96 kHz internal Nyquist a 120 Hz bass band allows
+harmonic 800 and a full-bandwidth treble band allows about 4. High-order
+synthesis is nearly free on the material this plugin exists for.
 
 **Known duplication, now resolved.** The editor's meter, note and page
 components were Halo's own copies of Emberdrive's. The header, palette, A/B and
@@ -268,6 +350,10 @@ inverse of where the display draws a marker, which is what makes the line land
 under the pointer instead of near it — measured at **0 px of error** across the
 full width by `tezla-ui-preview focus-drag`, which drives the gesture through
 the component and checks the round trip.
+
+In Chebyshev mode the display earns its keep twice over: the harmonics you asked
+for stand up out of the input curve exactly where the numbers say they will, so
+the recipe and the picture are the same thing.
 
 The analysis is framework-free and lives in `shared/tezla-dsp`, so the same code
 can drive a standalone analyser later without a GUI framework attached.
