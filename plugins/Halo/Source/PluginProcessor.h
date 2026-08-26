@@ -55,7 +55,61 @@ inline constexpr auto chebTilt     = "chebTilt";
 inline constexpr const char* harmonics[] {
     "harm2", "harm3", "harm4", "harm5", "harm6", "harm7", "harm8"
 };
+// Added at schema version 4: modulation. Appended for the same reason, and
+// every default is neutral -- every slot's source is Off, so nothing else here
+// can reach the signal path in a project saved before they existed.
+inline constexpr auto envAttack      = "envAttack";
+inline constexpr auto envRelease     = "envRelease";
+inline constexpr auto envSensitivity = "envSensitivity";
+
+/// Eight modulation slots: what drives it, what it drives, and how much.
+/// Written out rather than generated, for the same reason the harmonics are.
+inline constexpr const char* modSource[] {
+    "modSrc1", "modSrc2", "modSrc3", "modSrc4", "modSrc5", "modSrc6", "modSrc7", "modSrc8"
+};
+inline constexpr const char* modDestination[] {
+    "modDst1", "modDst2", "modDst3", "modDst4", "modDst5", "modDst6", "modDst7", "modDst8"
+};
+inline constexpr const char* modDepth[] {
+    "modDepth1", "modDepth2", "modDepth3", "modDepth4",
+    "modDepth5", "modDepth6", "modDepth7", "modDepth8"
+};
+
+/// Three LFOs, six controls each.
+inline constexpr const char* lfoWave[]     { "lfo1Wave",   "lfo2Wave",   "lfo3Wave" };
+inline constexpr const char* lfoRate[]     { "lfo1Rate",   "lfo2Rate",   "lfo3Rate" };
+inline constexpr const char* lfoSync[]     { "lfo1Sync",   "lfo2Sync",   "lfo3Sync" };
+inline constexpr const char* lfoDivision[] { "lfo1Div",    "lfo2Div",    "lfo3Div" };
+inline constexpr const char* lfoPhase[]    { "lfo1Phase",  "lfo2Phase",  "lfo3Phase" };
+inline constexpr const char* lfoSmooth[]   { "lfo1Smooth", "lfo2Smooth", "lfo3Smooth" };
 } // namespace ids
+
+/// Note divisions for a tempo-synced LFO, as cycles per beat.
+///
+/// **Append-only, like the destination list below**: a choice parameter stores
+/// an index, so inserting a division silently retunes every synced LFO in every
+/// saved project.
+///
+/// A 4/4 bar is four beats, so one cycle a bar is 0.25 cycles per beat. A
+/// triplet fits three in the space of two, hence 1.5x; a dotted note lasts one
+/// and a half times as long, hence 2/3.
+namespace division
+{
+struct Entry { const char* name; double cyclesPerBeat; };
+
+inline constexpr Entry entries[] {
+    { "8 bars", 0.03125 }, { "4 bars", 0.0625 }, { "2 bars", 0.125 },
+    { "1 bar",  0.25 },    { "1/2",    0.5 },    { "1/4",    1.0 },
+    { "1/8",    2.0 },     { "1/16",   4.0 },    { "1/32",   8.0 },
+    { "1/2 T",  0.75 },    { "1/4 T",  1.5 },    { "1/8 T",  3.0 },
+    { "1/2 D",  1.0 / 3.0 }, { "1/4 D", 2.0 / 3.0 }, { "1/8 D", 4.0 / 3.0 }
+};
+
+inline constexpr int count = static_cast<int> (std::size (entries));
+
+/// The default: one cycle a bar, which is where a sweep usually wants to be.
+inline constexpr int defaultIndex = 3;
+} // namespace division
 
 /// Everything a modulation source can be pointed at.
 ///
@@ -104,6 +158,18 @@ inline constexpr const char* parameterIds[] {
 
 static_assert (static_cast<int> (std::size (parameterIds)) == count,
                "every destination needs its parameter, and in the same order");
+
+/// What a slot's target reads as in the host and on the panel. Short, because
+/// it appears in a combo box that shares a row with three other controls.
+inline constexpr const char* displayNames[] {
+    "Focus", "Drive", "Colour", "Track", "Punch", "Width", "Amount",
+    "Floor Hz", "Ceiling Hz", "Input", "Output",
+    "H2", "H3", "H4", "H5", "H6", "H7", "H8",
+    "Index", "Tilt"
+};
+
+static_assert (static_cast<int> (std::size (displayNames)) == count,
+               "every destination needs a name, and in the same order");
 } // namespace dest
 
 class HaloProcessor final : public juce::AudioProcessor

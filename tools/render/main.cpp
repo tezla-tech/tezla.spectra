@@ -11,10 +11,12 @@
 // feature existed, and the only honest way to check it is to render the same
 // audio through both builds and compare. Everything else is an argument.
 //
-//   tezla-render <samples> <blockSize> <out.raw>
+//   tezla-render <samples> <blockSize> <out.raw> [id=value ...]
 //
 // Output is raw little-endian doubles, interleaved stereo, so a diff is a
-// byte comparison and needs no parser.
+// byte comparison and needs no parser. Parameters are set by their string ID
+// in the plugin's own units -- `focus=8000`, `modDepth1=-0.4` -- so a check
+// reads the way the plugin does rather than in normalised fractions.
 
 #include <cstdio>
 #include <cmath>
@@ -69,6 +71,42 @@ int main (int argc, char** argv)
     {
         std::fprintf (stderr, "the plugin would not instantiate\n");
         return 1;
+    }
+
+    // Parameters before prepareToPlay, so the engine is built for them.
+    for (int argument = 4; argument < argc; ++argument)
+    {
+        const juce::String assignment { argv[argument] };
+        const int equals = assignment.indexOfChar ('=');
+
+        if (equals <= 0)
+        {
+            std::fprintf (stderr, "expected id=value, got '%s'\n", argv[argument]);
+            return 2;
+        }
+
+        const auto id = assignment.substring (0, equals);
+        const float value = assignment.substring (equals + 1).getFloatValue();
+
+        auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (
+            [&]() -> juce::AudioProcessorParameter*
+            {
+                for (auto* candidate : processor->getParameters())
+                    if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (candidate))
+                        if (ranged->paramID == id)
+                            return ranged;
+
+                return nullptr;
+            }());
+
+        if (parameter == nullptr)
+        {
+            std::fprintf (stderr, "no parameter called '%s'\n", id.toRawUTF8());
+            return 2;
+        }
+
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+        std::printf ("  %s = %g\n", id.toRawUTF8(), static_cast<double> (value));
     }
 
     processor->setPlayConfigDetails (2, 2, kSampleRate, blockSize);
