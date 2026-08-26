@@ -472,9 +472,38 @@ Starting points known to be good:
 | Faust libraries | permissive | Reference implementations to compare against |
 | musicdsp.org, `olilarkin/awesome-musicdsp` | mixed | Index of everything else |
 
-**GPL awareness:** reading a GPL project to understand a *technique* is fine.
-Copying GPL code into ours makes ours GPL. Prefer deriving from the paper. If
-GPL code is ever pasted in, say so loudly and record it.
+### Our licence, and what we can take
+
+**This project is AGPLv3** — see `LICENSE`. That is not a choice so much as a
+consequence: we build against JUCE's free tier, which is AGPLv3, so the plugins
+already were. Declaring it explicitly is what makes other people's code safe to
+use.
+
+Compatible, and usable with attribution: **MIT, BSD, Apache-2.0, LGPL, GPLv3,
+GPLv2-or-later.**
+
+Incompatible, and to be refused however good it is: **GPLv2-only.** It cannot be
+combined with AGPLv3. This is the one to watch for when reading a plugin's
+source, because "GPLv2" and "GPLv2 or later" look identical at a glance and only
+one of them is usable. Check the per-file header, not the repository's summary.
+
+### Derive by default; copy only what measurement cannot check
+
+The default is to build from the paper and measure the result. That is not
+purity, it is what works here: the buffer-size dependence, the DC blocker reset,
+the auto-trim overshoot and the LFO block-size drift were all found because the
+code was derived and then measured. Pasted code arrives working, which is
+exactly why its bugs are indistinguishable from its design choices — all four
+would have been inherited silently.
+
+**The exception is knowledge measurement cannot verify.** A published coefficient
+table, a standard's exact defined behaviour, a documented edge case with a known
+pitfall: take it, because a subtle reimplementation is strictly worse than a
+faithful copy. The test is whether a measurement could tell you that you got it
+wrong. If it could, build it. If it could not, take it and attribute it.
+
+Anything taken is attributed **twice**: in a comment at the point of use, and in
+`docs/DSP-REFERENCES.md` with its licence. Not once.
 
 ---
 

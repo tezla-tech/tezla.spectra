@@ -154,9 +154,22 @@ rate. Manual override is always available if you want to spend or save CPU.
 
 ## Licensing
 
-Plugin source in this repository is ours. Third-party dependencies and any
-externally derived DSP are listed with their licences in
-[`docs/DSP-REFERENCES.md`](docs/DSP-REFERENCES.md).
+**This project is licensed under the GNU Affero General Public License v3** —
+see [`LICENSE`](LICENSE). That follows from the toolchain rather than being a
+separate choice: these plugins are built against JUCE's free tier, which is
+AGPLv3, so they already were. Saying so explicitly is what lets other people's
+open-source DSP be used here, and what tells you what you may do with ours.
+
+In practice: use it, modify it, ship it, as long as what you ship stays under
+the same licence and its source stays available. If you need a plugin you can
+close, JUCE sells a commercial licence and you would need to replace anything
+here that came from an AGPL or GPL source.
+
+Third-party dependencies and any externally derived DSP are listed with their
+licences in [`docs/DSP-REFERENCES.md`](docs/DSP-REFERENCES.md). The rule for
+adding to that list is in [`CLAUDE.md`](CLAUDE.md) §9: derive and measure by
+default, copy only what a measurement could never tell you that you had got
+wrong, and attribute twice — at the point of use and in the references.
 
 VST is a trademark of Steinberg Media Technologies GmbH. Any commercial plugin
 named in this repository is referenced only to describe a *sound* or a

@@ -12,15 +12,22 @@ all fair game. Commercial binaries are not, in any form.
 
 ## Licence quick guide
 
+**This project is AGPLv3** (see [`../LICENSE`](../LICENSE)), which is what JUCE's
+free tier requires of anything built on it. That decides the table below.
+
 | Licence | What it means for us |
 |---|---|
-| **MIT / BSD / ISC / zlib** | Copy freely. Keep the copyright notice. |
-| **LGPL** | Fine to link against; copying source into ours is not. |
-| **GPL / AGPL** | Reading it to learn a *technique* is fine. Copying code makes our plugin GPL. Prefer deriving from the paper. |
+| **MIT / BSD / ISC / zlib / Apache-2.0** | Copy freely. Keep the copyright notice. |
+| **LGPL** | Link against it, or copy with attribution. |
+| **GPLv3, GPLv2-or-later, AGPLv3** | Compatible. Copy with attribution — in a comment at the point of use *and* as a row here. |
+| **GPLv2-only** | **Refused.** Cannot be combined with AGPLv3, however good it is. Check the per-file header: "GPLv2" and "GPLv2 or later" look identical at a glance and only one is usable. |
 | **Paper / book** | Ideas and equations are not copyrightable. Cite it. Do not paste listings verbatim. |
+| **Standards (ITU, EBU, AES)** | Published so they can be implemented. Type the tables in and cite the document. |
 
-If GPL code ever does get pasted in, say so loudly, record it here, and licence
-the plugin accordingly.
+The default is still to derive and measure — see `CLAUDE.md` §9 for why that is
+a working practice rather than a principle. Copying is for the things a
+measurement could never tell you that you had got wrong: coefficient tables,
+a standard's exact defined behaviour, a documented edge case.
 
 ---
 
@@ -154,6 +161,43 @@ papers and from ordinary calculus.
 
 No Calf code is present in this repository, and none of it was consulted while
 writing the generator.
+
+---
+
+## Dynamics, limiting and true peak — used for Capstone
+
+The three documents live in [`../technical references/`](../technical%20references/),
+because the egress proxy in the development container blocks all three domains.
+They were read from there rather than fetched.
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| Perttu Hämäläinen, "Smoothing of the Control Signal without Clipped Output in Digital Peak Limiters", **DAFx-02**, Hamburg, 2002 | Conference paper — cite, do not paste | The max-filter (order-statistics) construction that makes a smoothed limiter gain provably non-clipping. §3.5 describes the dual we actually use, and warns of its hazard. |
+| **ITU-R BS.1770-5** (11/2023), Annex 2 | ITU copyright; published for implementation | True-peak measurement: the 12.04 dB attenuation convention, the order-48 four-phase interpolating FIR, and the worst-case under-read table that decides our oversampling control. **The coefficient table is typed in verbatim** — the one thing in Capstone that is copied rather than derived. |
+| Geraint Luff / Signalsmith Audio, "Designing a straightforward limiter", 2022 | Article, © Signalsmith Audio Ltd — cite, do not paste | A modern treatment of the same structure. The hold refinement — widening the minimum window without widening the smoothing — comes from here. |
+
+### What Capstone derives rather than takes
+
+The guarantee itself was derived and measured before any of the three was read,
+and the measurement is in `tests/test_LimiterCore.cpp`: a centred running minimum
+followed by any non-negative unit-sum kernel supported on the same window puts
+the smoothed gain provably below the gain each sample requires. Measured
+overshoot, one ULP; the three plausible alternatives overshoot by 0.22, 0.86 and
+1.91 against a 0.5 ceiling.
+
+Hämäläinen's paper max-filters the *level* and needs a clipping-control term to
+compensate a one-pole detector, and his §3.5 notes that the dual formulation —
+a min filter on the *gain*, which is ours — can drive gain below zero. Ours
+cannot: it is a convex combination of values in `[0, 1]`. That difference is why
+the structures are not the same, and it is worth the paragraph.
+
+Two GPL implementations were found while searching and **not read beyond their
+README**: [x42/sound-gambit](https://github.com/x42/sound-gambit) and
+[ryukau/OfflineLimiter](https://github.com/ryukau/OfflineLimiter). The second's
+documented failure — that limiting in an oversampled domain and then decimating
+can come back over the ceiling, needing up to four iterative passes — is what
+ruled that architecture out here. That is a fact about the problem, not a piece
+of their code.
 
 ---
 
