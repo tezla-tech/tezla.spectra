@@ -94,11 +94,26 @@ int runSelfTest()
     return ok ? 0 : 1;
 }
 
+/// fopen for writing, without MSVC's C4996.
+///
+/// The warning text suggests _CRT_SECURE_NO_WARNINGS, which switches the whole
+/// deprecation category off across the translation unit -- and that category is
+/// not all noise. One #ifdef in one place is cheaper than losing the rest of it.
+std::FILE* openForWriting (const std::string& path)
+{
+#ifdef _MSC_VER
+    std::FILE* file = nullptr;
+    return fopen_s (&file, path.c_str(), "w") == 0 ? file : nullptr;
+#else
+    return std::fopen (path.c_str(), "w");
+#endif
+}
+
 int runFilterResponse (const Args& args)
 {
     const auto coefficients = tezla::dsp::design::lowpass (args.frequency, args.q, args.sampleRate);
 
-    std::FILE* out = args.outPath.empty() ? stdout : std::fopen (args.outPath.c_str(), "w");
+    std::FILE* out = args.outPath.empty() ? stdout : openForWriting (args.outPath);
     if (out == nullptr)
     {
         std::fprintf (stderr, "could not open %s for writing\n", args.outPath.c_str());
@@ -168,7 +183,7 @@ int runEmberdrive (const Args& args)
     std::FILE* csv = nullptr;
     if (! args.outPath.empty())
     {
-        csv = std::fopen (args.outPath.c_str(), "w");
+        csv = openForWriting (args.outPath);
         if (csv == nullptr)
         {
             std::fprintf (stderr, "could not open %s for writing\n", args.outPath.c_str());
