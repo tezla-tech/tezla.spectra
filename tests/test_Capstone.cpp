@@ -563,3 +563,84 @@ TEZLA_TEST (capstone_clipper_aliasing_falls_with_oversampling)
     // band, at the setting Auto picks for a 48 kHz session.
     CHECK (x4 < -60.0);
 }
+
+TEZLA_TEST (capstone_bypass_is_a_clean_delayed_copy_of_the_input)
+{
+    // A shipped bug, reported by ear before any test caught it: engaging bypass
+    // produced crackling that sounded like buffer underruns.
+    //
+    // It was. setParameters() runs once per block and pushed the latency into
+    // the BypassMixer every time; setLatency() clears the dry delay line,
+    // because a ring at a new length holds nothing meaningful. So every callback
+    // wiped the dry path, and the bypassed output was the first `latency`
+    // samples of each block as silence followed by a fragment of signal.
+    // Measured at the time: at 64-sample blocks with 53 samples of latency, 83%
+    // of the output samples were exactly zero.
+    //
+    // Emberdrive and Halo never showed it because they call setLatency only when
+    // the latency actually changes. The guard now lives in BypassMixer, so a
+    // caller cannot reintroduce it -- see test_BypassMixer.cpp.
+    constexpr int length = 4096;
+
+    for (const int blockSize : { 64, 128, 512 })
+    {
+        capstone::Engine engine;
+        engine.prepare (kRate, 512, 2);
+
+        capstone::Parameters parameters;
+        parameters.bypass = true;
+        parameters.limitOn = true;
+        parameters.attackMs = 1.0;
+        parameters.truePeak = dsp::TruePeakMode::Standard;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        std::vector<std::vector<double>> x (2, std::vector<double> (length));
+
+        for (int i = 0; i < length; ++i)
+        {
+            const double v = 0.5 * std::sin (2.0 * std::numbers::pi * 300.0 * i / kRate);
+            x[0][static_cast<std::size_t> (i)] = v;
+            x[1][static_cast<std::size_t> (i)] = v;
+        }
+
+        auto y = x;
+
+        for (int offset = 0; offset < length; offset += blockSize)
+        {
+            const int span = std::min (blockSize, length - offset);
+            double* pointers[2] { y[0].data() + offset, y[1].data() + offset };
+
+            // Once per block, exactly as the processor does. That is the call
+            // pattern the bug lived in, so the test has to reproduce it rather
+            // than configure the engine once and render.
+            engine.setParameters (parameters);
+            engine.process (pointers, 2, span);
+        }
+
+        const int latency = engine.getLatencySamples();
+
+        // Past the crossfade, the bypassed output is the input delayed by
+        // exactly the reported latency. Bit-exact: a bypass that is only
+        // approximately the input makes every A/B comparison a lie.
+        bool exact = true;
+        int zeros = 0;
+
+        for (int i = 1200; i < length; ++i)
+        {
+            const auto index = static_cast<std::size_t> (i);
+
+            if (y[0][index] != x[0][static_cast<std::size_t> (i - latency)])
+                exact = false;
+
+            if (y[0][index] == 0.0)
+                ++zeros;
+        }
+
+        CHECK (exact);
+
+        // And stated the way the failure presented, so a regression is
+        // recognisable from the symptom rather than only from the assertion.
+        CHECK (zeros == 0);
+    }
+}

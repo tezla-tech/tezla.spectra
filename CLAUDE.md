@@ -352,6 +352,22 @@ Every plugin must satisfy these before it is considered done:
   state-preserving way to move it (`DcBlocker::retune`), and reserve `prepare`
   for building the graph. Emberdrive's expert DC corner had this bug from the
   day it shipped; it ticked once per change and nothing measured it.
+- **Any setter that clears state must refuse a no-op, and the guard goes in the
+  setter.** The rule above is the special case; this is the general one, and it
+  has now bitten three times. `BypassMixer::setLatency` clears the dry delay
+  line, correctly — a ring at a new length holds nothing meaningful — and its
+  own doc comment ("safe from the audio thread") invites a caller to push the
+  current latency every block. Capstone did, and every callback wiped the bypass
+  path: bypassed at 64-sample blocks with 53 samples of latency, **83% of the
+  output samples were exactly zero**, jumping 0.4985 between neighbours where
+  the signal itself steps 0.0196. It reached the user, who heard it as buffer
+  underruns before any test caught it.
+  The guard belongs in the callee, not the caller, and that is not a style
+  preference: guarding at the call site desynchronises the moment two callers
+  disagree, and here `prepare()` sets the mixer to its *maximum* latency, so a
+  caller comparing against its own previous value would skip the call and leave
+  the dry path delayed by the worst case. One guard, in the object that knows
+  what it is currently set to.
 - **Anything too expensive to recompute per sample gets a timer counted in
   samples, and the sample loop is cut at the timer's boundary** — not at the
   callback's. Rebuilding "once per block" makes the output depend on the host's

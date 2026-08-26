@@ -8,13 +8,30 @@ colouration, musical dynamics. Clean digital when you want it to disappear.
 Everything is written from scratch, from physics and published research —
 no reverse engineering of anyone's product.
 
-The first plugin, **Emberdrive**, measures identically to within 0.01 dB at
+## Contents
+
+- [The plugins](#the-plugins)
+- [Status](#status)
+- [Squashing bugs](#squashing-bugs)
+- [Quick start (Windows 11)](#quick-start-windows-11)
+- [Quick start (macOS)](#quick-start-macos)
+- [Prebuilt binaries](#prebuilt-binaries)
+- [How it's put together](#how-its-put-together)
+- [Sample rates](#sample-rates)
+- [Documentation](#documentation)
+- [Licensing](#licensing)
+
+---
+
+## The plugins
+
+**[Emberdrive](plugins/Emberdrive/)** measures identically to within 0.01 dB at
 44.1, 48, 96 and 192 kHz, holds its output level within 0.33 dB across a 30 dB
 drive range, and keeps audible-band aliasing below −220 dB. It also has a
 wavefolder with a ×100 range for when none of that is the point. Numbers, not
 adjectives: see [its README](plugins/Emberdrive/README.md).
 
-The second, **Halo**, is a harmonic exciter that adds harmonics without also
+**[Halo](plugins/Halo/)** is a harmonic exciter that adds harmonics without also
 adding a copy of the source — which is what every exciter built on the classic
 highpass-distort-blend structure does, and why their blend controls double as
 EQs. Its wet path measures −271 dB at the fundamental. Because there is no
@@ -31,29 +48,16 @@ follower, assignable to any continuous control by arming a source and dragging
 a ring on the knob. With nothing assigned a plugin is byte-for-byte what it was
 before the feature existed, which is a test rather than an intention.
 
-The third, **Capstone**, is the last plug: a true-peak brickwall limiter and a
-clipper in the same slot. Its ceiling is a theorem rather than a setting --
-every stage after the gain computer can only make the gain smaller, so the
-clamp at the end has nothing left to do, measured at 6.1e-15. Set to Strict it
-holds the ceiling on everything measured here, where a sample-peak limiter is
-3.01 dB over on a tone at a quarter of the sample rate. The clipper shaves
-transient tips so the limiter is not asked to duck the whole mix, which is how
-a drum bus gets loud without pumping. See
+**[Capstone](plugins/Capstone/)** is the last plug: a true-peak brickwall
+limiter and a clipper in the same slot. Its ceiling is a theorem rather than a
+setting — every stage after the gain computer can only make the gain smaller,
+so the clamp at the end has nothing left to do, measured at 6.1e-15. Set to
+Strict it holds the ceiling on everything measured here, where a sample-peak
+limiter is 3.01 dB over on a tone at a quarter of the sample rate. The clipper
+shaves transient tips so the limiter is not asked to duck the whole mix, which
+is how a drum bus gets loud without pumping. See
 [its README](plugins/Capstone/README.md).
 
-Building *that* found a test that proved nothing. Capstone's 972-case ceiling
-sweep passed with the limiter deliberately broken, because the clamp at the end
-holds the ceiling whatever reaches it -- every peak reading landed exactly on
-the ceiling while the clamp removed 1.02 of full scale. The sweep now measures
-what the clamp had to do, and goes red on that break.
-
-Building the modulation layer found three bugs older than the feature, all in Emberdrive and all
-invisible until something moved a parameter faster than a hand can: its output
-depended on the host's buffer size by a third of full scale while any parameter
-was settling, its auto-trim compensated a gain the signal had not reached yet
-(a level follower on Drive took a limiter set to −0.3 dBFS to +1.3), and its DC
-blocker threw away its own state every time the expert corner moved. All three
-are fixed and all three are pinned by tests.
 
 ---
 
@@ -65,9 +69,99 @@ are fixed and all three are pinned by tests.
 | **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.3.0 — 47/47 on Steinberg's validator |
 | **[Capstone](plugins/Capstone/)** | True-peak brickwall limiter and clipper for the end of the chain | v0.1.0 — 47/47 on Steinberg's validator |
 
-269 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+272 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
+
+---
+
+## Squashing bugs
+
+Every bug below was found by building a probe and printing numbers, not by
+reading code. They are collected here because the *way* each one hid is more
+useful than the fix, and because several were invisible to a test that was
+already passing.
+
+The house rules that came out of them live in
+[`CLAUDE.md`](CLAUDE.md) §7 and §10.
+
+### A passing test can prove nothing
+
+**Capstone's ceiling sweep — 972 combinations, the plugin's whole selling
+point — passed with the limiter deliberately broken.** Halving the minimum
+window against the smoother's support should have let peaks through. It did
+not, because the clamp at the end of `LimiterCore` holds the ceiling whatever
+reaches it: every peak reading landed exactly on the ceiling while the clamp
+was removing **1.02 of full scale**. The limiter had quietly become a clipper
+and no peak measurement could say so.
+
+The lesson generalises to any guard placed last: **measure what the guard had
+to do, not what came out after it.** `getClampExcess()` exists for that, and
+reads 6.1e-15 on a correct chain against 1.02 on the broken one. Both sweeps
+now go red on that break.
+
+### A reset hiding inside a setter — three times
+
+1. **`DcBlocker::prepare` resets state**, and Emberdrive used it to retune the
+   expert DC corner. A first-order highpass's memory *is* its last input and
+   output, so zeroing it mid-stream stepped the output by the whole previous
+   sample. It ticked once per change from the day it shipped. Fixed with
+   `retune()`, which moves the corner and keeps the state.
+
+2. **Emberdrive rebuilt its voicing once per block**, so the output depended on
+   the host's buffer size — 64-sample and 512-sample blocks disagreed by
+   **0.296 of full scale** while a parameter settled. No arrangement of a
+   per-call timer fixes that; the sample loop has to be cut at the timer's
+   boundary. Now exactly zero at 64, 100 and 512.
+
+3. **`BypassMixer::setLatency` clears the delay line**, because a ring at a new
+   length holds nothing meaningful — and Capstone pushed the latency into it
+   once per block. Every callback wiped the dry path. Bypassed at 64-sample
+   blocks with 53 samples of latency, **83% of the output samples were exactly
+   zero** and the rest jumped 0.4985 between neighbours where the signal itself
+   steps 0.0196. It sounded like buffer underruns because structurally it was
+   one. Reported by ear before any test caught it; the guard now lives in
+   `BypassMixer`, so no caller can reintroduce it.
+
+### Compensating for something that has not happened yet
+
+**Emberdrive's auto-trim used the drive gain's target rather than its current
+value.** With a 20 ms ramp, that compensates a level the signal has not reached,
+and a level follower driving Drive took a limiter set to −0.3 dBFS to **+1.3
+dBFS**. Verified by reverting the fix and watching the test fail.
+
+### Check the instrument before trusting it
+
+Four measurement bugs, each of which produced a confident wrong number:
+
+- A filter "failure" that was **peak-picking under-reading a 16 kHz tone at
+  48 kHz** — three samples per cycle reads 0.866, which looks exactly like a
+  filter 1.2 dB down. Use RMS, never peak, for a sine's amplitude.
+- A **3 dB scaling error** in the harness's own dBFS reference.
+- An aliasing comparison that analysed the **first block rather than a settled
+  one**. The DFT treats its block as circular and ADAA's first call primes its
+  state, so one wrong sample spread a flat floor across every bin and read as
+  25 dB of aliasing that did not exist.
+- A true-peak probe run at 0.45 of the sample rate, where **the sample grid is
+  too dense for the worst case to be reachable** — every ratio read identically
+  and the ITU's own bound looked wrong.
+
+### Being right about the theory and wrong about the plugin
+
+**Capstone's true-peak ratio was first scaled by host rate**, the way
+[`CLAUDE.md`](CLAUDE.md) §6 scales oversampling and the Recommendation itself
+permits. Measured at 192 kHz, that put Standard on a ratio of 1, reading
+**1.506 dB under the true peak — identical to Off**, the setting it exists to
+improve on. The reduction assumes the metered content is band-limited to about
+20 kHz, and a limiter sitting after a clipper cannot assume that. Ratios are
+fixed; Strict costs about four times Standard and the control says so.
+
+### One that was only a test
+
+**`BoxStackSmoother::setLength` clamped its floor to the stage count**, so an
+attack of zero gave a support of 4 and three samples of latency that the plugin
+would then have reported to the host as zero. Four boxes of length 1 have a
+support of 1.
 
 ---
 

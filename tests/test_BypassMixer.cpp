@@ -187,3 +187,102 @@ TEZLA_TEST (bypass_reset_clears_the_delay_and_the_fade)
     for (std::size_t i = 0; i < first.size(); ++i)
         CHECK (first[i] == second[i]);
 }
+
+TEZLA_TEST (bypass_setting_the_latency_it_already_has_disturbs_nothing)
+{
+    // The shipped bug, and the reason the guard is in setLatency rather than in
+    // its callers. Changing the length makes the ring's contents meaningless, so
+    // a real change clears it -- but the signature says "safe from the audio
+    // thread", which invites a caller to push the current latency once per
+    // block. Capstone did, and every callback wiped the dry path: bypassed at
+    // 64-sample blocks with 53 samples of latency, 83% of its output samples
+    // were exactly zero and the rest jumped 0.4985 between neighbours where the
+    // signal itself steps 0.0196.
+    constexpr int latency = 53;
+    constexpr std::size_t length = 2048;
+
+    const auto dry = ramp (length);
+    const std::vector<double> processed (length, -1.0);
+
+    // Two mixers, identical except that one is told its latency every block.
+    BypassMixer quiet;
+    quiet.prepare (48000.0, 256, 1);
+    quiet.setLatency (latency);
+    quiet.setBypassed (true);
+    quiet.reset (true);
+
+    BypassMixer pushed;
+    pushed.prepare (48000.0, 256, 1);
+    pushed.setLatency (latency);
+    pushed.setBypassed (true);
+    pushed.reset (true);
+
+    std::vector<double> quietOut = processed;
+    std::vector<double> pushedOut = processed;
+
+    constexpr int blockSize = 64;
+
+    for (std::size_t offset = 0; offset < length; offset += blockSize)
+    {
+        const int numSamples = static_cast<int> (std::min (static_cast<std::size_t> (blockSize),
+                                                           length - offset));
+        const double* dryPointer = dry.data() + offset;
+
+        double* a = quietOut.data() + offset;
+        quiet.process (&a, &dryPointer, 1, numSamples);
+
+        // The only difference: the same value, pushed again before every block.
+        pushed.setLatency (latency);
+
+        double* b = pushedOut.data() + offset;
+        pushed.process (&b, &dryPointer, 1, numSamples);
+    }
+
+    bool identical = true;
+
+    for (std::size_t i = 0; i < length; ++i)
+        if (quietOut[i] != pushedOut[i])
+            identical = false;
+
+    CHECK (identical);
+
+    // And the shared answer is right in the first place: past the fill, the
+    // bypassed output is the input delayed by exactly the latency.
+    bool delayedExactly = true;
+
+    for (std::size_t i = static_cast<std::size_t> (latency); i < length; ++i)
+        if (quietOut[i] != dry[i - static_cast<std::size_t> (latency)])
+            delayedExactly = false;
+
+    CHECK (delayedExactly);
+}
+
+TEZLA_TEST (bypass_changing_the_latency_still_takes_effect)
+{
+    // The other half of the guard. Refusing a no-op must not turn into refusing
+    // a real change -- an early-out that compared the wrong thing would pass the
+    // test above and silently pin the delay at whatever it was first given.
+    const auto dry = ramp (1024);
+    const std::vector<double> processed (1024, -1.0);
+
+    BypassMixer mixer;
+    mixer.prepare (48000.0, 256, 1);
+    mixer.setBypassed (true);
+
+    for (const int latency : { 0, 7, 200, 41 })
+    {
+        mixer.setLatency (latency);
+        CHECK (mixer.getLatency() == latency);
+
+        mixer.reset (true);
+        const auto output = run (mixer, dry, processed, 137);
+
+        bool delayedExactly = true;
+
+        for (std::size_t i = static_cast<std::size_t> (latency); i < dry.size(); ++i)
+            if (output[i] != dry[i - static_cast<std::size_t> (latency)])
+                delayedExactly = false;
+
+        CHECK (delayedExactly);
+    }
+}

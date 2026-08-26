@@ -188,15 +188,25 @@ and nothing about this plugin suggests twenty.
 | Look-ahead off, True Peak off, Clip off | latency exactly 0 |
 | Hold, any value | adds no latency |
 | Silence in, everything on | silence out |
-| Tests | 269 pass on x86-64 and ARM64 under qemu |
+| Tests | 272 pass on x86-64 and ARM64 under qemu |
 | Steinberg validator | **47/47** |
 | Reported latency, checked through the JUCE layer | 53 samples at 1 ms + Standard; 314 at 5 ms + Strict + clip ×4 |
 | Plugin inert (preset "Clean") | **bit-exact** through the real processor |
+| Bypassed | **bit-exact** input delayed by exactly the reported latency, at every block size |
 
 ---
 
 ## Notes
 
+- **Bypass shipped broken, and by ear rather than by test.** `setParameters()`
+  runs once per block and pushed the latency into the `BypassMixer` every time;
+  `setLatency()` clears the dry delay line, because a ring at a new length holds
+  nothing meaningful. So every callback wiped the bypass path — at 64-sample
+  blocks with 53 samples of latency, 83% of the output samples were exactly zero
+  and the rest jumped 0.4985 between neighbours where the signal steps 0.0196.
+  Emberdrive and Halo never showed it because they call `setLatency` only when
+  the latency changes. The guard now lives in `BypassMixer`, where a caller
+  cannot skip it, and both halves of it are tested.
 - **The ceiling test needed fixing before it meant anything.** The 972-case
   sweep passed with the limiter's minimum window deliberately halved against the
   smoother's support, because the clamp at the end of `LimiterCore` holds the

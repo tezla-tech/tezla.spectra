@@ -99,6 +99,16 @@ bool Engine::updateLatency()
 
     latency_ = std::min (clipLatency + limitLatency, maxLatency_);
 
+    // Unconditionally, and deliberately not guarded by `latency_ != previous`.
+    //
+    // setLatency() clears the dry delay line, because a ring at a new length
+    // holds nothing meaningful, and this runs once per block -- so pushing an
+    // unchanged value used to wipe the bypass path every callback. The guard
+    // that fixes it lives in BypassMixer, not here: prepare() sets the mixer to
+    // its maximum latency, so a second prepare() that left this engine's own
+    // latency unchanged would skip the call and leave the mixer delaying the
+    // dry path by the worst case instead of the real one. One guard, in the
+    // object that knows what it is currently set to.
     bypass_.setLatency (latency_);
 
     return latency_ != previous;

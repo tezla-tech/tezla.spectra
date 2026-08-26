@@ -64,9 +64,28 @@ public:
 
     /// Changes the delay without touching memory. Safe from the audio thread,
     /// which is the point of prepare() sizing for the worst case.
+    ///
+    /// **Asking for the latency it already has is a no-op**, and that is load
+    /// bearing rather than an optimisation. Changing the length makes the ring's
+    /// contents meaningless, so a real change has to clear it -- and a caller
+    /// that pushes the latency once per block, which the signature invites,
+    /// would otherwise wipe the dry path every callback. Capstone did exactly
+    /// that: bypassed, at 64-sample blocks with 53 samples of latency, 83% of
+    /// its output samples were exactly zero and the rest jumped 0.4985 between
+    /// neighbours where a clean sine steps 0.0196. It sounded like buffer
+    /// underruns because it was, structurally, the same thing.
+    ///
+    /// This is the third time a reset has hidden inside a setter here --
+    /// DcBlocker::prepare and Emberdrive's voicing rebuild were the others --
+    /// so the rule is in CLAUDE.md section 7 and the guard is in the code.
     void setLatency (int latencySamples) noexcept
     {
-        latency_ = std::clamp (latencySamples, 0, maxLatency_);
+        const int wanted = std::clamp (latencySamples, 0, maxLatency_);
+
+        if (wanted == latency_)
+            return;
+
+        latency_ = wanted;
 
         // One position per sample of delay, plus one to write into. Any longer
         // and the arithmetic below would have to carry a second pointer; any
