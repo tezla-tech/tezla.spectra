@@ -108,6 +108,7 @@ void ControlPage::addKnob (const char* parameterId, const juce::String& name, co
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
+    knob->id = parameterId;
     knob->attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         state_, parameterId, knob->slider);
 
@@ -140,6 +141,7 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name, 
     choice->label.setTooltip (tooltip);
     addAndMakeVisible (choice->label);
 
+    choice->id = parameterId;
     choice->attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
         state_, parameterId, choice->box);
 
@@ -162,6 +164,38 @@ void ControlPage::addToggle (const char* parameterId, const juce::String& name, 
 
     cells_.push_back ({ Cell::Kind::toggle, static_cast<int> (toggles_.size()) });
     toggles_.push_back (std::move (toggle));
+}
+
+void ControlPage::setControlEnabled (const char* parameterId, bool enabled)
+{
+    for (auto& knob : knobs_)
+    {
+        if (knob->id != parameterId)
+            continue;
+
+        knob->slider.setEnabled (enabled);
+        knob->label.setColour (juce::Label::textColourId, enabled ? kDimText : kDimText.withAlpha (0.35f));
+        knob->slider.setColour (juce::Slider::rotarySliderFillColourId,
+                                enabled ? kGlow : kGlow.withAlpha (0.2f));
+        knob->slider.setColour (juce::Slider::thumbColourId,
+                                enabled ? kGlowBright : kGlowBright.withAlpha (0.25f));
+        knob->slider.setColour (juce::Slider::textBoxTextColourId,
+                                enabled ? kText : kText.withAlpha (0.3f));
+        knob->label.repaint();
+        knob->slider.repaint();
+        return;
+    }
+
+    for (auto& choice : choices_)
+    {
+        if (choice->id != parameterId)
+            continue;
+
+        choice->box.setEnabled (enabled);
+        choice->label.setColour (juce::Label::textColourId, enabled ? kDimText : kDimText.withAlpha (0.35f));
+        choice->label.repaint();
+        return;
+    }
 }
 
 void ControlPage::addBreak()
@@ -296,7 +330,7 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
 
     buildPages();
 
-    static const char* pageNames[kNumPages] { "MAIN", "SHAPE" };
+    static const char* pageNames[kNumPages] { "MAIN", "SHAPE", "CHEBYSHEV" };
     for (int i = 0; i < kNumPages; ++i)
     {
         tabs_[static_cast<std::size_t> (i)].setButtonText (pageNames[i]);
@@ -334,6 +368,7 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     statusLabel_.setMinimumHorizontalScale (1.0f);
     addAndMakeVisible (statusLabel_);
 
+    updateForGenerator();
     showPage (0);
 
     setResizable (true, true);
@@ -354,6 +389,18 @@ void HaloEditor::buildPages()
     // SHAPE page needed three rows, Bypass sat alone on the last one, and the
     // note was silently dropped because paint() had under 20 px to draw it in.
     auto main = std::make_unique<ControlPage> (state, 5);
+
+    main->addChoice (ids::generator, "Generator",
+        "Which engine makes the harmonics. These are two different instruments behind "
+        "one panel, not two flavours of the same one.\n\n"
+        "CURVE is what you have been listening to: two smooth shapes blended by Colour. "
+        "You pick a shape and take the series that falls out of it, which is how every "
+        "exciter works -- and why none of them can be asked for one particular harmonic.\n\n"
+        "CHEBYSHEV picks the series and derives the curve. Because T(n) of a cosine is "
+        "exactly the nth harmonic, asking for the 5th gives you the 5th and nothing else: "
+        "measured, every other harmonic sits 120 dB below it. Drive, Colour and Track grey "
+        "out because the CHEBYSHEV page replaces all three.\n\n"
+        "Switching crossfades over 15 ms, so you can A/B it while playing.");
 
     main->addChoice (ids::bandMode, "Mode",
         "Which side of Focus gets excited.\n\n"
@@ -509,8 +556,85 @@ void HaloEditor::buildPages()
 
     pages_[1] = std::move (shape);
 
+    // ---- CHEBYSHEV ----------------------------------------------------------
+    //
+    // Seven levels in a row reads as a harmonic spectrum, which is the picture
+    // the mode is about; Index and Tilt go underneath on the second row.
+    auto cheb = std::make_unique<ControlPage> (state, 7);
+
+    static const char* harmonicNames[] {
+        "2nd -- octave", "3rd -- fifth", "4th -- 2 oct", "5th -- major 3rd",
+        "6th -- 12th", "7th -- flat 7th", "8th -- 3 oct"
+    };
+
+    for (int n = dsp::ChebyshevGenerator::kFirstHarmonic;
+         n <= dsp::ChebyshevGenerator::kLastHarmonic; ++n)
+    {
+        const auto index = static_cast<std::size_t> (n - dsp::ChebyshevGenerator::kFirstHarmonic);
+
+        cheb->addKnob (ids::harmonics[index], "H" + juce::String (n),
+            juce::String ("Level of the ") + harmonicNames[index] + " harmonic.\n\n"
+            "Off through +20 dB. At Index = Exact this really is that harmonic alone: "
+            "the others are 120 dB down, not merely quieter. Above unity the harmonic "
+            "comes out louder than the source that made it, which is bounded and safe "
+            "-- the polynomials never exceed 1, so the level is the number you set.\n\n"
+            "With every level at Off the generator is exactly the zero function and the "
+            "plugin is bit-exact bypass.");
+    }
+
+    cheb->addKnob (ids::chebIndex, "Index",
+        "How hard the normalised band is pushed into the polynomials. Le Brun's "
+        "waveshaping index -- the same idea as an FM modulation index.\n\n"
+        "EXACT (1.0) is the point the whole mode is built around: your recipe arrives "
+        "as written.\n\n"
+        "Below it the harmonics blend into one another, so the recipe breathes with the "
+        "material instead of standing still. Off is a true zero.\n\n"
+        "Above it the input clamps and this stops being harmonic synthesis: what comes "
+        "out is the wreckage of a chosen series, square-ish and harsh. It aliases like "
+        "a distortion because that is what it now is -- around -60 dB on a bass band. "
+        "That is the crazy end, and it is deliberate.");
+
+    cheb->addKnob (ids::chebTilt, "Tilt",
+        "One knob across all seven levels, pivoting on the 5th. 4 dB per harmonic step "
+        "at full deflection, so 24 dB end to end.\n\n"
+        "Left is darker -- weight on the low harmonics, which reads as body. Right is "
+        "brighter and more metallic. FLAT multiplies your levels by exactly one, so the "
+        "macro can never colour a recipe you set by hand.");
+
+    cheb->setNote (
+        "Chebyshev harmonic synthesis -- Le Brun, JAES 27(4), 1979. T(n) of a cosine is cos(n t), so harmonic n "
+        "arrives at the level you set and nothing else does. Track is pinned at 100% here: unit amplitude is what "
+        "makes that true. Best on one note at a time -- on a chord the harmonics of each note intermodulate.");
+
+    pages_[2] = std::move (cheb);
+
     for (auto& page : pages_)
         addChildComponent (*page);
+}
+
+void HaloEditor::updateForGenerator()
+{
+    const bool chebyshev =
+        halo_.getValueTreeState().getRawParameterValue (ids::generator)->load() > 0.5f;
+
+    if (shownGenerator_ == static_cast<int> (chebyshev))
+        return;
+
+    shownGenerator_ = static_cast<int> (chebyshev);
+
+    // Drive, Colour and Track are not merely unused in Chebyshev mode -- they
+    // are replaced. Leaving them live but inert reads as a broken plugin; greyed
+    // out, it reads as a mode, which is what it is.
+    for (const char* id : { ids::drive, ids::colour, ids::track })
+        pages_[0]->setControlEnabled (id, ! chebyshev);
+
+    pages_[0]->setNote (chebyshev
+        ? "Chebyshev generator: Drive, Colour and Track are replaced by the CHEBYSHEV page. Everything else on this "
+          "page still applies -- Focus, Punch, Width, Amount and Output work the same either way."
+        : "Amount at Off is a bit-exact bypass -- the dry path goes through a delay line and nothing else. "
+          "Latency is reported to the host and matched on bypass, so A/B is honest.");
+
+    pages_[0]->repaint();
 }
 
 void HaloEditor::showPage (int index)
@@ -545,6 +669,7 @@ void HaloEditor::timerCallback()
     harmonicsMeter_.repaint();
 
     statusLabel_.setText (halo_.describeOversampling(), juce::dontSendNotification);
+    updateForGenerator();
 
     if (spectrum_ != nullptr)
     {

@@ -39,6 +39,21 @@ inline constexpr auto bypass       = "bypass";
 // automation index by ID, and reordering silently repoints every automation lane
 // in every project that already uses the plugin.
 inline constexpr auto width        = "width";
+
+// Added at schema version 3: Chebyshev precision mode. Appended for the same
+// reason, and every one of them defaults to something that cannot reach a
+// project saved before it existed -- `generator` defaults to Curve, so the rest
+// are not consulted at all.
+inline constexpr auto generator    = "generator";
+inline constexpr auto chebIndex    = "chebIndex";
+inline constexpr auto chebTilt     = "chebTilt";
+
+/// Harmonics 2 through 8. Written out rather than generated, because a
+/// parameter ID is forever and a loop that builds one from an index is one
+/// refactor away from renumbering every project that uses it.
+inline constexpr const char* harmonics[] {
+    "harm2", "harm3", "harm4", "harm5", "harm6", "harm7", "harm8"
+};
 } // namespace ids
 
 class HaloProcessor final : public juce::AudioProcessor

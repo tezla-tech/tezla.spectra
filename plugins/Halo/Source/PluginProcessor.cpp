@@ -2,6 +2,7 @@
 #include "PluginEditor.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <tezla/dsp/Decibels.hpp>
 
@@ -17,7 +18,8 @@ namespace
 // bumping the state version must never move an existing parameter's ID.
 constexpr int kSchemaV1 = 1;
 constexpr int kSchemaV2 = 2;
-constexpr int kStateSchemaVersion = kSchemaV2;
+constexpr int kSchemaV3 = 3;
+constexpr int kStateSchemaVersion = kSchemaV3;
 constexpr auto kStateTypeName = "HaloState";
 
 /// A skew that puts the useful part of a range in the middle of the travel. A
@@ -58,6 +60,36 @@ juce::AudioParameterFloatAttributes hertzAttributes()
         {
             const float value = text.getFloatValue();
             return text.containsIgnoreCase ("k") ? value * 1000.0f : value;
+        });
+}
+
+/// A harmonic level. Shown in decibels because that is how a recipe is read,
+/// with a real Off at the bottom rather than a very small number -- the
+/// generator is exactly the zero function when every level is zero, and the
+/// display should not imply otherwise.
+juce::AudioParameterFloatAttributes harmonicAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withLabel ("dB")
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            if (value <= 0.0f)
+                return juce::String ("Off");
+
+            // Snapped, or unity comes back from a skewed range as 0.99999 and
+            // prints "-0.0 dB" -- which reads as a bug in the plugin rather than
+            // as the last digit of a float.
+            const auto db = juce::Decibels::gainToDecibels (value, -100.0f);
+            return juce::String (std::abs (db) < 0.05f ? 0.0f : db, 1) + " dB";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text)
+        {
+            const auto trimmed = text.trim();
+            if (trimmed.startsWithIgnoreCase ("off"))
+                return 0.0f;
+
+            return juce::jlimit (0.0f, 10.0f,
+                juce::Decibels::decibelsToGain (trimmed.getFloatValue(), -100.0f));
         });
 }
 
@@ -201,6 +233,63 @@ juce::AudioProcessorValueTreeState::ParameterLayout HaloProcessor::createParamet
             return juce::jlimit (0.0f, 2.0f, trimmed.getFloatValue() * 0.01f);
         })));
 
+    // ---- schema version 3: Chebyshev precision mode -------------------------
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::generator, kSchemaV3 }, "Generator",
+        // Short, because the box is one of five on a row and a truncated
+        // "Chebyshev (preci..." tells the user less than the bare name does.
+        // The tooltip and the page note carry the citation in full.
+        juce::StringArray { "Curve", "Chebyshev" }, 0));
+
+    for (int n = dsp::ChebyshevGenerator::kFirstHarmonic;
+         n <= dsp::ChebyshevGenerator::kLastHarmonic; ++n)
+    {
+        const auto index = static_cast<std::size_t> (n - dsp::ChebyshevGenerator::kFirstHarmonic);
+
+        layout.add (std::make_unique<Parameter> (
+            juce::ParameterID { ids::harmonics[index], kSchemaV3 },
+            "H" + juce::String (n),
+            // Skewed so unity sits at a third of the travel: the useful range is
+            // 0 to about 2, and the ceiling of 10 is there for the deliberately
+            // silly settings rather than for the ones anyone dials by accident.
+            skewedRange (0.0f, 10.0f, 1.0f), n == 2 ? 1.0f : 0.0f,
+            harmonicAttributes()));
+    }
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::chebIndex, kSchemaV3 }, "Index",
+        juce::NormalisableRange<float> { 0.0f, 2.0f }, 1.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            if (value < 0.0005f) return juce::String ("Off");
+            if (std::abs (value - 1.0f) < 0.005f) return juce::String ("Exact");
+            return juce::String (value, 2);
+        })
+        .withValueFromStringFunction ([] (const juce::String& text)
+        {
+            const auto trimmed = text.trim();
+            if (trimmed.startsWithIgnoreCase ("off"))   return 0.0f;
+            if (trimmed.startsWithIgnoreCase ("exact")) return 1.0f;
+            return juce::jlimit (0.0f, 2.0f, trimmed.getFloatValue());
+        })));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::chebTilt, kSchemaV3 }, "Tilt",
+        juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            if (std::abs (value) < 0.005f) return juce::String ("Flat");
+            const auto db = value * static_cast<float> (dsp::ChebyshevGenerator::kTiltDbPerStep);
+            return juce::String (db, 1) + " dB/step";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text)
+        {
+            const auto trimmed = text.trim();
+            if (trimmed.startsWithIgnoreCase ("flat")) return 0.0f;
+            return juce::jlimit (-1.0f, 1.0f,
+                trimmed.getFloatValue() / static_cast<float> (dsp::ChebyshevGenerator::kTiltDbPerStep));
+        })));
+
     return layout;
 }
 
@@ -295,6 +384,14 @@ void HaloProcessor::pullParameters()
     parameters_.autoTrim  = flag (ids::autoTrim);
     parameters_.inputDb   = value (ids::input);
     parameters_.outputDb  = value (ids::output);
+
+    parameters_.generator = value (ids::generator) < 0.5 ? Generator::Curve
+                                                        : Generator::Chebyshev;
+    parameters_.chebIndex = value (ids::chebIndex);
+    parameters_.chebTilt  = value (ids::chebTilt);
+
+    for (std::size_t i = 0; i < parameters_.harmonics.size(); ++i)
+        parameters_.harmonics[i] = value (ids::harmonics[i]);
 
     parameters_.oversampling = static_cast<dsp::OversamplingMode> (
         juce::jlimit (0, 4, static_cast<int> (value (ids::oversampling))));
@@ -544,13 +641,49 @@ const Preset& presetAt (int index)
           [] { Parameters p; p.focusHz = 6500.0; p.drive = 0.22; p.colour = 0.65;
                p.track = 1.0; p.ceilingHz = 18000.0; p.width = 1.2;
                p.amountDb = -8.0; return p; }() },
+
+        // ---- Chebyshev precision mode ---------------------------------------
+        //
+        // The three below are a different instrument behind the same panel, and
+        // they are named so that is obvious from the list.
+
+        // One octave up and nothing else -- the thing no curve-based exciter can
+        // be asked for. On a sub this is the missing-fundamental trick with the
+        // muddying harmonics simply absent rather than filtered away afterwards.
+        { "Cheb: octave lock",
+          [] { Parameters p; p.generator = Generator::Chebyshev;
+               p.bandMode = BandMode::Below; p.focusHz = 130.0;
+               p.harmonics = { 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+               p.floorOn = true; p.floorHz = 70.0; p.ceilingHz = 1500.0;
+               p.amountDb = -3.0; return p; }() },
+
+        // Where the high orders are free. A 40 Hz sub's 8th harmonic is 320 Hz,
+        // nowhere near the internal Nyquist, so the whole series is exact -- and
+        // the result is a bass that reads on a phone without touching the sub.
+        { "Cheb: sub bloom",
+          [] { Parameters p; p.generator = Generator::Chebyshev;
+               p.bandMode = BandMode::Below; p.focusHz = 150.0;
+               p.harmonics = { 1.0, 0.7, 0.5, 0.35, 0.25, 0.18, 0.12 };
+               p.chebTilt = -0.25;
+               p.floorOn = true; p.floorHz = 80.0; p.ceilingHz = 4000.0;
+               p.amountDb = -5.0; return p; }() },
+
+        // The wreckage end. Index past 1 clamps the input, so this stops being a
+        // chosen series and becomes a distortion -- which is the point, and why
+        // it aliases like one. Odd harmonics only, for the metallic reading.
+        { "Cheb: reese teeth",
+          [] { Parameters p; p.generator = Generator::Chebyshev;
+               p.focusHz = 700.0; p.chebIndex = 1.45; p.chebTilt = 0.3;
+               p.harmonics = { 0.0, 1.0, 0.0, 0.8, 0.0, 0.6, 0.0 };
+               p.floorOn = true; p.floorHz = 250.0; p.ceilingHz = 11000.0;
+               p.amountDb = -6.0; return p; }() },
     };
 
     static constexpr int count = static_cast<int> (std::size (presets));
     return presets[static_cast<std::size_t> (juce::jlimit (0, count - 1, index))];
 }
 
-constexpr int kNumPresets = 6;
+constexpr int kNumPresets = 9;
 } // namespace
 
 int HaloProcessor::getNumPrograms() { return kNumPresets; }
@@ -587,6 +720,13 @@ void HaloProcessor::setCurrentProgram (int index)
     set (ids::autoTrim,  preset.autoTrim ? 1.0f : 0.0f);
     set (ids::input,     static_cast<float> (preset.inputDb));
     set (ids::output,    static_cast<float> (preset.outputDb));
+
+    set (ids::generator, preset.generator == Generator::Curve ? 0.0f : 1.0f);
+    set (ids::chebIndex, static_cast<float> (preset.chebIndex));
+    set (ids::chebTilt,  static_cast<float> (preset.chebTilt));
+
+    for (std::size_t i = 0; i < preset.harmonics.size(); ++i)
+        set (ids::harmonics[i], static_cast<float> (preset.harmonics[i]));
 }
 
 juce::AudioProcessorEditor* HaloProcessor::createEditor()

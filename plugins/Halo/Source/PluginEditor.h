@@ -66,12 +66,19 @@ public:
     /// leave in a tooltip nobody hovers over.
     void setNote (const juce::String& note) { note_ = note; }
 
+    /// Greys a control out. Used for the three knobs the Chebyshev generator
+    /// replaces: leaving Drive, Colour and Track live but inert would be worse
+    /// than hiding them, because a knob that moves and does nothing reads as a
+    /// broken plugin rather than as a mode.
+    void setControlEnabled (const char* parameterId, bool enabled);
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
     struct Knob
     {
+        juce::String id;
         juce::Slider slider;
         juce::Label  label;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
@@ -79,6 +86,7 @@ private:
 
     struct Choice
     {
+        juce::String   id;
         juce::ComboBox box;
         juce::Label    label;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
@@ -123,6 +131,10 @@ private:
     void buildPages();
     void showPage (int index);
 
+    /// Greys the controls the current generator does not use, and updates the
+    /// note that says what the other one is doing instead.
+    void updateForGenerator();
+
     HaloProcessor& halo_;
 
     juce::TooltipWindow tooltips_ { this, 500 };
@@ -131,10 +143,15 @@ private:
     std::unique_ptr<ui::HeaderBar> header_;
     std::unique_ptr<ui::SpectrumDisplay> spectrum_;
 
-    static constexpr int kNumPages = 2;
+    static constexpr int kNumPages = 3;
     std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;
     std::array<juce::TextButton, kNumPages> tabs_;
     int currentPage_ { 0 };
+
+    /// Which generator the panel is currently dressed for. -1 so the first
+    /// timer tick always applies the state rather than assuming it, and so the
+    /// greying is not recomputed and repainted thirty times a second.
+    int shownGenerator_ { -1 };
 
     LevelMeter inputMeter_     { LevelMeter::Style::level };
     LevelMeter outputMeter_    { LevelMeter::Style::level };
