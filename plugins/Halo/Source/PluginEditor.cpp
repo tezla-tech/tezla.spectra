@@ -272,6 +272,25 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     addAndMakeVisible (*header_);
 
     spectrum_ = std::make_unique<ui::SpectrumDisplay> (palette_);
+
+    // Dragging the graph drives the real parameter, gestures and all, so a host
+    // records the move as one automation write and the knob follows along.
+    // Clamping is the parameter's job: convertTo0to1 does it, and the display
+    // has no business knowing that Focus stops at 12 kHz.
+    if (auto* focus = halo_.getValueTreeState().getParameter (ids::focus))
+    {
+        spectrum_->onFocusDragged = [focus] (double hz, ui::SpectrumDisplay::DragPhase phase)
+        {
+            using Phase = ui::SpectrumDisplay::DragPhase;
+
+            if (phase == Phase::began)
+                focus->beginChangeGesture();
+            else if (phase == Phase::ended)
+                focus->endChangeGesture();
+            else
+                focus->setValueNotifyingHost (focus->convertTo0to1 (static_cast<float> (hz)));
+        };
+    }
     spectrum_->prepare (halo_.getSampleRate() > 0.0 ? halo_.getSampleRate() : 48000.0);
     addAndMakeVisible (*spectrum_);
 
@@ -398,6 +417,17 @@ void HaloEditor::buildPages()
         "material gets nothing and hits get everything.\n\n"
         "This is what stops an exciter turning a jungle break into a wash of cymbals. "
         "At 0 the stage is bit-exact, so it costs nothing when you are not using it.");
+
+    main->addKnob (ids::width, "Width",
+        "Stereo width of the generated harmonics -- and of nothing else.\n\n"
+        "This is the control most exciters cannot offer. Theirs mix back a filtered copy of your "
+        "source, so widening the effect widens the source with it and the low end stops being "
+        "mono. Halo's wet path carries almost no fundamental and the dry path goes through a "
+        "delay line and nothing else, so wide air over a dead-centre sub is simply what happens.\n\n"
+        "Normal is a true identity, not a round trip through mid and side -- it multiplies the "
+        "side by exactly zero. Mono folds the harmonics to the centre, which is worth trying on a "
+        "reese where the added edge is smearing the image.\n\n"
+        "Does nothing on a mono track, and nothing to a mono source on a stereo track.");
 
     main->addKnob (ids::output, "Output",
         "Final level trim, applied after everything else.\n\n"

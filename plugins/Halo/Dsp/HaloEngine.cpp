@@ -156,9 +156,10 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     // Base rate: these apply outside the oversampled block, so smoothing them
     // at the internal rate would make the ramp four times too fast at 48 kHz
     // and correct only at 192.
-    inputGain_ .prepare (sampleRate_, kSmoothingSeconds);
-    amountGain_.prepare (sampleRate_, kSmoothingSeconds);
-    outputGain_.prepare (sampleRate_, kSmoothingSeconds);
+    inputGain_  .prepare (sampleRate_, kSmoothingSeconds);
+    amountGain_ .prepare (sampleRate_, kSmoothingSeconds);
+    outputGain_ .prepare (sampleRate_, kSmoothingSeconds);
+    widthAmount_.prepare (sampleRate_, kSmoothingSeconds);
 
     // Short: these follow the envelope, which is already smooth. All this has
     // to do is take the corners off the control-rate steps.
@@ -174,7 +175,8 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
 
     inputGain_ .setCurrentAndTarget (inputGain_ .getTarget());
     amountGain_.setCurrentAndTarget (amountGain_.getTarget());
-    outputGain_.setCurrentAndTarget (outputGain_.getTarget());
+    outputGain_ .setCurrentAndTarget (outputGain_ .getTarget());
+    widthAmount_.setCurrentAndTarget (widthAmount_.getTarget());
     focus_     .setCurrentAndTarget (focus_     .getTarget());
     driveGain_ .setCurrentAndTarget (driveGain_ .getTarget());
     colour_    .setCurrentAndTarget (colour_    .getTarget());
@@ -219,7 +221,8 @@ void Engine::reset()
     // quietly stop being true.
     inputGain_ .setCurrentAndTarget (inputGain_ .getTarget());
     amountGain_.setCurrentAndTarget (amountGain_.getTarget());
-    outputGain_.setCurrentAndTarget (outputGain_.getTarget());
+    outputGain_ .setCurrentAndTarget (outputGain_ .getTarget());
+    widthAmount_.setCurrentAndTarget (widthAmount_.getTarget());
     focus_     .setCurrentAndTarget (focus_     .getTarget());
     driveGain_ .setCurrentAndTarget (driveGain_ .getTarget());
     colour_    .setCurrentAndTarget (colour_    .getTarget());
@@ -275,6 +278,11 @@ void Engine::updateDerivedParameters()
 {
     inputGain_ .setTarget (dsp::dbToGain (parameters_.inputDb));
     outputGain_.setTarget (dsp::dbToGain (parameters_.outputDb));
+
+    // Stored as the *departure* from unity rather than as the width itself, so
+    // that the neutral setting multiplies by exactly zero. See the recombine
+    // loop for why that matters.
+    widthAmount_.setTarget (std::clamp (parameters_.width, 0.0, 2.0) - 1.0);
 
     // The floor is a real zero, not a very small number: at the bottom of its
     // travel Amount has to be silence so the plugin can be taken out of circuit
@@ -510,10 +518,36 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
     double dryEnergy = 0.0;
     double wetEnergy = 0.0;
 
+    const bool stereo = activeChannels == 2;
+
     for (int i = 0; i < numSamples; ++i)
     {
         const double amount = amountGain_.next();
         const double gain   = outputGain_.next() * trim;
+        const double widen  = widthAmount_.next();
+
+        // ---- width, on the harmonics alone ----------------------------------
+        //
+        // Written as a departure from unity rather than as a mid/side rebuild,
+        // because the obvious form is not an identity at the neutral setting:
+        // (L+R)/2 + (L-R)/2 rounds twice and does not return L bit for bit. This
+        // form multiplies the side by exactly zero at width 1 and adds nothing,
+        // so the neutral setting is a true identity.
+        //
+        // Only the wet path is touched. The dry signal has been nowhere but a
+        // delay line, so the sub underneath stays exactly where it was however
+        // wide the air gets -- which is the whole reason this control can exist
+        // here and cannot on an exciter whose wet path carries a copy of the
+        // source.
+        if (stereo && widen != 0.0)
+        {
+            const double left  = channels[0][i];
+            const double right = channels[1][i];
+            const double side  = 0.5 * (left - right);
+
+            channels[0][i] = left  + widen * side;
+            channels[1][i] = right - widen * side;
+        }
 
         for (int channel = 0; channel < activeChannels; ++channel)
         {

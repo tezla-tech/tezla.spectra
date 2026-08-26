@@ -69,6 +69,12 @@ struct Parameters
     bool     ceilingOn { true };
     double   ceilingHz { 16000.0 };  ///< 2000 .. 20000, harmonics above this removed
 
+    /// Stereo width of the generated harmonics only. 1 is unchanged, exactly;
+    /// 0 folds them to mono; 2 doubles their side content. The dry signal is
+    /// never touched by this, so however wide the air gets the sub underneath it
+    /// stays where it was.
+    double   width     { 1.0 };      ///< 0 .. 2
+
     double   amountDb  { 0.0 };      ///< -60 .. +12; -60 is silence, exactly
     bool     listen    { false };    ///< solo the generated harmonics
     bool     autoTrim  { true };
@@ -178,6 +184,7 @@ private:
     dsp::SmoothedValue<double> inputGain_;
     dsp::SmoothedValue<double> amountGain_;
     dsp::SmoothedValue<double> outputGain_;
+    dsp::SmoothedValue<double> widthAmount_;
 
     /// Derived from the envelope, so they are recomputed at control rate and
     /// smoothed rather than stepped. `scale` is envelope^Track, which costs a

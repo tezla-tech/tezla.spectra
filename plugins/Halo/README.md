@@ -59,6 +59,7 @@ integral, exact at both asymptotes and within 0.14% everywhere.
 | **Amount** | How much of the generated harmonics get added. At the bottom of its travel it reads Off and the output is the input, **bit for bit**. |
 | **Track** | How much the harmonics follow the source level. At 0 they behave like a real nonlinearity; at 100% the harmonic-to-source ratio holds constant at every level. |
 | **Punch** | Transient discrimination — harmonics arrive on the hits and leave the sustain alone. What stops an exciter turning a jungle break into a wash of cymbals. At 0 it is bit-exact. |
+| **Width** | Stereo width of **the harmonics alone**, from Mono through Normal to 200 %. The source keeps its own image whatever this does. At Normal it is bit-exact. |
 | **Output** | Plain level trim. |
 
 ### SHAPE
@@ -77,6 +78,33 @@ any tab. See **Global controls** below.
 
 Both Floor and Ceiling shape the **harmonics only**. The dry signal passes
 through a delay line and nothing else, so nothing here can thin the sub.
+
+### Why Width is on the harmonics only
+
+Every conventional exciter mixes a filtered copy of the source back in, so
+widening its wet path widens the source with it: the top end of the mix drifts
+out of the centre, the bass follows the treble, and a mono fold-down loses more
+than the effect. That is why the control is usually absent, or offered as a
+whole-plugin "stereo base" that has to be used sparingly.
+
+Halo's wet path has no fundamental in it, so there is nothing of the source to
+widen — the side signal being scaled is made entirely of harmonics that were not
+there before. The sub stays exactly where it was, mono, at any Width setting,
+because the dry path is untouched by this control and by everything else on the
+page.
+
+It is written as a departure from unity rather than as a mid/side rebuild:
+
+```
+side = (L - R) / 2
+L' = L + (w - 1) * side        w = 1 multiplies the side by exactly zero
+R' = R - (w - 1) * side
+```
+
+An encode/decode round trip rounds twice and lands within an LSB of the input,
+which is not the same as the input. This form adds `0.0 * side` at Normal, so
+Width joins Amount and Punch on the list of controls whose neutral setting is
+bit-exact rather than merely inaudible.
 
 ---
 
@@ -129,6 +157,9 @@ exciter mixes back at close to full level.
 | Ceiling at 6 kHz | 6th harmonic down 24.5 dB, 2nd unchanged within 0.2 dB |
 | DC at any setting | 1e-7 |
 | Amount at Off | bit-exact against the input |
+| Width at Normal | the side is multiplied by exactly zero; `x + 0.0 * side == x` over 4000 values, where the mid/side rebuild differs on most of them |
+| Width at Mono, stereo harmonics | side energy in the wet path to zero |
+| Width at any setting, mono source | output still identical in both channels |
 | Silence in | silence out, at every Track setting |
 | Steinberg `validator` | 47 passed, 0 failed |
 
@@ -221,11 +252,22 @@ leaving it to be worked out from the distance between two lines.
 Three things are marked, and each is only drawn when it is doing something:
 
 - **Focus**, as a solid line in the accent colour, with the side being excited
-  shaded.
+  shaded. **Drag it.** The line is the control: click anywhere on the graph and
+  Focus goes there, which is faster than reading a frequency off the axis and
+  then finding the knob that sets it. The pointer thickens the line, and a
+  reading in Hz appears while the drag is live.
 - **FLOOR** and **CEIL**, dashed and in the harmonics colour, showing where the
   generated content is allowed to live. Dashed rather than solid so they cannot
   be mistaken for Focus: Focus decides what gets excited, these two decide where
   the result may land, and they are different kinds of boundary.
+
+The whole drag is wrapped in one host gesture, so a DAW recording automation
+writes a single move rather than the several hundred separate jumps a
+per-pixel callback would produce. The frequency reported for a pixel is the
+inverse of where the display draws a marker, which is what makes the line land
+under the pointer instead of near it — measured at **0 px of error** across the
+full width by `tezla-ui-preview focus-drag`, which drives the gesture through
+the component and checks the round trip.
 
 The analysis is framework-free and lives in `shared/tezla-dsp`, so the same code
 can drive a standalone analyser later without a GUI framework attached.
@@ -237,4 +279,6 @@ and useless for checking what the picture says. Rendering it with a known signal
 found three faults the empty display had hidden: the axis labels were printed on
 top of the trace, the input curve was completely invisible because the output
 was drawn over it, and the CEIL marker's label printed straight through the word
-OUT.
+OUT. It found a fourth when the drag readout was added, which shared the top row
+with the IN/OUT legend and printed through it anywhere Focus sat between roughly
+4 and 10 kHz. The legend now steps aside for the duration of a drag.

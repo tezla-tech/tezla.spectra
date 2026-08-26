@@ -16,7 +16,8 @@ namespace
 // separate constants and why nothing below reaches for kStateSchemaVersion --
 // bumping the state version must never move an existing parameter's ID.
 constexpr int kSchemaV1 = 1;
-constexpr int kStateSchemaVersion = kSchemaV1;
+constexpr int kSchemaV2 = 2;
+constexpr int kStateSchemaVersion = kSchemaV2;
 constexpr auto kStateTypeName = "HaloState";
 
 /// A skew that puts the useful part of a range in the middle of the travel. A
@@ -106,6 +107,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout HaloProcessor::createParamet
             if (value < 0.02f) return juce::String ("Odd");
             if (value > 0.98f) return juce::String ("Even");
             return juce::String (juce::roundToInt (value * 100.0f)) + "% even";
+        })
+        // Without this, JUCE parses typed text with getFloatValue(), which reads
+        // "Odd" as zero and "50% even" as fifty -- so a host that offers a text
+        // field, or that round-trips the displayed string, sets the wrong value.
+        // Steinberg's validator reports it; it is not a warning to leave alone.
+        .withValueFromStringFunction ([] (const juce::String& text)
+        {
+            const auto trimmed = text.trim();
+
+            if (trimmed.startsWithIgnoreCase ("odd"))  return 0.0f;
+            if (trimmed.startsWithIgnoreCase ("even")) return 1.0f;
+
+            return juce::jlimit (0.0f, 1.0f, trimmed.getFloatValue() * 0.01f);
         })));
 
     layout.add (std::make_unique<Parameter> (
@@ -166,6 +180,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout HaloProcessor::createParamet
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::bypass, kSchemaV1 }, "Bypass", false));
+
+    // ---- schema version 2 ---------------------------------------------------
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::width, kSchemaV2 }, "Width",
+        juce::NormalisableRange<float> { 0.0f, 2.0f }, 1.0f,
+        Attributes().withStringFromValueFunction ([] (float value, int)
+        {
+            if (value < 0.005f) return juce::String ("Mono");
+            if (std::abs (value - 1.0f) < 0.005f) return juce::String ("Normal");
+            return juce::String (juce::roundToInt (value * 100.0f)) + " %";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text)
+        {
+            const auto trimmed = text.trim();
+
+            if (trimmed.startsWithIgnoreCase ("mono"))   return 0.0f;
+            if (trimmed.startsWithIgnoreCase ("normal")) return 1.0f;
+
+            return juce::jlimit (0.0f, 2.0f, trimmed.getFloatValue() * 0.01f);
+        })));
 
     return layout;
 }
@@ -255,6 +289,7 @@ void HaloProcessor::pullParameters()
     parameters_.floorHz   = value (ids::floorHz);
     parameters_.ceilingOn = flag (ids::ceilingOn);
     parameters_.ceilingHz = value (ids::ceilingHz);
+    parameters_.width     = value (ids::width);
     parameters_.amountDb  = value (ids::amount);
     parameters_.listen    = flag (ids::listen);
     parameters_.autoTrim  = flag (ids::autoTrim);
@@ -440,6 +475,10 @@ void HaloProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (! tree.isValid())
         return;
 
+    // Version 1 projects predate Width. Nothing to migrate: it defaults to
+    // Normal, which is a bit-exact identity, so an older project reopens
+    // sounding exactly as it did.
+    //
     // A version from the future is refused rather than half-loaded: a partial
     // parameter set is worse than the plugin's defaults, because it looks like
     // it worked.
@@ -474,7 +513,8 @@ const Preset& presetAt (int index)
         // presence region, with the very top kept out of it.
         { "Air",
           [] { Parameters p; p.focusHz = 5000.0; p.drive = 0.35; p.colour = 0.8;
-               p.track = 0.5; p.ceilingHz = 17000.0; p.amountDb = -3.0; return p; }() },
+               p.track = 0.5; p.ceilingHz = 17000.0; p.width = 1.35;
+               p.amountDb = -3.0; return p; }() },
 
         // Drum bus. Punch high, so the harmonics arrive on the hits and leave
         // the sustain alone -- which is what stops an exciter turning a break
@@ -502,7 +542,8 @@ const Preset& presetAt (int index)
         // Mastering: barely there, level-independent, and honest about it.
         { "Mix sheen",
           [] { Parameters p; p.focusHz = 6500.0; p.drive = 0.22; p.colour = 0.65;
-               p.track = 1.0; p.ceilingHz = 18000.0; p.amountDb = -8.0; return p; }() },
+               p.track = 1.0; p.ceilingHz = 18000.0; p.width = 1.2;
+               p.amountDb = -8.0; return p; }() },
     };
 
     static constexpr int count = static_cast<int> (std::size (presets));
@@ -540,6 +581,7 @@ void HaloProcessor::setCurrentProgram (int index)
     set (ids::floorHz,   static_cast<float> (preset.floorHz));
     set (ids::ceilingOn, preset.ceilingOn ? 1.0f : 0.0f);
     set (ids::ceilingHz, static_cast<float> (preset.ceilingHz));
+    set (ids::width,     static_cast<float> (preset.width));
     set (ids::amount,    static_cast<float> (preset.amountDb));
     set (ids::listen,    preset.listen ? 1.0f : 0.0f);
     set (ids::autoTrim,  preset.autoTrim ? 1.0f : 0.0f);

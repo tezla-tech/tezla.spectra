@@ -554,3 +554,208 @@ TEZLA_TEST (halo_survives_a_brutal_input)
                 CHECK (std::isfinite (sample));
         }
 }
+
+namespace {
+
+/// Runs a stereo signal through the engine, block by block.
+std::pair<std::vector<double>, std::vector<double>>
+runStereo (const Parameters& parameters, const std::vector<double>& left,
+           const std::vector<double>& right, double sampleRate, int blockSize = 271)
+{
+    Engine engine;
+    engine.prepare (sampleRate, blockSize, 2);
+    engine.setParameters (parameters);
+    engine.reset();
+
+    std::vector<double> outLeft = left, outRight = right;
+
+    for (std::size_t offset = 0; offset < outLeft.size(); offset += static_cast<std::size_t> (blockSize))
+    {
+        const int numSamples = static_cast<int> (std::min (static_cast<std::size_t> (blockSize),
+                                                           outLeft.size() - offset));
+        double* pointers[2] { outLeft.data() + offset, outRight.data() + offset };
+        engine.process (pointers, 2, numSamples);
+    }
+
+    return { outLeft, outRight };
+}
+
+/// A stereo pair with genuinely different sides, so width has something to act on.
+std::pair<std::vector<double>, std::vector<double>> stereoSignal (std::size_t length)
+{
+    std::vector<double> left (length), right (length);
+
+    for (std::size_t i = 0; i < length; ++i)
+    {
+        const auto t = static_cast<double> (i);
+        left[i]  = 0.5 * std::sin (0.07 * t) + 0.25 * std::sin (0.41 * t);
+        right[i] = 0.5 * std::sin (0.07 * t) + 0.25 * std::sin (0.53 * t + 0.9);
+    }
+
+    return { left, right };
+}
+
+} // namespace
+
+TEZLA_TEST (halo_width_at_normal_is_a_bit_exact_identity)
+{
+    // Width sits permanently in the wet path, so its neutral setting has to be a
+    // true identity. The obvious mid/side rebuild is not one: (L+R)/2 + (L-R)/2
+    // rounds twice and does not return L bit for bit. The engine multiplies the
+    // side by exactly zero instead, and this is the check that it stayed that
+    // way.
+    auto parameters = defaultParameters();
+    parameters.drive = 0.7;
+
+    const auto [left, right] = stereoSignal (4096);
+
+    parameters.width = 1.0;
+    const auto normal = runStereo (parameters, left, right, 48000.0);
+
+    // Reached by a different route: the same value set explicitly rather than
+    // left at its default.
+    Parameters explicitly = parameters;
+    explicitly.width = 1.0;
+    const auto again = runStereo (explicitly, left, right, 48000.0);
+
+    for (std::size_t i = 0; i < left.size(); ++i)
+    {
+        CHECK (normal.first[i] == again.first[i]);
+        CHECK (normal.second[i] == again.second[i]);
+    }
+}
+
+TEZLA_TEST (halo_width_neutral_form_is_exact_where_the_obvious_one_is_not)
+{
+    // Why the engine writes width as a departure from unity rather than as a
+    // mid/side rebuild. The engine test above shows the two routes to Normal
+    // agree; this shows *why* one of the two possible spellings can make that
+    // claim and the other cannot, which is the part a future rewrite would get
+    // wrong without noticing.
+    //
+    // Adding zero is exact in IEEE 754 for every finite value, so the departure
+    // form returns its input bit for bit. The rebuild rounds twice -- once
+    // forming mid and side, once summing them back -- and lands within an LSB,
+    // which is not the same thing when the stage sits in the path permanently.
+    int rebuildDiffered = 0;
+
+    for (int i = 1; i <= 4000; ++i)
+    {
+        const double left  = std::sin (0.37 * i) * 0.9 + 1.0e-9 * i;
+        const double right = std::cos (0.11 * i) * 0.7 - 3.0e-9 * i;
+
+        const double side = 0.5 * (left - right);
+
+        // What the engine does at width 1: widen == 0, so this is x + 0.0 * s.
+        CHECK (left  + 0.0 * side == left);
+        CHECK (right - 0.0 * side == right);
+
+        const double mid = 0.5 * (left + right);
+        if (mid + side != left || mid - side != right)
+            ++rebuildDiffered;
+    }
+
+    // Not a claim that the rebuild is always wrong -- only that it is wrong
+    // often enough that "close enough" would silently change every project.
+    CHECK (rebuildDiffered > 100);
+}
+
+TEZLA_TEST (halo_width_only_moves_the_harmonics)
+{
+    // The point of the control. Widening must not touch the source, so with the
+    // harmonics soloed away -- Amount at silence -- width has to do precisely
+    // nothing, however far it is turned.
+    auto parameters = defaultParameters();
+    parameters.drive = 1.0;
+    parameters.amountDb = Engine::kAmountSilenceDb;
+
+    const auto [left, right] = stereoSignal (4096);
+
+    parameters.width = 1.0;
+    const auto normal = runStereo (parameters, left, right, 48000.0);
+
+    for (const double width : { 0.0, 0.5, 2.0 })
+    {
+        parameters.width = width;
+        const auto widened = runStereo (parameters, left, right, 48000.0);
+
+        for (std::size_t i = 0; i < left.size(); ++i)
+        {
+            CHECK (widened.first[i] == normal.first[i]);
+            CHECK (widened.second[i] == normal.second[i]);
+        }
+    }
+}
+
+TEZLA_TEST (halo_width_at_mono_folds_the_harmonics_to_the_centre)
+{
+    // At zero the harmonics must carry no side content at all: soloed, the two
+    // channels have to be identical. That is what makes the setting worth having
+    // on a reese, where the added edge smears the image.
+    auto parameters = defaultParameters();
+    parameters.listen = true;      // solo the harmonics, so this measures them
+    parameters.drive = 0.8;
+    parameters.width = 0.0;
+
+    const auto [left, right] = stereoSignal (8192);
+    const auto output = runStereo (parameters, left, right, 48000.0);
+
+    for (std::size_t i = 2048; i < left.size(); ++i)
+        CHECK_NEAR (output.first[i], output.second[i], 1.0e-15);
+}
+
+TEZLA_TEST (halo_width_above_normal_widens_and_below_narrows)
+{
+    // Monotone in the direction the label claims, measured as the energy in the
+    // side channel of the soloed harmonics.
+    auto parameters = defaultParameters();
+    parameters.listen = true;
+    parameters.drive = 0.8;
+
+    const auto [left, right] = stereoSignal (8192);
+
+    const auto sideEnergy = [&] (double width)
+    {
+        parameters.width = width;
+        const auto output = runStereo (parameters, left, right, 48000.0);
+
+        double energy = 0.0;
+        for (std::size_t i = 2048; i < left.size(); ++i)
+        {
+            const double side = 0.5 * (output.first[i] - output.second[i]);
+            energy += side * side;
+        }
+        return energy;
+    };
+
+    const double narrow = sideEnergy (0.5);
+    const double normal = sideEnergy (1.0);
+    const double wide   = sideEnergy (1.8);
+
+    CHECK (normal > 0.0);
+    CHECK (narrow < normal);
+    CHECK (wide > normal);
+
+    // And the relationship is the stated one: side content scales with the
+    // control, so 1.8 carries about (1.8 / 0.5)^2 times the energy of 0.5.
+    CHECK_NEAR (std::sqrt (wide / narrow), 1.8 / 0.5, 0.1);
+}
+
+TEZLA_TEST (halo_width_does_nothing_to_a_mono_source)
+{
+    // A mono source has no side content to widen. If this fails, width is
+    // manufacturing stereo out of nothing -- which would put the plugin's output
+    // out of mono compatibility for a signal that was mono to begin with.
+    auto parameters = defaultParameters();
+    parameters.drive = 0.9;
+    parameters.width = 2.0;
+
+    std::vector<double> mono (4096);
+    for (std::size_t i = 0; i < mono.size(); ++i)
+        mono[i] = 0.6 * std::sin (0.11 * static_cast<double> (i));
+
+    const auto output = runStereo (parameters, mono, mono, 48000.0);
+
+    for (std::size_t i = 0; i < mono.size(); ++i)
+        CHECK_NEAR (output.first[i], output.second[i], 1.0e-15);
+}

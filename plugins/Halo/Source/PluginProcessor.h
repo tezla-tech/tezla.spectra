@@ -34,6 +34,11 @@ inline constexpr auto input        = "input";
 inline constexpr auto output       = "output";
 inline constexpr auto oversampling = "oversampling";
 inline constexpr auto bypass       = "bypass";
+
+// Added at schema version 2. Appended, never inserted: VST3 hosts and FL's own
+// automation index by ID, and reordering silently repoints every automation lane
+// in every project that already uses the plugin.
+inline constexpr auto width        = "width";
 } // namespace ids
 
 class HaloProcessor final : public juce::AudioProcessor
