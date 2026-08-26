@@ -759,3 +759,462 @@ TEZLA_TEST (halo_width_does_nothing_to_a_mono_source)
     for (std::size_t i = 0; i < mono.size(); ++i)
         CHECK_NEAR (output.first[i], output.second[i], 1.0e-15);
 }
+
+// ============================================================================
+//  Chebyshev precision mode
+// ============================================================================
+
+namespace {
+
+/// The Chebyshev generator with one harmonic requested and everything else off.
+Parameters chebyshevWith (int harmonic, double gain = 1.0)
+{
+    auto parameters = defaultParameters();
+    parameters.generator = Generator::Chebyshev;
+    parameters.harmonics.fill (0.0);
+    parameters.harmonics[static_cast<std::size_t> (harmonic - 2)] = gain;
+    return parameters;
+}
+
+/// Absolute level of every harmonic of `fundamentalHz`, index 0 = DC.
+///
+/// Deliberately not analyseHarmonics(): everything that reports is scaled to
+/// the fundamental, and the whole claim here is that the fundamental is absent.
+std::vector<double> harmonicLevelsDb (const std::vector<double>& signal, double sampleRate,
+                                      double fundamentalHz, int upTo = 10)
+{
+    const auto spectrum = fftOfReal (signal);
+    const double binWidth = sampleRate / static_cast<double> (signal.size());
+    const auto bin = static_cast<std::size_t> (std::llround (fundamentalHz / binWidth));
+
+    std::vector<double> levels (static_cast<std::size_t> (upTo) + 1, -400.0);
+
+    for (int n = 0; n <= upTo; ++n)
+    {
+        const std::size_t centre = bin * static_cast<std::size_t> (n);
+        double power = 0.0;
+
+        for (std::size_t k = (centre > 0 ? centre - 1 : 0);
+             k <= centre + 1 && k < signal.size() / 2; ++k)
+            power += std::norm (spectrum[k]);
+
+        const double amplitude = 2.0 * std::sqrt (power) / static_cast<double> (signal.size());
+        levels[static_cast<std::size_t> (n)] = dsp::gainToDb (amplitude, -400.0);
+    }
+
+    return levels;
+}
+
+} // namespace
+
+TEZLA_TEST (halo_chebyshev_puts_the_harmonic_where_it_was_asked_for)
+{
+    // The claim, through the whole chain rather than at the generator: band
+    // split, band limit, normalisation, the polynomial, the DC blockers and the
+    // downsampler. Ask for one harmonic and that is what comes out of the
+    // plugin, with the rest of the series far below it.
+    constexpr std::size_t window = 1 << 15;
+    constexpr double rate = 48000.0;
+
+    for (const int harmonic : { 2, 3, 5, 8 })
+    {
+        auto parameters = chebyshevWith (harmonic);
+        parameters.listen = true;         // the wet path alone
+        parameters.ceilingOn = false;     // do not filter away what we came to measure
+        parameters.bandMode = BandMode::Below;
+        parameters.focusHz = 900.0;
+
+        const double frequency = binExactFrequency (400.0, rate, window);
+        const auto output = run (parameters, settlingSine (frequency, 0.5, rate, window), rate);
+        const auto levels = harmonicLevelsDb (steadyState (output, window), rate, frequency);
+
+        const auto index = static_cast<std::size_t> (harmonic);
+
+        for (int n = 1; n <= 8; ++n)
+            if (n != harmonic)
+                CHECK (levels[static_cast<std::size_t> (n)] < levels[index] - 40.0);
+    }
+}
+
+TEZLA_TEST (halo_chebyshev_leaves_the_fundamental_alone)
+{
+    // The plugin's headline property, restated for the second generator. A
+    // conventional exciter mixes a filtered copy of the band back in; this must
+    // not, at any index -- including the settings where the polynomials would
+    // hand one back for free if nothing cancelled it.
+    constexpr std::size_t window = 1 << 15;
+    constexpr double rate = 48000.0;
+
+    for (const double index : { 0.4, 0.75, 1.0, 1.5 })
+    {
+        auto parameters = defaultParameters();
+        parameters.generator = Generator::Chebyshev;
+        parameters.harmonics.fill (0.6);
+        parameters.chebIndex = index;
+        parameters.listen = true;
+        parameters.ceilingOn = false;
+        parameters.bandMode = BandMode::Below;
+        parameters.focusHz = 900.0;
+
+        const double frequency = binExactFrequency (400.0, rate, window);
+        const auto output = run (parameters, settlingSine (frequency, 0.5, rate, window), rate);
+        const auto levels = harmonicLevelsDb (steadyState (output, window), rate, frequency);
+
+        double loudest = -400.0;
+        for (int n = 2; n <= 8; ++n)
+            loudest = std::max (loudest, levels[static_cast<std::size_t> (n)]);
+
+        CHECK (levels[1] < loudest - 40.0);
+    }
+}
+
+TEZLA_TEST (halo_chebyshev_is_silent_in_silence)
+{
+    // Where this generator differs from the curve one and needs help. T_even(0)
+    // is +/-1, not 0, so with the envelope merely floored rather than gated the
+    // wet path would sit at a -90 dBFS constant and then ride the envelope down
+    // after every note -- a slow thump on a gate, which is exactly the failure
+    // the moving DC pedestal already produced once here.
+    for (const double index : { 0.0, 0.5, 1.0, 2.0 })
+        for (const auto mode : { BandMode::Above, BandMode::Below })
+        {
+            auto parameters = defaultParameters();
+            parameters.generator = Generator::Chebyshev;
+            parameters.harmonics.fill (1.0);
+            parameters.chebIndex = index;
+            parameters.bandMode = mode;
+
+            const auto output = run (parameters, std::vector<double> (8192, 0.0), 48000.0);
+
+            for (const double sample : output)
+                CHECK (std::abs (sample) < 1.0e-15);
+        }
+}
+
+TEZLA_TEST (halo_chebyshev_with_every_harmonic_off_is_a_bit_exact_bypass)
+{
+    // All levels at zero makes the generator the exact zero function, so the wet
+    // path adds literally nothing and the output is the delayed input to the
+    // last bit -- the same guarantee Amount and Width already carry.
+    auto parameters = defaultParameters();
+    parameters.generator = Generator::Chebyshev;
+    parameters.harmonics.fill (0.0);
+    parameters.chebIndex = 2.0;
+
+    std::vector<double> input (4096);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.7 * std::sin (0.05 * static_cast<double> (i))
+                 + 0.2 * std::sin (0.9 * static_cast<double> (i));
+
+    const auto output = run (parameters, input, 48000.0);
+    const int latency = latencyOf (parameters, 48000.0);
+
+    for (std::size_t i = static_cast<std::size_t> (latency); i < input.size(); ++i)
+        CHECK (output[i] == input[i - static_cast<std::size_t> (latency)]);
+}
+
+TEZLA_TEST (halo_chebyshev_index_at_zero_is_a_bit_exact_bypass)
+{
+    // Index is a real off, not a fade to something quiet. The pedestal
+    // subtraction is exactly T_n(0) there, so the two cancel outright.
+    auto parameters = defaultParameters();
+    parameters.generator = Generator::Chebyshev;
+    parameters.harmonics.fill (1.0);
+    parameters.chebIndex = 0.0;
+
+    std::vector<double> input (4096);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.6 * std::sin (0.11 * static_cast<double> (i));
+
+    const auto output = run (parameters, input, 48000.0);
+    const int latency = latencyOf (parameters, 48000.0);
+
+    for (std::size_t i = static_cast<std::size_t> (latency); i < input.size(); ++i)
+        CHECK (output[i] == input[i - static_cast<std::size_t> (latency)]);
+}
+
+TEZLA_TEST (halo_chebyshev_parameters_do_nothing_in_curve_mode)
+{
+    // A regression guard rather than a feature. Nine new parameters were added
+    // to a plugin whose whole selling point is that its neutral settings are
+    // bit-exact; if any of them leaks into the path that was already shipped,
+    // every existing project changes the day this lands.
+    auto plain = defaultParameters();
+    plain.drive = 0.7;
+
+    auto loaded = plain;
+    loaded.harmonics.fill (1.0);
+    loaded.chebIndex = 1.7;
+    loaded.chebTilt = 0.8;
+
+    std::vector<double> input (4096);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.55 * std::sin (0.09 * static_cast<double> (i));
+
+    const auto before = run (plain, input, 48000.0);
+    const auto after  = run (loaded, input, 48000.0);
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK (before[i] == after[i]);
+}
+
+TEZLA_TEST (halo_chebyshev_tilt_at_centre_is_a_bit_exact_identity)
+{
+    auto plain = chebyshevWith (4);
+    plain.harmonics.fill (0.5);
+
+    auto tilted = plain;
+    tilted.chebTilt = 0.0;
+
+    std::vector<double> input (4096);
+    for (std::size_t i = 0; i < input.size(); ++i)
+        input[i] = 0.6 * std::sin (0.08 * static_cast<double> (i));
+
+    const auto before = run (plain, input, 48000.0);
+    const auto after  = run (tilted, input, 48000.0);
+
+    for (std::size_t i = 0; i < input.size(); ++i)
+        CHECK (before[i] == after[i]);
+}
+
+TEZLA_TEST (halo_chebyshev_holds_no_dc)
+{
+    // The pedestal correction lives in the generator, but it is the engine that
+    // multiplies the result by a moving envelope -- which is what turns a static
+    // offset into a low-frequency wobble. Measured after the chain, not before.
+    for (const double index : { 0.3, 1.0, 1.6 })
+    {
+        auto parameters = defaultParameters();
+        parameters.generator = Generator::Chebyshev;
+        parameters.harmonics.fill (0.8);
+        parameters.chebIndex = index;
+        parameters.listen = true;
+        parameters.bandMode = BandMode::Below;
+        parameters.focusHz = 900.0;
+
+        // Bin-exact, or the window holds a fraction of a cycle and its mean is
+        // non-zero for a signal with no DC in it whatsoever -- which reads
+        // exactly like the fault being tested for.
+        const double frequency = binExactFrequency (400.0, 48000.0, 8192);
+        const auto output = run (parameters, settlingSine (frequency, 0.5, 48000.0, 8192), 48000.0);
+        const auto window = steadyState (output, 8192);
+
+        double sum = 0.0;
+        for (const double sample : window)
+            sum += sample;
+
+        CHECK (std::abs (sum / static_cast<double> (window.size())) < 1.0e-6);
+    }
+}
+
+TEZLA_TEST (halo_chebyshev_agrees_at_every_session_rate)
+{
+    // Same recipe, same sound, whatever the host is running at. Auto picks x4 at
+    // 48 kHz and x1 at 192, so this also checks the band limit lands in the same
+    // place relative to the music rather than to the sample rate.
+    constexpr std::size_t window = 1 << 14;
+
+    std::vector<double> reference;
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        auto parameters = chebyshevWith (3);
+        parameters.harmonics[3] = 0.5;      // and a little 5th
+        parameters.listen = true;
+        parameters.ceilingOn = false;
+        parameters.bandMode = BandMode::Below;
+        parameters.focusHz = 900.0;
+
+        const double frequency = binExactFrequency (400.0, rate, window);
+        const auto output = run (parameters, settlingSine (frequency, 0.5, rate, window), rate);
+        const auto levels = harmonicLevelsDb (steadyState (output, window), rate, frequency, 6);
+
+        if (reference.empty())
+        {
+            reference = levels;
+            continue;
+        }
+
+        for (const int n : { 3, 5 })
+            CHECK_NEAR (levels[static_cast<std::size_t> (n)],
+                        reference[static_cast<std::size_t> (n)], 0.5);
+    }
+}
+
+TEZLA_TEST (halo_chebyshev_does_not_alias_at_the_exact_setting)
+{
+    // A polynomial of degree n on a band limited to internalNyquist / n is
+    // exactly band-limited, so nothing folds. This is that claim about the whole
+    // chain, at the two rates Auto treats most differently -- x4 at 48 kHz and
+    // x1 at 192.
+    //
+    // A sweep rather than a tone: fold-back from a harmonically related signal
+    // lands on top of that signal's own harmonics, so a steady-tone measurement
+    // will score a badly aliasing build as clean.
+    constexpr std::size_t window = 1 << 15;
+
+    for (const double rate : { 48000.0, 192000.0 })
+    {
+        auto parameters = defaultParameters();
+        parameters.generator = Generator::Chebyshev;
+        parameters.harmonics.fill (0.8);
+        parameters.listen = true;
+        parameters.ceilingOn = false;
+        parameters.focusHz = 1000.0;
+
+        const auto preroll = static_cast<std::size_t> (rate * 1.5);
+        const auto sweep = linearSweep (1000.0, 18000.0, 0.7, rate, preroll + window);
+        const auto output = steadyState (run (parameters, sweep, rate), window);
+
+        // Everything below the sweep's own lowest frequency can only be
+        // fold-back or intermodulation; nothing legitimate lives there.
+        const auto spectrum = fftOfReal (output);
+        const double binWidth = rate / static_cast<double> (window);
+        const auto top = static_cast<std::size_t> (900.0 / binWidth);
+
+        double worst = 0.0;
+        for (std::size_t k = static_cast<std::size_t> (20.0 / binWidth); k < top; ++k)
+            worst = std::max (worst, 2.0 * std::abs (spectrum[k]) / static_cast<double> (window));
+
+        CHECK (dsp::gainToDb (worst, -400.0) < -60.0);
+    }
+}
+
+TEZLA_TEST (halo_chebyshev_band_limit_is_what_stops_it_aliasing)
+{
+    // The test above passes with the band limit deleted, and that is worth
+    // saying rather than hiding: at a 96 kHz internal Nyquist, eight harmonics
+    // of an 18 kHz sweep reach 144 kHz and fold to 48 kHz, which is nowhere
+    // near the audible band. It is a real check that the chain is clean; it is
+    // not a check that the limit does anything.
+    //
+    // This is. With oversampling forced off at 48 kHz the internal Nyquist is
+    // 24 kHz, so eight harmonics may only be asked of content below 3 kHz --
+    // and without the limit an 18 kHz sweep folds straight into the audible
+    // band. The user can reach this setting from the front panel, so it has to
+    // hold there and not only where the headroom is generous.
+    constexpr std::size_t window = 1 << 15;
+    constexpr double rate = 48000.0;
+
+    auto parameters = defaultParameters();
+    parameters.generator = Generator::Chebyshev;
+    parameters.harmonics.fill (0.8);
+    parameters.oversampling = dsp::OversamplingMode::Off;
+    parameters.listen = true;
+    parameters.ceilingOn = false;
+    parameters.focusHz = 1000.0;
+
+    const auto preroll = static_cast<std::size_t> (rate * 1.5);
+    const auto sweep = linearSweep (1000.0, 18000.0, 0.7, rate, preroll + window);
+    const auto output = steadyState (run (parameters, sweep, rate), window);
+
+    const auto spectrum = fftOfReal (output);
+    const double binWidth = rate / static_cast<double> (window);
+    const auto top = static_cast<std::size_t> (900.0 / binWidth);
+
+    double worst = 0.0;
+    for (std::size_t k = static_cast<std::size_t> (20.0 / binWidth); k < top; ++k)
+        worst = std::max (worst, 2.0 * std::abs (spectrum[k]) / static_cast<double> (window));
+
+    CHECK (dsp::gainToDb (worst, -400.0) < -60.0);
+}
+
+TEZLA_TEST (halo_generator_switch_does_not_click)
+{
+    // Two generators producing quite different signals from the same input, so
+    // the change is discrete and crossfades. Without one it is a step, and a
+    // step in the wet path is a click on every A/B.
+    //
+    // Two things took getting right, and both were found by deleting the
+    // crossfade and watching the test still pass.
+    //
+    // The bar is the signal itself, not a fixed number. Seven harmonics of a
+    // 458 Hz tone reach the 8th at 3.7 kHz, and that waveform legitimately moves
+    // about 1.0 per sample -- so "no step larger than 0.1" is nonsense here. The
+    // question is whether the output moves faster *while switching* than it does
+    // either side.
+    //
+    // And the switch has to land at many phases. One switch lands at one point
+    // in the waveform, and if the wet path happens to be near zero there the
+    // step is small however brutal the transition. Swept across a cycle, the
+    // measured worst case is 0.99 with the crossfade and 1.50 without it.
+    constexpr double rate = 48000.0;
+    constexpr int blockSize = 64;
+
+    double worstRatio = 0.0;
+
+    for (int offset = 0; offset < 12; ++offset)
+    {
+        Engine engine;
+        engine.prepare (rate, blockSize, 1);
+
+        // Below mode with a low Focus, so the 458 Hz tone is inside the band and
+        // both generators are actually working. With the defaults it sits under
+        // a 3 kHz highpass, the band is empty, and the test passes without ever
+        // switching anything audible.
+        auto parameters = defaultParameters();
+        parameters.bandMode = BandMode::Below;
+        parameters.focusHz = 900.0;
+        parameters.drive = 0.8;
+        parameters.harmonics.fill (0.9);
+        parameters.generator = Generator::Chebyshev;
+        engine.setParameters (parameters);
+        engine.reset();
+
+        const int switchBlock = 200 + offset;
+
+        double previous = 0.0;
+        double worstSteady = 0.0;
+        double worstSwitching = 0.0;
+
+        for (int block = 0; block < 320; ++block)
+        {
+            if (block == switchBlock)
+            {
+                parameters.generator = Generator::Curve;
+                engine.setParameters (parameters);
+            }
+
+            std::vector<double> buffer (blockSize);
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const auto t = static_cast<double> (block * blockSize + i);
+                buffer[static_cast<std::size_t> (i)] = 0.6 * std::sin (0.06 * t);
+            }
+
+            double* pointer = buffer.data();
+            engine.process (&pointer, 1, blockSize);
+
+            // Skip the settling, but carry the last sample forward -- or the
+            // first comparison is against a zero that was never in the signal,
+            // and every run reports a step the size of the whole waveform.
+            if (block < 120)
+            {
+                previous = buffer.back();
+                continue;
+            }
+
+            // The crossfade is 15 ms; twenty blocks of 64 covers it with room
+            // for the oversampler's latency on either side.
+            const bool switching = block >= switchBlock && block < switchBlock + 20;
+
+            for (const double sample : buffer)
+            {
+                const double step = std::abs (sample - previous);
+
+                if (switching) worstSwitching = std::max (worstSwitching, step);
+                else           worstSteady    = std::max (worstSteady, step);
+
+                previous = sample;
+            }
+        }
+
+        CHECK (worstSteady > 0.0);
+        worstRatio = std::max (worstRatio, worstSwitching / worstSteady);
+    }
+
+    // A blend of two signals cannot move faster than the faster of them, so
+    // anything meaningfully above the steady-state worst case is the crossfade
+    // failing to be one.
+    CHECK (worstRatio < 1.2);
+}

@@ -1,6 +1,7 @@
 #include "HaloEngine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include <tezla/dsp/Decibels.hpp>
@@ -50,10 +51,25 @@ constexpr double kPunchSlowAttackMs  = 20.0;
 constexpr double kPunchSlowReleaseMs = 200.0;
 
 /// Floor for the envelope, and so for the division that normalises the band.
-/// Silence still comes out silent regardless -- the generator maps 0 to exactly
-/// 0 -- so this only decides how far down the normalisation keeps working
-/// before it gives up and stops amplifying noise.
+///
+/// For the Curve generator it only decides how far down the normalisation keeps
+/// working before it gives up and stops amplifying noise -- silence comes out
+/// silent regardless, because that generator maps 0 to exactly 0.
+///
+/// The Chebyshev generator does not. T_even(0) is +/-1, so at true silence it
+/// returns a constant, and multiplying that by a floored envelope would leave
+/// a -90 dBFS offset that *moves* with the signal. So the divisor is floored
+/// and the multiplier is gated: below this level the wet path is a real zero
+/// rather than a small number. See the recombine loop.
 constexpr double kEnvelopeFloorDb = -90.0;
+
+/// How long a generator change takes to cross over.
+///
+/// The two generators produce quite different signals from the same input, so
+/// switching between them is a discrete change and gets a crossfade rather than
+/// a step -- CLAUDE.md 7. Long enough not to click, short enough to feel like a
+/// switch rather than a fade.
+constexpr double kGeneratorFadeSeconds = 0.015;
 
 /// Two first-order stages on the wet path, not one.
 ///
@@ -170,6 +186,15 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     driveGain_.prepare (oversampledRate, kSmoothingSeconds);
     colour_   .prepare (oversampledRate, kSmoothingSeconds);
     track_    .prepare (oversampledRate, kSmoothingSeconds);
+    chebIndex_.prepare (oversampledRate, kSmoothingSeconds);
+    chebTilt_ .prepare (oversampledRate, kSmoothingSeconds);
+    bandLimit_.prepare (oversampledRate, kSmoothingSeconds);
+
+    for (auto& gain : chebGains_)
+        gain.prepare (oversampledRate, kSmoothingSeconds);
+
+    // Per sample, because it is a crossfade and not a coefficient.
+    generatorFade_.prepare (oversampledRate, kGeneratorFadeSeconds);
 
     updateDerivedParameters();
 
@@ -181,6 +206,13 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     driveGain_ .setCurrentAndTarget (driveGain_ .getTarget());
     colour_    .setCurrentAndTarget (colour_    .getTarget());
     track_     .setCurrentAndTarget (track_     .getTarget());
+    chebIndex_ .setCurrentAndTarget (chebIndex_ .getTarget());
+    chebTilt_  .setCurrentAndTarget (chebTilt_  .getTarget());
+    bandLimit_ .setCurrentAndTarget (bandLimit_ .getTarget());
+    generatorFade_.setCurrentAndTarget (generatorFade_.getTarget());
+
+    for (auto& gain : chebGains_)
+        gain.setCurrentAndTarget (gain.getTarget());
     scale_     .setCurrentAndTarget (1.0);
     punchGain_ .setCurrentAndTarget (1.0);
 
@@ -202,6 +234,8 @@ void Engine::reset()
         channel.floorB.reset();
         channel.ceilingA.reset();
         channel.ceilingB.reset();
+        channel.limitA.reset();
+        channel.limitB.reset();
         channel.dryDelay.reset();
     }
 
@@ -227,6 +261,13 @@ void Engine::reset()
     driveGain_ .setCurrentAndTarget (driveGain_ .getTarget());
     colour_    .setCurrentAndTarget (colour_    .getTarget());
     track_     .setCurrentAndTarget (track_     .getTarget());
+    chebIndex_ .setCurrentAndTarget (chebIndex_ .getTarget());
+    chebTilt_  .setCurrentAndTarget (chebTilt_  .getTarget());
+    bandLimit_ .setCurrentAndTarget (bandLimit_ .getTarget());
+    generatorFade_.setCurrentAndTarget (generatorFade_.getTarget());
+
+    for (auto& gain : chebGains_)
+        gain.setCurrentAndTarget (gain.getTarget());
     scale_     .setCurrentAndTarget (1.0);
     punchGain_ .setCurrentAndTarget (1.0);
 }
@@ -244,6 +285,18 @@ bool Engine::setParameters (const Parameters& parameters)
     const bool floorTurnedOn   = parameters.floorOn   && ! parameters_.floorOn;
     const bool ceilingTurnedOn = parameters.ceilingOn && ! parameters_.ceilingOn;
     const bool modeChanged     = parameters.bandMode  != parameters_.bandMode;
+
+    const bool limitTurnedOn = parameters.generator == Generator::Chebyshev
+                            && parameters_.generator != Generator::Chebyshev;
+
+    // The Curve generator's ADAA holds the previous sample, and while Chebyshev
+    // is selected it stops being called -- so on the way back its history is
+    // whatever it was left with, and its first sample would be a step. Clearing
+    // it makes that first sample a plain evaluate() instead, which the crossfade
+    // is weighting at nearly zero anyway. Chebyshev needs no equivalent: it
+    // keeps no history at all.
+    const bool curveReturning = parameters.generator == Generator::Curve
+                             && parameters_.generator != Generator::Curve;
 
     parameters_ = parameters;
 
@@ -263,6 +316,8 @@ bool Engine::setParameters (const Parameters& parameters)
     {
         if (floorTurnedOn)   { channel.floorA.reset();   channel.floorB.reset(); }
         if (ceilingTurnedOn) { channel.ceilingA.reset(); channel.ceilingB.reset(); }
+        if (limitTurnedOn)   { channel.limitA.reset();   channel.limitB.reset(); }
+        if (curveReturning)  { channel.generator.reset(); }
 
         // Only one branch of the split is ever called, so the other one holds
         // whatever state it had when the mode last changed. Switching to it
@@ -294,8 +349,45 @@ void Engine::updateDerivedParameters()
     colour_   .setTarget (std::clamp (parameters_.colour, 0.0, 1.0));
     track_    .setTarget (std::clamp (parameters_.track, 0.0, 1.0));
 
+    chebIndex_.setTarget (std::clamp (parameters_.chebIndex, 0.0, 2.0));
+    chebTilt_ .setTarget (std::clamp (parameters_.chebTilt, -1.0, 1.0));
+
+    for (std::size_t i = 0; i < chebGains_.size(); ++i)
+        chebGains_[i].setTarget (std::max (parameters_.harmonics[i], 0.0));
+
+    const bool chebyshev = parameters_.generator == Generator::Chebyshev;
+    generatorFade_.setTarget (chebyshev ? 1.0 : 0.0);
+
+    // How far up the band the Chebyshev generator may be fed. T_n of content at
+    // B lands at n*B, so anything above internalNyquist / n folds -- and this is
+    // the corner that stops it existing. Derived from the parameters rather than
+    // from the smoothed levels so it does not chatter while a level is moving.
+    //
+    // In Below mode this is almost never the binding constraint: a 120 Hz band
+    // allows harmonic 800. In Above mode it is, which is the honest shape of the
+    // trade and why the number is shown on the page.
+    const double nyquist = getOversampledRate() * 0.5;
+    const int highest = highestRequestedHarmonic();
+
+    bandLimit_.setTarget (highest > 0 ? std::clamp (nyquist / highest, 200.0, nyquist * 0.45)
+                                      : nyquist * 0.45);
+
     floorActive_   = parameters_.floorOn;
     ceilingActive_ = parameters_.ceilingOn;
+}
+
+int Engine::highestRequestedHarmonic() const noexcept
+{
+    if (parameters_.chebIndex < dsp::ChebyshevGenerator::kMinIndex)
+        return 0;
+
+    int highest = 0;
+
+    for (int i = 0; i < dsp::ChebyshevGenerator::kNumHarmonics; ++i)
+        if (parameters_.harmonics[static_cast<std::size_t> (i)] > 0.0)
+            highest = dsp::ChebyshevGenerator::kFirstHarmonic + i;
+
+    return highest;
 }
 
 /// Rebuilds every filter coefficient, and records what it built.
@@ -314,15 +406,19 @@ void Engine::updateFilters()
 
     const double floorHz = std::clamp (parameters_.floorHz, 20.0, nyquist * 0.45);
     const double ceilingHz = std::clamp (parameters_.ceilingHz, 200.0, nyquist * 0.45);
+    const double limitHz = std::clamp (bandLimit_.getCurrent(), 200.0, nyquist * 0.45);
 
     builtFocusHz_   = focusHz;
     builtFloorHz_   = floorHz;
     builtCeilingHz_ = ceilingHz;
+    builtLimitHz_   = limitHz;
 
     const auto floorLow  = dsp::design::highpass (floorHz, kButterworthQ1, oversampledRate);
     const auto floorHigh = dsp::design::highpass (floorHz, kButterworthQ2, oversampledRate);
     const auto ceilLow   = dsp::design::lowpass  (ceilingHz, kButterworthQ1, oversampledRate);
     const auto ceilHigh  = dsp::design::lowpass  (ceilingHz, kButterworthQ2, oversampledRate);
+    const auto limitLow  = dsp::design::lowpass  (limitHz, kButterworthQ1, oversampledRate);
+    const auto limitHigh = dsp::design::lowpass  (limitHz, kButterworthQ2, oversampledRate);
 
     for (auto& channel : channels_)
     {
@@ -331,6 +427,8 @@ void Engine::updateFilters()
         channel.floorB.setCoefficients (floorHigh);
         channel.ceilingA.setCoefficients (ceilLow);
         channel.ceilingB.setCoefficients (ceilHigh);
+        channel.limitA.setCoefficients (limitLow);
+        channel.limitB.setCoefficients (limitHigh);
     }
 }
 
@@ -355,6 +453,7 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
     focus_.skip (oversampledSamples);
     driveGain_.skip (oversampledSamples);
     colour_.skip (oversampledSamples);
+    bandLimit_.skip (oversampledSamples);
     const double track = track_.skip (oversampledSamples);
 
     // Against what was built, not against what changed. A tolerance rather than
@@ -364,9 +463,10 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
     // precision.
     constexpr double kFilterTolerance = 1.0e-9;
 
-    if (std::abs (focus_.getCurrent()   - builtFocusHz_)   > kFilterTolerance
-     || std::abs (parameters_.floorHz   - builtFloorHz_)   > kFilterTolerance
-     || std::abs (parameters_.ceilingHz - builtCeilingHz_) > kFilterTolerance)
+    if (std::abs (focus_.getCurrent()     - builtFocusHz_)   > kFilterTolerance
+     || std::abs (parameters_.floorHz     - builtFloorHz_)   > kFilterTolerance
+     || std::abs (parameters_.ceilingHz   - builtCeilingHz_) > kFilterTolerance
+     || std::abs (bandLimit_.getCurrent() - builtLimitHz_)   > kFilterTolerance)
         updateFilters();
 
     // Unconditionally, not only when a smoother is moving. prepare() runs
@@ -376,6 +476,16 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
     // bug that once left Emberdrive's oversampling control inert.
     generator_.setDrive (driveGain_.getCurrent());
     generator_.setColour (colour_.getCurrent());
+
+    // One call rather than nine: setAll rebuilds the pedestal and fundamental
+    // corrections once, and above index 1 that rebuild is a quadrature.
+    std::array<double, dsp::ChebyshevGenerator::kNumHarmonics> chebGains {};
+    for (std::size_t i = 0; i < chebGains_.size(); ++i)
+        chebGains[i] = chebGains_[i].skip (oversampledSamples);
+
+    chebyshev_.setAll (chebGains.data(),
+                       chebTilt_ .skip (oversampledSamples),
+                       chebIndex_.skip (oversampledSamples));
 
     const double punchDepth = std::clamp (parameters_.punch, 0.0, 1.0);
 
@@ -403,6 +513,12 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
 
     for (int i = 0; i < oversampledSamples; ++i)
     {
+        // Read before the split, because the band limit fades with it. A
+        // boolean here instead was a click: switching generator flipped the
+        // limit in one sample, and the outgoing generator -- still carrying
+        // almost all the weight -- saw its band step.
+        const double fade = generatorFade_.next();
+
         // ---- band split, stereo-linked peak --------------------------------
         double band[kMaxChannels] {};
         double linkedPeak = 0.0;
@@ -414,6 +530,22 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
 
             band[channel] = aboveMode ? channels_[c].focus.processHigh (x)
                                       : channels_[c].focus.processLow (x);
+
+            // Ahead of the envelope, not after it: the normalisation has to
+            // describe the signal the generator will actually see, or the unit
+            // amplitude the whole method rests on is measured off the wrong
+            // waveform.
+            //
+            // Faded in with the generator that needs it, and skipped outright
+            // when it is not wanted, so Curve mode pays nothing and neither
+            // generator ever sees its input step.
+            if (fade > 0.0)
+            {
+                const double limited = channels_[c].limitB.process (channels_[c].limitA.process (band[channel]));
+                band[channel] = fade >= 1.0 ? limited
+                                            : band[channel] + fade * (limited - band[channel]);
+            }
+
             linkedPeak = std::max (linkedPeak, std::abs (band[channel]));
         }
 
@@ -481,12 +613,38 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
         // and not a constant.
         generator_.setInputAmplitude (envelope_ * inverseScale);
 
+        // Chebyshev has its own normalisation, and it differs from Track's in
+        // two ways that both matter.
+        //
+        // It is pinned at Track 1 -- divide by the envelope, multiply back by
+        // it -- because T_n(a cos t) is the nth harmonic only at a = 1, so
+        // anything else is not the mode the control claims to be.
+        //
+        // And the multiplier is *gated* where the divisor is floored. The Curve
+        // generator maps 0 to exactly 0, so a floored multiplier is harmless
+        // there; T_even(0) is +/-1, so with a floored multiplier true silence
+        // would come out as a -90 dBFS constant that then rides the envelope on
+        // the way down. A real zero below the floor is what makes silence in
+        // silence out, rather than a slow thump.
+        const double chebDivisor = std::max (envelope_, envelopeFloor_);
+        const double chebScale   = envelope_ > envelopeFloor_ ? envelope_ : 0.0;
+
         for (int channel = 0; channel < activeChannels; ++channel)
         {
             const auto c = static_cast<std::size_t> (channel);
             auto& state = channels_[c];
 
-            double wet = state.generator.process (band[channel] * inverseScale, generator_) * scale;
+            // Both branches run only while the crossfade is in flight; in steady
+            // state one of them is skipped outright, so the generator that is
+            // not selected costs a comparison.
+            double wet = 0.0;
+
+            if (fade < 1.0)
+                wet += (1.0 - fade)
+                     * state.generator.process (band[channel] * inverseScale, generator_) * scale;
+
+            if (fade > 0.0)
+                wet += fade * chebyshev_.evaluate (band[channel] / chebDivisor) * chebScale;
 
             // The even half of the generator sits on a DC pedestal by
             // construction, so this is not optional.

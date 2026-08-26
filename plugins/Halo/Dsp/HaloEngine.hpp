@@ -14,24 +14,30 @@
 //              LR4 split at Focus -> band                                    |
 //                Above: the high side, an exciter                            |
 //                Below: the low side, a bass enhancer                        |
+//              band limit lowpass          (Chebyshev generator only)        |
 //              band envelope                                                 |
 //              normalise by envelope^Track                                   |
-//              harmonic generator (ADAA, odd/even blend)                     v
-//              restore envelope^Track                                      sum --> output
-//              DC block                                                      ^
-//              Floor highpass / Ceiling lowpass on the harmonics             |
-//              Punch: transient-dependent gain                               |
-//              Amount ------------------------------------------------------+
+//              harmonic generator                                            v
+//                Curve:     odd/even blend, ADAA'd                         sum --> output
+//                Chebyshev: chosen harmonics, direct                          ^
+//              restore envelope^Track                                         |
+//              DC block                                                       |
+//              Floor highpass / Ceiling lowpass on the harmonics              |
+//              Punch: transient-dependent gain                                |
+//              Amount -------------------------------------------------------+
 //            [ /oversampled ]
 //
 // The dry path is never filtered and the wet path carries almost no
 // fundamental, so unlike a conventional exciter there is nothing for the two to
-// comb against. See HarmonicGenerator.hpp for exactly how much "almost" is.
+// comb against. See HarmonicGenerator.hpp for exactly how much "almost" is, and
+// ChebyshevGenerator.hpp for the other generator's very different answer.
 
+#include <array>
 #include <vector>
 
 #include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Biquad.hpp>
+#include <tezla/dsp/ChebyshevGenerator.hpp>
 #include <tezla/dsp/Crossover.hpp>
 #include <tezla/dsp/DcBlocker.hpp>
 #include <tezla/dsp/HalfbandFir.hpp>
@@ -55,32 +61,65 @@ enum class BandMode
     Below
 };
 
+/// Which engine makes the harmonics.
+enum class Generator
+{
+    /// Two smooth curves blended by Colour. You choose a shape and accept the
+    /// series that falls out of it -- which is how every exciter works, and
+    /// which is why you cannot ask one for "the fifth, nothing else".
+    Curve = 0,
+
+    /// Chebyshev harmonic synthesis (Le Brun, JAES 27(4), 1979). You choose the
+    /// series and the curve is derived from it. Drive, Colour and Track have no
+    /// meaning here: Index replaces Drive, the harmonic levels replace Colour,
+    /// and Track is pinned at 1 because unit amplitude is the precondition the
+    /// whole method rests on.
+    Chebyshev
+};
+
 struct Parameters
 {
-    BandMode bandMode  { BandMode::Above };
-    double   focusHz   { 3000.0 };   ///< 40 .. 12000
-    double   drive     { 0.4 };      ///< 0 .. 1
-    double   colour    { 0.5 };      ///< 0 = odd harmonics, 1 = even
-    double   track     { 0.35 };     ///< 0 = level dependent, 1 = constant ratio
-    double   punch     { 0.0 };      ///< 0 .. 1, transient dependence
+    BandMode  bandMode  { BandMode::Above };
+    Generator generator { Generator::Curve };
+    double    focusHz   { 3000.0 };   ///< 40 .. 12000
+    double    drive     { 0.4 };      ///< 0 .. 1, Curve only
+    double    colour    { 0.5 };      ///< 0 = odd harmonics, 1 = even, Curve only
+    double    track     { 0.35 };     ///< 0 = level dependent, 1 = constant ratio, Curve only
+    double    punch     { 0.0 };      ///< 0 .. 1, transient dependence
 
-    bool     floorOn   { false };
-    double   floorHz   { 200.0 };    ///< 20 .. 2000, harmonics below this removed
-    bool     ceilingOn { true };
-    double   ceilingHz { 16000.0 };  ///< 2000 .. 20000, harmonics above this removed
+    bool      floorOn   { false };
+    double    floorHz   { 200.0 };    ///< 20 .. 2000, harmonics below this removed
+    bool      ceilingOn { true };
+    double    ceilingHz { 16000.0 };  ///< 2000 .. 20000, harmonics above this removed
 
     /// Stereo width of the generated harmonics only. 1 is unchanged, exactly;
     /// 0 folds them to mono; 2 doubles their side content. The dry signal is
     /// never touched by this, so however wide the air gets the sub underneath it
     /// stays where it was.
-    double   width     { 1.0 };      ///< 0 .. 2
+    double    width     { 1.0 };      ///< 0 .. 2
 
-    double   amountDb  { 0.0 };      ///< -60 .. +12; -60 is silence, exactly
-    bool     listen    { false };    ///< solo the generated harmonics
-    bool     autoTrim  { true };
+    double    amountDb  { 0.0 };      ///< -60 .. +12; -60 is silence, exactly
+    bool      listen    { false };    ///< solo the generated harmonics
+    bool      autoTrim  { true };
 
-    double   inputDb   { 0.0 };      ///< -24 .. +24
-    double   outputDb  { 0.0 };      ///< -24 .. +24
+    double    inputDb   { 0.0 };      ///< -24 .. +24
+    double    outputDb  { 0.0 };      ///< -24 .. +24
+
+    // ---- Chebyshev generator only -------------------------------------------
+
+    /// Linear level for harmonics 2 through 8, in that order. All zero makes the
+    /// generator exactly the zero function.
+    std::array<double, dsp::ChebyshevGenerator::kNumHarmonics> harmonics
+        { 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+
+    /// Le Brun's waveshaping index. 1 is the exact point; below it the
+    /// harmonics blend into one another, above it the clamp engages and what
+    /// comes out is the wreckage of a chosen series rather than one.
+    double chebIndex { 1.0 };       ///< 0 .. 2
+
+    /// Slope across the seven levels. 0 leaves a hand-set recipe untouched, to
+    /// the bit.
+    double chebTilt  { 0.0 };       ///< -1 .. +1
 
     dsp::OversamplingMode oversampling { dsp::OversamplingMode::Auto };
 };
@@ -121,12 +160,18 @@ public:
     /// the output can show them.
     [[nodiscard]] double getHarmonicsDb() const noexcept { return harmonicsDb_; }
 
+
 private:
     void updateDerivedParameters();
     void updateFilters();
 
     /// Maps the 0..1 Drive control onto the generator's gain.
     [[nodiscard]] static double driveGainFor (double drive) noexcept;
+
+    /// Highest harmonic the Chebyshev recipe actually asks for, from the
+    /// parameters rather than from the smoothed levels -- a corner derived from
+    /// a value still in motion would chatter every time a level was touched.
+    [[nodiscard]] int highestRequestedHarmonic() const noexcept;
 
     double sampleRate_   { 44100.0 };
     int    maxBlockSize_ { 512 };
@@ -151,6 +196,15 @@ private:
         dsp::Biquad<double>                floorA, floorB;      ///< 24 dB/oct, on the harmonics
         dsp::Biquad<double>                ceilingA, ceilingB;
 
+        /// Band limit for the Chebyshev generator, ahead of everything else.
+        ///
+        /// T_n of a band topping out at B reaches n*B, so content above
+        /// internalNyquist / n folds back. Limiting the band is what turns "this
+        /// aliases less" into "this cannot alias", and it is why the generator
+        /// needs no antialiasing of its own. Not used in Curve mode, where the
+        /// shaper is ADAA'd instead and the band is left alone.
+        dsp::Biquad<double>                limitA, limitB;
+
         /// The dry path is delayed rather than mixed inside the oversampled
         /// block, which is where this differs from Emberdrive deliberately.
         /// The oversampler's round-trip latency is a whole number of base-rate
@@ -173,6 +227,12 @@ private:
     /// the two sides differ. CLAUDE.md 7 says so; this is what obeying it
     /// looks like.
     dsp::HarmonicGenerator generator_;
+
+    /// Stereo-linked for the same reason, and stateless besides -- there is no
+    /// ADAA history here, because a polynomial on a band-limited signal is
+    /// already band-limited and ADAA only costs fundamental rejection. See
+    /// ChebyshevGenerator.hpp for the measurement that settled it.
+    dsp::ChebyshevGenerator chebyshev_;
 
     double meanSquareA_ { 0.0 };   ///< first of two cascaded averaging poles
     double meanSquare_  { 0.0 };
@@ -198,6 +258,16 @@ private:
     dsp::SmoothedValue<double> driveGain_;
     dsp::SmoothedValue<double> colour_;
     dsp::SmoothedValue<double> track_;
+    dsp::SmoothedValue<double> chebIndex_;
+    dsp::SmoothedValue<double> chebTilt_;
+    dsp::SmoothedValue<double> bandLimit_;
+    std::array<dsp::SmoothedValue<double>, dsp::ChebyshevGenerator::kNumHarmonics> chebGains_;
+
+    /// 0 is all Curve, 1 is all Chebyshev. Switching generator is a discrete
+    /// change between two quite different signals, so it crossfades rather than
+    /// steps -- CLAUDE.md 7. In steady state one branch is skipped entirely, so
+    /// the second generator costs nothing while it is not selected.
+    dsp::SmoothedValue<double> generatorFade_;
 
     /// How often the envelope-derived values are recomputed, in oversampled
     /// samples. Chosen from the actual rate so the control rate lands near
@@ -219,6 +289,7 @@ private:
     double builtFocusHz_   { 0.0 };
     double builtFloorHz_   { 0.0 };
     double builtCeilingHz_ { 0.0 };
+    double builtLimitHz_   { 0.0 };
 
     double autoTrimGain_ { 1.0 };
     double harmonicsDb_  { kAmountSilenceDb };
