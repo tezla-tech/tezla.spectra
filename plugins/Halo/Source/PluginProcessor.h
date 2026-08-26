@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <tezla/dsp/BypassMixer.hpp>
 #include <tezla/dsp/VuMeter.hpp>
 
 #include "HaloEngine.hpp"
@@ -108,17 +109,20 @@ private:
     // Double-precision scratch: the DSP is double throughout, so a float host
     // buffer is converted here rather than compromising the processing.
     juce::AudioBuffer<double> scratch_;
+    juce::AudioBuffer<double> dryScratch_;
     std::array<double*, Engine::kMaxChannels> channelPointers_ {};
+    std::array<const double*, Engine::kMaxChannels> dryPointers_ {};
 
     // Bypass has to be latency-matched, or A/B comparison is a lie: the
     // bypassed signal would arrive earlier than the processed one and sound
     // tighter for reasons that have nothing to do with the plugin.
-    juce::AudioBuffer<double> bypassDelay_;
-    int bypassDelayWrite_ { 0 };
-    int reportedLatency_  { 0 };
-
-    // Crossfade in and out of bypass so the switch does not click.
-    double bypassMix_ { 0.0 };
+    //
+    // This used to be a ring buffer written by hand here, and it delayed by
+    // zero -- so switching bypass jumped the signal by the whole reported
+    // latency and the crossfade swept a comb filter across it. It is shared and
+    // tested now; see BypassMixer.hpp.
+    dsp::BypassMixer bypassMixer_;
+    int reportedLatency_ { 0 };
 
     dsp::VuMeter inputMeter_[Engine::kMaxChannels];
     dsp::VuMeter outputMeter_[Engine::kMaxChannels];

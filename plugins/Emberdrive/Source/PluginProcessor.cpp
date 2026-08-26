@@ -1,6 +1,8 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+#include <algorithm>
+
 #include <tezla/dsp/Decibels.hpp>
 
 namespace tezla::emberdrive
@@ -29,7 +31,6 @@ constexpr int kSchemaV2 = 2;
 constexpr int kSchemaV3 = 3;
 constexpr int kStateSchemaVersion = 3;
 constexpr auto kStateTypeName = "EmberdriveState";
-constexpr double kBypassFadeSeconds = 0.010;
 
 /// A skew that puts the useful part of a range in the middle of the travel.
 /// A drive control that does everything interesting in its first 15% is a
@@ -340,7 +341,7 @@ void EmberdriveProcessor::prepareToPlay (double sampleRate, int maximumExpectedS
         outputMeter_[channel].prepare (sampleRate);
     }
 
-    bypassMix_ = bypassParameter_ != nullptr && bypassParameter_->get() ? 1.0 : 0.0;
+    dryScratch_.setSize (numChannels, maximumExpectedSamplesPerBlock, false, true, true);
 
     updateLatency (engine_.getLatencySamples());
 }
@@ -351,12 +352,12 @@ void EmberdriveProcessor::updateLatency (int engineLatencySamples)
     setLatencySamples (reportedLatency_);
 
     // The bypass path is delayed by exactly the latency the host is told about,
-    // so switching bypass does not shift the timing. +1 keeps the buffer valid
-    // when the latency is zero.
-    bypassDelay_.setSize (juce::jmax (1, getTotalNumOutputChannels()),
-                          juce::jmax (1, reportedLatency_ + 1), false, true, true);
-    bypassDelay_.clear();
-    bypassDelayWrite_ = 0;
+    // so switching bypass does not shift the timing.
+    const bool bypassed = bypassParameter_ != nullptr && bypassParameter_->get();
+
+    bypassMixer_.prepare (sampleRate_, reportedLatency_,
+                          juce::jmax (1, getTotalNumOutputChannels()));
+    bypassMixer_.reset (bypassed);
 }
 
 void EmberdriveProcessor::pullParameters()
@@ -454,7 +455,10 @@ void EmberdriveProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
         updateLatency (engine_.getLatencySamples());
 
     if (scratch_.getNumSamples() < numSamples || scratch_.getNumChannels() < numChannels)
+    {
         scratch_.setSize (numChannels, numSamples, false, true, true);
+        dryScratch_.setSize (numChannels, numSamples, false, true, true);
+    }
 
     for (int channel = 0; channel < numChannels; ++channel)
     {
@@ -465,60 +469,35 @@ void EmberdriveProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
             destination[i] = static_cast<double> (source[i]);
 
         inputMeter_[channel].processBlock (destination, numSamples);
+
+        // The bypass path needs the input as doubles and untouched, and the
+        // engine is about to overwrite `destination` in place.
+        std::copy (destination, destination + numSamples, dryScratch_.getWritePointer (channel));
+
         channelPointers_[static_cast<std::size_t> (channel)] = destination;
-    }
-
-    // Keep the delayed dry copy running whether or not bypass is engaged, so
-    // engaging it mid-note does not read stale samples.
-    const int delayLength = juce::jmax (1, reportedLatency_ + 1);
-    for (int channel = 0; channel < numChannels && channel < bypassDelay_.getNumChannels(); ++channel)
-    {
-        auto* delayLine = bypassDelay_.getWritePointer (channel);
-        const auto* source = buffer.getReadPointer (channel);
-        int write = bypassDelayWrite_;
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            delayLine[write] = static_cast<double> (source[i]);
-            write = (write + 1) % delayLength;
-        }
+        dryPointers_[static_cast<std::size_t> (channel)] = dryScratch_.getReadPointer (channel);
     }
 
     engine_.process (channelPointers_.data(), numChannels, numSamples);
 
-    const bool bypassRequested = bypassParameter_ != nullptr && bypassParameter_->get();
-    const double bypassTarget = bypassRequested ? 1.0 : 0.0;
-    const double fadeStep = 1.0 / juce::jmax (1.0, kBypassFadeSeconds * sampleRate_);
+    // Latency-matched, crossfaded, and shared by every plugin so there is one
+    // copy of this to get right. See BypassMixer.hpp for what it used to do.
+    bypassMixer_.setBypassed (bypassParameter_ != nullptr && bypassParameter_->get());
+    bypassMixer_.process (channelPointers_.data(), dryPointers_.data(), numChannels, numSamples);
 
     for (int channel = 0; channel < numChannels; ++channel)
     {
         const auto* processed = scratch_.getReadPointer (channel);
         auto* destination = buffer.getWritePointer (channel);
 
-        const double* delayLine = channel < bypassDelay_.getNumChannels()
-                                ? bypassDelay_.getReadPointer (channel) : nullptr;
-
-        int read = bypassDelayWrite_;
-        double mix = bypassMix_;
-
         for (int i = 0; i < numSamples; ++i)
-        {
-            mix = bypassTarget > mix ? juce::jmin (bypassTarget, mix + fadeStep)
-                                     : juce::jmax (bypassTarget, mix - fadeStep);
+            destination[i] = static_cast<FloatType> (processed[i]);
 
-            const double dry = delayLine != nullptr ? delayLine[read] : 0.0;
-            destination[i] = static_cast<FloatType> (processed[i] * (1.0 - mix) + dry * mix);
-
-            read = (read + 1) % delayLength;
-        }
-
-        if (channel == numChannels - 1)
-            bypassMix_ = mix;
-
-        outputMeter_[channel].processBlock (scratch_.getReadPointer (channel), numSamples);
+        // Metered after the bypass mix, so the meters show what is being heard
+        // rather than what the engine produced and the bypass then discarded.
+        outputMeter_[channel].processBlock (processed, numSamples);
     }
 
-    bypassDelayWrite_ = (bypassDelayWrite_ + numSamples) % delayLength;
 
     meters_.inputVuDb.store    (static_cast<float> (inputMeter_[0].getVuDb()),    std::memory_order_relaxed);
     meters_.inputPeakDb.store  (static_cast<float> (inputMeter_[0].getPeakDb()),  std::memory_order_relaxed);
