@@ -121,8 +121,14 @@ class Engine
 public:
     static constexpr int kMaxChannels = 2;
 
-    /// Allocates. Never call from the audio thread.
+    /// Allocates, for the worst case rather than for the current settings.
+    /// Never call from the audio thread.
     void prepare (double sampleRate, int maxBlockSize, int numChannels);
+
+    /// Everything the oversampling factor changes, and nothing that allocates.
+    /// Safe from the audio thread -- which is why prepare() sizes for x8
+    /// whatever factor is actually running.
+    void setOversamplingFactor (int factor);
 
     /// Clears every filter, envelope and delay line. No state may survive this.
     void reset();
@@ -149,6 +155,9 @@ public:
 
 private:
     void updateDerivedParameters();
+
+    /// The DC corner alone -- one coefficient per blocker, no memory touched.
+    void updateDcBlockers();
     void updateFilters();
     void updateAutoTrim();
 

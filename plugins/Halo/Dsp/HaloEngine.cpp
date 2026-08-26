@@ -138,11 +138,12 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     maxBlockSize_ = std::max (maxBlockSize, 1);
     numChannels_  = std::clamp (numChannels, 1, kMaxChannels);
 
-    const int factor = dsp::oversamplingFactor (parameters_.oversampling, sampleRate_);
-    oversampler_.prepare (maxBlockSize_, numChannels_, factor);
-    preparedFactor_ = factor;
-
-    const double oversampledRate = getOversampledRate();
+    // Everything that allocates lives here and nowhere else, sized for the
+    // *worst* case rather than for the current settings, so that changing the
+    // oversampling factor later can be a switch rather than a rebuild. See
+    // setOversamplingFactor().
+    oversampler_.prepare (maxBlockSize_, numChannels_, dsp::oversamplingFactor (
+        parameters_.oversampling, sampleRate_));
 
     channels_.assign (static_cast<std::size_t> (numChannels_), ChannelState {});
     dryInput_.assign (static_cast<std::size_t> (numChannels_),
@@ -150,13 +151,45 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
 
     for (auto& channel : channels_)
     {
+        // For x8's latency whatever factor is running, so the line never has to
+        // be resized when the factor moves. It rounds up to a power of two
+        // internally, and 71 and 47 land in the same bucket anyway.
+        channel.dryDelay.prepare (dsp::Oversampler::latencyForFactor (8) + 2);
+    }
+
+    // Base rate: these apply outside the oversampled block, so smoothing them
+    // at the internal rate would make the ramp four times too fast at 48 kHz
+    // and correct only at 192. They are the only smoothers the factor does not
+    // touch, which is why they are set here rather than below.
+    inputGain_  .prepare (sampleRate_, kSmoothingSeconds);
+    amountGain_ .prepare (sampleRate_, kSmoothingSeconds);
+    outputGain_ .prepare (sampleRate_, kSmoothingSeconds);
+    widthAmount_.prepare (sampleRate_, kSmoothingSeconds);
+
+    envelopeFloor_ = dsp::dbToGain (kEnvelopeFloorDb, -200.0);
+
+    setOversamplingFactor (oversampler_.getFactor());
+}
+
+/// Everything the oversampling factor changes, and nothing that allocates.
+///
+/// Safe to call from the audio thread, which is the point: the factor is a
+/// parameter, and rebuilding the engine when it moves was an allocation in
+/// processBlock -- forbidden outright by CLAUDE.md 2.2. It had never been
+/// audible because the glitch was masked by the mode change itself, which is
+/// exactly how a rule gets broken quietly for a year.
+void Engine::setOversamplingFactor (int factor)
+{
+    oversampler_.setFactor (factor);
+    preparedFactor_ = oversampler_.getFactor();
+
+    const double oversampledRate = getOversampledRate();
+
+    for (auto& channel : channels_)
+    {
         channel.focus.prepare (oversampledRate);
         channel.dcBlockerA.prepare (oversampledRate, kDcBlockerHz);
         channel.dcBlockerB.prepare (oversampledRate, kDcBlockerHz);
-
-        // The delay only ever has to cover the oversampler's own latency, which
-        // is a whole number of base-rate samples by design.
-        channel.dryDelay.prepare (oversampler_.getLatencySamples() + 2);
     }
 
     controlInterval_  = std::max (1, static_cast<int> (std::lround (oversampledRate / kControlRateHz)));
@@ -167,15 +200,6 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     punchFastRelease_ = coefficientFor (kPunchFastReleaseMs, oversampledRate);
     punchSlowAttack_  = coefficientFor (kPunchSlowAttackMs,  oversampledRate);
     punchSlowRelease_ = coefficientFor (kPunchSlowReleaseMs, oversampledRate);
-    envelopeFloor_    = dsp::dbToGain (kEnvelopeFloorDb, -200.0);
-
-    // Base rate: these apply outside the oversampled block, so smoothing them
-    // at the internal rate would make the ramp four times too fast at 48 kHz
-    // and correct only at 192.
-    inputGain_  .prepare (sampleRate_, kSmoothingSeconds);
-    amountGain_ .prepare (sampleRate_, kSmoothingSeconds);
-    outputGain_ .prepare (sampleRate_, kSmoothingSeconds);
-    widthAmount_.prepare (sampleRate_, kSmoothingSeconds);
 
     // Short: these follow the envelope, which is already smooth. All this has
     // to do is take the corners off the control-rate steps.
@@ -306,8 +330,9 @@ bool Engine::setParameters (const Parameters& parameters)
     {
         // The factor changes the internal rate, and with it every time
         // constant, every filter coefficient, and the latency the host has to
-        // be told about. Rebuilding is the honest way to handle it.
-        prepare (sampleRate_, maxBlockSize_, numChannels_);
+        // be told about -- but not a byte of memory. This used to call
+        // prepare(), which allocated, on the audio thread.
+        setOversamplingFactor (requestedFactor);
         return true;
     }
 

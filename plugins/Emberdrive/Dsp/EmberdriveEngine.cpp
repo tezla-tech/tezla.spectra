@@ -91,37 +91,59 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     maxBlockSize_ = std::max (maxBlockSize, 1);
     numChannels_  = std::clamp (numChannels, 1, kMaxChannels);
 
-    const int factor = dsp::oversamplingFactor (parameters_.oversampling, sampleRate_);
-    oversampler_.prepare (maxBlockSize_, numChannels_, factor);
-
-    const double oversampledRate = getOversampledRate();
+    // Everything that allocates lives here, sized for the *worst* case rather
+    // than for the current settings, so changing the oversampling factor later
+    // can be a switch rather than a rebuild. See setOversamplingFactor().
+    oversampler_.prepare (maxBlockSize_, numChannels_, dsp::oversamplingFactor (
+        parameters_.oversampling, sampleRate_));
 
     channels_.assign (static_cast<std::size_t> (numChannels_), ChannelState {});
     dryInput_.assign (static_cast<std::size_t> (numChannels_),
                       std::vector<double> (static_cast<std::size_t> (maxBlockSize_), 0.0));
     workPointers_.assign (static_cast<std::size_t> (numChannels_), nullptr);
 
-    const int maxFeedbackSamples = static_cast<int> (std::ceil (kMaxFeedbackSeconds * oversampledRate)) + 2;
-
-    const double dcHz = parameters_.expert.enabled
-                      ? std::clamp (parameters_.expert.dcBlockerHz, 1.0, 40.0) : kDcBlockerHz;
-
-    preparedFactor_ = factor;
-    preparedDcHz_   = dcHz;
+    // Both delay lines are sized for x8 whatever factor is running: the dry one
+    // covers the oversampler's latency, the feedback one covers its longest
+    // time at the highest internal rate. Sizing them for the current factor is
+    // what made a factor change allocate.
+    const int maxFeedbackSamples =
+        static_cast<int> (std::ceil (kMaxFeedbackSeconds * sampleRate_ * 8.0)) + 2;
 
     for (auto& channel : channels_)
     {
-        channel.splitter.prepare (oversampledRate);
-        // The dry delay only ever has to cover the oversampler's own latency,
-        // which is a whole number of base-rate samples by design.
-        channel.dryDelay.prepare (oversampler_.getLatencySamples() + 2);
+        channel.dryDelay.prepare (dsp::Oversampler::latencyForFactor (8) + 2);
 
         for (auto& band : channel.bands)
-        {
-            band.dcBlocker.prepare (oversampledRate, dcHz);
             band.feedbackDelay.prepare (maxFeedbackSamples);
-        }
     }
+
+    masterGainComputer_.setKneeDb (kMasterKneeDb);
+
+    // Base rate: these apply after the oversampled block, because crush and
+    // downsample are wet-only and live out there. The factor does not touch
+    // them, which is why they are set here rather than below.
+    mix_       .prepare (sampleRate_, kSmoothingSeconds);
+    outputGain_.prepare (sampleRate_, kSmoothingSeconds);
+
+    setOversamplingFactor (oversampler_.getFactor());
+}
+
+/// Everything the oversampling factor changes, and nothing that allocates.
+///
+/// Safe to call from the audio thread, which is the point: the factor is a
+/// parameter, and rebuilding the engine when it moved was an allocation in
+/// processBlock -- forbidden outright by CLAUDE.md 2.2. Worse here than in
+/// Halo, because the same rebuild was also triggered by the expert DC corner,
+/// which is a continuous control and can be automated.
+void Engine::setOversamplingFactor (int factor)
+{
+    oversampler_.setFactor (factor);
+    preparedFactor_ = oversampler_.getFactor();
+
+    const double oversampledRate = getOversampledRate();
+
+    for (auto& channel : channels_)
+        channel.splitter.prepare (oversampledRate);
 
     // Everything time-based is set from the actual running rate, so the plugin
     // behaves identically at 44.1 and 192 kHz.
@@ -133,21 +155,31 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
 
     detectorCoefficient_ = std::exp (-1.0 / (kDetectorSeconds * oversampledRate));
 
-    masterGainComputer_.setKneeDb (kMasterKneeDb);
-
     driveGain_     .prepare (oversampledRate, kSmoothingSeconds);
     foldGain_      .prepare (oversampledRate, kSmoothingSeconds);
     rectifyAmount_ .prepare (oversampledRate, kSmoothingSeconds);
     feedbackAmount_.prepare (oversampledRate, kSmoothingSeconds);
-    // Mix now runs at base rate: it applies after the oversampled block,
-    // because crush and downsample are wet-only and live out there.
-    mix_       .prepare (sampleRate_,     kSmoothingSeconds);
-    outputGain_.prepare (sampleRate_,     kSmoothingSeconds);
-    bias_      .prepare (oversampledRate, kSmoothingSeconds);
-    tone_      .prepare (oversampledRate, kSmoothingSeconds);
+    bias_          .prepare (oversampledRate, kSmoothingSeconds);
+    tone_          .prepare (oversampledRate, kSmoothingSeconds);
 
+    updateDcBlockers();
     updateDerivedParameters();
     reset();
+}
+
+/// The DC corner alone. One coefficient per blocker, no memory touched -- which
+/// is what lets the expert DC control be automated, or modulated, without
+/// rebuilding the engine underneath it.
+void Engine::updateDcBlockers()
+{
+    const double dcHz = parameters_.expert.enabled
+                      ? std::clamp (parameters_.expert.dcBlockerHz, 1.0, 40.0) : kDcBlockerHz;
+
+    preparedDcHz_ = dcHz;
+
+    for (auto& channel : channels_)
+        for (auto& band : channel.bands)
+            band.dcBlocker.prepare (getOversampledRate(), dcHz);
 }
 
 void Engine::reset()
@@ -226,14 +258,22 @@ bool Engine::setParameters (const Parameters& parameters)
 
     parameters_ = parameters;
 
-    if (factorChanged || dcChanged)
+    if (factorChanged)
     {
-        // The oversampling factor changes the internal rate, which changes
-        // every time constant and every filter coefficient -- and the latency,
-        // which the host has to be told about. Rebuilding is the honest way to
-        // handle it; the caller reports the new latency.
-        prepare (sampleRate_, maxBlockSize_, numChannels_);
-        return factorChanged;
+        // The factor changes the internal rate, and with it every time
+        // constant, every filter coefficient, and the latency the host has to
+        // be told about -- but not a byte of memory. This used to call
+        // prepare(), which allocated, on the audio thread.
+        setOversamplingFactor (requestedFactor);
+        return true;
+    }
+
+    if (dcChanged)
+    {
+        // A corner, not a rebuild. It shares one coefficient with nothing else,
+        // and it used to drag the whole engine through prepare() -- on a
+        // continuous control, from the audio thread.
+        updateDcBlockers();
     }
 
     updateDerivedParameters();

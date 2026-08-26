@@ -81,17 +81,21 @@ public:
     static constexpr double kStopbandDb = 100.0;
 
     /// Allocates. Call from prepareToPlay, never from the audio thread.
+    ///
+    /// Every stage is built, not just the ones this factor needs, because the
+    /// factor is a *parameter*: it can change while audio is running, and
+    /// re-preparing then would allocate on the audio thread -- which CLAUDE.md
+    /// 2.2 forbids outright. Use setFactor() for that, which touches no memory.
+    ///
+    /// The cost is the two stages a x2 session is not using. At a 4096-sample
+    /// block in stereo that is about 900 kB against 400, which is a fair price
+    /// for never allocating in processBlock.
     void prepare (int maxBlockSize, int numChannels, int factor)
     {
-        factor_      = std::clamp (factor, 1, 8);
         numChannels_ = std::max (numChannels, 1);
         maxBlockSize_ = std::max (maxBlockSize, 1);
 
-        numStages_ = 0;
-        for (int f = factor_; f > 1; f /= 2)
-            ++numStages_;
-
-        for (int stage = 0; stage < numStages_; ++stage)
+        for (int stage = 0; stage < kMaxStages; ++stage)
         {
             const auto coefficients = designHalfband (kTapsPerStage[static_cast<std::size_t> (stage)], kStopbandDb);
 
@@ -116,15 +120,41 @@ public:
             channel.assign (static_cast<std::size_t> (maxBlockSize_), 0.0);
 
         pointers_.assign (static_cast<std::size_t> (numChannels_), nullptr);
+
+        setFactor (factor);
+    }
+
+    /// Changes the oversampling factor without touching memory.
+    ///
+    /// Safe from the audio thread, which is the whole point of prepare()
+    /// building every stage. Everything is cleared, including the stages just
+    /// switched out: a stage that stops being called keeps whatever state it
+    /// had, and switching it back in later would dump that straight into the
+    /// signal as a click. The same argument the engines already make about
+    /// filters that get bypassed.
+    void setFactor (int factor) noexcept
+    {
+        factor_ = std::clamp (factor, 1, 8);
+
+        numStages_ = 0;
+        for (int f = factor_; f > 1; f /= 2)
+            ++numStages_;
+
+        reset();
     }
 
     void reset() noexcept
     {
-        for (int stage = 0; stage < numStages_; ++stage)
+        // Every stage, not only the active ones -- see setFactor().
+        for (int stage = 0; stage < kMaxStages; ++stage)
             for (int channel = 0; channel < numChannels_; ++channel)
             {
                 const auto s = static_cast<std::size_t> (stage);
                 const auto c = static_cast<std::size_t> (channel);
+
+                if (c >= upsamplers_[s].size())
+                    continue;
+
                 upsamplers_[s][c].reset();
                 downsamplers_[s][c].reset();
                 std::fill (buffers_[s][c].begin(), buffers_[s][c].end(), 0.0);
