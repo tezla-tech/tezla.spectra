@@ -144,6 +144,42 @@ function rather than against a handful of inequalities — which is what caught 
 one-sample error in the delay line's read index, visible only as a 6.02 dB comb
 peak measuring 5.946 dB at the first harmonic and 5.333 dB at the third.
 
+---
+
+## Tuning
+
+| Source | Licence | Relevance |
+|---|---|---|
+| [The Scala scale file format](https://www.huygens-fokker.org/scala/scl_format.html) and [keyboard map format](https://www.huygens-fokker.org/scala/help.htm#mappings) | public specification | `ScalaFile.hpp` parses both. **Not fetched** — the proxy refuses `huygens-fokker.org` — so the format rules implemented here (a decimal point makes a value cents, a bare integer means *n*/1, the last entry is the repeat interval, `x` marks an unmapped key) are from general reference. Worth checking against the specification, particularly the `.kbm` field order. |
+| Peterson & Barney, JASA 24(2), 1952 | paper | See the Formant row above. |
+
+**The scales are generated, not tabulated**, which is both a licence question and
+a testing one — CLAUDE.md §2.1 and §9. A Pythagorean scale is a chain of 3/2s, a
+quarter-comma meantone fifth is narrowed until four of them make a pure 5/4, and
+Bohlen-Pierce is thirteen equal parts of 3/1. Writing the arithmetic down avoids
+shipping anybody's data files *and* makes each scale checkable against the
+property it was built for rather than against another table. `tests/test_Tuning.cpp`
+asserts that a Pythagorean fifth is 701.955 cents and its limma bit-exactly
+256/243, that four meantone fifths make an exact 5/4, that Kirnberger III's C–E is
+exactly 5/4, and that each Carlos scale's minor third is as flat as its major
+third is sharp.
+
+**What is deliberately absent, and why.** Javanese slendro and pelog, the maqam
+sets and the 22 shruti are *not* built in. They have no canonical tuning — a
+slendro is whatever a particular gamelan was tuned to — so any specific numbers
+would be one instrument's measurements presented as a standard. Those are exactly
+what `.scl` loading is for, and the Scala archive has hundreds of them measured
+from real instruments.
+
+**The three historical temperaments are a middle case.** Werckmeister III,
+Kirnberger III and Vallotti are generated from their constructions, and the
+constructions are written out in `Scales.hpp`. What comes from general reference
+rather than from a source that could be read is *which* fifths each one tempers.
+The defining intervals are asserted, so a wrong assignment would show up as a
+wrong C–E; a wrong assignment that still gave the right C–E would not.
+
+---
+
 **A compiler note that belongs here rather than in a build document.** GCC and
 Clang default to `-ffp-contract=fast`, which may fuse `a*b + c` into a single
 multiply-add with one rounding instead of two. On x86-64 that is invisible —
