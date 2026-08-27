@@ -84,7 +84,7 @@ be band-limited (ADAA, or a smooth shaper) as well. These numbers are pinned in
 
 | Source | Licence | Relevance |
 |---|---|---|
-| Zavalishin, *The Art of VA Filter Design* (free PDF) | book | The standard text on topology-preserving transform / zero-delay-feedback filters. Read this before writing any filter whose cutoff is modulated. |
+| Zavalishin, *The Art of VA Filter Design* ([free PDF](https://www.native-instruments.com/fileadmin/ni_media/downloads/pdf/VAFilterDesign_2.1.0.pdf)) | book | The standard text on topology-preserving transform / zero-delay-feedback filters. Read this before writing any filter whose cutoff is modulated. **Not fetched** — the egress proxy refuses `native-instruments.com` with a 403 at the CONNECT stage, so `curl` is no help either. `SvfFilter.hpp` was derived from the TPT equations rather than read off the page, and then measured against the analogue prototype; the measurements are in `tests/test_SvfFilter.cpp` and below. What a reading would settle is the nonlinear part: the book discusses solving the zero-delay feedback *through* a saturator by iteration, and this implementation keeps the linear solve and shapes the integrator states afterwards. That is a standard simplification, but "standard" here is second-hand. |
 | Robert Bristow-Johnson, *Audio EQ Cookbook* | public | The biquad coefficient formulas implemented in `shared/tezla-dsp/include/tezla/dsp/Biquad.hpp`. |
 | [Surge XT](https://github.com/surge-synthesizer/surge) | GPLv3 | Filters, waveshapers, oversampling, and a well-organised large plugin codebase. Read for architecture; do not copy. |
 | [Calf Studio Gear](https://github.com/calf-studio-gear/calf) | LGPL/GPL | Classic effect topologies, clearly written. |
@@ -106,6 +106,38 @@ outlier. Trust a plain biquad to be rate-independent only below about Fs/8. Put
 anything whose high-frequency shape actually matters — a cabinet response, a
 tape head bump, the tone stack inside a saturation stage — inside an oversampled
 section. Pinned in `tests/test_Biquad.cpp`.
+
+**And what a TPT structure does and does not fix.** `SvfFilter.hpp` is the
+answer to that biquad table, so it is worth being exact about how much of it is
+answered. Measured across 44.1 / 48 / 96 / 192 kHz, resonance 0.6, as the
+spread between the highest and lowest reading:
+
+| corner | at the corner | an octave above | two octaves above |
+|---|---|---|---|
+| 200 Hz | 0.000 dB | 0.004 dB | 0.017 dB |
+| 1 kHz | 0.000 dB | 0.097 dB | 0.444 dB |
+| 4 kHz | 0.000 dB | 1.689 dB | 10.638 dB |
+
+**The corner is exact at every rate, and only the corner.** The prewarp cancels
+precisely at `f = fc`, where all three outputs read `Q` — measured 1.9252 dB at
+resonance 0.6, against 1.9251 from the algebra, at every corner and every rate.
+Replacing `tan(πf/fs)` with the small-angle `πf/fs` — a structure with no
+prewarp — moves that reading to 0.5475 dB for an 8 kHz corner at 44.1 kHz.
+
+Above the corner the response still warps, and must: a discrete response is
+symmetric about Nyquist, and Nyquist is a different frequency at every rate. So
+the biquad rule survives in a weaker form — a TPT filter is rate-independent
+where it counts, but a corner swept up towards Nyquist still belongs inside an
+oversampled section. Pinned in `tests/test_SvfFilter.cpp`.
+
+**A compiler note that belongs here rather than in a build document.** GCC and
+Clang default to `-ffp-contract=fast`, which may fuse `a*b + c` into a single
+multiply-add with one rounding instead of two. On x86-64 that is invisible —
+there is no FMA instruction without `-mfma` — but `fmadd` is baseline on
+AArch64, so the same source computes different numbers on Apple Silicon. It
+surfaced as `SvfFilter` failing to match the linear difference equation it
+implements, bit for bit, on ARM64 only. `cmake/TezlaCompilerOptions.cmake` now
+passes `-ffp-contract=off`, which is what MSVC's `/fp:precise` already does.
 
 ---
 
