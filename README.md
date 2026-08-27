@@ -214,10 +214,23 @@ downloaded plugins loading: **[`docs/BUILD-MACOS.md`](docs/BUILD-MACOS.md)**.
 
 ## Prebuilt binaries
 
-Every push builds Windows and macOS plugins in CI, downloadable from the run's
-**Artifacts**. To cut a GitHub Release, either push a version tag
-(`git tag v0.3.0 && git push origin v0.3.0`) or use **Actions → CI → Run
-workflow** and type a version. An ordinary push deliberately does not release.
+CI **does not run by itself** — no push trigger, no pull-request trigger. Start
+it when you want Windows and macOS builds:
+
+**Actions → CI → Run workflow.**
+
+The **Run workflow** button only appears once **CI** is selected in the left
+sidebar; the "All workflows" view does not show it, which is the usual reason
+for not finding it. Leave the version box empty to just test and build — the
+bundles appear under **Artifacts** at the bottom of the run. Type a version to
+cut a GitHub Release instead.
+
+Pushing a tag does the same and always releases:
+
+```bash
+git tag v0.5.0 && git push origin v0.5.0
+```
+
 See **[`docs/CI.md`](docs/CI.md)**.
 
 ---

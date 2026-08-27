@@ -1,7 +1,32 @@
 # Continuous integration
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push and
-pull request. It does three things.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) **does not run by
+itself.** There is no push trigger and no pull-request trigger: it starts when
+you ask for it, or when a version tag is pushed. It does three things.
+
+### Starting a run
+
+**Actions → CI → Run workflow.**
+
+The **Run workflow** button only appears once **CI** is selected in the left
+sidebar — the "All workflows" view does not show it, and that is the usual
+reason for not being able to find it. Type a version into the box to cut a
+release, or leave it empty to just test and build.
+
+Pushing a tag matching `v*` starts the same run and always cuts a release.
+
+### Why it is not automatic
+
+Every commit used to start one. Because `cancel-in-progress` kills the previous
+run, a normal working session left a column of cancelled runs and burned macOS
+minutes — billed at 10× on private repositories — on builds nobody was going to
+download. Thirty-five runs had accumulated this way, all but a handful of them
+cancelled, before the trigger was changed.
+
+The cost of the change is real and worth stating: **nothing now checks a push.**
+Run the tests locally — `scripts\build.bat NONE -test` on Windows,
+`./scripts/build.sh NONE --test` elsewhere — and start CI by hand before
+tagging.
 
 ---
 
@@ -54,15 +79,14 @@ is the only change needed and the cache invalidates itself.
 
 ## 3. Releases
 
-**A release never happens on an ordinary push** — that would mean one per
-commit. There are two ways to ask for one, and if you were expecting a release
-and got a skipped job, it is because neither happened.
+There are two ways to ask for one, and if you were expecting a release and got
+a skipped job, it is because neither happened.
 
 ### Push a version tag
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 ### Or run the workflow by hand
@@ -110,10 +134,10 @@ macOS runner minutes bill at **10×** on private repositories; Windows at 2×,
 Linux at 1×. The macOS plugin build is the expensive job, and building a
 universal binary compiles everything twice.
 
-If that becomes a problem, restrict the `build` job to tags and manual runs by
-changing its trigger, leaving the cheap `test` job on every push. The tests are
-where most of the value is anyway — all the DSP is framework-free, so they cover
-the part that actually makes the sound.
+This is why nothing runs automatically any more. If you later want the cheap
+`test` job back on every push while leaving the expensive `build` job manual,
+split it into a second workflow file with its own `on: push` — a single workflow
+cannot give one job a trigger the others do not have.
 
 ---
 

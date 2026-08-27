@@ -1,35 +1,54 @@
 name: CI
 
-# Tests run on every push and pull request. Plugin builds run alongside them and
-# upload downloadable bundles.
+# Nothing here runs by itself on an ordinary push. That is deliberate: CI is
+# started by hand, or by a version tag, and never by the act of committing.
 #
-# Releases happen two ways, and never automatically on an ordinary push -- that
-# would mean a release per commit:
+# **To cut a release, and this is the only place it happens:**
 #
-#   1. Push a tag:   git tag v0.3.0 && git push origin v0.3.0
-#   2. Actions -> CI -> "Run workflow", and type a version into the box.
+#   Actions -> CI (in the left sidebar) -> "Run workflow" -> type a version
+#   into the box, e.g. v0.5.0 -> Run workflow.
 #
-# If you were expecting a release and got a skipped job, it is almost certainly
-# because neither of those happened. The build job writes the instructions into
-# the run summary.
+#   The "Run workflow" button only appears once you have selected **CI** in the
+#   left sidebar. The "All workflows" view does not show it, which is the usual
+#   reason for not being able to find it.
 #
-# macOS runner minutes are billed at 10x on private repositories. If that ever
-# matters, move the `build` job behind `workflow_dispatch` and tags only.
+# Or, equivalently, from a terminal:
+#
+#   git tag v0.5.0 && git push origin v0.5.0
+#
+# Leaving the version box empty runs the tests and builds the plugins without
+# cutting a release, which is what you want before tagging.
+#
+# Why no push trigger: every commit used to start a run, and because
+# cancel-in-progress kills the previous one, a normal working session left a
+# column of cancelled runs and burned macOS minutes (billed at 10x on private
+# repositories) on builds nobody was going to download. Run it when you want an
+# answer.
 on:
   push:
-    branches: ['**']
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
     inputs:
       release_version:
-        description: 'Cut a release with this version (e.g. v0.3.0). Leave empty to just build.'
+        description: 'Cut a release with this version (e.g. v0.5.0). Leave empty to just test and build.'
         required: false
         type: string
 
+# Named so a dispatched run says what it is doing in the runs list, rather than
+# repeating the commit subject of whatever happened to be at the top.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && (inputs.release_version != ''
+          && format('Release {0}', inputs.release_version)
+          || 'Manual test and build')
+      || format('Release {0}', github.ref_name) }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Not cancel-in-progress. Every run is now deliberate, and cancelling one
+  # halfway through the release job would leave a tag with no binaries against
+  # it. Two runs queueing is the correct behaviour when someone asked for both.
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -231,14 +250,17 @@ jobs:
             fi
             if [ "${{ startsWith(github.ref, 'refs/tags/v') }}" != "true" ] \
                && [ -z "${{ github.event.inputs.release_version }}" ]; then
-              echo "_No release was cut: this run is not a version tag and no version"
-              echo "was given. To cut one, either push a tag:_"
+              echo "_No release was cut: this run had no version. That is the normal"
+              echo "result of a test-and-build run, and the artifacts above are still"
+              echo "yours to download._"
+              echo
+              echo "_To cut one: **Actions -> CI** in the left sidebar -> **Run workflow**"
+              echo "-> type a version. The button only appears once CI is selected in the"
+              echo "sidebar; the All workflows view does not show it. Or from a terminal:_"
               echo
               echo '```bash'
-              echo 'git tag v0.3.0 && git push origin v0.3.0'
+              echo 'git tag v0.5.0 && git push origin v0.5.0'
               echo '```'
-              echo
-              echo "_or use **Run workflow** on this workflow and type a version._"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
