@@ -84,7 +84,8 @@
 #include <algorithm>
 #include <array>
 
-#include "RcNetwork.hpp"
+#include "Exact.hpp"
+#include "PassiveNetwork.hpp"
 
 namespace tezla::dsp {
 
@@ -226,7 +227,7 @@ public:
         const double m = std::clamp (middle, 0.0, 1.0);
         const double t = std::clamp (treble, 0.0, 1.0);
 
-        if (b == bass_ && m == middle_ && t == treble_)
+        if (isExactly (b, bass_) && isExactly (m, middle_) && isExactly (t, treble_))
             return;
 
         bass_ = b;
@@ -245,7 +246,7 @@ private:
         network_.setOutputNode (kNodeOutput);
         network_.clearElements();
 
-        using Net = RcNetwork<>;
+        using Net = PassiveNetwork<>;
 
         network_.addCapacitor (Net::kInput, kNodeTrebleTop, components_.trebleCap);
 
@@ -294,7 +295,7 @@ private:
     double middle_ { 0.5 };
     double treble_ { 0.5 };
 
-    RcNetwork<> network_;
+    PassiveNetwork<> network_;
 };
 
 } // namespace tezla::dsp

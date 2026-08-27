@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,7 @@
 #include <tezla/measure/Harmonics.hpp>
 #include <tezla/measure/Signals.hpp>
 
+#include "AnvilEngine.hpp"
 #include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
@@ -1343,6 +1345,287 @@ int runLoudness (const Args& args)
     return 0;
 }
 
+
+// ---------------------------------------------------------------------------
+// anvil
+// ---------------------------------------------------------------------------
+
+namespace anvilMeasure
+{
+using namespace tezla;
+
+/// Renders a sine through a configured amplifier and returns the last window.
+std::vector<double> renderAnvil (const anvil::Parameters& parameters, double rate,
+                                 double amplitude, double frequency, std::size_t window)
+{
+    anvil::Engine engine;
+    engine.prepare (rate, 128, 2);
+    engine.setParameters (parameters);
+    engine.reset();
+
+    std::vector<double> left (128), right (128), out;
+    out.reserve (3 * window);
+
+    double* channels[2] { left.data(), right.data() };
+    std::size_t i = 0;
+
+    while (out.size() < 3 * window)
+    {
+        for (int k = 0; k < 128; ++k)
+            left[static_cast<std::size_t> (k)] = right[static_cast<std::size_t> (k)]
+                = amplitude * std::sin (2.0 * std::numbers::pi * frequency
+                                        * static_cast<double> (i + static_cast<std::size_t> (k)) / rate);
+
+        engine.process (channels, 2, 128);
+
+        for (int k = 0; k < 128; ++k)
+            out.push_back (left[static_cast<std::size_t> (k)]);
+
+        i += 128;
+    }
+
+    return { out.begin() + static_cast<long> (2 * window), out.begin() + static_cast<long> (3 * window) };
+}
+
+/// The loudest inharmonic component in the audible band, in absolute dBFS.
+struct Alias { double hz; double dbFs; };
+
+Alias worstAlias (const std::vector<double>& signal, double rate, double fundamentalHz)
+{
+    const std::size_t n = signal.size();
+    const auto spectrum = measure::fftOfReal (signal);
+
+    const double binWidth = rate / static_cast<double> (n);
+    const auto fundamental = static_cast<std::size_t> (std::llround (fundamentalHz / binWidth));
+
+    Alias worst { 0.0, -300.0 };
+
+    for (std::size_t k = 2; k + 1 < n / 2; ++k)
+    {
+        const double hz = static_cast<double> (k) * binWidth;
+
+        if (hz < 20.0 || hz > 18000.0)
+            continue;
+
+        const long harmonic = std::lround (static_cast<double> (k) / static_cast<double> (fundamental));
+
+        if (harmonic >= 1
+            && std::llabs (static_cast<long> (k) - harmonic * static_cast<long> (fundamental)) <= 1)
+            continue;
+
+        const double amplitude = 2.0 * std::abs (spectrum[k]) / static_cast<double> (n);
+        const double db = 20.0 * std::log10 (std::max (amplitude, 1.0e-15));
+
+        if (db > worst.dbFs)
+            worst = { hz, db };
+    }
+
+    return worst;
+}
+} // namespace anvilMeasure
+
+int runAnvil (const Args& args)
+{
+    using namespace tezla;
+    using namespace anvilMeasure;
+
+    const double rate = args.sampleRate;
+    constexpr std::size_t window = 1 << 15;
+
+    static const char* laneNames[3] { "clean", "vintage", "modern" };
+
+    // ---- 1. aliasing, and the probe frequency that makes it visible -----------
+
+    // The worst case is always the highest probe, and a single low one cannot
+    // see it -- so this is swept rather than sampled. CLAUDE.md section 7.
+    const double probes[] { 82.0, 330.0, 1000.0, 4400.0 };
+
+    std::printf ("Aliasing at maximum gain with five valves, absolute dBFS, british 4x12\n");
+    std::printf ("Worst of a sweep from 82 Hz to 4.4 kHz, and the sweep is the point.\n\n");
+
+    std::printf ("  %-9s %10s %10s %10s %10s\n", "lane", "off", "x2", "x4", "x8");
+
+    for (int lane = 0; lane < 3; ++lane)
+    {
+        std::printf ("  %-9s", laneNames[lane]);
+
+        for (const auto mode : { dsp::OversamplingMode::Off, dsp::OversamplingMode::X2,
+                                 dsp::OversamplingMode::X4, dsp::OversamplingMode::X8 })
+        {
+            double worst = -300.0;
+
+            for (const double frequency : probes)
+            {
+                anvil::Parameters p;
+                p.voicing = static_cast<anvil::Voicing> (lane);
+                p.cabinet = anvil::CabinetChoice::british;
+                p.gainDb = 48.0;
+                p.masterDb = 0.0;
+                p.extraStages = 2;
+                p.oversampling = mode;
+
+                const double bin = measure::binExactFrequency (frequency, rate, window);
+                worst = std::max (worst,
+                    worstAlias (renderAnvil (p, rate, 0.5, bin, window), rate, bin).dbFs);
+            }
+
+            std::printf ("  %9.1f ", worst);
+        }
+
+        std::printf ("\n");
+    }
+
+    std::printf ("\n  CLAUDE.md section 7 asks for nothing above -60 dBFS at maximum drive.\n");
+    std::printf ("  Anvil's Auto picks x%d at %.0f Hz for exactly that reason -- a cascade\n",
+                 anvil::Engine::autoFactorFor (rate), rate);
+    std::printf ("  compounds, and the house table's 192 kHz target is not enough here.\n\n");
+
+    // ---- 2. the instrument, checked before it is trusted -----------------------
+
+    // A probe that is bin-exact *and* divides the host rate cannot see aliasing
+    // at all: every alias of it lands on one of its own harmonics. 1500 Hz at
+    // 48 kHz is both. CLAUDE.md section 10.
+    {
+        const double blind = 1500.0;
+        const double honest = measure::binExactFrequency (4400.0, rate, window);
+
+        anvil::Parameters p;
+        p.voicing = anvil::Voicing::modern;
+        p.cabinet = anvil::CabinetChoice::british;
+        p.gainDb = 48.0;
+        p.masterDb = 0.0;
+        p.extraStages = 2;
+        p.oversampling = dsp::OversamplingMode::X4;
+
+        const auto seen = worstAlias (renderAnvil (p, rate, 0.5, honest, window), rate, honest);
+        const auto hidden = worstAlias (renderAnvil (p, rate, 0.5, blind, window), rate, blind);
+
+        std::printf ("  Checking the instrument. The same amplifier, the same setting, two\n");
+        std::printf ("  probes -- both bin-exact, so neither leaks. Only one divides %.0f:\n\n",
+                     rate);
+        std::printf ("    %8.2f Hz  ->  %7.1f dBFS at %8.1f Hz\n", honest, seen.dbFs, seen.hz);
+        std::printf ("    %8.2f Hz  ->  %7.1f dBFS at %8.1f Hz   <- blind: %.0f/%.0f = %.0f\n\n",
+                     blind, hidden.dbFs, hidden.hz, rate, blind, rate / blind);
+    }
+
+    // ---- 3. the lanes are different amplifiers --------------------------------
+
+    std::printf ("THD at 220 Hz, -12 dBFS in, cabinet off, master at its default\n\n");
+    std::printf ("  %-9s %8s %8s %8s %8s %8s\n", "lane", "-6 dB", "0 dB", "+6 dB", "+12 dB", "+24 dB");
+
+    for (int lane = 0; lane < 3; ++lane)
+    {
+        std::printf ("  %-9s", laneNames[lane]);
+
+        for (const double gain : { -6.0, 0.0, 6.0, 12.0, 24.0 })
+        {
+            anvil::Parameters p;
+            p.voicing = static_cast<anvil::Voicing> (lane);
+            p.cabinet = anvil::CabinetChoice::none;
+            p.gainDb = gain;
+
+            const double bin = measure::binExactFrequency (220.0, rate, window);
+            const auto report = measure::analyseHarmonics (
+                renderAnvil (p, rate, 0.25, bin, window), rate, bin);
+
+            std::printf (" %8.1f", report.thdDb);
+        }
+
+        std::printf ("\n");
+    }
+
+    std::printf ("\n  The clean lane is not a quieter version of the dirty one. CLAUDE.md\n");
+    std::printf ("  priority 2 asks for a setting that genuinely gets out of the way.\n\n");
+
+    // ---- 4. the mechanism the whole plugin is built on ------------------------
+
+    std::printf ("The transformer: the same voltage, an octave apart\n\n");
+    std::printf ("  %-10s %10s %10s\n", "frequency", "flux", "thd");
+
+    for (const double frequency : { 41.0, 82.0, 164.0, 328.0, 656.0, 1312.0 })
+    {
+        anvil::Parameters p;
+        p.voicing = anvil::Voicing::vintage;
+        p.cabinet = anvil::CabinetChoice::none;
+        p.gainDb = 0.0;
+        p.masterDb = -3.0;
+        p.coreHz = 180.0;              // a small transformer, so the effect is plain
+        p.damping = 20.0;
+
+        anvil::Engine engine;
+        engine.prepare (rate, 128, 2);
+        engine.setParameters (p);
+        engine.reset();
+
+        std::vector<double> left (128), right (128);
+        double* channels[2] { left.data(), right.data() };
+        double flux = 0.0;
+
+        for (int i = 0; i < static_cast<int> (rate * 0.5); i += 128)
+        {
+            for (int k = 0; k < 128; ++k)
+                left[static_cast<std::size_t> (k)] = right[static_cast<std::size_t> (k)]
+                    = 0.4 * std::sin (2.0 * std::numbers::pi * frequency * (i + k) / rate);
+
+            engine.process (channels, 2, 128);
+
+            if (i > static_cast<int> (rate * 0.25))
+                flux = std::max (flux, engine.getFlux());
+        }
+
+        const double bin = measure::binExactFrequency (frequency, rate, window);
+        const auto report = measure::analyseHarmonics (
+            renderAnvil (p, rate, 0.4, bin, window), rate, bin);
+
+        std::printf ("  %8.0f Hz %10.3f %10.1f\n", frequency, flux, report.thdDb);
+    }
+
+    std::printf ("\n  Flux is the integral of voltage, so it falls 6 dB per octave and the\n");
+    std::printf ("  distortion it makes falls about 18. Nothing in the code tests the\n");
+    std::printf ("  frequency -- integrate the voltage and this falls out.\n\n");
+
+    // ---- 5. what it costs ------------------------------------------------------
+
+    std::printf ("CPU, one stereo instance, milliseconds per second of audio at %.0f Hz\n\n", rate);
+
+    for (const auto mode : { dsp::OversamplingMode::Off, dsp::OversamplingMode::X2,
+                             dsp::OversamplingMode::X4, dsp::OversamplingMode::X8 })
+    {
+        anvil::Parameters p;
+        p.voicing = anvil::Voicing::modern;
+        p.gainDb = 30.0;
+        p.oversampling = mode;
+
+        anvil::Engine engine;
+        engine.prepare (rate, 512, 2);
+        engine.setParameters (p);
+        engine.reset();
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        for (int k = 0; k < 512; ++k)
+            left[static_cast<std::size_t> (k)] = right[static_cast<std::size_t> (k)]
+                = 0.3 * std::sin (k * 0.05);
+
+        const auto started = std::chrono::steady_clock::now();
+
+        for (int i = 0; i < static_cast<int> (rate); i += 512)
+            engine.process (channels, 2, 512);
+
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        const double ms = std::chrono::duration<double, std::milli> (elapsed).count();
+
+        std::printf ("  x%d: %7.1f ms/s  = %5.1f%% of one core   latency %3d samples\n",
+                     engine.getOversamplingFactor(), ms, ms / 10.0, engine.getLatencySamples());
+    }
+
+    std::printf ("\n  Fidelity above CPU, CLAUDE.md section 1. Auto takes x%d.\n",
+                 anvil::Engine::autoFactorFor (rate));
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -1357,6 +1640,7 @@ void printUsage()
     std::printf ("  chebyshev       [--fs --freq]  precision mode: selection, fundamental, index\n");
     std::printf ("  capstone        [--fs]  limiter true peak, clipper aliasing, look-ahead, CPU\n");
     std::printf ("  loudness        [--fs]  LUFS at four rates, gating, PLR/PSR, correlation\n");
+    std::printf ("  anvil           [--fs]  amplifier aliasing, lane THD, transformer flux, CPU\n");
 }
 
 } // namespace
@@ -1383,6 +1667,7 @@ int main (int argc, char** argv)
     if (command == "chebyshev")       return runChebyshev (args);
     if (command == "capstone")        return runCapstone (args);
     if (command == "loudness")        return runLoudness (args);
+    if (command == "anvil")           return runAnvil (args);
 
     printUsage();
     return 1;

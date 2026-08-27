@@ -490,6 +490,7 @@ build\bin\Release\tezla-measure selftest
 build\bin\Release\tezla-measure clip-aliasing --fs 48000 --drive 4
 build\bin\Release\tezla-measure emberdrive --freq 1000 --out emberdrive.csv
 build\bin\Release\tezla-measure filter-response --freq 1000 --q 0.707 --out response.csv
+build\bin\Release\tezla-measure anvil
 ```
 
 `selftest` verifies the analysis chain itself before you trust any number it
