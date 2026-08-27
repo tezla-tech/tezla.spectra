@@ -84,7 +84,7 @@
 #include <algorithm>
 #include <array>
 
-#include "RcNetwork.hpp"
+#include "PassiveNetwork.hpp"
 
 namespace tezla::dsp {
 
@@ -245,7 +245,7 @@ private:
         network_.setOutputNode (kNodeOutput);
         network_.clearElements();
 
-        using Net = RcNetwork<>;
+        using Net = PassiveNetwork<>;
 
         network_.addCapacitor (Net::kInput, kNodeTrebleTop, components_.trebleCap);
 
@@ -294,7 +294,7 @@ private:
     double middle_ { 0.5 };
     double treble_ { 0.5 };
 
-    RcNetwork<> network_;
+    PassiveNetwork<> network_;
 };
 
 } // namespace tezla::dsp
