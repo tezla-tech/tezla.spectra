@@ -176,6 +176,44 @@ They were read from there rather than fetched.
 | **ITU-R BS.1770-5** (11/2023), Annex 2 | ITU copyright; published for implementation | True-peak measurement: the 12.04 dB attenuation convention, the order-48 four-phase interpolating FIR, and the worst-case under-read table that decides our oversampling control. **The coefficient table is typed in verbatim** — the one thing in Capstone that is copied rather than derived. |
 | Geraint Luff / Signalsmith Audio, "Designing a straightforward limiter", 2022 | Article, © Signalsmith Audio Ltd — cite, do not paste | A modern treatment of the same structure. The hold refinement — widening the minimum window without widening the smoothing — comes from here. |
 
+---
+
+## Loudness — Transpectus
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| **ITU-R BS.1770-5** (11/2023), Annex 1 | ITU copyright; published for implementation | The K-weighting filter pair, the `−0.691` offset, the 400 ms / 75 %-overlap block structure, and the two-stage gating (absolute `−70 LUFS`, relative `−10 LU`). The **printed 48 kHz coefficient tables are used as the target a design has to reproduce**, not as the coefficients themselves — see below. |
+| **EBU R 128** (2020) and **EBU Tech 3341** | EBU, freely published | The −23 LUFS broadcast target, and the compliance test cases the meter is checked against rather than eyeballed. `tests/test_LoudnessMeter.cpp` implements cases 1–3 with the ±0.1 LU tolerance the document specifies. |
+| **libebur128** (Jan Kokemüller) | MIT | The analogue-prototype parameters that generalise the K-weighting to any sample rate: shelf `f0 = 1681.974450955533`, `G = 3.999843853973347`, `Q = 0.7071752369554196`; high-pass `f0 = 38.13547087602444`, `Q = 0.5003270373238773`. Attributed at the point of use in `LoudnessMeter.hpp`. |
+| **AES TD1008** | AES technical document | The recommendation the streaming platforms converged on, and the reason their targets cluster at −14 to −16 LUFS. Context for the platform table in Transpectus, which is stored with a verification date because those numbers change. |
+
+### Why the coefficients are designed rather than typed
+
+BS.1770 prints its K-weighting coefficients **for 48 kHz only**. They look like
+constants and they are not: used unchanged at 44.1 or 96 kHz they give a filter
+with the wrong corner frequencies and a loudness reading that is quietly wrong.
+This is CLAUDE.md §6 in its purest form, and it is the one thing most likely to
+be got wrong by someone reading the Recommendation quickly.
+
+So the filters are designed from the analogue prototype at the host's actual
+rate. The prototype parameters above are taken under §9 — the standard *is* the
+definition, so no measurement of ours could say a filter of our own was the
+wrong one to have chosen — and the proof that they are the right prototype is
+that at 48 kHz they reproduce the Recommendation's own printed numbers to
+**8.9e-16**, which is double rounding rather than agreement to a tolerance.
+
+`tests/test_LoudnessMeter.cpp` asserts that, and — because that check alone
+would still pass for a meter that ignored its sample rate entirely — also
+asserts that the filter at 96 kHz is a *different* filter, and that a −23 dBFS
+tone reads −23.0 LUFS at 44.1, 48, 96 and 192 kHz.
+
+One residual worth stating rather than hiding: the standard's −0.691 dB offset
+is a fixed constant, but the bilinear transform warps the filter's 1 kHz gain
+slightly with rate — +0.7005 dB at 44.1 kHz against +0.6707 at 192 kHz. So the
+same tone reads −22.990 at 44.1 kHz and −23.020 at 192 kHz. That spread is in
+the Recommendation, not in this code, and it is five times inside EBU's
+±0.1 LU tolerance.
+
 ### What Capstone derives rather than takes
 
 The guarantee itself was derived and measured before any of the three was read,
