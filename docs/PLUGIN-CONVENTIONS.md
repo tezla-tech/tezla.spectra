@@ -89,6 +89,23 @@ Small and opinionated beats large and generic. Aim at the actual work:
 
 Name presets for what they are for, not for gear they resemble.
 
+**A preset is a complete parameter set or it is a trap.** Switching from one to
+another must not leave the first one's settings behind on any control the second
+does not mention. Two ways to hold that guarantee, and which one is clearer
+depends on the count:
+
+- Under about thirty parameters, write every one out longhand. Anvil does, and
+  reading the table tells you the whole patch.
+- Past that, reset every parameter to its default first and then apply the
+  departures. Sonitus does, with a hundred and fifty; longhand there would be a
+  hundred and fifty lines per preset in which the four that matter are
+  invisible. This only works because §Parameters requires every default to be
+  neutral, so "the defaults" is itself a valid preset.
+
+**An instrument's presets do not carry its tuning.** A scale is loaded by the
+player and outlives the patch they are auditioning, and a preset that silently
+reset it to 12-TET would be a bug rather than a feature.
+
 ---
 
 ## Metering and gain

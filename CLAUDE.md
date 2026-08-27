@@ -399,6 +399,15 @@ Every plugin must satisfy these before it is considered done:
 - **Any stage permanently in the signal path needs a bit-exact bypass at its
   neutral setting**, not merely a transparent one. "Almost identity" means every
   existing project changes the day the plugin updates.
+  The worked example is arithmetic rather than design, which is why it went
+  unnoticed for five plugins: a shelf or peak at 0 dB produces a numerator equal
+  to its denominator term for term, so it *should* be exactly the identity — but
+  `Biquad`'s `normalise` divided through by `a0` as a reciprocal and five
+  multiplications, and `a0 * (1 / a0)` is not exactly 1. That left `b0` a unit in
+  the last place off, the first output not equal to the input, and the state
+  never settling. `a0 / a0` **is** exactly 1. Five divisions at design time cost
+  nothing. Assume nothing about a "neutral" setting until a test has fed it a
+  signal and compared bit for bit.
 - **A feedback loop around a nonlinearity needs a bound that cannot be
   defeated** — a soft clip inside the loop, plus a cap below unity on the amount
   — and a test that sweeps the whole parameter space rather than sampling it.
