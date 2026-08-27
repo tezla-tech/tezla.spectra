@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/ModRing.hpp>
 #include <tezla/ui/ModStrip.hpp>
 #include <tezla/ui/ModulationView.hpp>
@@ -17,27 +18,17 @@ namespace tezla::emberdrive
 /// whether it is about to clip, and a separate gain-reduction bar. Those two
 /// readings disagree by 10 dB or more on drums, and the disagreement is the
 /// information an engineer is actually reading.
-class LevelMeter final : public juce::Component
+class ReductionMeter final : public juce::Component
 {
 public:
-    enum class Style { level, gainReduction };
-
-    explicit LevelMeter (Style style) : style_ (style) {}
-
-    void setValues (float vuDb, float peakDb) noexcept
-    {
-        vuDb_ = vuDb;
-        peakDb_ = peakDb;
-    }
+    void setValue (float reductionDb) noexcept { reductionDb_ = reductionDb; }
 
     void paint (juce::Graphics&) override;
 
 private:
-    [[nodiscard]] float positionFor (float db) const noexcept;
+    [[nodiscard]] static float positionFor (float db) noexcept;
 
-    Style style_;
-    float vuDb_   { -100.0f };
-    float peakDb_ { -100.0f };
+    float reductionDb_ { 0.0f };
 };
 
 /// Wraps, so the "what Auto is doing right now" sentence is never truncated.
@@ -162,9 +153,13 @@ private:
     std::array<juce::TextButton, kNumPages> tabs_;
     int currentPage_ { 0 };
 
-    LevelMeter inputMeter_     { LevelMeter::Style::level };
-    LevelMeter outputMeter_    { LevelMeter::Style::level };
-    LevelMeter reductionMeter_ { LevelMeter::Style::gainReduction };
+    std::unique_ptr<ui::LevelMeter> inputMeter_;
+    std::unique_ptr<ui::LevelMeter> outputMeter_;
+
+    /// What Ceiling the output meter is referenced to, so it is not pushed
+    /// thirty times a second for no reason.
+    float shownCeilingDb_ { 1000.0f };
+    ReductionMeter reductionMeter_;
 
     juce::Label inputMeterLabel_     { {}, "IN" };
     juce::Label outputMeterLabel_    { {}, "OUT" };

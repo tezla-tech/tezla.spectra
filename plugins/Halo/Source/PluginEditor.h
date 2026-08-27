@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/ModRing.hpp>
 #include <tezla/ui/ModStrip.hpp>
 #include <tezla/ui/ModulationView.hpp>
@@ -22,27 +23,17 @@ namespace tezla::halo
 /// energy is being added relative to the source -- so it gets its own scale and
 /// its own colour rather than being squeezed onto a level scale where it would
 /// read as nonsense.
-class LevelMeter final : public juce::Component
+class HarmonicsMeter final : public juce::Component
 {
 public:
-    enum class Style { level, harmonics };
-
-    explicit LevelMeter (Style style) : style_ (style) {}
-
-    void setValues (float vuDb, float peakDb) noexcept
-    {
-        vuDb_ = vuDb;
-        peakDb_ = peakDb;
-    }
+    void setValue (float harmonicsDb) noexcept { harmonicsDb_ = harmonicsDb; }
 
     void paint (juce::Graphics&) override;
 
 private:
-    [[nodiscard]] float positionFor (float db) const noexcept;
+    [[nodiscard]] static float positionFor (float db) noexcept;
 
-    Style style_;
-    float vuDb_   { -100.0f };
-    float peakDb_ { -100.0f };
+    float harmonicsDb_ { -60.0f };
 };
 
 /// Wraps, so the "what Auto is doing right now" sentence is never truncated.
@@ -183,9 +174,9 @@ private:
     /// greying is not recomputed and repainted thirty times a second.
     int shownGenerator_ { -1 };
 
-    LevelMeter inputMeter_     { LevelMeter::Style::level };
-    LevelMeter outputMeter_    { LevelMeter::Style::level };
-    LevelMeter harmonicsMeter_ { LevelMeter::Style::harmonics };
+    std::unique_ptr<ui::LevelMeter> inputMeter_;
+    std::unique_ptr<ui::LevelMeter> outputMeter_;
+    HarmonicsMeter harmonicsMeter_;
 
     juce::Label inputMeterLabel_     { {}, "IN" };
     juce::Label outputMeterLabel_    { {}, "OUT" };

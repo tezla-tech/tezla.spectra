@@ -42,46 +42,26 @@ constexpr int kMaxWidth  = 1520;
 constexpr int kMaxHeight = 1240;
 } // namespace
 
-float LevelMeter::positionFor (float db) const noexcept
+float HarmonicsMeter::positionFor (float db) noexcept
 {
-    if (style_ == Style::harmonics)
-        return juce::jlimit (0.0f, 1.0f,
-                             (db - kHarmonicsFloorDb) / (kHarmonicsTopDb - kHarmonicsFloorDb));
-
-    return juce::jlimit (0.0f, 1.0f, (db - kMeterFloorDb) / (kMeterTopDb - kMeterFloorDb));
+    return juce::jlimit (0.0f, 1.0f,
+                         (db - kHarmonicsFloorDb) / (kHarmonicsTopDb - kHarmonicsFloorDb));
 }
 
-void LevelMeter::paint (juce::Graphics& g)
+void HarmonicsMeter::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
 
     g.setColour (kBackground.brighter (0.08f));
     g.fillRoundedRectangle (bounds, 2.0f);
 
-    const bool isHarmonics = style_ == Style::harmonics;
-    const float filled = positionFor (vuDb_);
+    const float filled = positionFor (harmonicsDb_);
 
     if (filled > 0.0f)
     {
         auto bar = bounds.reduced (1.0f);
-        g.setColour (isHarmonics ? kHarmonics : kGlow);
+        g.setColour (kHarmonics);
         g.fillRoundedRectangle (bar.removeFromBottom (bar.getHeight() * filled), 1.5f);
-    }
-
-    if (! isHarmonics && peakDb_ > kMeterFloorDb)
-    {
-        // A thin line rather than a second bar: the peak is a warning, not a
-        // level, and drawing it as a bar invites reading it as one.
-        const float y = bounds.getBottom() - bounds.getHeight() * positionFor (peakDb_);
-        g.setColour (peakDb_ > -0.1f ? juce::Colours::red : kGlowBright);
-        g.fillRect (bounds.getX() + 1.0f, y - 1.0f, bounds.getWidth() - 2.0f, 2.0f);
-    }
-
-    if (! isHarmonics)
-    {
-        const float y = bounds.getBottom() - bounds.getHeight() * positionFor (0.0f);
-        g.setColour (kDimText.withAlpha (0.5f));
-        g.fillRect (bounds.getX(), y, bounds.getWidth(), 1.0f);
     }
 }
 
@@ -393,8 +373,27 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
         addAndMakeVisible (tabs_[static_cast<std::size_t> (i)]);
     }
 
-    for (auto* meter : { &inputMeter_, &harmonicsMeter_, &outputMeter_ })
-        addAndMakeVisible (*meter);
+    inputMeter_  = std::make_unique<ui::LevelMeter> (palette_);
+    outputMeter_ = std::make_unique<ui::LevelMeter> (palette_);
+
+    // Full scale both sides: Halo has no output ceiling to reference, unlike
+    // Emberdrive and Capstone, so 0 dBFS is the honest line here.
+    inputMeter_->setReferenceDb (0.0f);
+    outputMeter_->setReferenceDb (0.0f);
+
+    // The scale goes on the rightmost meter, the same place in every plugin in
+    // the suite.
+    outputMeter_->setScaleVisible (true);
+
+    for (auto* meter : { inputMeter_.get(), outputMeter_.get() })
+        meter->setTooltip ("Peak level. The number is the worst peak since it was last "
+                           "cleared -- click the meter to clear it. It turns red when the "
+                           "peak went over full scale. Hover to read the live level instead "
+                           "of the held one.");
+
+    addAndMakeVisible (*inputMeter_);
+    addAndMakeVisible (*outputMeter_);
+    addAndMakeVisible (harmonicsMeter_);
 
     for (auto* label : { &inputMeterLabel_, &harmonicsMeterLabel_, &outputMeterLabel_ })
     {
@@ -734,14 +733,14 @@ void HaloEditor::timerCallback()
 {
     auto& meters = halo_.getMeterValues();
 
-    inputMeter_.setValues (meters.inputVuDb.load (std::memory_order_relaxed),
+    inputMeter_->setValues (meters.inputVuDb.load (std::memory_order_relaxed),
                            meters.inputPeakDb.load (std::memory_order_relaxed));
-    outputMeter_.setValues (meters.outputVuDb.load (std::memory_order_relaxed),
+    outputMeter_->setValues (meters.outputVuDb.load (std::memory_order_relaxed),
                             meters.outputPeakDb.load (std::memory_order_relaxed));
-    harmonicsMeter_.setValues (meters.harmonicsDb.load (std::memory_order_relaxed), -100.0f);
+    harmonicsMeter_.setValue (meters.harmonicsDb.load (std::memory_order_relaxed));
 
-    inputMeter_.repaint();
-    outputMeter_.repaint();
+    inputMeter_->repaint();
+    outputMeter_->repaint();
     harmonicsMeter_.repaint();
 
     statusLabel_.setText (halo_.describeOversampling(), juce::dontSendNotification);
@@ -805,18 +804,25 @@ void HaloEditor::resized()
     // left a band of empty panel between the note and the status line.
     auto controls = bounds.removeFromTop (juce::jmin (300, juce::jmax (200, bounds.getHeight() - 170)));
 
-    auto meterArea = controls.removeFromRight (110).reduced (10, 12);
-    const int meterWidth = meterArea.getWidth() / 3;
+    // 160 rather than 110: the readout needs 46 pixels to render a number like
+    // "-12.3", and the rightmost meter carries the labelled dB scale on top of
+    // that. Three meters at 30 pixels each is a bar you can only compare
+    // against its neighbour.
+    auto meterArea = controls.removeFromRight (160).reduced (4, 12);
+    const int meterWidth = ui::LevelMeter::kMinimumWidth;
 
-    const auto layoutMeter = [] (LevelMeter& meter, juce::Label& label, juce::Rectangle<int> area)
+    const auto layoutMeter = [] (juce::Component& meter, juce::Label& label,
+                                 juce::Rectangle<int> area)
     {
         label.setBounds (area.removeFromBottom (14));
-        meter.setBounds (area.reduced (4, 0));
+        meter.setBounds (area);
     };
 
-    layoutMeter (inputMeter_,     inputMeterLabel_,     meterArea.removeFromLeft (meterWidth));
-    layoutMeter (harmonicsMeter_, harmonicsMeterLabel_, meterArea.removeFromLeft (meterWidth));
-    layoutMeter (outputMeter_,    outputMeterLabel_,    meterArea);
+    layoutMeter (*inputMeter_,    inputMeterLabel_,     meterArea.removeFromLeft (meterWidth));
+    layoutMeter (harmonicsMeter_, harmonicsMeterLabel_,
+                 meterArea.removeFromLeft (meterArea.getWidth()
+                                           - meterWidth - ui::LevelMeter::kScaleWidth));
+    layoutMeter (*outputMeter_,   outputMeterLabel_,    meterArea);
 
     for (auto& page : pages_)
         page->setBounds (controls.reduced (8, 4));

@@ -35,45 +35,25 @@ constexpr int kMaxHeight = 1000;
 
 // ============================================================================
 
-float LevelMeter::positionFor (float db) const noexcept
+float ReductionMeter::positionFor (float db) noexcept
 {
-    if (style_ == Style::gainReduction)
-        return juce::jlimit (0.0f, 1.0f, -db / kReductionMaxDb);
-
-    return juce::jlimit (0.0f, 1.0f, (db - kMeterFloorDb) / (kMeterTopDb - kMeterFloorDb));
+    return juce::jlimit (0.0f, 1.0f, -db / kReductionMaxDb);
 }
 
-void LevelMeter::paint (juce::Graphics& g)
+void ReductionMeter::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
 
     g.setColour (kBackground.brighter (0.08f));
     g.fillRoundedRectangle (bounds, 2.0f);
 
-    const bool isReduction = style_ == Style::gainReduction;
-    const float filled = positionFor (vuDb_);
+    const float filled = positionFor (reductionDb_);
 
     if (filled > 0.0f)
     {
         auto bar = bounds.reduced (1.0f);
-        g.setColour (isReduction ? kReduction : kEmber);
+        g.setColour (kReduction);
         g.fillRoundedRectangle (bar.removeFromBottom (bar.getHeight() * filled), 1.5f);
-    }
-
-    if (! isReduction && peakDb_ > kMeterFloorDb)
-    {
-        // A thin line rather than a second bar: the peak is a warning, not a
-        // level, and drawing it as a bar invites reading it as one.
-        const float y = bounds.getBottom() - bounds.getHeight() * positionFor (peakDb_);
-        g.setColour (peakDb_ > -0.1f ? juce::Colours::red : kEmberBright);
-        g.fillRect (bounds.getX() + 1.0f, y - 1.0f, bounds.getWidth() - 2.0f, 2.0f);
-    }
-
-    if (! isReduction)
-    {
-        const float y = bounds.getBottom() - bounds.getHeight() * positionFor (0.0f);
-        g.setColour (kDimText.withAlpha (0.5f));
-        g.fillRect (bounds.getX(), y, bounds.getWidth(), 1.0f);
     }
 }
 
@@ -321,8 +301,26 @@ EmberdriveEditor::EmberdriveEditor (EmberdriveProcessor& processorToUse)
         addAndMakeVisible (tabs_[static_cast<std::size_t> (i)]);
     }
 
-    for (auto* meter : { &inputMeter_, &reductionMeter_, &outputMeter_ })
-        addAndMakeVisible (*meter);
+    inputMeter_  = std::make_unique<ui::LevelMeter> (palette_);
+    outputMeter_ = std::make_unique<ui::LevelMeter> (palette_);
+
+    // Full scale going in; the limiter's own Ceiling coming out, because that
+    // is the number this plugin promised rather than a generic 0.
+    inputMeter_->setReferenceDb (0.0f);
+
+    // The scale goes on the rightmost meter, the same place in every plugin in
+    // the suite. One scale is enough for a row of meters that share it.
+    outputMeter_->setScaleVisible (true);
+
+    for (auto* meter : { inputMeter_.get(), outputMeter_.get() })
+        meter->setTooltip ("Peak level. The number is the worst peak since it was last "
+                           "cleared -- click the meter to clear it. It turns red when the "
+                           "peak went over: full scale on the input, Ceiling on the output. "
+                           "Hover to read the live level instead of the held one.");
+
+    addAndMakeVisible (*inputMeter_);
+    addAndMakeVisible (*outputMeter_);
+    addAndMakeVisible (reductionMeter_);
 
     for (auto* label : { &inputMeterLabel_, &reductionMeterLabel_, &outputMeterLabel_ })
     {
@@ -718,14 +716,24 @@ void EmberdriveEditor::timerCallback()
 {
     auto& meters = processor_.getMeterValues();
 
-    inputMeter_.setValues (meters.inputVuDb.load (std::memory_order_relaxed),
+    inputMeter_->setValues (meters.inputVuDb.load (std::memory_order_relaxed),
                            meters.inputPeakDb.load (std::memory_order_relaxed));
-    outputMeter_.setValues (meters.outputVuDb.load (std::memory_order_relaxed),
+    outputMeter_->setValues (meters.outputVuDb.load (std::memory_order_relaxed),
                             meters.outputPeakDb.load (std::memory_order_relaxed));
-    reductionMeter_.setValues (meters.gainReductionDb.load (std::memory_order_relaxed), -100.0f);
+    reductionMeter_.setValue (meters.gainReductionDb.load (std::memory_order_relaxed));
 
-    inputMeter_.repaint();
-    outputMeter_.repaint();
+    // The output meter's "over" line follows Ceiling rather than full scale.
+    const float ceilingDb = processor_.getValueTreeState()
+                                .getRawParameterValue (ids::ceiling)->load();
+
+    if (std::abs (ceilingDb - shownCeilingDb_) > 0.001f)
+    {
+        shownCeilingDb_ = ceilingDb;
+        outputMeter_->setReferenceDb (ceilingDb);
+    }
+
+    inputMeter_->repaint();
+    outputMeter_->repaint();
     reductionMeter_.repaint();
 
     statusLabel_.setText (processor_.describeOversampling(), juce::dontSendNotification);
@@ -767,18 +775,25 @@ void EmberdriveEditor::resized()
     auto footer = bounds.removeFromBottom (40);
     statusLabel_.setBounds (footer.reduced (16, 4));
 
-    auto meterArea = bounds.removeFromRight (110).reduced (10, 12);
-    const int meterWidth = meterArea.getWidth() / 3;
+    // 160 rather than 110: the readout needs 46 pixels to render a number like
+    // "-12.3", and the rightmost meter carries the labelled dB scale on top of
+    // that. Three meters at 30 pixels each is a bar you can only compare
+    // against its neighbour.
+    auto meterArea = bounds.removeFromRight (160).reduced (4, 12);
+    const int meterWidth = ui::LevelMeter::kMinimumWidth;
 
-    const auto layoutMeter = [] (LevelMeter& meter, juce::Label& label, juce::Rectangle<int> area)
+    const auto layoutMeter = [] (juce::Component& meter, juce::Label& label,
+                                 juce::Rectangle<int> area)
     {
         label.setBounds (area.removeFromBottom (14));
-        meter.setBounds (area.reduced (4, 0));
+        meter.setBounds (area);
     };
 
-    layoutMeter (inputMeter_,     inputMeterLabel_,     meterArea.removeFromLeft (meterWidth));
-    layoutMeter (reductionMeter_, reductionMeterLabel_, meterArea.removeFromLeft (meterWidth));
-    layoutMeter (outputMeter_,    outputMeterLabel_,    meterArea);
+    layoutMeter (*inputMeter_,    inputMeterLabel_,     meterArea.removeFromLeft (meterWidth));
+    layoutMeter (reductionMeter_, reductionMeterLabel_,
+                 meterArea.removeFromLeft (meterArea.getWidth()
+                                           - meterWidth - ui::LevelMeter::kScaleWidth));
+    layoutMeter (*outputMeter_,   outputMeterLabel_,    meterArea);
 
     for (auto& page : pages_)
         page->setBounds (bounds.reduced (8, 4));
