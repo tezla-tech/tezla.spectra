@@ -224,9 +224,18 @@ public:
                 return {};
 
             const auto end = text.find ('\n', position);
-            const auto result = text.substr (position, end == std::string::npos
-                                                     ? std::string::npos : end - position);
+            auto result = text.substr (position, end == std::string::npos
+                                               ? std::string::npos : end - position);
             position = end == std::string::npos ? text.size() : end + 1;
+
+            // A file written on Windows arrives with CRLF, and these travel
+            // between machines by design -- that is the whole reason they are
+            // files rather than only project state. strtod happens to stop at
+            // the carriage return, so this works either way today; relying on
+            // that is not the same as handling it.
+            if (! result.empty() && result.back() == '\r')
+                result.pop_back();
+
             return result;
         };
 
@@ -257,7 +266,19 @@ public:
             if (value.empty())
                 return false;
 
-            loaded.push_back (std::strtod (value.c_str(), nullptr));
+            // The whole line has to be a number, not merely start with one.
+            // strtod returns 0.0 for text it cannot read at all, so accepting
+            // whatever it hands back turns a corrupt file into a curve of
+            // zeros -- which is a flat reference, which is a plausible-looking
+            // measurement. That is the exact failure this function exists to
+            // refuse.
+            char* end = nullptr;
+            const double parsed = std::strtod (value.c_str(), &end);
+
+            if (end == value.c_str() || end == nullptr || *end != '\0')
+                return false;
+
+            loaded.push_back (parsed);
         }
 
         curve_ = std::move (loaded);

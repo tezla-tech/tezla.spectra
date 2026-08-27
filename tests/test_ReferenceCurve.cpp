@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <tezla/dsp/ReferenceCurve.hpp>
@@ -229,6 +230,18 @@ TEZLA_TEST (reference_curve_refuses_text_it_cannot_trust)
     CHECK (! curve.fromText ("tzref 1 32\n"));                 // wrong bin count
     CHECK (! curve.fromText ("tzref 1 96\n1.0\n2.0\n"));       // truncated
 
+    // A value line that is not a number. strtod reads this as 0.0 and reports
+    // nothing, so without a full-consumption check the whole file would load as
+    // a flat curve -- a reference that looks measured and is not.
+    {
+        std::string corrupt = "tzref 1 96\n";
+
+        for (std::size_t i = 0; i < kBins; ++i)
+            corrupt += (i == 40 ? std::string ("oops") : std::string ("-1.0")) + "\n";
+
+        CHECK (! curve.fromText (corrupt));
+    }
+
     CHECK (! curve.hasCurve());
 }
 
@@ -255,4 +268,43 @@ TEZLA_TEST (reference_curve_reports_progress_while_capturing)
     curve.cancelCapture();
     CHECK (! curve.isCapturing());
     CHECK (! curve.hasCurve());
+}
+
+
+TEZLA_TEST (reference_curve_reads_a_file_written_on_another_platform)
+{
+    // These are files, and files move between machines: a reference captured on
+    // the Windows rig is meant to open on the Mac. Windows text tools write
+    // CRLF, so the parser has to survive it -- and it does not get to survive it
+    // by accident, which is what relying on strtod stopping at the carriage
+    // return would be.
+    ReferenceCurve original;
+    original.prepare (kBins, 48000.0);
+    capture (original, tilted (-0.22, -25.0));
+
+    std::string text = original.toText();
+
+    std::string withCrLf;
+    for (const char c : text)
+    {
+        if (c == '\n')
+            withCrLf += '\r';
+
+        withCrLf += c;
+    }
+
+    ReferenceCurve loaded;
+    loaded.prepare (kBins, 48000.0);
+
+    CHECK (loaded.fromText (withCrLf));
+    CHECK (loaded.hasCurve());
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < kBins; ++i)
+        worst = std::max (worst, std::abs (loaded.getCurveDb()[i] - original.getCurveDb()[i]));
+
+    // Exactly what the LF round trip gives: the text is identical once the
+    // carriage returns are gone, so the only error left is toText's own %.3f.
+    CHECK (worst < 1.0e-3);
 }

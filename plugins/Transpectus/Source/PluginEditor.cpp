@@ -605,6 +605,28 @@ void TranspectusEditor::buildControls()
     };
     addAndMakeVisible (clearReferenceButton_);
 
+    // A reference stored only in the project travels with that project and
+    // nowhere else, which is the wrong shape for the thing it is: a reference
+    // is something you keep and reuse across everything you make. So it lives
+    // in both places -- in the state, and in a file you can name, copy and
+    // read. The file is plain text on purpose; a curve you cannot diff or
+    // inspect is a curve you have to trust.
+    saveReferenceButton_.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.2f));
+    saveReferenceButton_.setColour (juce::TextButton::textColourOffId, palette_.dimText);
+    saveReferenceButton_.setTooltip ("Writes the stored curve to a .tzref file, so the same "
+                                     "reference can be used in every project rather than only "
+                                     "in this one. Plain text: 96 numbers and a header.");
+    saveReferenceButton_.onClick = [this] { saveReference(); };
+    addAndMakeVisible (saveReferenceButton_);
+
+    loadReferenceButton_.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.2f));
+    loadReferenceButton_.setColour (juce::TextButton::textColourOffId, palette_.dimText);
+    loadReferenceButton_.setTooltip ("Reads a .tzref file back. It replaces whatever is stored "
+                                     "now, and is then saved with the project like any other "
+                                     "capture.");
+    loadReferenceButton_.onClick = [this] { loadReference(); };
+    addAndMakeVisible (loadReferenceButton_);
+
     pinkButton_.setColour (juce::ToggleButton::textColourId, palette_.text);
     pinkButton_.setColour (juce::ToggleButton::tickColourId, palette_.accent);
     pinkButton_.setToggleState (true, juce::dontSendNotification);
@@ -725,6 +747,8 @@ void TranspectusEditor::timerCallback()
         : "CAPTURE REFERENCE");
 
     clearReferenceButton_.setEnabled (reference.hasCurve());
+    saveReferenceButton_.setEnabled (reference.hasCurve());
+    loadReferenceButton_.setEnabled (! reference.isCapturing());
     differenceButton_.setEnabled (reference.hasCurve());
 
     inputMeter_->setValues (static_cast<float> (peak), static_cast<float> (peak));
@@ -759,12 +783,89 @@ void TranspectusEditor::timerCallback()
                << " Hz \xe2\x80\xa2 latency 0";
     }
 
-    statusLabel_.setText (status, juce::dontSendNotification);
+    // A notice from SAVE or LOAD holds the line for a few seconds; the running
+    // report resumes on its own afterwards.
+    if (juce::Time::getMillisecondCounter() >= noticeUntilMs_)
+        statusLabel_.setText (status, juce::dontSendNotification);
+}
+
+void TranspectusEditor::showNotice (juce::String text)
+{
+    statusLabel_.setText (text, juce::dontSendNotification);
+    noticeUntilMs_ = juce::Time::getMillisecondCounter() + 4000;
 }
 
 void TranspectusEditor::paint (juce::Graphics& g)
 {
     g.fillAll (palette_.background);
+}
+
+juce::File TranspectusEditor::referenceFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+}
+
+void TranspectusEditor::saveReference()
+{
+    auto& reference = transpectus_.getReferenceCurve();
+
+    if (! reference.hasCurve())
+        return;
+
+    chooser_ = std::make_unique<juce::FileChooser> (
+        "Save this reference curve", referenceFolder().getChildFile ("reference.tzref"), "*.tzref");
+
+    chooser_->launchAsync (juce::FileBrowserComponent::saveMode
+                               | juce::FileBrowserComponent::canSelectFiles
+                               | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this] (const juce::FileChooser& result)
+        {
+            auto file = result.getResult();
+
+            if (file == juce::File {})
+                return;
+
+            // The extension is how the plugin finds these again. A user who
+            // types a bare name gets one anyway rather than a file the LOAD
+            // browser then hides from them.
+            if (! file.hasFileExtension ("tzref"))
+                file = file.withFileExtension ("tzref");
+
+            const auto text = transpectus_.getReferenceCurve().toText();
+
+            if (file.replaceWithText (juce::String (text)))
+                showNotice ("Saved " + file.getFileName());
+            else
+                showNotice ("Could not write " + file.getFullPathName());
+        });
+}
+
+void TranspectusEditor::loadReference()
+{
+    chooser_ = std::make_unique<juce::FileChooser> (
+        "Load a reference curve", referenceFolder(), "*.tzref");
+
+    chooser_->launchAsync (juce::FileBrowserComponent::openMode
+                               | juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& result)
+        {
+            const auto file = result.getResult();
+
+            if (file == juce::File {} || ! file.existsAsFile())
+                return;
+
+            // fromText() validates and returns false rather than half-loading,
+            // so a truncated or foreign file leaves the current curve alone.
+            if (transpectus_.getReferenceCurve().fromText (file.loadFileAsString().toStdString()))
+            {
+                showNotice ("Loaded " + file.getFileName());
+                spectrum_->repaint();
+            }
+            else
+            {
+                showNotice (file.getFileName() + " is not a reference curve");
+            }
+        });
 }
 
 void TranspectusEditor::resized()
@@ -853,7 +954,11 @@ void TranspectusEditor::resized()
 
     captureButton_.setBounds (spectrumControls.removeFromLeft (160));
     spectrumControls.removeFromLeft (6);
-    clearReferenceButton_.setBounds (spectrumControls.removeFromLeft (70));
+    clearReferenceButton_.setBounds (spectrumControls.removeFromLeft (62));
+    spectrumControls.removeFromLeft (6);
+    saveReferenceButton_.setBounds (spectrumControls.removeFromLeft (58));
+    spectrumControls.removeFromLeft (6);
+    loadReferenceButton_.setBounds (spectrumControls.removeFromLeft (58));
     spectrumControls.removeFromLeft (14);
     pinkButton_.setBounds (spectrumControls.removeFromLeft (110));
     differenceButton_.setBounds (spectrumControls.removeFromLeft (110));

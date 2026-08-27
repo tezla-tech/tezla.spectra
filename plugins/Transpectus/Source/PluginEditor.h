@@ -127,6 +127,18 @@ private:
     /// negative number that looks like a reading.
     [[nodiscard]] static juce::String formatLufs (double lufs);
 
+    void saveReference();
+    void loadReference();
+
+    /// Puts a message on the status line and holds it there. Without the hold
+    /// it would be replaced 50 ms later by the next timer tick, which is to say
+    /// never seen at all.
+    void showNotice (juce::String text);
+
+    /// Where the browser opens. The user's documents folder, and after that
+    /// wherever they last put one.
+    [[nodiscard]] static juce::File referenceFolder();
+
     TranspectusProcessor& transpectus_;
 
     juce::TooltipWindow tooltips_ { this, 500 };
@@ -150,6 +162,13 @@ private:
 
     juce::TextButton captureButton_ { "CAPTURE REFERENCE" };
     juce::TextButton clearReferenceButton_ { "CLEAR" };
+    juce::TextButton saveReferenceButton_ { "SAVE" };
+    juce::TextButton loadReferenceButton_ { "LOAD" };
+
+    /// Held rather than local: a FileChooser launched asynchronously must
+    /// outlive the call that launched it, and a stack one is destroyed the
+    /// moment the browser opens.
+    std::unique_ptr<juce::FileChooser> chooser_;
     juce::ToggleButton pinkButton_ { "Pink slope" };
     juce::ToggleButton differenceButton_ { "Difference" };
 
@@ -164,6 +183,9 @@ private:
     juce::TextButton resetButton_ { "RESET MEASUREMENT" };
 
     juce::Label statusLabel_;
+
+    /// When the status line goes back to reporting what the plugin is doing.
+    juce::uint32 noticeUntilMs_ { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TranspectusEditor)
 };
