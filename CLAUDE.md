@@ -503,6 +503,32 @@ Starting points known to be good:
 | Faust libraries | permissive | Reference implementations to compare against |
 | musicdsp.org, `olilarkin/awesome-musicdsp` | mixed | Index of everything else |
 
+### When a source cannot be fetched, ask — do not work around it silently
+
+The container's egress proxy blocks most of the web. `dafx.de`, `arxiv.org`,
+`manualslib.com` and `audiofanzine.com` are all refused, at the network layer as
+well as through the fetch tool, so `curl` is no help either. Web *search* works
+and returns useful snippets; fetching the actual paper does not.
+
+**So: whenever a needed source cannot be retrieved, stop and give the user the
+URLs.** They will fetch them and hand the contents back. This is not a fallback
+to reach for after exhausting alternatives — a paper read second-hand through
+search snippets is a paper not read, and the difference matters most exactly
+where §9 says copying beats deriving: a fitted coefficient table, a standard's
+defined behaviour, a documented edge case.
+
+The rules that follow:
+
+- **List the URLs explicitly**, prioritised, with one line each on what it would
+  change. Do not bury the ask at the end of a long message.
+- **Say which claims rest on a source that was not read.** "Search snippets say
+  X" and "the paper says X" are different statements and must not be blurred.
+- **Carry on with what does not depend on it.** Being blocked on one reference
+  is not a reason to stop; derive, build, measure, and mark the spot that a
+  source would settle.
+- **`docs/DSP-REFERENCES.md` records the access, not just the citation.** A row
+  for a paper that shaped a design without being read says so.
+
 ### Our licence, and what we can take
 
 **This project is AGPLv3** — see `LICENSE`. That is not a choice so much as a
