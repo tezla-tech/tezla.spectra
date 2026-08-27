@@ -94,8 +94,14 @@ void addParameters (juce::AudioProcessorValueTreeState::ParameterLayout& layout,
             juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f,
             Attributes().withStringFromValueFunction ([] (float value, int)
             {
-                if (value == 0.0f) return juce::String ("Off");
-                return juce::String (juce::roundToInt (value * 100.0f)) + " %";
+                // Decided on the number that is about to be shown, not on the
+                // raw value. A depth of 0.004 used to read "0 %", which claims
+                // to be nothing while the slot was still spent -- and it is the
+                // percentage, not the float, that the user is reading.
+                const int percent = juce::roundToInt (value * 100.0f);
+
+                return percent == 0 ? juce::String ("Off")
+                                    : juce::String (percent) + " %";
             })
             .withValueFromStringFunction ([] (const juce::String& text)
             {

@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include <tezla/dsp/Exact.hpp>
+
 namespace tezla::ui
 {
 
@@ -266,7 +268,7 @@ void ModRing::mouseUp (const juce::MouseEvent&)
 
     // Dragged back to nothing -- or never dragged at all -- gives the slot back,
     // so the eight are a budget the user spends rather than one they leak.
-    if (view_.getSlotDepth (draggingSlot_) == 0.0)
+    if (dsp::isExactlyZero (view_.getSlotDepth (draggingSlot_)))
         view_.freeSlot (draggingSlot_);
 
     draggingSlot_ = -1;

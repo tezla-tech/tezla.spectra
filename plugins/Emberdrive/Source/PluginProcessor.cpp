@@ -4,6 +4,7 @@
 #include <algorithm>
 
 #include <tezla/dsp/Decibels.hpp>
+#include <tezla/dsp/Exact.hpp>
 
 namespace tezla::emberdrive
 {
@@ -450,7 +451,7 @@ void EmberdriveProcessor::applyModulation()
         // whose slot sits at the centre of its depth control, hands over the
         // base value untouched. That is what keeps every bit-exact neutral
         // setting in this plugin bit-exact once modulation exists.
-        if (offset == 0.0 || destinationParameters_[i] == nullptr)
+        if (dsp::isExactlyZero (offset) || destinationParameters_[i] == nullptr)
         {
             destinationValues_[i] = baseValues_[i];
             continue;

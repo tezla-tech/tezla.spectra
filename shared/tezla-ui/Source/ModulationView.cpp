@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include <tezla/dsp/Exact.hpp>
+
 namespace tezla::ui
 {
 
@@ -227,7 +229,8 @@ int ModulationView::soleSourceFor (int destination) const
     {
         const int source = getSlotSource (slot);
 
-        if (source == none || getSlotDestination (slot) != destination || getSlotDepth (slot) == 0.0)
+        if (source == none || getSlotDestination (slot) != destination
+            || dsp::isExactlyZero (getSlotDepth (slot)))
             continue;
 
         if (found != none && found != source)

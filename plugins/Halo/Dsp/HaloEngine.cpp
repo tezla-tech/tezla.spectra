@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include <tezla/dsp/Decibels.hpp>
+#include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Denormals.hpp>
 
 namespace tezla::halo
@@ -761,7 +762,7 @@ void Engine::process (double* const* channels, int numChannels, int numSamples) 
         // wide the air gets -- which is the whole reason this control can exist
         // here and cannot on an exciter whose wet path carries a copy of the
         // source.
-        if (stereo && widen != 0.0)
+        if (stereo && ! dsp::isExactlyZero (widen))
         {
             const double left  = channels[0][i];
             const double right = channels[1][i];

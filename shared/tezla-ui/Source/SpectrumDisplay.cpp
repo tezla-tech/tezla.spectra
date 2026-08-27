@@ -223,11 +223,18 @@ void SpectrumDisplay::drawGrid (juce::Graphics& g, juce::Rectangle<float> area,
                     juce::Justification::centred);
     }
 
-    for (const float db : { 0.0f, -20.0f, -40.0f, -60.0f })
+    // The 0 dB line is brighter than the rest, and that is data rather than
+    // something to rederive from the value: pairing each line with its own
+    // alpha says which one is special without asking a float whether it is
+    // equal to another float.
+    struct Gridline { float db; float alpha; };
+
+    for (const auto& line : { Gridline { 0.0f, 0.30f }, Gridline { -20.0f, 0.12f },
+                              Gridline { -40.0f, 0.12f }, Gridline { -60.0f, 0.12f } })
     {
-        const float y = yFor (area, db);
-        g.setColour (palette_.dimText.withAlpha (db == 0.0f ? 0.30f : 0.12f));
-        g.drawHorizontalLine (juce::roundToInt (y), area.getX(), area.getRight());
+        g.setColour (palette_.dimText.withAlpha (line.alpha));
+        g.drawHorizontalLine (juce::roundToInt (yFor (area, line.db)),
+                              area.getX(), area.getRight());
     }
 }
 

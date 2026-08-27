@@ -85,7 +85,7 @@ either large panel can be maximised or lifted into its own window. See
 | **[Capstone](plugins/Capstone/)** | True-peak brickwall limiter and clipper for the end of the chain | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Transpectus](plugins/Transpectus/)** | Loudness, true peak, spectrum, correlation and goniometer — analysis only, bit-exact passthrough | v0.1.0 — 47/47 on Steinberg's validator |
 
-316 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+321 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 
@@ -204,6 +204,41 @@ without it, a Windows-written file is now rejected outright.
 
 Both tests were then seen red, each for its own reason. The decoration became a
 test only because it was checked.
+
+### A warning that was right nine times and wrong ten
+
+`-Wfloat-equal` flagged ten comparisons. Silencing a warning is not a fix, and
+neither is mechanically applying a tolerance everywhere it fires — so each one
+got read, and they turned out to be three different things.
+
+**Eight were deliberate, and load-bearing.** They are the bit-exact-neutral
+guarantee [`CLAUDE.md`](CLAUDE.md) §7 requires: a stage in the signal path is
+skipped when its control sits at *exactly* zero. A tolerance there would be the
+bug — a very small modulation depth would silently stop modulating, at a
+threshold chosen by whoever picked the tolerance. Those now go through one named
+`isExactlyZero`, so the exception is declared and justified in one place instead
+of looking like an oversight in nine.
+
+**One was a comparison that did not need to exist.** A gridline loop asked each
+value whether it was the 0 dB line; pairing each line with its own alpha makes
+that data instead of a derived condition.
+
+**And one was a real inconsistency.** A modulation depth of 0.004 displayed
+`0 %` — claiming to be nothing while the slot was still spent. Deciding on the
+rounded percentage rather than the raw float makes it read `Off`, which is what
+it is.
+
+The substitution is proved rather than assumed: a test asserts
+`isExactlyZero(x) == (x == 0.0)` across denormals, infinities, NaN and a sweep
+of ordinary values, and **Emberdrive and Halo render bit-identically before and
+after** — including with an LFO assigned at depth 0.7 and Width at 1.4, so both
+sides of every changed branch were exercised.
+
+Both plausible "tidy-ups" of the helper were then tried. A tolerance fails at
+*compile* time, on a `static_assert`. The usual trick for writing an exact
+comparison without tripping the warning — `!(x < 0) && !(x > 0)` — fails at run
+time, because it is true for NaN and would quietly route a NaN down the neutral
+path instead of letting it show.
 
 ### Visible, enabled, and completely unreachable
 

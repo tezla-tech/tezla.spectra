@@ -383,7 +383,7 @@ oversampling is a deliberate choice with a price you can see.
 | Editor: close the standalone with a panel detached | exits 0 |
 | Crosshair at the 1 kHz gridline | reads **998 Hz**, one quarter-pixel of rounding |
 | Steinberg validator | **47 tests passed, 0 failed** |
-| `tezla-tests` | **316 passed, 0 failed** on x86-64 and on ARM64 under qemu |
+| `tezla-tests` | **321 passed, 0 failed** on x86-64 and on ARM64 under qemu |
 
 ### Reproducing all of it
 

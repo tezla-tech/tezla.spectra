@@ -28,6 +28,7 @@
 #include <array>
 #include <cstddef>
 
+#include "Exact.hpp"
 #include "LevelFollower.hpp"
 #include "Lfo.hpp"
 
@@ -158,7 +159,7 @@ public:
 
         for (const auto& slot : slots_)
         {
-            if (slot.source == Source::off || slot.depth == 0.0)
+            if (slot.source == Source::off || isExactlyZero (slot.depth))
                 continue;
 
             offsets_[static_cast<std::size_t> (slot.destination)] += slot.depth * valueOf (slot.source);
@@ -196,7 +197,8 @@ public:
     [[nodiscard]] bool isModulated (int destination) const noexcept
     {
         for (const auto& slot : slots_)
-            if (slot.source != Source::off && slot.destination == destination && slot.depth != 0.0)
+            if (slot.source != Source::off && slot.destination == destination
+                && ! isExactlyZero (slot.depth))
                 return true;
 
         return false;
@@ -208,7 +210,7 @@ private:
         active_ = false;
 
         for (const auto& slot : slots_)
-            if (slot.source != Source::off && slot.depth != 0.0)
+            if (slot.source != Source::off && ! isExactlyZero (slot.depth))
             {
                 active_ = true;
                 return;
