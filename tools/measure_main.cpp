@@ -25,6 +25,7 @@
 
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Decibels.hpp>
+#include <tezla/dsp/Scales.hpp>
 #include <tezla/dsp/TruePeakDetector.hpp>
 #include <tezla/dsp/Version.hpp>
 #include <tezla/measure/Fft.hpp>
@@ -35,6 +36,7 @@
 #include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
+#include "SonitusEngine.hpp"
 #include "TranspectusEngine.hpp"
 
 namespace {
@@ -1626,6 +1628,324 @@ int runAnvil (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// sonitus
+// ---------------------------------------------------------------------------
+
+namespace sonitusMeasure
+{
+using namespace tezla;
+
+/// The nonlinear chain with one oscillator, which is the only patch an aliasing
+/// figure can honestly be taken from.
+///
+/// A reese is dense and inharmonic *by design* -- five detuned oscillators, a
+/// synced partner and a ring modulator -- and any harmonic analysis counts all
+/// of that as aliasing. Pointed at a real patch the number reads 0 dB and means
+/// nothing. So the probe is one saw at a bin-exact fundamental, with the folder,
+/// the filter's rail and the tube all the way up: the three stages that can
+/// actually fold energy back over Nyquist.
+sonitus::EngineParameters harmonicPatch()
+{
+    sonitus::EngineParameters parameters;
+
+    parameters.voice.shapeA = dsp::OscShape::saw;
+    parameters.voice.levelA = 1.0;
+    parameters.voice.levelB = 0.0;
+    parameters.voice.subLevel = 0.0;
+    parameters.voice.unisonA = 1;
+    parameters.voice.foldAmount = 0.6;
+    parameters.voice.cutoffHz = 16000.0;
+    parameters.voice.resonance = 0.7;
+    parameters.voice.filterDrive = 0.7;
+    parameters.voice.ampAttack = 0.001;
+    parameters.voice.ampSustain = 1.0;
+    parameters.voice.ampVelocity = 0.0;
+    parameters.voice.level = 0.5;
+    parameters.keyboard = sonitus::KeyboardMode::mono;
+    parameters.tubeDriveDb = 24.0;
+    parameters.splitHz = 20.0;
+    parameters.subMono = false;
+
+    return parameters;
+}
+
+std::vector<double> playNote (const sonitus::EngineParameters& parameters, double rate,
+                              double frequency, std::size_t window)
+{
+    // Parameters before prepare, so the graph is built at the factor asked for
+    // rather than rebuilt on the first block -- which cuts the note.
+    sonitus::Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (rate, 512);
+    engine.tuning().setReference (60, frequency);
+    engine.noteOn (60, 1.0);
+
+    // **A second of pre-roll, counted in time rather than samples.** The tube's
+    // bias shift and supply sag have 33 and 45 ms time constants, and 8192
+    // samples is 171 ms at 48 kHz against 43 ms at 192 -- a settling time
+    // counted in samples is a different settling time at every rate. The short
+    // one read -52.99 dB where the settled figure is -69.89.
+    const auto preRoll = static_cast<std::size_t> (rate);
+
+    std::vector<double> left (512), right (512), out;
+    out.reserve (window + preRoll);
+
+    double* channels[2] { left.data(), right.data() };
+
+    while (out.size() < window + preRoll)
+    {
+        engine.process (channels, 512);
+
+        for (int i = 0; i < 512; ++i)
+            out.push_back (left[static_cast<std::size_t> (i)]);
+    }
+
+    return { out.end() - static_cast<long> (window), out.end() };
+}
+} // namespace sonitusMeasure
+
+int runSonitus (const Args& args)
+{
+    using namespace tezla;
+    using namespace sonitusMeasure;
+
+    const double rate = args.sampleRate;
+    constexpr std::size_t window = 1 << 15;
+
+    // ---- 1. aliasing across the range a bass actually plays -------------------
+
+    std::printf ("Aliasing, one saw at full fold, filter drive 0.7 and 24 dB of tube.\n");
+    std::printf ("Absolute dBFS of inharmonic energy in the audible band, at %.0f Hz.\n\n",
+                 rate);
+
+    std::printf ("  %-8s %9s %9s %9s %9s\n", "note", "off", "x2", "x4", "x8");
+
+    const double notes[] { 41.2, 55.0, 82.4, 110.0, 164.8, 220.0, 440.0 };
+
+    for (const double note : notes)
+    {
+        std::printf ("  %5.1f Hz", note);
+
+        for (const auto mode : { dsp::OversamplingMode::Off, dsp::OversamplingMode::X2,
+                                 dsp::OversamplingMode::X4, dsp::OversamplingMode::X8 })
+        {
+            auto parameters = harmonicPatch();
+            parameters.oversampling = mode;
+
+            const double hz = measure::binExactFrequency (note, rate, window);
+
+            std::printf ("  %8.2f", measure::analyseHarmonics (
+                playNote (parameters, rate, hz, window), rate, hz).audibleAliasingDb);
+        }
+
+        std::printf ("\n");
+    }
+
+    std::printf ("\n  CLAUDE.md section 7 asks for nothing above -60 dBFS at maximum drive,\n");
+    std::printf ("  and Auto picks x%d here. That clears it from E1 to A3 -- which is what a\n",
+                 dsp::autoOversamplingFactor (rate));
+    std::printf ("  bass instrument plays -- and does not clear it at 440 Hz, where the\n");
+    std::printf ("  control offers x8. The limit is stated rather than hidden.\n\n");
+
+    // ---- 2. the comb, which is what the instrument is for ---------------------
+
+    std::printf ("The comb's first notch, in Hz. The delay is 1/(2 x notch), so the row is\n");
+    std::printf ("a check that the control means what the tooltip says it means.\n\n");
+
+    std::printf ("  %-10s %12s %12s %12s\n", "time", "predicted", "measured", "inverted");
+
+    for (const double milliseconds : { 0.5, 1.0, 2.0, 4.0, 8.0, 16.0 })
+    {
+        auto parameters = harmonicPatch();
+        parameters.combMode = sonitus::CombMode::flange;
+        parameters.combTimeMs = milliseconds;
+        parameters.combMix = 1.0;
+
+        sonitus::Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 512);
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        engine.process (channels, 512);
+
+        const double straight = engine.getCombNotchHz();
+
+        parameters.combInverted = true;
+        engine.setParameters (parameters);
+        engine.process (channels, 512);
+
+        std::printf ("  %6.2f ms %12.1f %12.1f %12.1f\n", milliseconds,
+                     500.0 / milliseconds, straight, engine.getCombNotchHz());
+    }
+
+    // Key tracking is the claim that the growl comes out *tuned*: with the
+    // amount at 1 the delay is the note's own period, so the notches land on
+    // its harmonics whatever note is played.
+    std::printf ("\n  Key tracking at 100%%: the delay becomes the note's period, so the\n");
+    std::printf ("  first notch sits at half the played frequency whatever is played.\n\n");
+
+    std::printf ("  %-10s %14s %14s\n", "note", "note / 2", "measured");
+
+    for (const int note : { 28, 40, 52, 64 })
+    {
+        auto parameters = harmonicPatch();
+        parameters.combMode = sonitus::CombMode::flange;
+        parameters.combTimeMs = 3.0;
+        parameters.combKeyTrack = 1.0;
+        parameters.combMix = 1.0;
+
+        sonitus::Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 512);
+        engine.noteOn (note, 1.0);
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        engine.process (channels, 512);
+
+        const double played = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+
+        std::printf ("  MIDI %-5d %14.2f %14.2f\n", note, played * 0.5,
+                     engine.getCombNotchHz());
+    }
+
+    // ---- 3. what it costs -----------------------------------------------------
+
+    std::printf ("\nCPU, one second of audio rendered in 512-sample blocks, after two\n");
+    std::printf ("seconds of pre-roll -- the idle skip needs a second of silence before\n");
+    std::printf ("it engages, and timing it while it engages measures the settling.\n\n");
+
+    // Where the time actually goes, which is not where the plan assumed. The
+    // voices dominate and the mangle is nearly free, so the unison table below
+    // is the *shallow* axis and the polyphony is the steep one.
+    {
+        std::printf ("  Idle -- nothing playing, the skip engaged:\n");
+
+        auto quiet = harmonicPatch();
+        quiet.tubeDriveDb = 0.0;
+
+        sonitus::Engine engine;
+        engine.setParameters (quiet);
+        engine.prepare (rate, 512);
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        for (int i = 0; i < 2 * static_cast<int> (rate); i += 512)
+            engine.process (channels, 512);
+
+        const auto started = std::chrono::steady_clock::now();
+
+        for (int i = 0; i < static_cast<int> (rate); i += 512)
+            engine.process (channels, 512);
+
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        const double ms = std::chrono::duration<double, std::milli> (elapsed).count();
+
+        std::printf ("    %7.1f ms/s = %.2f%% of one core. Without the skip this was 17.9\n",
+                     ms, ms / 10.0);
+        std::printf ("    ms/s -- the mangle and the decimation FIRs running on silence.\n\n");
+    }
+
+    std::printf ("  Eight voices held, saw plus saw, everything in the mangle running:\n\n");
+
+    std::printf ("  %-22s %10s %8s %10s\n", "unison (A + B)", "ms/s", "core", "latency");
+
+    for (const int unison : { 1, 3, 5, 7 })
+    {
+        auto parameters = harmonicPatch();
+
+        parameters.keyboard = sonitus::KeyboardMode::poly;
+        parameters.polyphony = 8;
+        parameters.voice.levelB = 1.0;
+        parameters.voice.unisonA = unison;
+        parameters.voice.unisonB = unison;
+        parameters.voice.detuneA = 18.0;
+        parameters.voice.detuneB = 22.0;
+        parameters.combMode = sonitus::CombMode::flange;
+        parameters.combMix = 0.8;
+        parameters.combFeedback = 0.7;
+        parameters.formantMix = 0.6;
+
+        sonitus::Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 512);
+
+        for (int note = 0; note < 8; ++note)
+            engine.noteOn (36 + 3 * note, 0.9);
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        // A block first, so the measurement is not timing the graph being built
+        // and the voices being allocated.
+        engine.process (channels, 512);
+
+        const auto started = std::chrono::steady_clock::now();
+
+        for (int i = 0; i < static_cast<int> (rate); i += 512)
+            engine.process (channels, 512);
+
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        const double ms = std::chrono::duration<double, std::milli> (elapsed).count();
+
+        std::printf ("  %2d each = %3d oscs %10.1f %7.1f%% %8d sm\n",
+                     unison, 16 * unison, ms, ms / 10.0, engine.getLatencySamples());
+    }
+
+    std::printf ("\n  **The voices dominate, not the oscillators**, and that is the opposite\n");
+    std::printf ("  of what the plan assumed. Seven times the oscillators costs about a\n");
+    std::printf ("  third more; an eighth of the *voices* costs an eighth. The filter, the\n");
+    std::printf ("  envelopes and the folder's antialiasing are per voice and the unison\n");
+    std::printf ("  bank is not. So mono is the setting that saves CPU -- and a reese is one\n");
+    std::printf ("  voice anyway. Turning unison down is the wrong lever.\n\n");
+
+    // ---- 4. tuning ------------------------------------------------------------
+
+    std::printf ("Tuning: what the built-in scales actually produce, against theory.\n\n");
+
+    {
+        dsp::Tuning tuning;
+
+        tuning.setScale (dsp::Tuning::twelveToneEqual());
+
+        double worst = 0.0;
+
+        for (int note = 0; note < 128; ++note)
+        {
+            const double theory = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+
+            worst = std::max (worst, std::abs (tuning.frequencyFor (note) - theory));
+        }
+
+        std::printf ("  12-TET against 440 * 2^((n-69)/12), worst of 128 notes: %.3e Hz\n", worst);
+
+        tuning.setScale (dsp::scales::pythagorean());
+
+        // The Pythagorean fifth is a pure 3/2 and is 701.955 cents, not the
+        // 700 that twelve-tone equal rounds it to. That two-cent difference is
+        // the whole reason the scale exists.
+        const double fifth = 1200.0 * std::log2 (tuning.frequencyFor (67) / tuning.frequencyFor (60));
+
+        std::printf ("  Pythagorean fifth: %.3f cents (a pure 3/2 is 701.955, 12-TET is 700)\n",
+                     fifth);
+
+        tuning.setScale (dsp::scales::bohlenPierce());
+
+        const double repeat = 1200.0 * std::log2 (tuning.frequencyFor (73) / tuning.frequencyFor (60));
+
+        std::printf ("  Bohlen-Pierce repeat: %.3f cents (3/1 is 1901.955 -- a tritave, not an\n",
+                     repeat);
+        std::printf ("    octave, which is the point of having it)\n");
+    }
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -1641,6 +1961,7 @@ void printUsage()
     std::printf ("  capstone        [--fs]  limiter true peak, clipper aliasing, look-ahead, CPU\n");
     std::printf ("  loudness        [--fs]  LUFS at four rates, gating, PLR/PSR, correlation\n");
     std::printf ("  anvil           [--fs]  amplifier aliasing, lane THD, transformer flux, CPU\n");
+    std::printf ("  sonitus         [--fs]  instrument aliasing, comb notches, tuning, CPU\n");
 }
 
 } // namespace
@@ -1668,6 +1989,7 @@ int main (int argc, char** argv)
     if (command == "capstone")        return runCapstone (args);
     if (command == "loudness")        return runLoudness (args);
     if (command == "anvil")           return runAnvil (args);
+    if (command == "sonitus")         return runSonitus (args);
 
     printUsage();
     return 1;
