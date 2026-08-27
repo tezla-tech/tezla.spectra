@@ -47,6 +47,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 #include <tezla/dsp/Tuning.hpp>
 
@@ -84,8 +85,11 @@ public:
     {
         sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
 
-        for (auto& voice : voices_)
-            voice.prepare (sampleRate_);
+        // Each voice gets its own seed, so the note-random source and the
+        // unison phase scatter differ between them -- see Voice::prepare.
+        for (int index = 0; index < kMaxVoices; ++index)
+            voices_[static_cast<std::size_t> (index)]
+              .prepare (sampleRate_, static_cast<std::uint64_t> (index) + 1ull);
 
         reset();
     }
@@ -282,15 +286,20 @@ public:
     }
 
     /// Hands every sounding voice its controls for this chunk.
-    void applyControls (const VoiceParameters& parameters, double cutoffModulation,
-                        double pitchModulationCents, double levelModulation)
+    ///
+    /// Pitch bend is folded into the parameters rather than into the matrix,
+    /// because it is not modulation: a bend applies to every voice equally and
+    /// has no slot to occupy.
+    void applyControls (const VoiceParameters& parameters, const GlobalSources& global)
     {
-        const double bendCents = bendSemitones_ * 100.0;
+        VoiceParameters bent = parameters;
+
+        bent.centsA += bendSemitones_ * 100.0;
+        bent.centsB += bendSemitones_ * 100.0;
 
         for (auto& voice : voices_)
             if (voice.isActive())
-                voice.applyControls (parameters, cutoffModulation,
-                                     pitchModulationCents + bendCents, levelModulation);
+                voice.applyControls (bent, global);
     }
 
     /// Sums every sounding voice into one stereo sample.

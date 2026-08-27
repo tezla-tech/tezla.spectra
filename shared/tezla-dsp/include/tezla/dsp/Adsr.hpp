@@ -251,6 +251,21 @@ public:
         return 0.0;
     }
 
+    /// Advances `numSamples` at once and returns the level.
+    ///
+    /// For a modulation envelope, which runs at the control rate rather than
+    /// per sample. Written as a loop rather than a closed form on purpose: a
+    /// segment can *end* inside the chunk, and only stepping through it finds
+    /// the boundary. A closed form would sail past a 1 ms decay in a 32-sample
+    /// chunk and land somewhere the envelope never goes.
+    double skip (int numSamples) noexcept
+    {
+        for (int i = 0; i < numSamples; ++i)
+            (void) process();
+
+        return level_;
+    }
+
 private:
     /// `ln(T / (T - 1))`: how many time constants a segment aiming at T takes to
     /// cover the distance it was actually asked to cover.

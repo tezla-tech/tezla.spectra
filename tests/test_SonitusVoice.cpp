@@ -33,7 +33,7 @@ Rendered render (Voice& voice, const VoiceParameters& parameters, int samples,
     for (int i = 0; i < samples; ++i)
     {
         if (i % Voice::kControlIntervalSamples == 0)
-            voice.applyControls (parameters, 0.0, 0.0, 0.0);
+            voice.applyControls (parameters, GlobalSources {});
 
         if (i == releaseAt)
             voice.noteOff();
@@ -111,7 +111,7 @@ TEZLA_TEST (a_voice_is_silent_until_played_and_after_it_finishes)
         double left = 0.0;
         double right = 0.0;
 
-        voice.applyControls (parameters, 0.0, 0.0, 0.0);
+        voice.applyControls (parameters, GlobalSources {});
         voice.process (left, right);
 
         CHECK (left == 0.0);
@@ -387,7 +387,7 @@ TEZLA_TEST (the_filter_fm_swing_is_symmetric_in_octaves)
     {
         parameters.filterFm = depth;
         voice.noteOn (45, 110.0, 1.0, false);
-        voice.applyControls (parameters, 0.0, 0.0, 0.0);
+        voice.applyControls (parameters, GlobalSources {});
 
         for (const double modulator : { 0.25, 0.5, 1.0 })
         {
@@ -405,14 +405,14 @@ TEZLA_TEST (the_filter_fm_swing_is_symmetric_in_octaves)
 
     // And the depth means what it says -- two octaves either way at the top.
     parameters.filterFm = 1.0;
-    voice.applyControls (parameters, 0.0, 0.0, 0.0);
+    voice.applyControls (parameters, GlobalSources {});
 
     CHECK_NEAR (voice.filterScaleFor (1.0), 4.0, 1.0e-12);
     CHECK_NEAR (voice.filterScaleFor (-1.0), 0.25, 1.0e-12);
 
     // At zero depth it is exactly 1, which the filter reads as its fast path.
     parameters.filterFm = 0.0;
-    voice.applyControls (parameters, 0.0, 0.0, 0.0);
+    voice.applyControls (parameters, GlobalSources {});
 
     CHECK (voice.filterScaleFor (1.0) == 1.0);
     CHECK (voice.filterScaleFor (-1.0) == 1.0);
@@ -536,6 +536,9 @@ TEZLA_TEST (the_voice_is_block_size_independent)
         parameters.cutoffHz = 800.0;
         parameters.resonance = 0.5;
 
+        // Through the matrix, so the modulation path is exercised too.
+        parameters.slots[0] = { ModSource::lfo1, ModDestination::cutoff, 3.0 };
+
         voice.noteOn (48, 130.8127826502993, 0.8, false);
 
         std::vector<double> out;
@@ -549,8 +552,12 @@ TEZLA_TEST (the_voice_is_block_size_independent)
             for (int i = 0; i < take; ++i)
             {
                 if ((done + i) % Voice::kControlIntervalSamples == 0)
-                    voice.applyControls (parameters, 0.3 * std::sin ((done + i) * 0.0005),
-                                         0.0, 0.0);
+                {
+                    GlobalSources global;
+                    global.lfo1 = std::sin ((done + i) * 0.0005);
+
+                    voice.applyControls (parameters, global);
+                }
 
                 double left = 0.0;
                 double right = 0.0;
@@ -583,6 +590,308 @@ TEZLA_TEST (the_voice_is_block_size_independent)
     CHECK (worst < 1.0e-9);
 }
 
+TEZLA_TEST (a_matrix_slot_moves_the_control_it_points_at)
+{
+    // The whole modulation surface, checked one destination at a time. Each
+    // slot is pointed at a control with a known audible consequence and the
+    // consequence is measured -- a matrix that silently modulates the wrong
+    // thing is the failure mode CLAUDE.md section 8's append-only rule exists
+    // to prevent, and the only way to see it is to look.
+    constexpr double rate = 48000.0;
+
+    const auto renderWith = [&] (ModDestination destination, double depth,
+                                 double sourceValue)
+    {
+        auto parameters = basic();
+
+        parameters.shapeA = OscShape::saw;
+        parameters.levelA = 1.0;
+        parameters.levelB = 1.0;
+        parameters.shapeB = OscShape::saw;
+        parameters.semitonesB = 7.0;
+        parameters.cutoffHz = 600.0;
+        parameters.subLevel = 0.0;
+
+        parameters.slots[0] = { ModSource::lfo1, destination, depth };
+
+        Voice voice;
+        voice.prepare (rate);
+        voice.noteOn (45, 110.0, 1.0, false);
+
+        GlobalSources global;
+        global.lfo1 = sourceValue;
+
+        Rendered out;
+        double sum = 0.0;
+
+        for (int i = 0; i < 24000; ++i)
+        {
+            if (i % Voice::kControlIntervalSamples == 0)
+                voice.applyControls (parameters, global);
+
+            double left = 0.0;
+            double right = 0.0;
+
+            voice.process (left, right);
+
+            out.left.push_back (left);
+            out.peak = std::max (out.peak, std::abs (left));
+            sum += left * left;
+        }
+
+        out.rms = std::sqrt (sum / 24000.0);
+
+        return out;
+    };
+
+    // Cutoff, in octaves -- measured **at a high harmonic**, not on the RMS. A
+    // saw's energy is nearly all in its fundamental, which passes a 600 Hz
+    // lowpass either way, so the RMS moves by a few percent while the twentieth
+    // harmonic moves by twenty decibels. Asserting on the RMS is asserting on
+    // the part the filter is not touching.
+    {
+        const auto shut = renderWith (ModDestination::cutoff, 0.0, 1.0);
+        const auto open = renderWith (ModDestination::cutoff, 3.0, 1.0);
+
+        const double harmonic = 110.0 * 20.0;
+
+        CHECK (amplitudeAt (open.left, harmonic, rate, 4800)
+                 > amplitudeAt (shut.left, harmonic, rate, 4800) * 5.0);
+
+        // And the fundamental is not what moved.
+        CHECK_NEAR (amplitudeAt (open.left, 110.0, rate, 4800)
+                      / amplitudeAt (shut.left, 110.0, rate, 4800), 1.0, 0.35);
+    }
+
+    // Level.
+    CHECK (renderWith (ModDestination::level, -0.8, 1.0).rms
+             < renderWith (ModDestination::level, 0.0, 1.0).rms * 0.5);
+
+    // Pitch, in cents. An octave up is an octave up.
+    {
+        const auto shifted = renderWith (ModDestination::pitch, 1200.0, 1.0);
+
+        CHECK (amplitudeAt (shifted.left, 220.0, rate, 4800) > 0.05);
+        CHECK (amplitudeAt (shifted.left, 220.0, rate, 4800)
+                 > amplitudeAt (shifted.left, 110.0, rate, 4800) * 5.0);
+    }
+
+    // The sub level, which nothing else reaches.
+    CHECK (renderWith (ModDestination::subLevel, 1.0, 1.0).rms
+             > renderWith (ModDestination::subLevel, 0.0, 1.0).rms * 1.2);
+
+    // The oscillator mix is a crossfade, so pushing it either way silences one
+    // bank and leaves the other.
+    {
+        const auto toA = renderWith (ModDestination::oscMix, -1.0, 1.0);
+        const auto toB = renderWith (ModDestination::oscMix, 1.0, 1.0);
+
+        const double fifth = 110.0 * std::pow (2.0, 7.0 / 12.0);
+
+        CHECK (amplitudeAt (toA.left, 110.0, rate, 4800)
+                 > amplitudeAt (toA.left, fifth, rate, 4800) * 5.0);
+        CHECK (amplitudeAt (toB.left, fifth, rate, 4800)
+                 > amplitudeAt (toB.left, 110.0, rate, 4800) * 5.0);
+    }
+
+    // And a depth of zero changes nothing at all, whatever the source is doing.
+    for (const double source : { -1.0, 0.0, 1.0 })
+    {
+        const auto quiet = renderWith (ModDestination::cutoff, 0.0, source);
+        const auto reference = renderWith (ModDestination::none, 0.0, 0.0);
+
+        CHECK_NEAR (quiet.rms, reference.rms, 1.0e-12);
+    }
+}
+
+TEZLA_TEST (two_slots_on_one_destination_add_rather_than_fight)
+{
+    // Summed rather than last-wins, because an envelope opening the filter and
+    // an LFO wobbling it are one sound, not a conflict.
+    constexpr double rate = 48000.0;
+
+    const auto cutoffAfter = [&] (double firstDepth, double secondDepth)
+    {
+        auto parameters = basic();
+
+        parameters.cutoffHz = 500.0;
+        parameters.slots[0] = { ModSource::lfo1, ModDestination::cutoff, firstDepth };
+        parameters.slots[1] = { ModSource::lfo2, ModDestination::cutoff, secondDepth };
+
+        Voice voice;
+        voice.prepare (rate);
+        voice.noteOn (45, 110.0, 1.0, false);
+
+        GlobalSources global;
+        global.lfo1 = 1.0;
+        global.lfo2 = 1.0;
+
+        auto parametersCopy = parameters;
+
+        voice.applyControls (parametersCopy, global);
+
+        // Settle the cutoff smoother.
+        for (int i = 0; i < 4800; ++i)
+        {
+            if (i % Voice::kControlIntervalSamples == 0)
+                voice.applyControls (parametersCopy, global);
+
+            double left = 0.0;
+            double right = 0.0;
+
+            voice.process (left, right);
+        }
+
+        return voice.currentCutoffHz();
+    };
+
+    CHECK_NEAR (cutoffAfter (1.0, 0.0), 1000.0, 1.0);
+    CHECK_NEAR (cutoffAfter (0.0, 1.0), 1000.0, 1.0);
+
+    // One octave plus one octave is two octaves, not one.
+    CHECK_NEAR (cutoffAfter (1.0, 1.0), 2000.0, 2.0);
+    CHECK_NEAR (cutoffAfter (2.0, -1.0), 1000.0, 1.0);
+}
+
+TEZLA_TEST (the_mod_envelopes_are_per_voice)
+{
+    // Which is the whole reason they live in the voice rather than the engine:
+    // two notes played a moment apart have to have their filters open at
+    // different times, or a chord is one sound with eight copies.
+    constexpr double rate = 48000.0;
+
+    VoiceManager manager;
+    manager.prepare (rate);
+
+    auto parameters = basic();
+
+    parameters.cutoffHz = 300.0;
+    parameters.modAttack1 = 0.5;
+    parameters.modDecay1 = 0.5;
+    parameters.modSustain1 = 1.0;
+    parameters.slots[0] = { ModSource::modEnvelope1, ModDestination::cutoff, 4.0 };
+
+    const auto run = [&] (double seconds)
+    {
+        const int samples = static_cast<int> (rate * seconds);
+
+        for (int i = 0; i < samples; ++i)
+        {
+            if (i % Voice::kControlIntervalSamples == 0)
+                manager.applyControls (parameters, GlobalSources {});
+
+            double left = 0.0;
+            double right = 0.0;
+
+            manager.process (left, right);
+        }
+    };
+
+    manager.noteOn (48, 0.8);
+    run (0.25);
+    manager.noteOn (55, 0.8);
+    run (0.05);
+
+    // The first voice's envelope is half way up its attack; the second has just
+    // started. A global envelope would have them equal.
+    CHECK (manager.voice (0).getModEnvelopeLevel (0)
+             > manager.voice (1).getModEnvelopeLevel (0) * 3.0);
+    CHECK (manager.voice (1).getModEnvelopeLevel (0) > 0.0);
+
+    // And the **cutoff** follows, which is what the slot actually drives.
+    // Reading the envelope accessor alone would pass on a matrix that routed
+    // the amp envelope here instead -- break-checking found exactly that, and
+    // with `basic()`'s 1 ms amp attack the two voices would have been equal.
+    CHECK (manager.voice (0).currentCutoffHz()
+             > manager.voice (1).currentCutoffHz() * 1.5);
+
+    // Four octaves of depth on a 300 Hz corner, so the older voice should be
+    // most of the way there and the newer one barely off the floor.
+    CHECK (manager.voice (0).currentCutoffHz() > 700.0);
+    CHECK (manager.voice (1).currentCutoffHz() < 450.0);
+}
+
+TEZLA_TEST (the_note_random_source_is_drawn_once_per_note)
+{
+    // A source that changed while a note sounded would be a slow LFO, not a
+    // random -- and the point of it is that each note in a chord gets its own
+    // fixed offset.
+    VoiceManager manager;
+    manager.prepare (48000.0);
+
+    auto parameters = basic();
+    parameters.slots[0] = { ModSource::noteRandom, ModDestination::cutoff, 1.0 };
+
+    std::vector<double> drawn;
+
+    for (int note = 40; note < 48; ++note)
+    {
+        manager.noteOn (note, 0.8);
+        drawn.push_back (manager.voice (note - 40).getNoteRandom());
+    }
+
+    // Eight different values, all in range.
+    for (const double value : drawn)
+    {
+        CHECK (value >= -1.0);
+        CHECK (value <= 1.0);
+    }
+
+    int distinct = 0;
+
+    for (std::size_t i = 0; i < drawn.size(); ++i)
+    {
+        bool unique = true;
+
+        for (std::size_t j = 0; j < i; ++j)
+            if (drawn[i] == drawn[j])
+                unique = false;
+
+        distinct += unique ? 1 : 0;
+    }
+
+    CHECK (distinct == 8);
+
+    // And it does not move while the note is held -- checked through the
+    // **cutoff** as well as through the accessor, because a source that redrew
+    // itself on every lookup would leave the stored value alone and jitter
+    // everything it was pointed at. Break-checking found that gap.
+    const double held = manager.voice (0).getNoteRandom();
+
+    parameters.cutoffHz = 500.0;
+    parameters.slots[0] = { ModSource::noteRandom, ModDestination::cutoff, 2.0 };
+
+    const auto settle = [&] (int samples)
+    {
+        for (int i = 0; i < samples; ++i)
+        {
+            if (i % Voice::kControlIntervalSamples == 0)
+                manager.applyControls (parameters, GlobalSources {});
+
+            double left = 0.0;
+            double right = 0.0;
+
+            manager.process (left, right);
+        }
+    };
+
+    settle (9600);
+
+    const double cutoff = manager.voice (0).currentCutoffHz();
+
+    // Where the stored draw says it should be, exactly.
+    CHECK_NEAR (cutoff, 500.0 * std::pow (2.0, 2.0 * held), 0.5);
+
+    for (int pass = 0; pass < 20; ++pass)
+    {
+        settle (480);
+
+        CHECK_NEAR (manager.voice (0).currentCutoffHz(), cutoff, 1.0e-6);
+    }
+
+    CHECK (manager.voice (0).getNoteRandom() == held);
+}
+
 // ---------------------------------------------------------------------------
 // The voice manager
 // ---------------------------------------------------------------------------
@@ -610,7 +919,7 @@ TEZLA_TEST (polyphony_allocates_and_frees_voices)
     for (int i = 0; i < 48000; ++i)
     {
         if (i % Voice::kControlIntervalSamples == 0)
-            manager.applyControls (parameters, 0.0, 0.0, 0.0);
+            manager.applyControls (parameters, GlobalSources {});
 
         double left = 0.0;
         double right = 0.0;
@@ -650,7 +959,7 @@ TEZLA_TEST (stealing_prefers_the_quietest_released_voice)
         for (int i = 0; i < samples; ++i)
         {
             if (i % Voice::kControlIntervalSamples == 0)
-                manager.applyControls (parameters, 0.0, 0.0, 0.0);
+                manager.applyControls (parameters, GlobalSources {});
 
             double left = 0.0;
             double right = 0.0;
@@ -746,7 +1055,7 @@ TEZLA_TEST (legato_retriggers_only_from_silence)
         for (int i = 0; i < 24000; ++i)
         {
             if (i % Voice::kControlIntervalSamples == 0)
-                manager.applyControls (parameters, 0.0, 0.0, 0.0);
+                manager.applyControls (parameters, GlobalSources {});
 
             double left = 0.0;
             double right = 0.0;
@@ -944,7 +1253,7 @@ TEZLA_TEST (the_tracked_frequency_follows_the_newest_note)
         double left = 0.0;
         double right = 0.0;
 
-        manager.applyControls (parameters, 0.0, 0.0, 0.0);
+        manager.applyControls (parameters, GlobalSources {});
         manager.process (left, right);
     }
 

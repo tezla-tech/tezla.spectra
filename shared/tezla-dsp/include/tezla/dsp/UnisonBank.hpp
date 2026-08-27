@@ -113,9 +113,19 @@ public:
 
     /// Clears every oscillator and, unless told otherwise, scatters their
     /// phases -- see the header: a stack that starts in phase is one loud saw.
+    /// The seed the phase scatter and the drift are drawn from.
+    ///
+    /// Settable, because **every bank scattering identically defeats the
+    /// point**. With one fixed seed, two voices playing the same note start in
+    /// exactly the same phase relationship and sum coherently -- +6 dB rather
+    /// than the +3 the sqrt(N) normalisation assumes -- and oscillator A and
+    /// oscillator B inside one voice drift in lockstep instead of against each
+    /// other. Left alone it keeps the value it always had.
+    void setSeed (std::uint64_t seed) noexcept { seed_ = seed | 1ull; }
+
     void reset (bool randomisePhases = true) noexcept
     {
-        random_.seed (0x5bf03635c1e5a2b3ull);
+        random_.seed (seed_);
 
         for (int i = 0; i < kMaxVoices; ++i)
         {
@@ -315,6 +325,7 @@ private:
     double driftCoefficient_ { 0.0 };
     int    driftCountdown_   { 0 };
 
+    std::uint64_t seed_ { 0x5bf03635c1e5a2b3ull };
     SmallRandom random_;
 };
 
