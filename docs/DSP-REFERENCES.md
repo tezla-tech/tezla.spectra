@@ -247,6 +247,43 @@ of their code.
 
 ---
 
+## Valve and amplifier modelling — used for Anvil
+
+The papers themselves are in [`technical references/anvil/`](../technical%20references/anvil/),
+fetched by the user because this container's egress proxy refuses `dafx.de` and
+`arxiv.org` outright — see `CLAUDE.md` §9 on asking rather than working around it.
+
+| Source | Licence / access | What we take |
+|---|---|---|
+| **Macak, Schimmel & Holters**, *Simulation of Fender Type Guitar Preamp Using Approximation and State-Space Model*, Proc. DAFx-12, York, 2012 | DAFx proceedings, freely published. **Read.** | The **Dempwolf 12AX7 model and its fitted constants**, reproduced verbatim in its Table 1 and §4.1: `Gg 6.06e-4, Cg 13.9, ξg 1.354; Gk 2.14e-3, Ck 3.04, ξk 1.303, μ 100.8`. Typed in at [`tools/include/tezla/measure/Triode12AX7.hpp`](../tools/include/tezla/measure/Triode12AX7.hpp) as a **measurement reference only** — it is not shipped in any plugin. Also the state-space formulation and the spline-table approach we chose *not* to follow. |
+| **Dempwolf & Zölzer**, *A physically-motivated triode model for circuit simulations*, Proc. DAFx-11, Paris, 2011 | DAFx proceedings. **Not read** — reached only through the verbatim reproduction above. | The model and constants, second-hand but complete. Cited because it is the primary source for numbers we use; the row is honest that we read them in the DAFx-12 paper. |
+| **Giampiccolo, D'Angelo, Bernardini & Sarti**, *A Quadric Surface Model of Vacuum Tubes for Virtual Analog Applications*, Proc. DAFx-23, Copenhagen, 2023 | CC-BY 4.0. **Read.** | Their model, once the constrained coefficients of eq. (13) are substituted, is exactly a **squared linear form** `(a·Vpk + b·Vgk + c)²` — the same power law as Cardarilli's at an exponent of 2.0. Used as one of the four published exponents our curve is checked against, not as an implementation. Also their summary of the Koren and Cardarilli models: Koren's 12AX7 `k = 1.4`, Cardarilli's plate law a 3/2 power of `Vgk + Vpk/μ + h`. |
+| **Cohen & Hélie**, *Real-Time Simulation of a Guitar Power Amplifier*, Proc. DAFx-10, Graz, 2010 | DAFx proceedings. In the reference folder for the power-amp stage. | Push-pull output stage and transformer, for Anvil's power section. |
+| **Hughes & Kettner**, zenTera DSM-modelling amplifier manual | Manufacturer documentation, read for what a control *does* — `CLAUDE.md` §2.1. | Context for what "Dynamic Sector Modeling" claims: a circuit whose shape adapts continuously with the strength, frequency and harmonic content of the signal, rather than a static snapshot. Read as a design brief, not a specification to reproduce. |
+
+### What Anvil derives rather than takes
+
+The triode **structure** is derived from the space-charge law, not copied: a
+3/2 power of the accelerating voltage, exactly zero below cutoff, normalised to
+unity small-signal gain. What that buys is a closed-form antiderivative, so the
+stage antialiases exactly — and none of the four published models above has one,
+because a softplus raised to a non-integer power cannot be integrated in closed
+form.
+
+The published models are used as the thing to be **measured against**, which is
+the only honest way to find out whether the trade was worth it. Fitted over the
+cutoff half against Dempwolf's 12AX7 on a real load line: **rms 0.0118, worst
+2.39% of peak swing, and a fitted exponent of 1.585** — within 6% of Child's
+3/2, and well inside the 1.303–2.0 spread the published fits of the same bottle
+already disagree over.
+
+The grid-conduction side is deliberately *not* fitted, and diverges by 1.27
+normalised units at +3 V. That is the size of the two mechanisms — grid current
+and plate bottoming — that belong in the stage's dynamics rather than in a
+memoryless curve, and a test asserts the gap stays open.
+
+---
+
 ## Products referenced as sonic targets only
 
 Named in this repository to describe a *sound* or a *workflow*. No binary has
@@ -257,6 +294,10 @@ been inspected, no code reverse engineered, no artwork or preset data used.
   double-sampling ("FAT") mode. Behaviour understood from the publicly available
   operation manual.
 - Steinberg Warp — amp and cabinet simulation (three amp voicings, three cabinet
-  types), from the Cubase VST era.
+  types), from the Cubase VST era, built on Hughes & Kettner's DSM. The target
+  for **Anvil**. Understood from published descriptions and from H&K's own
+  manual for their DSM amplifiers; no binary inspected, no impulse response
+  extracted, and none ever will be — Anvil's cabinets are synthesised from
+  driver and enclosure physics for exactly that reason.
 - Antares Tube, Waves L1 / Renaissance Verb, Bitcrusher — further points of
   reference for later plugins.
