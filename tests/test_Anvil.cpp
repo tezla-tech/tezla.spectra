@@ -125,16 +125,17 @@ TEZLA_TEST (anvil_aliases_below_sixty_dbfs_at_maximum_gain_in_every_lane)
     // CLAUDE.md section 7: no inharmonic component above -60 dBFS in the
     // audible band, at maximum drive.
     //
-    // **The probe frequency is load bearing.** 1000.49 Hz is used rather than
-    // 1000, because 1000 divides 48000 exactly -- so every alias of it lands on
-    // a harmonic bin and is counted as a harmonic. Measured with a 1500 Hz
-    // probe this engine reads -174 dBFS, which is not a good result, it is a
-    // blind instrument. CLAUDE.md section 10: check the instrument first.
-    const double probe = measure::binExactFrequency (1000.0, kRate, kFft);
-
-    CHECK (std::abs (probe - 1000.0) > 0.1);          // genuinely off the grid
-    CHECK (std::abs (std::fmod (kRate, probe)) > 1.0);
-
+    // **Swept, not sampled.** The worst case is always the highest probe
+    // frequency, and a single 1 kHz probe cannot see it -- measured, that probe
+    // reads x4 at -68.7 dBFS where a sweep to 4.4 kHz reads -46.5. CLAUDE.md
+    // section 7 asks for a sweep for exactly this reason.
+    //
+    // **And the probe has to be bin-exact but must not divide the host rate.**
+    // 1500 Hz at 48 kHz is both bin-exact and a divisor, so every alias of it
+    // lands on a harmonic bin and is scored as a harmonic -- the engine reads
+    // -174 dBFS on such a probe, which is a blind instrument rather than a good
+    // result. binExactFrequency gives a probe that is bin-exact and is not a
+    // divisor, which is what is wanted.
     for (const auto voicing : { anvil::Voicing::clean,
                                 anvil::Voicing::vintage,
                                 anvil::Voicing::modern })
@@ -143,13 +144,54 @@ TEZLA_TEST (anvil_aliases_below_sixty_dbfs_at_maximum_gain_in_every_lane)
         parameters.voicing = voicing;
         parameters.cabinet = anvil::CabinetChoice::british;
         parameters.gainDb = 48.0;
-        parameters.masterDb = 12.0;
+        parameters.masterDb = 0.0;
+        parameters.extraStages = 2;      // the worst case the plugin can build
 
-        auto engine = made (parameters);
-        const auto alias = worstAlias (engine, 0.5, 1000.0);
+        double worst = -300.0;
 
-        CHECK (alias.dbFs < -60.0);
+        for (const double frequency : { 82.0, 330.0, 1000.0, 4400.0 })
+        {
+            auto engine = made (parameters);
+            worst = std::max (worst, worstAlias (engine, 0.5, frequency).dbFs);
+        }
+
+        CHECK (worst < -60.0);
     }
+}
+
+TEZLA_TEST (a_probe_that_divides_the_host_rate_cannot_see_aliasing_at_all)
+{
+    // The instrument, checked before it is trusted -- CLAUDE.md section 10.
+    //
+    // 1500 Hz at 48 kHz divides the rate exactly, so every alias of it lands on
+    // a multiple of 1500 and is counted as a harmonic. The engine reads a
+    // spotless figure through that probe at a factor the sweep shows is not
+    // spotless at all. If this test ever fails it means the harness changed and
+    // the aliasing test above may have gone blind with it.
+    anvil::Parameters parameters;
+    parameters.voicing = anvil::Voicing::modern;
+    parameters.cabinet = anvil::CabinetChoice::british;
+    parameters.gainDb = 48.0;
+    parameters.masterDb = 0.0;
+    parameters.extraStages = 2;
+    parameters.oversampling = dsp::OversamplingMode::X4;
+
+    // Both bin-exact, so neither leaks. Only one of them divides 48000.
+    const double blind = 1500.0;
+    const double honest = measure::binExactFrequency (4400.0, kRate, kFft);
+
+    CHECK_NEAR (std::fmod (kRate, blind), 0.0, 1.0e-9);
+    CHECK (std::fmod (kRate, honest) > 1.0);
+
+    auto a = made (parameters);
+    auto b = made (parameters);
+
+    const double throughBlind = worstAlias (a, 0.5, blind).dbFs;
+    const double throughHonest = worstAlias (b, 0.5, 4400.0).dbFs;
+
+    CHECK (throughBlind < -100.0);        // spotless, and untrue
+    CHECK (throughHonest > -60.0);        // the same amplifier, actually measured
+    CHECK (throughHonest - throughBlind > 40.0);
 }
 
 TEZLA_TEST (anvil_auto_holds_that_figure_at_every_host_rate)
@@ -177,9 +219,11 @@ TEZLA_TEST (anvil_auto_holds_that_figure_at_every_host_rate)
         parameters.voicing = anvil::Voicing::modern;
         parameters.cabinet = anvil::CabinetChoice::british;
         parameters.gainDb = 48.0;
+        parameters.masterDb = 0.0;
+        parameters.extraStages = 2;
 
         auto engine = made (parameters, rate);
-        CHECK (worstAlias (engine, 0.5, 1000.0, rate).dbFs < -60.0);
+        CHECK (worstAlias (engine, 0.5, 4400.0, rate).dbFs < -60.0);
     }
 }
 

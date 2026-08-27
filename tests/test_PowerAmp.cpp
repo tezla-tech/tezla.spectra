@@ -451,6 +451,16 @@ TEZLA_TEST (power_amp_presence_removes_correction_rather_than_adding_treble)
     //
     // Two things must therefore both be true: the top gets louder, *and* the
     // top gets dirtier. A treble control does only the first.
+    //
+    // Measured at 90% into a loop of 0.6 at 3x drive:
+    //
+    //                100 Hz     5 kHz
+    //     level      +0.05     +2.99 dB
+    //     THD           --    +16.59 dB   (-49.5 -> -32.9)
+    //
+    // Three decibels of level and sixteen and a half of distortion. The
+    // assertions below are floors well under those, so they catch the
+    // mechanism being removed without pinning the exact figure.
     PowerAmpParameters parameters;
     parameters.feedback = 0.6;         // a loop worth removing
     parameters.crossoverDepth = 0.0;

@@ -73,6 +73,22 @@ there; a violet peak-hold trace keeps the worst case until you clear it; and
 either large panel can be maximised or lifted into its own window. See
 [its README](plugins/Transpectus/README.md).
 
+**[Anvil](plugins/Anvil/)** is a valve amplifier, the speaker it is driving and
+the microphone in front of it — built from the mechanisms rather than fitted to
+a curve. Its thesis is that **the character is in the time constants and the
+load, not the transfer curve**, and the mechanism that makes the case is the
+output transformer: flux is the *integral* of voltage, so the same voltage puts
+twice as much of it into the core an octave down. Measured with the valves held
+bit-exactly linear, the flux falls **6 dB per octave** and the distortion it
+produces falls about **18** — from −20.1 dB at 40 Hz to −102.2 at 1280. Nothing
+in the code tests the frequency. `Core` puts that on a knob and takes it far
+past any transformer ever wound, which on sub bass is the point. `Damping` is
+the other half: a speaker is 93 Ω at resonance and 6.6 Ω at 400 Hz, and a valve
+amplifier's output impedance is a large fraction of that, so the two form a
+divider worth nine decibels of tone shaping that no cabinet impulse response can
+supply. The cabinet is synthesised from the enclosure, the cone and the
+microphone — never captured. See [its README](plugins/Anvil/README.md).
+
 
 ---
 
@@ -84,8 +100,9 @@ either large panel can be maximised or lifted into its own window. See
 | **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.3.0 — 47/47 on Steinberg's validator |
 | **[Capstone](plugins/Capstone/)** | True-peak brickwall limiter and clipper for the end of the chain | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Transpectus](plugins/Transpectus/)** | Loudness, true peak, spectrum, correlation and goniometer — analysis only, bit-exact passthrough | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Anvil](plugins/Anvil/)** | Valve amplifier, speaker load and cabinet, from the mechanisms | v0.1.0 — 47/47 on Steinberg's validator |
 
-321 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+416 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

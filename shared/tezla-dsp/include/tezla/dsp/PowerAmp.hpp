@@ -183,6 +183,11 @@ struct PowerAmpParameters
     /// nothing like a treble control even when the curves look similar: turning
     /// it up makes the amplifier *less linear* in the top, not louder there.
     ///
+    /// Measured at 90% into a loop of 0.6 at 3x drive: 5 kHz comes up
+    /// **2.99 dB** and its distortion comes up **16.59 dB**, from -49.5 to
+    /// -32.9, while 100 Hz moves 0.05 dB. A treble control can do the first
+    /// and cannot do the second, and it is the second that is heard.
+    ///
     /// At 0 the feedback signal is untouched, bit for bit.
     double presence { 0.0 };
 

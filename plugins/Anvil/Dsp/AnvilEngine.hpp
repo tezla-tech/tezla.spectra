@@ -262,23 +262,30 @@ public:
     /// | above         | x1     | as given    |
     ///
     /// The house figure was set for a plugin with one shaper in the path. This
-    /// one has three cascaded valve stages and an output stage, and a cascade
-    /// compounds: each stage distorts the harmonics the last one made, so the
-    /// energy reaching the internal Nyquist is far greater than any single
-    /// shaper produces. Measured at maximum gain, feeding 1000.49 Hz -- a
-    /// frequency chosen because it does *not* divide the host rate, so aliases
-    /// land where they can be seen rather than on a harmonic bin:
+    /// one has up to five cascaded valve stages and an output stage, and a
+    /// cascade compounds: each stage distorts the harmonics the last one made,
+    /// so the energy reaching the internal Nyquist is far greater than any
+    /// single shaper produces.
     ///
-    ///     lane        x2        x4        x8
-    ///     clean    -49.9     -59.9     -70.3   dBFS
-    ///     vintage  -46.5     -59.7     -75.2
-    ///     modern   -33.1     -47.2     -72.3
+    /// Measured at maximum gain with two extra valves, worst of a sweep from
+    /// 82 Hz to 4.4 kHz, absolute dBFS -- and **swept rather than sampled**,
+    /// because a single 1 kHz probe reads x4 at -68.7 and flatters it by
+    /// twenty decibels:
+    ///
+    ///                  1 kHz probe        worst of the sweep
+    ///     lane        x4        x8        x4        x8
+    ///     clean   -104.7    -128.9     -67.0     -89.3
+    ///     vintage  -73.1     -86.3     -46.3     -66.0
+    ///     modern   -68.7     -90.2     -46.5     -65.0
+    ///
+    /// The worst case is always the highest probe frequency, which is what one
+    /// would expect and what a single low probe cannot see.
     ///
     /// CLAUDE.md section 7 asks for nothing above -60 dBFS at maximum drive.
-    /// Only x8 delivers that on all three, so that is what Auto picks. The
-    /// priority order in CLAUDE.md section 1 puts fidelity above CPU in as many
-    /// words, and this is the case it was written for: x8 costs about 23% of
-    /// one core for a stereo instance at 48 kHz against 11% at x4.
+    /// Only x8 delivers that, so that is what Auto picks. The priority order in
+    /// CLAUDE.md section 1 puts fidelity above CPU in as many words, and this
+    /// is the case it was written for: x8 costs about 37% of one core for a
+    /// stereo instance at 48 kHz against 17% at x4.
     ///
     /// The manual settings are unchanged and mean exactly what they say, so
     /// anyone who would rather have the CPU back can take x4 and know what it

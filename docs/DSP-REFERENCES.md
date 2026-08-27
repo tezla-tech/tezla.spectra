@@ -260,6 +260,8 @@ fetched by the user because this container's egress proxy refuses `dafx.de` and
 | **Giampiccolo, D'Angelo, Bernardini & Sarti**, *A Quadric Surface Model of Vacuum Tubes for Virtual Analog Applications*, Proc. DAFx-23, Copenhagen, 2023 | CC-BY 4.0. **Read.** | Their model, once the constrained coefficients of eq. (13) are substituted, is exactly a **squared linear form** `(a·Vpk + b·Vgk + c)²` — the same power law as Cardarilli's at an exponent of 2.0. Used as one of the four published exponents our curve is checked against, not as an implementation. Also their summary of the Koren and Cardarilli models: Koren's 12AX7 `k = 1.4`, Cardarilli's plate law a 3/2 power of `Vgk + Vpk/μ + h`. |
 | **Cohen & Hélie**, *Real-Time Simulation of a Guitar Power Amplifier*, Proc. DAFx-10, Graz, 2010 | DAFx proceedings. In the reference folder for the power-amp stage. | Push-pull output stage and transformer, for Anvil's power section. |
 | **Hughes & Kettner**, zenTera DSM-modelling amplifier manual | Manufacturer documentation, read for what a control *does* — `CLAUDE.md` §2.1. | Context for what "Dynamic Sector Modeling" claims: a circuit whose shape adapts continuously with the strength, frequency and harmonic content of the signal, rather than a static snapshot. Read as a design brief, not a specification to reproduce. |
+| **Leach**, *Loudspeaker Voice-Coil Inductance Losses: Circuit Models, Parameter Estimation, and Effect on Frequency Response*, JAES vol. 50 no. 6, 2002 | JAES. **Not read** — the result is standard textbook material and is used as a target to fit against, not as an implementation. | The finding that a voice coil's impedance rises as roughly `f^0.6` with a phase near 55°, not `f^1` at 90°, because of eddy currents in the pole piece. `SpeakerLoad`'s two-element approximation is derived and then *measured* against that exponent: slope **0.542** over 400 Hz – 5 kHz, phase **+55°**. Nothing is copied; the paper supplies the number the fit is checked against. |
+| **Thiele** and **Small**, the loudspeaker small-signal parameter papers, JAES 1971–1972 | JAES. **Not read directly** — the electrical equivalent circuit and the relations below are in every loudspeaker textbook and in the datasheet of every driver sold. | The driver's electrical equivalent circuit and the standard relations `Res = Re·Qms/Qes`, `Lces = Res/(ωs·Qms)`, `Cmes = 1/(ωs²·Lces)`. Written as a netlist in [`SpeakerLoad.hpp`](../shared/tezla-dsp/include/tezla/dsp/SpeakerLoad.hpp) and checked against the physics rather than against a source: the impedance peak must be `Re·(1 + Qms/Qes)` and purely resistive at resonance, and a test asserts both. |
 
 ### What Anvil derives rather than takes
 
@@ -281,6 +283,24 @@ The grid-conduction side is deliberately *not* fitted, and diverges by 1.27
 normalised units at +3 V. That is the size of the two mechanisms — grid current
 and plate bottoming — that belong in the stage's dynamics rather than in a
 memoryless curve, and a test asserts the gap stays open.
+
+**The cabinet is synthesised, never captured.** `CLAUDE.md` §2.1: an impulse
+response taken from a commercial cabinet is that cabinet's measured property,
+and shipping one means shipping somebody else's product. Every curve in
+[`Cabinet.hpp`](../shared/tezla-dsp/include/tezla/dsp/Cabinet.hpp) is built from
+the mechanism that produces it — the enclosure's alignment, the rear radiation
+of an open back, cone breakup, the driver's own top from cone mass and coil
+inductance, and the microphone's position and distance — and every number in its
+comments was measured from that code. No impulse response, curve, preset or
+parameter table has been taken from any product.
+
+**The transformer's frequency dependence is ours.** Cohen and Hélie's power
+amplifier is explicit that its transformer is "a simple linear model",
+parameterised from datasheet inductances — which is the right call for what they
+were measuring and leaves the mechanism on the table. `PowerAmp` integrates the
+voltage across the primary and lets the permeability fall as the flux rises;
+setting `coreSaturation` to zero recovers exactly the linear model, which is
+what the addition is measured against.
 
 ---
 

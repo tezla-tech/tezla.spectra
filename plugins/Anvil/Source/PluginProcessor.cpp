@@ -416,10 +416,12 @@ juce::String AnvilProcessor::describeOversampling() const
     }
 
     description
-        << " Three cascaded valves and an output stage make far more out-of-band energy than a "
-        << "single saturator does, because each one distorts the harmonics the last one made. "
-        << "Measured at full gain: x2 aliases at -33 dBFS, x4 at -47, x8 at -72. Anything under "
-        << "x8 at a 48 kHz session is audibly cheaper and measurably dirtier.";
+        << " Cascaded valves make far more out-of-band energy than a single saturator does, "
+        << "because each one distorts the harmonics the last one made. Measured at full gain "
+        << "with five valves, worst of a sweep from 82 Hz to 4.4 kHz: x4 aliases at -46 dBFS "
+        << "and x8 at -65. A single 1 kHz probe reads x4 at -69 and flatters it by twenty "
+        << "decibels, which is why the figure is swept. x8 costs about 37% of one core for a "
+        << "stereo instance here against 17% at x4.";
 
     description << " Latency " << dsp::Oversampler::latencyForFactor (factor) << " samples.";
 
