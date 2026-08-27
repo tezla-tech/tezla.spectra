@@ -346,7 +346,7 @@ with far too little bottom end.
 | check | result |
 |---|---|
 | Steinberg validator | **47/47** |
-| DSP tests | 416 pass on x86-64 |
+| DSP tests | 416 pass on x86-64 **and on ARM64 under emulation**, identically |
 | Aliasing at maximum drive, swept | −65.0 dBFS worst lane, spec is −60 |
 | Auto at 44.1 / 48 / 96 kHz | all under −60 dBFS |
 | Block-size independence, controls sweeping | < 1e-9 between 64 and 512 |
