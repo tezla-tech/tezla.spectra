@@ -173,6 +173,33 @@ struct PowerAmpParameters
     /// perfectly ordinary way to build a guitar amplifier.
     double feedback { 0.35 };
 
+    /// Presence: how much of the high end is shunted *out of the feedback
+    /// signal* before it is subtracted.
+    ///
+    /// This is what the control on the back of an amplifier actually is -- a
+    /// capacitor from the feedback tap to ground. It does not boost anything.
+    /// It removes the correction up top, so the output stage's own gain shows
+    /// through, along with its own distortion. That is why presence sounds
+    /// nothing like a treble control even when the curves look similar: turning
+    /// it up makes the amplifier *less linear* in the top, not louder there.
+    ///
+    /// At 0 the feedback signal is untouched, bit for bit.
+    double presence { 0.0 };
+
+    /// Where the presence shunt starts working.
+    double presenceHz { 700.0 };
+
+    /// Resonance: the same trick on the other end. Removing the low frequencies
+    /// from the feedback lets the output stage and the transformer do what they
+    /// like down there -- which, with a core that saturates on flux, is a great
+    /// deal. This is the control that makes a low note bloom.
+    ///
+    /// At 0 the feedback signal is untouched, bit for bit.
+    double resonance { 0.0 };
+
+    /// Where the resonance shunt stops working.
+    double resonanceHz { 180.0 };
+
     // ---- the output transformer ------------------------------------------------
 
     /// Where the primary inductance gives up the low end, with the core
@@ -260,6 +287,8 @@ public:
         lowState_ = 0.0;
         highState_ = 0.0;
         feedbackState_ = 0.0;
+        presenceState_ = 0.0;
+        resonanceState_ = 0.0;
     }
 
     void setParameters (const PowerAmpParameters& parameters) noexcept
@@ -287,7 +316,7 @@ public:
         // Previous sample's output, so there is no algebraic loop to solve. The
         // loop's authority is whatever the valves' incremental gain still is,
         // which is the point: it lets go on its own when they clip.
-        const double driven = x * parameters_.drive - parameters_.feedback * feedbackState_;
+        const double driven = x * parameters_.drive - parameters_.feedback * shapedFeedback();
 
         // ---- class AB handover ------------------------------------------------
 
@@ -318,6 +347,28 @@ public:
     }
 
 private:
+    /// The feedback signal with the presence and resonance shunts applied.
+    ///
+    /// Both are subtractions of a filtered copy, so at zero each returns the
+    /// signal unchanged to the bit -- the loop is exactly what it was, not
+    /// nearly. That matters more here than in most places: this signal is
+    /// subtracted from the input, so an error in it is an error in everything.
+    [[nodiscard]] double shapedFeedback() noexcept
+    {
+        double signal = feedbackState_;
+
+        // The high end out. presenceState_ is the lowpass, so the difference is
+        // the high end, and removing it is what a capacitor to ground does.
+        presenceState_ += presenceCoefficient_ * (signal - presenceState_);
+        signal -= parameters_.presence * (signal - presenceState_);
+
+        // And the low end out, from what is left.
+        resonanceState_ += resonanceCoefficient_ * (signal - resonanceState_);
+        signal -= parameters_.resonance * resonanceState_;
+
+        return signal;
+    }
+
     /// Primary inductance below, leakage above, and a core whose permeability
     /// falls as the flux rises.
     [[nodiscard]] double transformer (double v) noexcept
@@ -393,6 +444,9 @@ private:
         fluxScale_ = 1.0 / capacity;
 
         sagCoefficient_ = 1.0 - std::exp (-1.0 / (std::max (parameters_.sagMs, 0.1) * 0.001 * sampleRate_));
+
+        presenceCoefficient_ = std::clamp (twoPi * parameters_.presenceHz / sampleRate_, 0.0, 1.0);
+        resonanceCoefficient_ = std::clamp (twoPi * parameters_.resonanceHz / sampleRate_, 0.0, 1.0);
     }
 
     double sampleRate_ { 48000.0 };
@@ -410,12 +464,16 @@ private:
     double lowState_       { 0.0 };
     double highState_      { 0.0 };
     double feedbackState_  { 0.0 };
+    double presenceState_  { 0.0 };
+    double resonanceState_ { 0.0 };
 
     double fluxScale_       { 1.0 };
     double lowCoefficient_  { 0.0 };
     double highCoefficient_ { 0.0 };
     double fluxLeak_        { 0.0 };
     double sagCoefficient_  { 0.0 };
+    double presenceCoefficient_  { 0.0 };
+    double resonanceCoefficient_ { 0.0 };
 };
 
 } // namespace tezla::dsp

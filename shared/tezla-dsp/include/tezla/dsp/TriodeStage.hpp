@@ -200,6 +200,50 @@ struct TriodeStageParameters
     /// the bias shift of one stage becoming a DC offset in the next.
     double couplingHz { 12.0 };
 
+    /// The grid stopper working against the Miller capacitance, as a corner.
+    ///
+    /// Every high-gain amplifier built has a resistor in series with each grid,
+    /// usually somewhere between 10k and 100k. It is there for two reasons and
+    /// both matter here. It stops the stage oscillating, and -- with the Miller
+    /// capacitance the stage's own gain creates, C_gp*(1+|A|), about 100 pF for
+    /// a 12AX7 -- it is a lowpass that keeps the previous stage's harmonics out
+    /// of this one's grid. A 68k stopper into 100 pF is a corner at 23 kHz.
+    ///
+    /// Set it far above the internal rate to disable it.
+    double gridStopperHz { 30000.0 };
+
+    /// The stage's own bandwidth, at the plate.
+    ///
+    /// This is the dominant pole of a real gain stage and the one that decides
+    /// what leaves it. The plate load in parallel with the valve's own plate
+    /// resistance -- 100k with 62k, so 38k -- drives whatever capacitance hangs
+    /// on the plate: stray wiring of 20 pF or so, plus the next grid's Miller
+    /// capacitance of about 100 pF. 38k into 120 pF is a corner at **35 kHz**,
+    /// and that is the measured bandwidth of a 12AX7 gain stage.
+    ///
+    /// Together with the grid stopper it gives two poles per stage, which is
+    /// what a cascade needs and why it is here rather than being left to the
+    /// oversampler. Harmonics are generated *inside* a stage, after its grid
+    /// stopper, so a filter on the input cannot touch them; only a filter on
+    /// the output can, and the real circuit has one.
+    ///
+    /// Both poles are worth having and neither is worth much against aliasing,
+    /// which is worth saying plainly because it is not what one expects.
+    /// Measured on Anvil's three-valve lane at 36 dB of gain, x4 from 48 kHz:
+    /// the grid stopper bought 5 dB and the plate pole another 1.8.
+    ///
+    /// The reason is that the folding happens *at* the shaper. A per-sample
+    /// nonlinearity running at 192 kHz puts energy above 96 kHz and it folds
+    /// down in the same instant; a filter after it can only remove what landed
+    /// high, and what lands low is already indistinguishable from signal. The
+    /// component that made this visible was harmonic 192 of a 1000.49 Hz input
+    /// -- 192.09 kHz, folded to 93.75 Hz, at -47 dBFS.
+    ///
+    /// So these two poles are here because the circuit has them, and what
+    /// actually fixed the aliasing was raising the internal rate. See
+    /// AnvilEngine's autoFactorFor for the numbers.
+    double plateCornerHz { 35000.0 };
+
     [[nodiscard]] bool operator== (const TriodeStageParameters&) const = default;
 };
 
@@ -226,6 +270,8 @@ public:
 
         bias_ = 0.0;
         gridCharge_ = 0.0;
+        gridState_ = 0.0;
+        plateState_ = 0.0;
     }
 
     void setParameters (const TriodeStageParameters& parameters) noexcept
@@ -256,10 +302,15 @@ public:
     {
         const double limit = kStateLimitInKnees * parameters_.knee;
 
+        // The grid stopper into the Miller capacitance, before anything else --
+        // because in the circuit it is before anything else, in series with the
+        // grid itself.
+        gridState_ += gridStopper_ * (x - gridState_);
+
         // Last sample's capacitor voltages. A capacitor cannot change
         // instantaneously, so using the previous values is not an approximation
         // for convenience -- it is the reason there is no algebraic loop.
-        const double v = x - bias_ - gridCharge_;
+        const double v = gridState_ - bias_ - gridCharge_;
 
         // ---- grid conduction -------------------------------------------------
         //
@@ -277,6 +328,9 @@ public:
         const double shaped = curveAdaa_.process (v, curve_);
         const double bottomed = ceilingAdaa_.process (shaped, ceiling_);
 
+        // The plate's own load: everything the stage makes leaves through it.
+        plateState_ += plateCorner_ * (bottomed - plateState_);
+
         // ---- the cathode bypass capacitor ------------------------------------
         //
         // Tracks the *current*, not the voltage: e^p is what flows through the
@@ -290,7 +344,7 @@ public:
 
         // ---- the coupling capacitor out --------------------------------------
 
-        return coupling_.process (bottomed);
+        return coupling_.process (plateState_);
     }
 
 private:
@@ -302,6 +356,13 @@ private:
         biasCoefficient_ = onePole (parameters_.biasMs);
         gridAttack_ = onePole (parameters_.gridAttackMs);
         gridRelease_ = onePole (parameters_.gridRecoveryMs);
+
+        // The stopper is a coefficient change, never a reset: its state is the
+        // last voltage on the Miller capacitance, and zeroing that mid-stream
+        // would step the grid by a whole sample. CLAUDE.md section 7.
+        constexpr double twoPi = 6.283185307179586;
+        gridStopper_ = std::clamp (twoPi * parameters_.gridStopperHz / sampleRate_, 0.0, 1.0);
+        plateCorner_ = std::clamp (twoPi * parameters_.plateCornerHz / sampleRate_, 0.0, 1.0);
     }
 
     /// The per-sample coefficient of a one-pole reaching 1 - 1/e in `ms`.
@@ -325,10 +386,14 @@ private:
 
     double bias_        { 0.0 };
     double gridCharge_  { 0.0 };
+    double gridState_   { 0.0 };
+    double plateState_  { 0.0 };
 
     double biasCoefficient_ { 0.0 };
     double gridAttack_      { 0.0 };
     double gridRelease_     { 0.0 };
+    double gridStopper_     { 1.0 };
+    double plateCorner_     { 1.0 };
 };
 
 } // namespace tezla::dsp

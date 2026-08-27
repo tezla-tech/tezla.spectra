@@ -437,3 +437,112 @@ TEZLA_TEST (power_amp_never_runs_away)
     // The valves bound the swing whatever the loops do.
     CHECK (worst < 10.0);
 }
+
+// ---------------------------------------------------------------------------
+// Presence and resonance, which are feedback controls rather than tone controls
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (power_amp_presence_removes_correction_rather_than_adding_treble)
+{
+    // The control on the back of an amplifier is a capacitor from the feedback
+    // tap to ground. It boosts nothing. It removes the loop's correction up
+    // top, so the output stage's own gain -- and its own distortion -- show
+    // through. That is why it sounds nothing like a treble control.
+    //
+    // Two things must therefore both be true: the top gets louder, *and* the
+    // top gets dirtier. A treble control does only the first.
+    PowerAmpParameters parameters;
+    parameters.feedback = 0.6;         // a loop worth removing
+    parameters.crossoverDepth = 0.0;
+    parameters.coreSaturation = 0.0;   // the transformer out of the way
+    parameters.sagDepth = 0.0;
+    parameters.drive = 3.0;            // into the valves, so there is gain to lose
+
+    auto flat = made (parameters);
+
+    auto lifted = parameters;
+    lifted.presence = 0.9;
+    auto present = made (lifted);
+
+    const double flatLow = toneLevel (flat, 0.3, 100.0);
+    const double presentLow = toneLevel (present, 0.3, 100.0);
+
+    auto flat2 = made (parameters);
+    auto present2 = made (lifted);
+
+    const double flatHigh = toneLevel (flat2, 0.3, 5000.0);
+    const double presentHigh = toneLevel (present2, 0.3, 5000.0);
+
+    // Louder up top, and untouched down low: this is a control that lives above
+    // its corner and nowhere else.
+    CHECK (presentHigh > flatHigh * 1.1);
+    CHECK_NEAR (presentLow / flatLow, 1.0, 0.02);
+
+    // And dirtier up top, which is the half a treble control cannot do.
+    auto flat3 = made (parameters);
+    auto present3 = made (lifted);
+
+    CHECK (thdOf (present3, 0.3, 5000.0) > thdOf (flat3, 0.3, 5000.0) + 2.0);
+}
+
+TEZLA_TEST (power_amp_resonance_is_the_same_trick_at_the_other_end)
+{
+    // Removing the low frequencies from the feedback lets the output stage and
+    // the transformer do as they like down there -- which, with a core that
+    // saturates on flux, is a great deal. This is the control that makes a low
+    // note bloom.
+    PowerAmpParameters parameters;
+    parameters.feedback = 0.6;
+    parameters.crossoverDepth = 0.0;
+    parameters.sagDepth = 0.0;
+    parameters.drive = 3.0;
+
+    auto flat = made (parameters);
+
+    auto lifted = parameters;
+    lifted.resonance = 0.9;
+    auto resonant = made (lifted);
+
+    const double flatLow = toneLevel (flat, 0.3, 60.0);
+    const double resonantLow = toneLevel (resonant, 0.3, 60.0);
+
+    auto flat2 = made (parameters);
+    auto resonant2 = made (lifted);
+
+    const double flatHigh = toneLevel (flat2, 0.3, 5000.0);
+    const double resonantHigh = toneLevel (resonant2, 0.3, 5000.0);
+
+    CHECK (resonantLow > flatLow * 1.1);
+    CHECK_NEAR (resonantHigh / flatHigh, 1.0, 0.02);
+}
+
+TEZLA_TEST (power_amp_both_shunts_at_zero_leave_the_loop_bit_exact)
+{
+    // Both are subtractions of a filtered copy of the feedback signal, so at
+    // zero each must return it unchanged to the bit. This matters more here
+    // than in most places: the signal is subtracted from the input, so an error
+    // in it is an error in everything the amplifier does.
+    PowerAmpParameters plain;
+    plain.feedback = 0.5;
+
+    auto withShunts = plain;
+    withShunts.presence = 0.0;
+    withShunts.resonance = 0.0;
+    withShunts.presenceHz = 3000.0;      // corners moved, amounts still zero
+    withShunts.resonanceHz = 40.0;
+
+    auto a = made (plain);
+    auto b = made (withShunts);
+
+    bool exact = true;
+
+    for (int i = 0; i < 8192; ++i)
+    {
+        const double x = 0.7 * std::sin (i * 0.011) + 0.3 * std::sin (i * 0.19);
+
+        if (a.process (x) != b.process (x))
+            exact = false;
+    }
+
+    CHECK (exact);
+}
