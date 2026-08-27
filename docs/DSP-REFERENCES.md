@@ -89,6 +89,8 @@ be band-limited (ADAA, or a smooth shaper) as well. These numbers are pinned in
 | [Surge XT](https://github.com/surge-synthesizer/surge) | GPLv3 | Filters, waveshapers, oversampling, and a well-organised large plugin codebase. Read for architecture; do not copy. |
 | [Calf Studio Gear](https://github.com/calf-studio-gear/calf) | LGPL/GPL | Classic effect topologies, clearly written. |
 | [Faust libraries](https://faustlibraries.grame.fr/) | permissive | Reference implementations worth comparing our measurements against. |
+| Laakso, Valimaki, Karjalainen & Laine, *"Splitting the Unit Delay"*, IEEE Signal Processing Magazine 13(1), 1996 | paper | Fractional-delay filter design. `Comb.hpp` uses the 4-point Lagrange kernel from it, derived rather than copied — the closed form for four points is short enough that a reimplementation is checkable, and `tests/test_Comb.cpp` checks it. **Not fetched**; the kernel and its properties are from general reference. |
+| Peterson & Barney, *"Control Methods Used in a Study of the Vowels"*, JASA 24(2), 1952 | paper | The vowel formant frequencies in `Formant.hpp`. **Not fetched** — the proxy refuses the journal — so the table is the widely reproduced adult-male averages quoted from general reference and rounded to 10 Hz. This is exactly the case CLAUDE.md §9 says to *copy* rather than derive: no measurement of ours could tell us the numbers were wrong. Worth verifying against the paper. |
 
 **Measured caveat on biquads.** Computing coefficients from the actual sample
 rate is necessary but not sufficient for rate-independence. Bilinear-transform
@@ -129,6 +131,18 @@ symmetric about Nyquist, and Nyquist is a different frequency at every rate. So
 the biquad rule survives in a weaker form — a TPT filter is rate-independent
 where it counts, but a corner swept up towards Nyquist still belongs inside an
 oversampled section. Pinned in `tests/test_SvfFilter.cpp`.
+
+**Where a comb's notches are, and why there are two of them.** A delay shifts
+every frequency by the same *time*, so a flanger's notches are evenly spaced —
+at 1/(2D), 3/(2D), 5/(2D) — which is what makes a flange metallic and what makes
+it useful when key-tracked onto a note's harmonic series. A first-order allpass
+shifts every frequency by a different *phase*, so a phaser's notches bunch
+around its corner and thin out either side; N stages give exactly N/2 of them.
+Both are in the suite because neither replaces the other. Pinned in
+`tests/test_Comb.cpp` and `tests/test_Phaser.cpp`, both against the transfer
+function rather than against a handful of inequalities — which is what caught a
+one-sample error in the delay line's read index, visible only as a 6.02 dB comb
+peak measuring 5.946 dB at the first harmonic and 5.333 dB at the third.
 
 **A compiler note that belongs here rather than in a build document.** GCC and
 Clang default to `-ffp-contract=fast`, which may fuse `a*b + c` into a single
