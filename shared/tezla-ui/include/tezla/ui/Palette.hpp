@@ -33,6 +33,12 @@ struct Palette
     /// It is the one control whose state a user must be able to read from across
     /// the room, and a per-plugin colour would make it a guess.
     juce::Colour bypassGlow { 0xffff7a18 };
+
+    /// A level that went over, which is a different statement from "bypassed"
+    /// and must not share its colour. Appended rather than inserted: the
+    /// existing plugins initialise this struct positionally, and moving a field
+    /// would silently repaint every one of them.
+    juce::Colour over { 0xffe2483d };
 };
 
 } // namespace tezla::ui

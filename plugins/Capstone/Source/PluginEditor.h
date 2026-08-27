@@ -3,33 +3,13 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/Palette.hpp>
 
 #include "PluginProcessor.h"
 
 namespace tezla::capstone
 {
-
-/// A level meter with honest ballistics: a VU bar for how loud it is and a peak
-/// line for whether it is about to clip. The two disagree by 10 dB or more on
-/// drums, and the disagreement is the information an engineer is reading.
-class LevelMeter final : public juce::Component
-{
-public:
-    void setValues (float vuDb, float peakDb) noexcept
-    {
-        vuDb_ = vuDb;
-        peakDb_ = peakDb;
-    }
-
-    void paint (juce::Graphics&) override;
-
-private:
-    [[nodiscard]] float positionFor (float db) const noexcept;
-
-    float vuDb_   { -100.0f };
-    float peakDb_ { -100.0f };
-};
 
 /// The meter a limiter is actually watched on: how much is being taken away,
 /// growing leftwards from the right-hand edge.
@@ -166,12 +146,16 @@ private:
     std::array<juce::TextButton, kNumPages> tabs_;
     int currentPage_ { 0 };
 
-    LevelMeter inputMeter_;
-    LevelMeter outputMeter_;
+    std::unique_ptr<ui::LevelMeter> inputMeter_;
+    std::unique_ptr<ui::LevelMeter> outputMeter_;
     std::unique_ptr<ReductionMeter> reductionMeter_;
 
     juce::Label inputMeterLabel_  { {}, "IN" };
     juce::Label outputMeterLabel_ { {}, "OUT" };
+
+    /// What Ceiling the output meter is currently referenced to, so it is not
+    /// pushed thirty times a second for no reason.
+    float shownCeilingDb_ { 1000.0f };
     juce::Label reductionLabel_   { {}, "GAIN REDUCTION" };
 
     WrappingLabel statusLabel_;

@@ -12,7 +12,8 @@ juce_add_console_app(tezla-ui-preview PRODUCT_NAME "tezla-ui-preview")
 # around it.
 target_sources(tezla-ui-preview PRIVATE
     main.cpp
-    "${TEZLA_ROOT_DIR}/shared/tezla-ui/Source/SpectrumDisplay.cpp")
+    "${TEZLA_ROOT_DIR}/shared/tezla-ui/Source/SpectrumDisplay.cpp"
+    "${TEZLA_ROOT_DIR}/shared/tezla-ui/Source/LevelMeter.cpp")
 
 target_compile_definitions(tezla-ui-preview PRIVATE
     JUCE_WEB_BROWSER=0

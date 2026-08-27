@@ -14,6 +14,13 @@
 //   tezla-ui-preview focus-drag out.png     the same, mid-drag, with the gesture
 //                                           driven through the component and the
 //                                           frequencies it reported printed
+//   tezla-ui-preview meters     out.png     every state of the level meter side
+//                                           by side: silent, quiet, hot, over,
+//                                           and referenced to a ceiling. A meter
+//                                           in a standalone with no audio device
+//                                           reads -inf forever, so this is the
+//                                           only way to see the states that
+//                                           matter without a DAW.
 
 #include <cmath>
 #include <numbers>
@@ -22,6 +29,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <tezla/dsp/SpectrumAnalyser.hpp>
+#include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/SpectrumDisplay.hpp>
 
 namespace
@@ -245,13 +253,160 @@ int renderSpectrum (const juce::File& destination)
 
     return writeSnapshot (display, destination);
 }
+
+/// Every state of the level meter, side by side.
+///
+/// A standalone build in a container has no audio device, so its meters read
+/// -inf forever and the interesting states -- a hot level, a held overshoot,
+/// the ceiling line -- are unreachable by running the plugin. Feeding the
+/// component directly is the only way to look at them, which is the same
+/// argument tezla-measure makes about DSP applied to drawing.
+int renderMeters (const juce::File& destination)
+{
+    struct Case
+    {
+        const char* caption;
+        float vuDb;
+        float peakDb;
+        float referenceDb;
+        bool  scale;
+    };
+
+    // The last one is deliberately over its ceiling: that is the state the
+    // readout exists for, and the one worth looking at hardest.
+    const Case cases[] {
+        { "silent",        -100.0f, -100.0f,  0.0f, true  },
+        { "quiet",          -28.0f,  -22.4f,  0.0f, false },
+        { "working",        -12.0f,   -6.2f,  0.0f, false },
+        { "hot",             -4.0f,   -0.4f,  0.0f, false },
+        { "over full scale", -2.0f,    2.7f,  0.0f, false },
+        { "over ceiling",    -6.0f,   -0.1f, -1.0f, true  },
+        { "hovering",        -6.0f,   -0.1f, -1.0f, false },
+        { "cleared",         -6.0f,   -0.1f, -1.0f, false },
+    };
+
+    // The last two are driven through the component's own event handlers rather
+    // than set up by hand, because that is the part worth checking: a hover that
+    // never repaints and a click that never clears would both look correct in a
+    // static screenshot. Xvfb with no window manager delivers no enter events at
+    // all -- a knob's tooltip does not appear either -- so this is the only way
+    // to exercise them without a desktop.
+
+
+    constexpr int width = 66;
+    constexpr int height = 320;
+    constexpr int gap = 10;
+
+    const int total = static_cast<int> (std::size (cases));
+    const int hoveringIndex = total - 2;
+    const int clearedIndex  = total - 1;
+
+    // Painted on the background the plugins use, not on nothing. A snapshot of a
+    // transparent component comes out white, and every judgement about contrast
+    // made against that is a judgement about the wrong picture.
+    struct Holder : juce::Component
+    {
+        explicit Holder (juce::Colour c) : colour (c) {}
+        void paint (juce::Graphics& g) override { g.fillAll (colour); }
+        juce::Colour colour;
+    };
+
+    Holder holder { tezla::ui::Palette{}.background };
+    holder.setSize (total * (width + gap) + gap, height + 26);
+
+    std::vector<std::unique_ptr<tezla::ui::LevelMeter>> meters;
+    tezla::ui::Palette palette;
+
+    for (int i = 0; i < total; ++i)
+    {
+        auto meter = std::make_unique<tezla::ui::LevelMeter> (palette);
+
+        meter->setReferenceDb (cases[i].referenceDb);
+        meter->setScaleVisible (cases[i].scale);
+        meter->setValues (cases[i].vuDb, cases[i].peakDb);
+        meter->setBounds (gap + i * (width + gap), 4, width, height);
+
+        holder.addAndMakeVisible (*meter);
+        meters.push_back (std::move (meter));
+    }
+
+    {
+        auto source = juce::Desktop::getInstance().getMainMouseSource();
+        const auto now = juce::Time::getCurrentTime();
+
+        const auto eventFor = [&] (juce::Component* c)
+        {
+            return juce::MouseEvent { source, {}, juce::ModifierKeys{},
+                                      juce::MouseInputSource::defaultPressure,
+                                      juce::MouseInputSource::defaultOrientation,
+                                      juce::MouseInputSource::defaultRotation,
+                                      juce::MouseInputSource::defaultTiltX,
+                                      juce::MouseInputSource::defaultTiltY,
+                                      c, c, now, {}, now, 0, false };
+        };
+
+        auto* hovering = meters[static_cast<std::size_t> (hoveringIndex)].get();
+        hovering->mouseEnter (eventFor (hovering));
+
+        auto* cleared = meters[static_cast<std::size_t> (clearedIndex)].get();
+        cleared->mouseDown (eventFor (cleared));
+    }
+
+    const auto image = holder.createComponentSnapshot (holder.getLocalBounds(), false, 2.0f);
+
+    // The captions are drawn onto the snapshot rather than added as components,
+    // so the meters are photographed exactly as a plugin would show them.
+    juce::Graphics g (const_cast<juce::Image&> (image));
+    g.addTransform (juce::AffineTransform::scale (2.0f));
+    g.setColour (palette.dimText);
+    g.setFont (juce::FontOptions (11.0f));
+
+    for (int i = 0; i < total; ++i)
+        g.drawText (cases[i].caption,
+                    juce::Rectangle<int> { gap + i * (width + gap), height + 6, width, 16 },
+                    juce::Justification::centred);
+
+    destination.deleteFile();
+    std::unique_ptr<juce::FileOutputStream> stream (destination.createOutputStream());
+
+    if (stream == nullptr)
+    {
+        std::fprintf (stderr, "could not write %s\n", destination.getFullPathName().toRawUTF8());
+        return 1;
+    }
+
+    juce::PNGImageFormat png;
+    if (! png.writeImageToStream (image, *stream))
+    {
+        std::fprintf (stderr, "could not encode the image\n");
+        return 1;
+    }
+
+    std::printf ("wrote %s (%d x %d)\n", destination.getFullPathName().toRawUTF8(),
+                 image.getWidth(), image.getHeight());
+
+    for (int i = 0; i < total; ++i)
+        std::printf ("  %-16s vu %7.1f  peak %7.1f  reference %5.1f  held %7.1f\n",
+                     cases[i].caption, cases[i].vuDb, cases[i].peakDb,
+                     cases[i].referenceDb, meters[static_cast<std::size_t> (i)]->getHeldDb());
+
+    // The click has to have actually cleared the hold, not merely repainted.
+    const float clearedHold = meters[static_cast<std::size_t> (clearedIndex)]->getHeldDb();
+
+    std::printf ("\nclick cleared the hold: %s (held %.1f, was %.1f)\n",
+                 clearedHold < -99.0f ? "yes" : "NO",
+                 clearedHold, cases[clearedIndex].peakDb);
+
+    return 0;
+}
+
 } // namespace
 
 int main (int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag> <out.png>\n");
+        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag|meters> <out.png>\n");
         return 2;
     }
 
@@ -265,6 +420,9 @@ int main (int argc, char** argv)
 
     if (what == "focus-drag")
         return renderFocusDrag (destination);
+
+    if (what == "meters")
+        return renderMeters (destination);
 
     std::fprintf (stderr, "unknown preview '%s'\n", argv[1]);
     return 2;

@@ -27,9 +27,6 @@ constexpr int kValueHeight = 18;
 constexpr int kMaxCellHeight = 130;
 constexpr int kNoteHeight = 58;
 
-constexpr float kMeterFloorDb = -60.0f;
-constexpr float kMeterTopDb   = 6.0f;
-
 /// How much reduction the meter shows end to end. Twelve, because that is where
 /// a limiter stops being a limiter -- past it you are looking at a different
 /// problem, and a scale that went to 40 would make 3 dB unreadable.
@@ -40,53 +37,11 @@ constexpr int kMinHeight = 560;
 constexpr int kMaxWidth  = 1440;
 constexpr int kMaxHeight = 1120;
 
-constexpr int kMeterWidth = 34;
+constexpr int kMeterWidth = ui::LevelMeter::kMinimumWidth;
 constexpr int kTabHeight  = 28;
 constexpr int kStatusHeight = 24;
 constexpr int kReductionHeight = 62;
 } // namespace
-
-// ---------------------------------------------------------------------------
-// LevelMeter
-// ---------------------------------------------------------------------------
-
-float LevelMeter::positionFor (float db) const noexcept
-{
-    const float clamped = juce::jlimit (kMeterFloorDb, kMeterTopDb, db);
-    return (clamped - kMeterFloorDb) / (kMeterTopDb - kMeterFloorDb);
-}
-
-void LevelMeter::paint (juce::Graphics& g)
-{
-    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
-
-    g.setColour (kPalette.panel.brighter (0.10f));
-    g.fillRoundedRectangle (bounds, 3.0f);
-
-    // 0 dBFS, drawn before the bar so the bar reads against it. On a limiter
-    // this is the only graduation that matters.
-    const float zero = bounds.getBottom() - positionFor (0.0f) * bounds.getHeight();
-    g.setColour (kPalette.dimText.withAlpha (0.45f));
-    g.drawHorizontalLine (juce::roundToInt (zero), bounds.getX(), bounds.getRight());
-
-    const float vuHeight = positionFor (vuDb_) * bounds.getHeight();
-
-    if (vuHeight > 1.0f)
-    {
-        auto bar = bounds.withTop (bounds.getBottom() - vuHeight);
-
-        g.setColour (vuDb_ > 0.0f ? kPalette.bypassGlow : kPalette.accent);
-        g.fillRoundedRectangle (bar, 3.0f);
-    }
-
-    const float peak = bounds.getBottom() - positionFor (peakDb_) * bounds.getHeight();
-
-    if (peakDb_ > kMeterFloorDb)
-    {
-        g.setColour (peakDb_ > 0.0f ? kPalette.bypassGlow : kPalette.accentBright);
-        g.fillRect (bounds.getX(), peak - 1.0f, bounds.getWidth(), 2.0f);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // ReductionMeter
@@ -379,6 +334,8 @@ CapstoneEditor::CapstoneEditor (CapstoneProcessor& processorToUse)
     : juce::AudioProcessorEditor (&processorToUse),
       capstone_ (processorToUse),
       palette_ (kPalette),
+      inputMeter_ (std::make_unique<ui::LevelMeter> (kPalette)),
+      outputMeter_ (std::make_unique<ui::LevelMeter> (kPalette)),
       reductionMeter_ (std::make_unique<ReductionMeter> (kPalette))
 {
     header_ = std::make_unique<ui::HeaderBar> (
@@ -414,9 +371,24 @@ CapstoneEditor::CapstoneEditor (CapstoneProcessor& processorToUse)
         addAndMakeVisible (tabs_[static_cast<std::size_t> (i)]);
     }
 
-    addAndMakeVisible (inputMeter_);
-    addAndMakeVisible (outputMeter_);
+    // The input is measured against full scale; the output against whatever
+    // Ceiling is set to, because that is the number this plugin promised.
+    inputMeter_->setReferenceDb (0.0f);
+
+    // One scale between the two meters would be ideal, but they sit on opposite
+    // edges of the window -- so the output gets it, since that is the one a
+    // ceiling is read off.
+    outputMeter_->setScaleVisible (true);
+
+    addAndMakeVisible (*inputMeter_);
+    addAndMakeVisible (*outputMeter_);
     addAndMakeVisible (*reductionMeter_);
+
+    for (auto* meter : { inputMeter_.get(), outputMeter_.get() })
+        meter->setTooltip ("Peak level. The number is the worst peak since it was last "
+                           "cleared -- click the meter to clear it. It turns red when the "
+                           "peak went over: full scale on the input, Ceiling on the output. "
+                           "Hover to read the live level instead of the held one.");
 
     for (auto* label : { &inputMeterLabel_, &outputMeterLabel_, &reductionLabel_ })
     {
@@ -629,18 +601,27 @@ void CapstoneEditor::timerCallback()
 {
     auto& meters = capstone_.getMeterValues();
 
-    inputMeter_.setValues (meters.inputVuDb.load (std::memory_order_relaxed),
-                           meters.inputPeakDb.load (std::memory_order_relaxed));
-    outputMeter_.setValues (meters.outputVuDb.load (std::memory_order_relaxed),
-                            meters.outputPeakDb.load (std::memory_order_relaxed));
+    inputMeter_->setValues (meters.inputVuDb.load (std::memory_order_relaxed),
+                            meters.inputPeakDb.load (std::memory_order_relaxed));
+    outputMeter_->setValues (meters.outputVuDb.load (std::memory_order_relaxed),
+                             meters.outputPeakDb.load (std::memory_order_relaxed));
+
+    // The output meter's "over" line follows Ceiling rather than full scale.
+    const float ceilingDb = capstone_.getState().getRawParameterValue (ids::ceiling)->load();
+
+    if (std::abs (ceilingDb - shownCeilingDb_) > 0.001f)
+    {
+        shownCeilingDb_ = ceilingDb;
+        outputMeter_->setReferenceDb (ceilingDb);
+    }
 
     const float limiterDb = meters.limiterReductionDb.load (std::memory_order_relaxed);
     const float clipDb    = meters.clipReductionDb.load (std::memory_order_relaxed);
 
     reductionMeter_->setValues (limiterDb, clipDb);
 
-    inputMeter_.repaint();
-    outputMeter_.repaint();
+    inputMeter_->repaint();
+    outputMeter_->repaint();
     reductionMeter_->repaint();
 
     // The numbers behind the meter. A bar says "about 3 dB"; a delivery spec
@@ -693,11 +674,13 @@ void CapstoneEditor::resized()
     // are never on different pages.
     auto left = bounds.removeFromLeft (kMeterWidth + 8).reduced (4, 6);
     inputMeterLabel_.setBounds (left.removeFromBottom (12));
-    inputMeter_.setBounds (left);
+    inputMeter_->setBounds (left);
 
-    auto right = bounds.removeFromRight (kMeterWidth + 8).reduced (4, 6);
+    // Wider on the right: the output meter carries the labelled scale.
+    auto right = bounds.removeFromRight (kMeterWidth + ui::LevelMeter::kScaleWidth + 8)
+                     .reduced (4, 6);
     outputMeterLabel_.setBounds (right.removeFromBottom (12));
-    outputMeter_.setBounds (right);
+    outputMeter_->setBounds (right);
 
     auto reduction = bounds.removeFromTop (kReductionHeight + 12).reduced (4, 4);
     reductionLabel_.setBounds (reduction.removeFromTop (12));

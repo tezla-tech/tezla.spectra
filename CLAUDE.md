@@ -216,10 +216,25 @@ Rules:
   separate documents because the toolchains and install locations share almost
   nothing; sections 3 and 4 of `BUILD.md` (manual CMake, supplying your own
   JUCE) are the cross-platform parts.
-- **CI is not a substitute for building locally, and it has never run here.**
-  This project is developed in a Linux container, so the Windows and macOS
-  workflow jobs are reasoned about rather than observed. Say so rather than
-  implying they are proven.
+- **CI has run, and what it proves is narrower than "it works".** Observed on
+  run 36 (`Release v0.8.1`, commit `f85bfae`): the DSP tests pass on Linux,
+  Windows, macOS and ARM64 under emulation, and `tezla-measure selftest` passes
+  on each. Observed earlier, on run 23: the plugin jobs build and upload a
+  Windows VST3 bundle and a macOS universal VST3 + AU bundle. So MSVC and Apple
+  clang both compile this tree, and the numbers agree across all four
+  architectures.
+  What is **still not observed** is the thing that matters most: nobody has
+  loaded those bundles into a DAW on Windows or macOS from here. This project is
+  developed in a Linux container, so "CI is green" means the code compiles and
+  the DSP measures correctly — not that FL Studio scans it, not that Logic loads
+  the AU, and not that Gatekeeper lets a downloaded build run. Say which of
+  those you mean rather than saying "CI passes" and letting it stand for all of
+  them.
+- **CI does not run by itself.** No push trigger, no pull-request trigger: a
+  `v*` tag or **Actions → CI → Run workflow**, and nothing else. So a green tick
+  on a commit means somebody asked for one. Run the tests locally before
+  pushing — `scripts\build.bat NONE -test`, or `./scripts/build.sh NONE --test`
+  — because nothing else will.
 
 ### Framework: JUCE
 
