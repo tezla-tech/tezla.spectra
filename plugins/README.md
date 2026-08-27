@@ -22,6 +22,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | `Tzha` | [`Halo`](Halo/) | Tezla Halo | Effect — harmonic exciter and bass enhancer, with a Chebyshev precision mode and a modulation layer | v0.3.0, builds and validates |
 | `Tzcp` | [`Capstone`](Capstone/) | Tezla Capstone | Effect — true-peak brickwall limiter and clipper for the end of the chain | v0.1.0, builds and validates |
 | `Tztr` | [`Transpectus`](Transpectus/) | Tezla Transpectus | Analyser — loudness, true peak, spectrum and stereo image. Does not touch the audio | v0.1.0, builds and validates |
+| `Tzan` | [`Anvil`](Anvil/) | Tezla Anvil | Effect — valve amplifier, speaker load and cabinet, modelled from the mechanisms | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 
@@ -33,7 +34,6 @@ something else in the meantime:
 | Name | Code | Intended for |
 |------|------|--------------|
 | `Ferrite` | `Tzfe` | Plugin #2 — the tape machine proper: wow, flutter, hysteresis, head bump |
-| `Anvil` | `Tzan` | Plugin #3 — amp and cabinet distortion, the Steinberg Warp lane |
 | `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
 
 ---

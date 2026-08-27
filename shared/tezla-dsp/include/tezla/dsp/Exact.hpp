@@ -18,9 +18,17 @@
 // declared and justified, rather than nine separate `== 0.0` comparisons each
 // looking to a reader like an oversight the compiler caught.
 //
-// Not for asking whether a measurement came out at zero. That question wants a
-// tolerance, and the tolerance is part of the claim being made -- see the
-// tolerances in tests/ for what that looks like.
+// There is a second such place, and CLAUDE.md section 7 makes it a rule rather
+// than a habit: **any setter that clears state must refuse a no-op, and the
+// guard goes in the setter.** That guard is an equality test between the value
+// asked for and the value already held -- and it has to be exact for the same
+// reason as above. A tolerance would let a small move be silently ignored, and
+// the threshold at which the control started working would be arbitrary.
+//
+// Neither is for asking whether a measurement came out at zero, or whether two
+// measurements agree. Those questions want a tolerance, and the tolerance is
+// part of the claim being made -- see the tolerances in tests/ for what that
+// looks like.
 
 namespace tezla::dsp {
 
@@ -34,6 +42,27 @@ template <typename Float>
 #endif
 
     return value == static_cast<Float> (0);
+
+#if defined(__GNUC__) || defined(__clang__)
+  #pragma GCC diagnostic pop
+#endif
+}
+
+/// True only when the two are the same value, bit for bit. NaN is never equal
+/// to anything, including itself, exactly as `==` says.
+///
+/// For the no-op guards CLAUDE.md section 7 requires in any setter that clears
+/// state, and for nothing else. Two computed quantities that ought to agree are
+/// a job for a tolerance.
+template <typename Float>
+[[nodiscard]] constexpr bool isExactly (Float a, Float b) noexcept
+{
+#if defined(__GNUC__) || defined(__clang__)
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wfloat-equal"
+#endif
+
+    return a == b;
 
 #if defined(__GNUC__) || defined(__clang__)
   #pragma GCC diagnostic pop

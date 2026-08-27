@@ -84,6 +84,7 @@
 #include <algorithm>
 #include <array>
 
+#include "Exact.hpp"
 #include "PassiveNetwork.hpp"
 
 namespace tezla::dsp {
@@ -226,7 +227,7 @@ public:
         const double m = std::clamp (middle, 0.0, 1.0);
         const double t = std::clamp (treble, 0.0, 1.0);
 
-        if (b == bass_ && m == middle_ && t == treble_)
+        if (isExactly (b, bass_) && isExactly (m, middle_) && isExactly (t, treble_))
             return;
 
         bass_ = b;

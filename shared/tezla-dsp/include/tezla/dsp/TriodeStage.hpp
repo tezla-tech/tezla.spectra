@@ -69,6 +69,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Exact.hpp"
 #include "Adaa.hpp"
 #include "DcBlocker.hpp"
 #include "Triode.hpp"
@@ -282,7 +283,7 @@ public:
         // retune rather than prepare: a coupling capacitor's memory *is* its
         // last input and output, and zeroing it mid-stream steps the output by
         // the whole previous sample. CLAUDE.md section 7.
-        if (parameters.couplingHz != parameters_.couplingHz)
+        if (! isExactly (parameters.couplingHz, parameters_.couplingHz))
             coupling_.retune (sampleRate_, parameters.couplingHz);
 
         parameters_ = parameters;

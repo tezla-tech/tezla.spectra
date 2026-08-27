@@ -98,3 +98,27 @@ TEZLA_TEST (exactly_zero_is_the_comparison_it_replaced)
 
     CHECK (identical);
 }
+
+TEZLA_TEST (is_exactly_is_the_no_op_guard_and_nothing_looser)
+{
+    // CLAUDE.md section 7: any setter that clears state must refuse a no-op,
+    // and the guard goes in the setter. That guard is an equality test, and it
+    // has to be exact -- a tolerance would let a small move be silently
+    // ignored and put the threshold at which the control starts working
+    // somewhere arbitrary.
+    CHECK (isExactly (1.0, 1.0));
+    CHECK (isExactly (0.0, -0.0));          // as `==` says: the two zeroes agree
+    CHECK (! isExactly (1.0, 1.0 + 1.0e-15));
+
+    // NaN is equal to nothing, itself included, which is exactly what `==` does
+    // and what a guard wants: a NaN target must not be mistaken for a no-op.
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+
+    CHECK (! isExactly (nan, nan));
+    CHECK (! isExactly (nan, 0.0));
+
+    // Not a tolerance in disguise. Two values a millionth apart are different
+    // values, and a setter must act on the difference.
+    CHECK (! isExactly (1000.0, 1000.000001));
+    CHECK (! isExactly (0.0, 1.0e-300));
+}

@@ -101,6 +101,7 @@
 #include <cmath>
 
 #include "Biquad.hpp"
+#include "Exact.hpp"
 
 namespace tezla::dsp {
 
@@ -377,7 +378,7 @@ private:
 
         // The cone.
         for (const auto& mode : v.breakup)
-            if (mode.frequencyHz > 0.0 && mode.gainDb != 0.0)
+            if (mode.frequencyHz > 0.0 && ! isExactlyZero (mode.gainDb))
                 add (design::peak (mode.frequencyHz, std::max (mode.q, 0.1), mode.gainDb, sampleRate_));
 
         // The driver's own top, then what the microphone can see of it.

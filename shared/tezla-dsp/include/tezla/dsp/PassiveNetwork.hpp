@@ -70,6 +70,8 @@
 #include <cmath>
 #include <cstddef>
 
+#include "Exact.hpp"
+
 namespace tezla::dsp {
 
 /// A linear R/L/C network with one input node and one output node.
@@ -340,7 +342,7 @@ private:
 
                 const double factor = working[row][column];
 
-                if (factor == 0.0)
+                if (isExactlyZero (factor))
                     continue;
 
                 for (std::size_t j = 0; j < n; ++j)
