@@ -28,6 +28,11 @@ constexpr int kMaxWidth  = 1520;
 constexpr int kMaxHeight = 1040;
 
 constexpr int kStatusHeight = 42;
+
+/// Below this the spectrum's control strip takes two lines instead of one.
+/// 160+62+58+58 of reference controls, 100+100+98+110 of view switches, and the
+/// gaps between them.
+constexpr int kSpectrumControlsOneRowWidth = 790;
 constexpr int kControlHeight = 52;
 
 /// Below this a loudness reading is silence rather than a number.
@@ -192,10 +197,15 @@ constexpr double kGridHz[] { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 
 /// The display's vertical range, in dB.
 constexpr float kTopDb   = 0.0f;
 constexpr float kFloorDb = -84.0f;
+
+/// Where an untouched peak-hold bin sits -- below the display, so it draws off
+/// the bottom rather than as a flat line that reads like a measurement.
+constexpr float kHoldFloorDb = -140.0f;
 } // namespace
 
-SpectrumView::SpectrumView (ui::Palette palette, dsp::ReferenceCurve& reference)
-    : palette_ (palette), reference_ (reference)
+SpectrumView::SpectrumView (ui::Palette palette, dsp::ReferenceCurve& reference,
+                            std::vector<float>& peakHold)
+    : palette_ (palette), reference_ (reference), peakHold_ (peakHold)
 {
     // 2048 points: about 23 Hz of resolution at 48 kHz, which separates the
     // harmonics of anything above a bass note and still redraws comfortably.
@@ -390,13 +400,42 @@ void SpectrumView::paintCrosshair (juce::Graphics& g, juce::Rectangle<float> are
 
 bool SpectrumView::update (const dsp::SpectrumCapture& capture)
 {
-    return analyser_.update (capture);
+    if (! analyser_.update (capture))
+        return false;
+
+    // The permanent maximum. No decay at all, which is the whole point: the
+    // analyser's own peak hold falls away after a second or two, and what a
+    // mix decision needs is the worst thing that happened since you last asked.
+    const auto& live = analyser_.getMagnitudesDb();
+
+    if (peakHold_.size() == live.size())
+        for (std::size_t i = 0; i < live.size(); ++i)
+            peakHold_[i] = juce::jmax (peakHold_[i], live[i]);
+
+    return true;
 }
 
 void SpectrumView::pushToCapture()
 {
     if (reference_.isCapturing())
         reference_.push (analyser_.getMagnitudesDb().data(), analyser_.getNumBins());
+}
+
+void SpectrumView::setShowPeakHold (bool shouldShow)
+{
+    if (showPeakHold_ == shouldShow)
+        return;
+
+    showPeakHold_ = shouldShow;
+    repaint();
+}
+
+void SpectrumView::resetPeakHold()
+{
+    // The same floor the processor uses, so a cleared bin looks cleared rather
+    // than like a very quiet reading.
+    std::fill (peakHold_.begin(), peakHold_.end(), kHoldFloorDb);
+    repaint();
 }
 
 void SpectrumView::setShowPinkSlope (bool shouldShow)
@@ -533,6 +572,14 @@ void SpectrumView::paint (juce::Graphics& g)
 
     // The peak hold behind the live curve, so a transient stays visible.
     paintCurve (g, area, analyser_.getPeaksDb(), palette_.accent.withAlpha (0.45f), 1.0f, false);
+
+    // The permanent hold under the live curve, in a colour outside the family
+    // the live curves use -- it is a different kind of statement and has to
+    // read as one. Under rather than over, so it never hides what is happening
+    // now.
+    if (showPeakHold_ && peakHold_.size() == analyser_.getMagnitudesDb().size())
+        paintCurve (g, area, peakHold_, palette_.hold.withAlpha (0.9f), 1.3f, false);
+
     paintCurve (g, area, analyser_.getMagnitudesDb(), palette_.accentBright, 1.6f, true);
 
     // The captured reference, drawn at the live curve's own average so the two
@@ -779,6 +826,19 @@ void TranspectusEditor::updatePanelChrome()
     goniometerMaxButton_.setVisible (goniometerHere);
     spectrumPopButton_.setVisible (spectrumHere || isDetached (Panel::spectrum));
     goniometerPopButton_.setVisible (goniometerHere || isDetached (Panel::goniometer));
+
+    // Chrome sits *over* its panel, and z-order is insertion order: docking a
+    // panel re-adds it, which puts it at the front of the child list, in front
+    // of buttons that were added long before it.
+    //
+    // The symptom is worth writing down because it is not what it looks like.
+    // The buttons stayed visible and stayed enabled -- they were simply behind
+    // an opaque panel, which from the outside is indistinguishable from having
+    // been hidden. Only the panel that was re-added lost its chrome, and
+    // reopening the editor "fixed" it by rebuilding in the original order.
+    for (auto* button : { &spectrumMaxButton_, &spectrumPopButton_,
+                          &goniometerMaxButton_, &goniometerPopButton_ })
+        button->toFront (false);
 }
 
 void TranspectusEditor::buildPanelChrome()
@@ -986,10 +1046,15 @@ void TranspectusEditor::buildControls()
     {
         transpectus_.resetMeasurement();
         inputMeter_->resetHold();
+
+        // Everything held, including the spectrum's. "Restart measurement" that
+        // left one held reading standing would be the surprising one.
+        spectrum_->resetPeakHold();
     };
     addAndMakeVisible (resetButton_);
 
-    spectrum_ = std::make_unique<SpectrumView> (palette_, transpectus_.getReferenceCurve());
+    spectrum_ = std::make_unique<SpectrumView> (palette_, transpectus_.getReferenceCurve(),
+                                                transpectus_.getSpectrumPeakHold());
     spectrum_->setComponentID ("spectrum");
     addAndMakeVisible (*spectrum_);
 
@@ -1062,6 +1127,31 @@ void TranspectusEditor::buildControls()
         spectrum_->setShowDifference (differenceButton_.getToggleState());
     };
     addAndMakeVisible (differenceButton_);
+
+    peakHoldButton_.setColour (juce::ToggleButton::textColourId, palette_.text);
+    peakHoldButton_.setColour (juce::ToggleButton::tickColourId, palette_.hold);
+    peakHoldButton_.setToggleState (true, juce::dontSendNotification);
+    peakHoldButton_.setTooltip ("A permanent maximum, in violet, of the loudest each frequency "
+                                "has been since the last reset. It never decays -- the faint "
+                                "green trace behind the live curve is the analyser's own hold "
+                                "and falls away in about a second, which is a different question. "
+                                "This one answers \"what is the worst this mix does\", and it "
+                                "survives closing the window.");
+    peakHoldButton_.setComponentID ("peak-hold");
+    peakHoldButton_.onClick = [this]
+    {
+        spectrum_->setShowPeakHold (peakHoldButton_.getToggleState());
+    };
+    addAndMakeVisible (peakHoldButton_);
+
+    resetPeaksButton_.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.2f));
+    resetPeaksButton_.setColour (juce::TextButton::textColourOffId, palette_.hold);
+    resetPeaksButton_.setTooltip ("Throws the violet maximum away and starts collecting again. "
+                                  "This is how the feature gets used: make an EQ move, clear, "
+                                  "play the section again, and see what the new worst case is.");
+    resetPeaksButton_.setComponentID ("reset-peaks");
+    resetPeaksButton_.onClick = [this] { spectrum_->resetPeakHold(); };
+    addAndMakeVisible (resetPeaksButton_);
 
     statusLabel_.setJustificationType (juce::Justification::centred);
     statusLabel_.setColour (juce::Label::textColourId, palette_.dimText);
@@ -1357,7 +1447,8 @@ void TranspectusEditor::resized()
 
     const std::initializer_list<juce::Component*> spectrumControlList {
         &captureButton_, &clearReferenceButton_, &saveReferenceButton_,
-        &loadReferenceButton_, &pinkButton_, &differenceButton_ };
+        &loadReferenceButton_, &pinkButton_, &differenceButton_,
+        &peakHoldButton_, &resetPeaksButton_ };
 
     for (auto* c : spectrumControlList)
         c->setVisible (spectrumInBody);
@@ -1387,7 +1478,8 @@ void TranspectusEditor::resized()
 
     if (maximised_ == Panel::spectrum)
     {
-        auto spectrumControls = body.removeFromBottom (28).reduced (4, 2);
+        auto spectrumControls = body.removeFromBottom (spectrumControlsHeight (body.getWidth()))
+                                    .reduced (4, 2);
         layOutSpectrumControls (spectrumControls);
 
         spectrum_->setBounds (body.reduced (4, 2));
@@ -1455,7 +1547,8 @@ void TranspectusEditor::resized()
 
     if (spectrumInBody)
     {
-        auto spectrumControls = body.removeFromBottom (28).reduced (4, 2);
+        auto spectrumControls = body.removeFromBottom (spectrumControlsHeight (body.getWidth()))
+                                    .reduced (4, 2);
         layOutSpectrumControls (spectrumControls);
 
         spectrum_->setBounds (body.reduced (4, 2));
@@ -1470,18 +1563,50 @@ void TranspectusEditor::resized()
     }
 }
 
+int TranspectusEditor::spectrumControlsHeight (int width) noexcept
+{
+    // Everything on one line needs this much; below it the strip takes two.
+    // Wrapping rather than shrinking, because the alternative at the minimum
+    // window width is controls that overlap, and a control you cannot read is
+    // worse than one that costs a few pixels of spectrum.
+    return width >= kSpectrumControlsOneRowWidth ? 28 : 54;
+}
+
 void TranspectusEditor::layOutSpectrumControls (juce::Rectangle<int> row)
 {
-    captureButton_.setBounds (row.removeFromLeft (160));
-    row.removeFromLeft (6);
-    clearReferenceButton_.setBounds (row.removeFromLeft (62));
-    row.removeFromLeft (6);
-    saveReferenceButton_.setBounds (row.removeFromLeft (58));
-    row.removeFromLeft (6);
-    loadReferenceButton_.setBounds (row.removeFromLeft (58));
-    row.removeFromLeft (14);
-    pinkButton_.setBounds (row.removeFromLeft (110));
-    differenceButton_.setBounds (row.removeFromLeft (110));
+    const auto reference = [this] (juce::Rectangle<int> strip)
+    {
+        captureButton_.setBounds (strip.removeFromLeft (160));
+        strip.removeFromLeft (6);
+        clearReferenceButton_.setBounds (strip.removeFromLeft (62));
+        strip.removeFromLeft (6);
+        saveReferenceButton_.setBounds (strip.removeFromLeft (58));
+        strip.removeFromLeft (6);
+        loadReferenceButton_.setBounds (strip.removeFromLeft (58));
+    };
+
+    const auto view = [this] (juce::Rectangle<int> strip)
+    {
+        pinkButton_.setBounds (strip.removeFromLeft (100));
+        strip.removeFromLeft (4);
+        differenceButton_.setBounds (strip.removeFromLeft (100));
+        strip.removeFromLeft (4);
+        peakHoldButton_.setBounds (strip.removeFromLeft (98));
+        strip.removeFromLeft (6);
+        resetPeaksButton_.setBounds (strip.removeFromLeft (110).withSizeKeepingCentre (110, 22));
+    };
+
+    if (row.getHeight() >= 40)
+    {
+        // Two lines: the reference controls above, the view switches below.
+        reference (row.removeFromTop (row.getHeight() / 2).withTrimmedBottom (2));
+        view (row);
+        return;
+    }
+
+    reference (row);
+    row.removeFromLeft (160 + 6 + 62 + 6 + 58 + 6 + 58 + 14);
+    view (row);
 }
 
 } // namespace tezla::transpectus

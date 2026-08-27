@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/ReferenceCurve.hpp>
@@ -79,6 +81,19 @@ public:
     /// project.
     [[nodiscard]] dsp::ReferenceCurve& getReferenceCurve() noexcept { return reference_; }
 
+    /// The permanent per-bin maximum behind the spectrum's peak-hold ghost, in
+    /// dB, since the last reset.
+    ///
+    /// It lives here rather than in the editor because it is a measurement, and
+    /// a measurement that vanishes when you close the window is not one -- the
+    /// true-peak hold and the integrated loudness behave the same way. Only the
+    /// message thread ever touches it: the display bins are computed in the
+    /// editor, so this is storage that outlives the editor, not something the
+    /// audio thread writes.
+    [[nodiscard]] std::vector<float>& getSpectrumPeakHold() noexcept { return spectrumPeakHold_; }
+
+    void resetSpectrumPeakHold() noexcept;
+
     /// Clears the integration, the true-peak hold and the peak-hold bars.
     void resetMeasurement() noexcept { engine_.resetMeasurement(); }
 
@@ -105,6 +120,10 @@ private:
     std::array<const double*, Engine::kMaxChannels> channelPointers_ {};
 
     dsp::ReferenceCurve reference_;
+
+    /// kSpectrumBins of it, every entry at the floor until something louder
+    /// arrives.
+    std::vector<float> spectrumPeakHold_;
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
 

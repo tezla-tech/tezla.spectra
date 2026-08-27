@@ -16,6 +16,11 @@ constexpr auto kStateTypeName = "TranspectusState";
 /// Where the captured reference is kept inside the state tree.
 constexpr auto kReferenceChild = "reference";
 constexpr auto kReferenceProperty = "curve";
+
+/// Where an untouched peak-hold bin sits. Below the display's own floor, so an
+/// unvisited bin draws off the bottom rather than as a flat line that looks
+/// like a measurement.
+constexpr float kSpectrumHoldFloorDb = -140.0f;
 } // namespace
 
 juce::StringArray choices::targetNames()
@@ -92,6 +97,11 @@ bool TranspectusProcessor::isBusesLayoutSupported (const BusesLayout& layouts) c
     return layouts.getMainInputChannelSet() == main;
 }
 
+void TranspectusProcessor::resetSpectrumPeakHold() noexcept
+{
+    spectrumPeakHold_.assign (static_cast<std::size_t> (Engine::kNumBins), kSpectrumHoldFloorDb);
+}
+
 void TranspectusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -105,6 +115,13 @@ void TranspectusProcessor::prepareToPlay (double sampleRate, int maximumExpected
     scratch_.setSize (Engine::kMaxChannels, maximumBlock, false, true, true);
 
     reference_.prepare (static_cast<std::size_t> (Engine::kNumBins), sampleRate_);
+
+    // Sized here rather than in the constructor so the bin count has exactly
+    // one source. Not cleared on a later prepare: a transport stop is not a
+    // reason to forget what the loudest moment was, any more than it is for the
+    // true-peak hold.
+    if (spectrumPeakHold_.size() != static_cast<std::size_t> (Engine::kNumBins))
+        resetSpectrumPeakHold();
 
     // prepare() runs before any parameter is known, so this is what makes the
     // very first push take effect rather than being swallowed.

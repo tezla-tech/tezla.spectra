@@ -77,7 +77,8 @@ class SpectrumView final : public juce::Component,
                            public juce::SettableTooltipClient
 {
 public:
-    SpectrumView (ui::Palette palette, dsp::ReferenceCurve& reference);
+    SpectrumView (ui::Palette palette, dsp::ReferenceCurve& reference,
+                  std::vector<float>& peakHold);
 
     /// Folds the latest capture onto the display bins. Returns true if there
     /// was anything new to draw.
@@ -85,6 +86,12 @@ public:
 
     void setShowPinkSlope (bool shouldShow);
     void setShowDifference (bool shouldShow);
+    void setShowPeakHold (bool shouldShow);
+
+    /// Throws the permanent maximum away and starts collecting again. The
+    /// point of the feature: change an EQ move, clear, and watch what the new
+    /// worst case turns out to be.
+    void resetPeakHold();
 
     /// @see ui::Goniometer::setTopRightInset
     void setTopRightInset (int pixels) noexcept { topRightInset_ = juce::jmax (0, pixels); }
@@ -129,12 +136,17 @@ private:
 
     ui::Palette palette_;
     dsp::ReferenceCurve& reference_;
+
+    /// Owned by the processor, so it outlives this view.
+    std::vector<float>& peakHold_;
+
     dsp::SpectrumAnalyser analyser_;
 
     std::vector<double> difference_;
 
     bool showPinkSlope_ { true };
     bool showDifference_ { false };
+    bool showPeakHold_ { true };
     int  topRightInset_ { 0 };
 
     /// Empty when the pointer is not over the plot.
@@ -197,6 +209,7 @@ private:
 
     void updatePanelChrome();
     void layOutSpectrumControls (juce::Rectangle<int> row);
+    [[nodiscard]] static int spectrumControlsHeight (int width) noexcept;
 
     /// Formats a loudness for display, with a real "silent" rather than a large
     /// negative number that looks like a reading.
@@ -259,6 +272,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::ToggleButton pinkButton_ { "Pink slope" };
     juce::ToggleButton differenceButton_ { "Difference" };
+    juce::ToggleButton peakHoldButton_ { "Peak hold" };
+    juce::TextButton resetPeaksButton_ { "RESET PEAKS" };
 
     // ---- the controls --------------------------------------------------------
 

@@ -39,6 +39,13 @@ struct Palette
     /// existing plugins initialise this struct positionally, and moving a field
     /// would silently repaint every one of them.
     juce::Colour over { 0xffe2483d };
+
+    /// A reading that has been frozen rather than one that is live -- a
+    /// permanent peak hold, a captured maximum. Deliberately outside the
+    /// green/teal/red family the live curves already use, because its whole
+    /// job is to be told apart from them at a glance. Appended, for the reason
+    /// `over` was: these structs are initialised positionally.
+    juce::Colour hold { 0xffab9bf5 };
 };
 
 } // namespace tezla::ui

@@ -69,7 +69,8 @@ folklore. A −23 dBFS tone reads within **0.0203 LU of −23.000 at 44.1, 48, 9
 and 192 kHz**, because BS.1770 prints its coefficients at one rate only and this
 filter is designed at whatever rate the host is running. Point at the spectrum
 for a crosshair reading frequency, the nearest note in cents and the level
-there; either large panel can be maximised or lifted into its own window. See
+there; a violet peak-hold trace keeps the worst case until you clear it; and
+either large panel can be maximised or lifted into its own window. See
 [its README](plugins/Transpectus/README.md).
 
 
@@ -203,6 +204,30 @@ without it, a Windows-written file is now rejected outright.
 
 Both tests were then seen red, each for its own reason. The decoration became a
 test only because it was checked.
+
+### Visible, enabled, and completely unreachable
+
+Reported by ear, so to speak — by using the thing. Popping Transpectus's
+spectrum out into its own window and then docking it back left that panel's
+buttons gone, and reopening the plugin brought them back.
+
+Both halves of that are the same fact. **Z-order is insertion order**, and
+docking a panel re-adds it as a child, which puts it in *front* of buttons that
+were added long before. The buttons were still visible and still enabled — they
+were behind an opaque panel, which from the outside is indistinguishable from
+having been hidden. Reopening the editor "fixed" it by rebuilding in the
+original order.
+
+The fix is one line; the useful part is that this class of bug is now
+detectable. `tezla-render editor hit:<id>` asks whether a control is actually
+the thing a click at its own centre would reach, and names what it hits instead:
+
+```
+spectrum-max is NOT reachable at (807, 177) -- a click there hits spectrum
+```
+
+Seen red by adding the chrome before the panels and removing the raise, which
+reproduces the same burial without any clicking at all.
 
 ---
 

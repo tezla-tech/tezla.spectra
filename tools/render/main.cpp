@@ -128,31 +128,176 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
                  editor->getWidth(), editor->getHeight(),
                  editor->isResizable() ? ", resizable" : "");
 
+    // A component with no parent starts invisible, and getComponentAt walks
+    // only visible children -- so without this every hit test reports that a
+    // click there would reach nothing, which looks exactly like the bug it is
+    // meant to find.
+    editor->setVisible (true);
+
 
     int failures = 0;
+    bool prepared = false;
 
     for (int i = 2; i < argc; ++i)
     {
         juce::String id { argv[i] };
 
-        // "id@x,y" moves the pointer over that component instead of clicking
-        // it, for anything that only shows itself under a cursor.
-        if (id.contains ("@"))
+        // "audio:<seconds>" runs the tool's own test signal through the
+        // processor, so a display has something in it. Without this every
+        // spectrum photographed here is a flat line at its floor, which is
+        // enough to check a layout and useless for checking what it says.
+        if (id.startsWith ("audio:"))
         {
-            const auto target = id.upToFirstOccurrenceOf ("@", false, false);
-            const auto where = id.fromFirstOccurrenceOf ("@", false, false);
-            const float x = where.upToFirstOccurrenceOf (",", false, false).getFloatValue();
-            const float y = where.fromFirstOccurrenceOf (",", false, false).getFloatValue();
+            // "audio:<seconds>" or "audio:<seconds>@<gain>", so a run can get
+            // quieter -- which is the only way to see whether something that
+            // claims to hold a maximum actually holds it.
+            const auto spec = id.fromFirstOccurrenceOf ("audio:", false, false);
+            const double seconds = spec.upToFirstOccurrenceOf ("@", false, false).getDoubleValue();
+            const double gain = spec.contains ("@")
+                                    ? spec.fromFirstOccurrenceOf ("@", false, false).getDoubleValue()
+                                    : 1.0;
+            const int blockSize = 512;
+            const auto total = static_cast<int> (kSampleRate * juce::jmax (0.05, seconds));
 
-            if (auto* found = findById (*editor, target))
+            // Only the first time: prepareToPlay resets the engine, and a
+            // second run at a lower level is meant to continue the measurement,
+            // not restart it.
+            if (! prepared)
             {
-                found->mouseMove (eventAt (*found, x, y));
-                std::printf ("  pointed at %s (%.0f, %.0f), which is %d x %d\n",
-                             target.toRawUTF8(), x, y, found->getWidth(), found->getHeight());
+                processor.setPlayConfigDetails (2, 2, kSampleRate, blockSize);
+                processor.prepareToPlay (kSampleRate, blockSize);
+                prepared = true;
+            }
+
+            juce::AudioBuffer<double> buffer (2, blockSize);
+            juce::MidiBuffer midi;
+
+            std::size_t index = 0;
+
+            for (int written = 0; written < total; written += blockSize)
+            {
+                const int span = juce::jmin (blockSize, total - written);
+                buffer.setSize (2, span, false, false, true);
+
+                for (int i = 0; i < span; ++i)
+                {
+                    const double value = source (index++) * gain;
+                    buffer.setSample (0, i, value);
+                    buffer.setSample (1, i, value * 0.85);
+                }
+
+                processor.processBlock (buffer, midi);
+            }
+
+            std::printf ("  ran %.2f s of audio through it at gain %.3f\n", seconds, gain);
+            continue;
+        }
+
+        // "size:<w>x<h>" resizes the editor, for photographing a layout at a
+        // width it has to adapt to rather than only at its default.
+        if (id.startsWith ("size:"))
+        {
+            const auto spec = id.fromFirstOccurrenceOf ("size:", false, false);
+            const int w = spec.upToFirstOccurrenceOf ("x", false, false).getIntValue();
+            const int h = spec.fromFirstOccurrenceOf ("x", false, false).getIntValue();
+
+            if (w > 0 && h > 0)
+            {
+                editor->setSize (w, h);
+                std::printf ("  resized to %d x %d\n", w, h);
             }
             else
             {
+                std::fprintf (stderr, "  could not read a size from %s\n", id.toRawUTF8());
+                ++failures;
+            }
+
+            continue;
+        }
+
+        // "reopen" throws the editor away and makes a new one, the way a host
+        // does when somebody closes and reopens the window. Anything the plugin
+        // claims to remember across that has to survive it.
+        if (id == "reopen")
+        {
+            processor.editorBeingDeleted (editor.get());
+            editor.reset();
+
+            editor.reset (processor.createEditorAndMakeActive());
+
+            if (editor == nullptr)
+            {
+                std::fprintf (stderr, "  the editor would not reopen\n");
+                return 1;
+            }
+
+            editor->setVisible (true);
+            std::printf ("  reopened the editor\n");
+            continue;
+        }
+
+        // "tick:<n>" lets the editor's own timer fire n times. Real time has to
+        // pass for a Timer to be due, so this sleeps -- which is the price of
+        // driving a display that updates on a clock rather than on demand.
+        if (id.startsWith ("tick:"))
+        {
+            const int count = id.fromFirstOccurrenceOf ("tick:", false, false).getIntValue();
+
+            for (int t = 0; t < juce::jmax (1, count); ++t)
+            {
+                juce::Thread::sleep (55);
+                juce::Timer::callPendingTimersSynchronously();
+            }
+
+            std::printf ("  ticked %d times\n", juce::jmax (1, count));
+            continue;
+        }
+
+        // "hit:id" asks whether that component is actually the thing a click at
+        // its own centre would reach. A control can be visible, enabled, and
+        // correctly placed, and still be behind an opaque sibling -- which from
+        // the outside is indistinguishable from having been hidden.
+        if (id.startsWith ("hit:"))
+        {
+            const auto target = id.fromFirstOccurrenceOf ("hit:", false, false);
+            auto* found = findById (*editor, target);
+
+            if (found == nullptr)
+            {
                 std::fprintf (stderr, "  no component with id %s\n", target.toRawUTF8());
+                ++failures;
+                continue;
+            }
+
+            const auto centre = editor->getLocalPoint (found, found->getLocalBounds().getCentre());
+            auto* topmost = editor->getComponentAt (centre);
+
+            // A child of the control counts: a button's label is still the
+            // button as far as a click is concerned.
+            bool reachable = false;
+
+            for (auto* c = topmost; c != nullptr; c = c->getParentComponent())
+            {
+                if (c == found)
+                {
+                    reachable = true;
+                    break;
+                }
+            }
+
+            if (reachable)
+            {
+                std::printf ("  %s is reachable at (%d, %d)\n",
+                             target.toRawUTF8(), centre.x, centre.y);
+            }
+            else
+            {
+                std::fprintf (stderr, "  %s is NOT reachable at (%d, %d) -- a click there hits %s\n",
+                              target.toRawUTF8(), centre.x, centre.y,
+                              topmost == nullptr ? "nothing"
+                                                 : (topmost->getComponentID().isNotEmpty()
+                                                        ? topmost->getComponentID().toRawUTF8()
+                                                        : "an unnamed component"));
                 ++failures;
             }
 
@@ -184,6 +329,34 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
 
             std::fprintf (stderr, "  could not write %s\n", out.getFullPathName().toRawUTF8());
             ++failures;
+            continue;
+        }
+
+        // "id@x,y" moves the pointer over that component instead of clicking
+        // it, for anything that only shows itself under a cursor.
+        //
+        // Last of the special forms on purpose: "audio:2@0.06" contains an "@"
+        // too, and checking this one first quietly turned a level into a
+        // pointer position.
+        if (id.contains ("@"))
+        {
+            const auto target = id.upToFirstOccurrenceOf ("@", false, false);
+            const auto where = id.fromFirstOccurrenceOf ("@", false, false);
+            const float x = where.upToFirstOccurrenceOf (",", false, false).getFloatValue();
+            const float y = where.fromFirstOccurrenceOf (",", false, false).getFloatValue();
+
+            if (auto* found = findById (*editor, target))
+            {
+                found->mouseMove (eventAt (*found, x, y));
+                std::printf ("  pointed at %s (%.0f, %.0f), which is %d x %d\n",
+                             target.toRawUTF8(), x, y, found->getWidth(), found->getHeight());
+            }
+            else
+            {
+                std::fprintf (stderr, "  no component with id %s\n", target.toRawUTF8());
+                ++failures;
+            }
+
             continue;
         }
 
@@ -241,7 +414,9 @@ int main (int argc, char** argv)
     {
         std::printf ("usage: tezla-render <samples> <blockSize> <out.raw> [id=value ...]\n"
                      "       tezla-render params\n"
-                     "       tezla-render editor [componentId | id@x,y | shot:out.png ...]\n");
+                     "       tezla-render editor [componentId | id@x,y | hit:id | shot:out.png\n"
+                     "                            | audio:secs[@gain] | tick:n | size:WxH\n"
+                     "                            | reopen ...]\n");
         return 2;
     }
 

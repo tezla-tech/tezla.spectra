@@ -218,6 +218,40 @@ decorative:
 **Difference** then draws live-minus-reference, which states the EQ move
 directly instead of leaving it to be eyeballed.
 
+### The permanent peak hold
+
+Three traces, three different questions, three colours:
+
+| Trace | Colour | Answers |
+|---|---|---|
+| live | bright green, filled | what is happening now |
+| the analyser's own hold | dim green | what happened in the last second or so |
+| **the permanent hold** | **violet** | **what is the worst this mix has done** |
+
+The violet one never decays. That is the whole point — the middle trace falls
+away while you are still reaching for the mouse, and the question a mix decision
+actually asks is *what is the loudest that resonance ever got*, not *what was it
+half a second ago*.
+
+**RESET PEAKS** throws it away and starts collecting again, which is how the
+feature gets used: make an EQ move, clear, play the section back, and see what
+the new worst case turns out to be.
+
+It **survives closing the window**, because it is a measurement and a
+measurement that vanishes when you close a window is not one — the same reason
+the true-peak hold and the integrated loudness behave that way. It is stored on
+the processor, not in the editor. **RESET MEASUREMENT** clears it along with
+everything else held.
+
+Measured, by running the tool's test signal loud, dropping it 26 dB, and looking
+at what each trace did:
+
+| | |
+|---|---|
+| after the drop | violet sits **26 dB above** the live curve; the analyser's own hold has fallen most of the way |
+| after RESET PEAKS | violet gone, re-collecting from the current level |
+| after closing and reopening the editor | violet **still there**; the analyser's own hold correctly gone, because that one lives in the editor |
+
 ### The crosshair
 
 Point at the spectrum and it reads out where you are pointing:
@@ -307,6 +341,10 @@ things at once, which is what a second monitor is for.
 | **Mono Check** | 60–300 Hz, default 120 | Where the sub correlation bar stops looking. 120 Hz because that is about where a club system stops being able to place a sound and starts merely moving air. |
 | **Bypass** | — | Pauses measurement. The audio is untouched either way; this plugin never changes it. |
 
+The spectrum's own switches — **Pink slope**, **Difference**, **Peak hold** —
+are view state rather than parameters: they change what is drawn, never what is
+measured, so they are not saved with the project.
+
 There are no presets. Nothing here shapes a sound, so there is nothing to
 preset — the Target selector is the only thing anyone would save, and it is one
 click.
@@ -340,6 +378,8 @@ oversampling is a deliberate choice with a price you can see.
 | Allocations in the scope read the editor does each frame | **0** |
 | Silence in | every reading at its floor, no NaN |
 | Editor: create, maximise each panel, resize 760x520 to 1520x1040, destroy | clean (`tezla-render editor`) |
+| Every control reachable by a click at its own centre, at 760 and at 980 wide | yes (`hit:` — catches a control buried under an opaque sibling) |
+| Pop a panel out, dock it back, then use its buttons | works (this was a bug: see the root README) |
 | Editor: close the standalone with a panel detached | exits 0 |
 | Crosshair at the 1 kHz gridline | reads **998 Hz**, one quarter-pixel of rounding |
 | Steinberg validator | **47 tests passed, 0 failed** |
@@ -357,6 +397,10 @@ tezla-ui-preview goniometer out.png   :: the six stereo shapes
 :: point at one, photograph the result
 TranspectusRender editor spectrum-max shot:big.png
 TranspectusRender editor spectrum@488,122 shot:crosshair.png
+
+:: with real signal in it, and driving the editor's own timer
+TranspectusRender editor audio:2 tick:10 audio:3@0.05 tick:40 shot:hold.png
+TranspectusRender editor size:760x520 hit:reset-peaks shot:narrow.png
 ```
 
 ---
