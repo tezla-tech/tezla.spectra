@@ -23,6 +23,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | `Tzcp` | [`Capstone`](Capstone/) | Tezla Capstone | Effect — true-peak brickwall limiter and clipper for the end of the chain | v0.1.0, builds and validates |
 | `Tztr` | [`Transpectus`](Transpectus/) | Tezla Transpectus | Analyser — loudness, true peak, spectrum and stereo image. Does not touch the audio | v0.1.0, builds and validates |
 | `Tzan` | [`Anvil`](Anvil/) | Tezla Anvil | Effect — valve amplifier, speaker load and cabinet, modelled from the mechanisms | v0.1.0, builds and validates |
+| `Tzso` | [`Sonitus`](Sonitus/) | Tezla Sonitus | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, and Scala microtuning | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 

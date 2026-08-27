@@ -1,0 +1,398 @@
+#include "TestFramework.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <vector>
+
+#include <tezla/dsp/Formant.hpp>
+
+using namespace tezla::dsp;
+
+namespace
+{
+double magnitudeAt (Formant& formant, double frequency, double sampleRate)
+{
+    formant.reset();
+
+    const int settle = static_cast<int> (sampleRate * 0.25);
+    const int measure = static_cast<int> (std::round (200.0 * sampleRate / frequency));
+
+    double phase = 0.0;
+    const double step = 2.0 * std::numbers::pi * frequency / sampleRate;
+
+    for (int i = 0; i < settle; ++i)
+    {
+        double left = std::sin (phase);
+        double right = left;
+        formant.process (left, right);
+        phase += step;
+    }
+
+    double inPhase = 0.0;
+    double quadrature = 0.0;
+
+    for (int i = 0; i < measure; ++i)
+    {
+        double left = std::sin (phase);
+        double right = left;
+        formant.process (left, right);
+
+        inPhase += left * std::sin (phase);
+        quadrature += left * std::cos (phase);
+        phase += step;
+    }
+
+    return 2.0 * std::hypot (inPhase, quadrature) / measure;
+}
+
+double dbOf (double magnitude) { return 20.0 * std::log10 (std::max (magnitude, 1.0e-12)); }
+
+Formant made (double rate = 48000.0, double morph = 0.0, double sharpness = 0.5,
+              double mix = 1.0)
+{
+    Formant formant;
+    formant.prepare (rate);
+    formant.setMorph (morph);
+    formant.setSharpness (sharpness);
+    formant.setMix (mix);
+    return formant;
+}
+} // namespace
+
+TEZLA_TEST (each_pure_vowel_lands_on_its_published_formants)
+{
+    // The table is measured data taken whole rather than derived -- CLAUDE.md
+    // section 9 -- so what is checkable here is that the filter is placed where
+    // the table says, not that the table is right. Five vowels, five morph
+    // positions, three formants each.
+    auto formant = made();
+
+    for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
+    {
+        formant.setMorph (vowel / (Formant::kVowels - 1.0));
+
+        for (int index = 0; index < Formant::kFormants; ++index)
+            CHECK_NEAR (formant.formantHz (index),
+                        Formant::kFrequencies[static_cast<std::size_t> (vowel)]
+                                             [static_cast<std::size_t> (index)],
+                        1.0e-9);
+    }
+}
+
+TEZLA_TEST (the_morph_blends_the_formants_geometrically)
+{
+    // Half way between "ee" at 270 Hz and "eh" at 530 Hz is 378 Hz, not 400 --
+    // a formant is a frequency and the ear hears the ratio. On a sweep the
+    // difference is the whole character of the movement: arithmetic blending
+    // spends too long at the top of the range and arrives late.
+    auto formant = made();
+
+    // Quarter of the way along a five-vowel list is half way from vowel 1 to
+    // vowel 2.
+    formant.setMorph (0.5 / (Formant::kVowels - 1.0));
+
+    CHECK_NEAR (formant.formantHz (0), std::sqrt (270.0 * 530.0), 1.0e-9);
+    CHECK_NEAR (formant.formantHz (0), 378.29, 0.01);
+
+    CHECK_NEAR (formant.formantHz (1), std::sqrt (2290.0 * 1840.0), 1.0e-9);
+
+    // And an arithmetic blend would have put it at 400.
+    CHECK (std::abs (formant.formantHz (0) - 400.0) > 20.0);
+
+    // Monotonic all the way along, for the formant that moves furthest.
+    double previous = 0.0;
+
+    for (double morph = 0.0; morph <= 0.5000001; morph += 0.02)
+    {
+        formant.setMorph (morph);
+
+        CHECK (formant.formantHz (0) > previous);
+        previous = formant.formantHz (0);
+    }
+}
+
+TEZLA_TEST (the_response_has_a_peak_at_each_formant_and_at_the_stated_height)
+{
+    // Two claims, and the second is the one with teeth.
+    //
+    // **A local maximum**, checked over a narrow window rather than against a
+    // valley an octave down. The first version of this asked for 3 dB of drop
+    // 1.6 times below each formant and failed at "ah" and "oh" -- where F1 and
+    // F2 are 360 and 270 Hz apart and the space between them is *supposed* to
+    // be filled. Back vowels having merged formants is the data being right,
+    // not the filter being wrong.
+    //
+    // **And at the height the amplitude table states**, which is what the
+    // division by Q in updateCoefficients() buys. Measured, every vowel, wet
+    // only, sharpness 0.8:
+    //
+    //     F1   0.000  0.000  0.009  0.017  0.002   dB   (table:   0.0)
+    //     F2  -6.989 -6.982 -6.871 -6.772 -6.920        (table:  -7.0)
+    //     F3 -11.938 -11.913 -11.944 -11.949 -11.943    (table: -12.0)
+    //
+    // Without it the peaks would sit 20*log10(Q) high -- 17.7 dB out at "ee"
+    // F2 -- and the sharpness control would be a tone control and a fader at
+    // the same time.
+    constexpr double rate = 48000.0;
+
+    for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
+    {
+        auto formant = made (rate, vowel / (Formant::kVowels - 1.0), 0.8, 1.0);
+
+        for (int index = 0; index < Formant::kFormants; ++index)
+        {
+            const double centre = formant.formantHz (index);
+
+            const double atPeak = dbOf (magnitudeAt (formant, centre, rate));
+            const double below = dbOf (magnitudeAt (formant, centre / 1.06, rate));
+            const double above = dbOf (magnitudeAt (formant, centre * 1.06, rate));
+
+            // A local maximum. The tightest margin in the whole table is
+            // 2.586 dB, at "ee" F1 where Q is only 7.75.
+            CHECK (atPeak > below + 2.0);
+            CHECK (atPeak > above + 2.0);
+
+            CHECK_NEAR (atPeak, Formant::kAmplitudesDb[static_cast<std::size_t> (index)], 0.25);
+        }
+    }
+}
+
+TEZLA_TEST (the_sharpness_control_is_not_a_volume_control)
+{
+    // The bandpass node reads Q at its own corner, so without the division by Q
+    // the sharpness control would raise the peak by 20*log10(Q) as it narrowed
+    // -- a sharpness knob that is mostly a gain knob. With it, the peak height
+    // stays put and only the width moves.
+    //
+    // Measured at "ah", F1 = 730 Hz, wet only:
+    //
+    //     sharpness       Q    peak dB    down at x1.09
+    //          0.00    2.28      0.638             0.90
+    //          0.25    4.56      0.187             2.77
+    //          0.50    9.12      0.049             6.26
+    //          0.75   18.25      0.012            11.27
+    //          1.00   36.50      0.003            17.00
+    //
+    // Sixteen times the Q, nineteen times the skirt, and 0.64 dB of movement
+    // in the peak -- which is the residual overlap from F2 and F3, not the
+    // resonance's own gain.
+    constexpr double rate = 48000.0;
+    constexpr double centre = 730.0;
+
+    double previousQ = 0.0;
+    double previousSkirt = 0.0;
+
+    for (const double sharpness : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        auto formant = made (rate, 0.0, sharpness, 1.0);
+
+        formant.setMorph (2.0 / (Formant::kVowels - 1.0));   // "ah"
+
+        CHECK_NEAR (formant.formantHz (0), centre, 1.0e-9);
+
+        const double peak = dbOf (magnitudeAt (formant, centre, rate));
+        const double skirt = peak - dbOf (magnitudeAt (formant, centre * 1.09, rate));
+
+        // The peak barely moves...
+        CHECK (peak > -0.1);
+        CHECK (peak < 0.7);
+
+        // ...while the Q and the skirt climb together, every step.
+        CHECK (formant.formantQ (0) > previousQ);
+        CHECK (skirt > previousSkirt);
+
+        previousQ = formant.formantQ (0);
+        previousSkirt = skirt;
+    }
+
+    // The two ends, so a change to kNarrowest or kWidest shows up here.
+    CHECK_NEAR (previousQ, 36.50, 0.05);
+    CHECK_NEAR (previousSkirt, 17.00, 0.15);
+}
+
+TEZLA_TEST (the_formants_are_where_they_were_asked_for_at_every_sample_rate)
+{
+    // The prewarp again. A vowel filter whose formants drift between a 48 kHz
+    // session and a 96 kHz one is a different instrument on each.
+    for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
+        for (int index = 0; index < Formant::kFormants; ++index)
+        {
+            std::vector<double> readings;
+
+            for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+            {
+                auto formant = made (rate, vowel / (Formant::kVowels - 1.0), 0.9, 1.0);
+
+                const double centre = formant.formantHz (index);
+
+                CHECK_NEAR (centre,
+                            Formant::kFrequencies[static_cast<std::size_t> (vowel)]
+                                                 [static_cast<std::size_t> (index)],
+                            1.0e-9);
+
+                readings.push_back (dbOf (magnitudeAt (formant, centre, rate)));
+            }
+
+            for (const double reading : readings)
+                CHECK_NEAR (reading, readings.back(), 0.15);
+        }
+}
+
+TEZLA_TEST (a_mix_of_zero_is_bit_exactly_transparent)
+{
+    for (const double morph : { 0.0, 0.5, 1.0 })
+        for (const double sharpness : { 0.0, 1.0 })
+        {
+            auto formant = made (48000.0, morph, sharpness, 0.0);
+
+            bool exact = true;
+
+            for (int i = 0; i < 8192; ++i)
+            {
+                const double x = 0.7 * std::sin (i * 0.019) + 0.2 * std::sin (i * 0.31);
+
+                double left = x;
+                double right = -x;
+
+                formant.process (left, right);
+
+                if (left != x || right != -x)
+                    exact = false;
+            }
+
+            CHECK (exact);
+        }
+}
+
+TEZLA_TEST (silence_in_silence_out)
+{
+    for (const double morph : { 0.0, 1.0 })
+        for (const double sharpness : { 0.0, 1.0 })
+        {
+            auto formant = made (48000.0, morph, sharpness, 1.0);
+
+            bool silent = true;
+
+            for (int i = 0; i < 48000; ++i)
+            {
+                double left = 0.0;
+                double right = 0.0;
+
+                formant.process (left, right);
+
+                if (left != 0.0 || right != 0.0)
+                    silent = false;
+            }
+
+            CHECK (silent);
+        }
+}
+
+TEZLA_TEST (the_whole_parameter_space_stays_bounded)
+{
+    // Including the morph swept while the resonators ring, which is the case
+    // that a static parameter sweep misses: retuning a Q of 30 every sample
+    // moves energy between the state variables.
+    double worst = 0.0;
+
+    for (const double sharpness : { 0.0, 0.5, 1.0 })
+        for (const double mix : { 0.0, 0.5, 1.0 })
+        {
+            auto formant = made (48000.0, 0.0, sharpness, mix);
+
+            for (int i = 0; i < 200000; ++i)
+            {
+                formant.setMorph (0.5 + 0.5 * std::sin (i * 0.0011));
+
+                double left = (i / 64) % 2 == 0 ? 1.0 : -1.0;
+                double right = -left;
+
+                formant.process (left, right);
+
+                CHECK (std::isfinite (left));
+                CHECK (std::isfinite (right));
+
+                worst = std::max ({ worst, std::abs (left), std::abs (right) });
+            }
+        }
+
+    CHECK (worst < 8.0);
+}
+
+TEZLA_TEST (a_low_sample_rate_clamps_the_top_formant_rather_than_folding_it)
+{
+    // F3 at "ee" is 3010 Hz, which is above Nyquist at 5512 Hz... it is not,
+    // but it is above the 45% ceiling, and a tangent at Nyquist is infinite.
+    Formant formant;
+    formant.prepare (5512.5);
+    formant.setMorph (0.0);
+    formant.setMix (1.0);
+
+    for (int index = 0; index < Formant::kFormants; ++index)
+    {
+        CHECK (std::isfinite (formant.formantHz (index)));
+        CHECK (formant.formantHz (index) <= 5512.5 * 0.45 + 1.0e-9);
+        CHECK (formant.formantQ (index) > 0.0);
+    }
+
+    for (int i = 0; i < 8192; ++i)
+    {
+        double left = std::sin (i * 0.2);
+        double right = left;
+
+        formant.process (left, right);
+
+        CHECK (std::isfinite (left));
+        CHECK (std::abs (left) < 20.0);
+    }
+}
+
+TEZLA_TEST (the_vowel_list_runs_front_to_back_so_a_sweep_is_one_mouth_movement)
+{
+    // The order is the vowel circle, not the alphabet: F2 falls monotonically
+    // from "ee" to "oo" while F1 rises and then falls. If the list were sorted
+    // some other way, sweeping the morph would jump about.
+    auto formant = made();
+
+    // F2 falls by a factor of 2.6 from "ee" to "oo" -- 2290, 1840, 1090, 840,
+    // 870. Every step falls **except the last, which rises 3.5%**, and that is
+    // the measured data rather than a sorting mistake: "oo" is more rounded
+    // than "oh" but not further back. Asserting strict monotonicity is what the
+    // first version of this did, and it failed on a 30 Hz step in real data.
+    double previousSecond = 1.0e9;
+
+    for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
+    {
+        formant.setMorph (vowel / (Formant::kVowels - 1.0));
+
+        const double here = formant.formantHz (1);
+
+        if (vowel < Formant::kVowels - 1)
+            CHECK (here < previousSecond);
+        else
+            CHECK (here < previousSecond * 1.05);
+
+        previousSecond = here;
+    }
+
+    formant.setMorph (0.0);
+    const double highest = formant.formantHz (1);
+
+    formant.setMorph (1.0);
+
+    CHECK_NEAR (highest / formant.formantHz (1), 2.632, 0.001);
+
+    // And F1 traces an arch: open in the middle, closed at both ends.
+    formant.setMorph (0.0);
+    const double atEe = formant.formantHz (0);
+
+    formant.setMorph (2.0 / (Formant::kVowels - 1.0));
+    const double atAh = formant.formantHz (0);
+
+    formant.setMorph (1.0);
+    const double atOo = formant.formantHz (0);
+
+    CHECK (atAh > atEe);
+    CHECK (atAh > atOo);
+}

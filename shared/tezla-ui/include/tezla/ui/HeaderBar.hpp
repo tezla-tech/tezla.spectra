@@ -45,6 +45,10 @@ class HeaderBar final : public juce::Component
 public:
     /// `title` is the plugin's name in capitals; `subtitle` the one-line
     /// description that sits under the vendor name.
+    ///
+    /// `bypassParameterId` may be null or empty, and then the bypass button is
+    /// left out rather than shown dead -- an instrument has nothing to bypass,
+    /// and muting the track is what a player reaches for anyway.
     HeaderBar (juce::AudioProcessorValueTreeState& state,
                const juce::String& title,
                const juce::String& subtitle,
@@ -82,6 +86,7 @@ private:
     juce::TextButton swapButton_ { "A / B" };
     juce::TextButton copyButton_ { "COPY" };
 
+    bool hasBypass_ { true };
     bool slotB_ { false };
     bool otherFilled_ { false };
 

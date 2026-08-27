@@ -91,10 +91,21 @@ HeaderBar::HeaderBar (juce::AudioProcessorValueTreeState& state,
         "arrives early and sounds tighter for reasons that have nothing to do with the plugin, "
         "and every comparison you make is wrong.\n\n"
         "Crossfaded over 10 ms, so it does not click.");
-    addAndMakeVisible (bypassButton_);
 
-    bypassAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
-        state, bypassParameterId, bypassButton_);
+    // **An instrument has nothing to bypass.** Passing no parameter id leaves
+    // the button out entirely rather than showing a dead one: bypassing a synth
+    // means silence, which is what muting the track already does, and a header
+    // control that does nothing is worse than a missing one. Everything else in
+    // the bar -- the name, A/B, Copy -- applies to an instrument unchanged.
+    hasBypass_ = bypassParameterId != nullptr && *bypassParameterId != '\0';
+
+    if (hasBypass_)
+    {
+        addAndMakeVisible (bypassButton_);
+
+        bypassAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+            state, bypassParameterId, bypassButton_);
+    }
 
     swapButton_.setTooltip (
         "Two complete settings, A and B, and this swaps between them.\n\n"
@@ -168,7 +179,8 @@ void HeaderBar::paint (juce::Graphics& g)
     g.setColour (palette_.dimText);
     g.setFont (juce::FontOptions (11.0f));
     g.drawText (juce::String::fromUTF8 ("TEZLA TECH  \xc2\xb7  ") + subtitle_,
-                textArea.withTrimmedRight (kBypassWidth + kSwapWidth + kCopyWidth + 4 * kGap),
+                textArea.withTrimmedRight ((hasBypass_ ? kBypassWidth + 2 * kGap : 0)
+                                             + kSwapWidth + kCopyWidth + 2 * kGap),
                 juce::Justification::centredLeft);
 }
 
@@ -179,8 +191,11 @@ void HeaderBar::resized()
 
     auto strip = bounds.withHeight (kButtonHeight).withY (y);
 
-    bypassButton_.setBounds (strip.removeFromRight (kBypassWidth));
-    strip.removeFromRight (kGap * 2);
+    if (hasBypass_)
+    {
+        bypassButton_.setBounds (strip.removeFromRight (kBypassWidth));
+        strip.removeFromRight (kGap * 2);
+    }
     copyButton_.setBounds (strip.removeFromRight (kCopyWidth));
     strip.removeFromRight (kGap);
     swapButton_.setBounds (strip.removeFromRight (kSwapWidth));

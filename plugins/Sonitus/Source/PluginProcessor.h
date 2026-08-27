@@ -1,0 +1,410 @@
+#pragma once
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include <tezla/dsp/VuMeter.hpp>
+#include <tezla/ui/AbCompare.hpp>
+
+#include "SonitusEngine.hpp"
+
+namespace tezla::sonitus
+{
+
+/// Parameter IDs. These are permanent: renaming one silently resets that
+/// parameter in every project that already uses the plugin. CLAUDE.md section 8.
+namespace ids
+{
+// ---- oscillator A ----------------------------------------------------------
+inline constexpr auto shapeA      = "shapeA";
+inline constexpr auto octaveA     = "octaveA";
+inline constexpr auto semitonesA  = "semitonesA";
+inline constexpr auto centsA      = "centsA";
+inline constexpr auto widthA      = "widthA";
+inline constexpr auto unisonA     = "unisonA";
+inline constexpr auto detuneA     = "detuneA";
+inline constexpr auto spreadA     = "spreadA";
+inline constexpr auto driftA      = "driftA";
+inline constexpr auto levelA      = "levelA";
+
+// ---- oscillator B ----------------------------------------------------------
+inline constexpr auto shapeB      = "shapeB";
+inline constexpr auto octaveB     = "octaveB";
+inline constexpr auto semitonesB  = "semitonesB";
+inline constexpr auto centsB      = "centsB";
+inline constexpr auto widthB      = "widthB";
+inline constexpr auto unisonB     = "unisonB";
+inline constexpr auto detuneB     = "detuneB";
+inline constexpr auto spreadB     = "spreadB";
+inline constexpr auto driftB      = "driftB";
+inline constexpr auto levelB      = "levelB";
+inline constexpr auto syncB       = "syncB";
+inline constexpr auto pmIndex     = "pmIndex";
+
+// ---- sub and destruction ---------------------------------------------------
+inline constexpr auto subShape    = "subShape";
+inline constexpr auto subOctave   = "subOctave";
+inline constexpr auto subLevel    = "subLevel";
+inline constexpr auto ringAmount  = "ringAmount";
+inline constexpr auto foldAmount  = "foldAmount";
+
+// ---- filter ----------------------------------------------------------------
+inline constexpr auto filterMode  = "filterMode";
+inline constexpr auto cutoff      = "cutoff";
+inline constexpr auto resonance   = "resonance";
+inline constexpr auto filterDrive = "filterDrive";
+inline constexpr auto filterTrack = "filterTrack";
+inline constexpr auto filterFm    = "filterFm";
+inline constexpr auto filterVel   = "filterVel";
+
+// ---- envelopes -------------------------------------------------------------
+inline constexpr auto ampAttack   = "ampAttack";
+inline constexpr auto ampDecay    = "ampDecay";
+inline constexpr auto ampSustain  = "ampSustain";
+inline constexpr auto ampRelease  = "ampRelease";
+inline constexpr auto ampShape    = "ampShape";
+inline constexpr auto ampVelocity = "ampVelocity";
+
+inline constexpr auto env1Attack  = "env1Attack";
+inline constexpr auto env1Decay   = "env1Decay";
+inline constexpr auto env1Sustain = "env1Sustain";
+inline constexpr auto env1Release = "env1Release";
+inline constexpr auto env1Shape   = "env1Shape";
+
+inline constexpr auto env2Attack  = "env2Attack";
+inline constexpr auto env2Decay   = "env2Decay";
+inline constexpr auto env2Sustain = "env2Sustain";
+inline constexpr auto env2Release = "env2Release";
+inline constexpr auto env2Shape   = "env2Shape";
+
+// ---- keyboard --------------------------------------------------------------
+inline constexpr auto keyMode     = "keyMode";
+inline constexpr auto polyphony   = "polyphony";
+inline constexpr auto glide       = "glide";
+inline constexpr auto bendRange   = "bendRange";
+
+// ---- global modulation sources ---------------------------------------------
+inline constexpr auto lfo1Wave    = "lfo1Wave";
+inline constexpr auto lfo1Rate    = "lfo1Rate";
+inline constexpr auto lfo1Smooth  = "lfo1Smooth";
+inline constexpr auto lfo2Wave    = "lfo2Wave";
+inline constexpr auto lfo2Rate    = "lfo2Rate";
+inline constexpr auto lfo2Smooth  = "lfo2Smooth";
+
+inline constexpr auto seqRate     = "seqRate";
+inline constexpr auto seqLength   = "seqLength";
+inline constexpr auto seqGlide    = "seqGlide";
+inline constexpr auto seqToLfoRate = "seqToLfoRate";
+
+/// `seq1` .. `seq16`. Built rather than listed, because sixteen near-identical
+/// names invite a typo that would silently point one step at nothing.
+[[nodiscard]] inline juce::String step (int index)
+{
+    return "seq" + juce::String (index + 1);
+}
+
+/// `modSource1` / `modDest1` / `modDepth1`, and so on.
+[[nodiscard]] inline juce::String modSource (int slot) { return "modSource" + juce::String (slot + 1); }
+[[nodiscard]] inline juce::String modDest (int slot)   { return "modDest" + juce::String (slot + 1); }
+[[nodiscard]] inline juce::String modDepth (int slot)  { return "modDepth" + juce::String (slot + 1); }
+
+/// The global matrix, which drives the mangle rather than the voice.
+[[nodiscard]] inline juce::String globalSource (int slot) { return "gmodSource" + juce::String (slot + 1); }
+[[nodiscard]] inline juce::String globalDest (int slot)   { return "gmodDest" + juce::String (slot + 1); }
+[[nodiscard]] inline juce::String globalDepth (int slot)  { return "gmodDepth" + juce::String (slot + 1); }
+
+// ---- the split and the mangle ----------------------------------------------
+inline constexpr auto splitHz     = "splitHz";
+inline constexpr auto subMono     = "subMono";
+
+inline constexpr auto order       = "order";
+inline constexpr auto tubeDrive   = "tubeDrive";
+inline constexpr auto combMode    = "combMode";
+inline constexpr auto combTime    = "combTime";
+inline constexpr auto combTrack   = "combTrack";
+inline constexpr auto combFeed    = "combFeed";
+inline constexpr auto combDamp    = "combDamp";
+inline constexpr auto combSpread  = "combSpread";
+inline constexpr auto combMix     = "combMix";
+inline constexpr auto combInvert  = "combInvert";
+inline constexpr auto phaseFreq   = "phaseFreq";
+inline constexpr auto phaseStages = "phaseStages";
+inline constexpr auto formantMorph = "formantMorph";
+inline constexpr auto formantSharp = "formantSharp";
+inline constexpr auto formantMix  = "formantMix";
+inline constexpr auto tilt        = "tilt";
+
+// ---- global ----------------------------------------------------------------
+inline constexpr auto output      = "output";
+inline constexpr auto oversampling = "oversampling";
+} // namespace ids
+
+/// The option lists behind the choice parameters.
+///
+/// **Append-only, forever.** A choice parameter stores an *index*, not a name,
+/// so inserting or reordering an entry silently repoints every saved use of it
+/// -- the plugin still loads, still runs, and quietly plays a different sound.
+/// CLAUDE.md section 8.
+///
+/// Each is checked against the enum it is read back as at compile time, so a
+/// list that drifts out of step with its enum stops the build rather than the
+/// project.
+namespace choices
+{
+inline const juce::StringArray shape { "Saw", "Pulse", "Triangle", "Sine" };
+inline const juce::StringArray subShape { "Sine", "Square" };
+inline const juce::StringArray filterMode { "Lowpass", "Bandpass", "Highpass", "Notch" };
+inline const juce::StringArray keyMode { "Poly", "Mono", "Legato" };
+inline const juce::StringArray combMode { "Off", "Flange", "Phase" };
+inline const juce::StringArray order { "Tube then comb", "Comb then tube" };
+inline const juce::StringArray lfoWave { "Sine", "Triangle", "Saw up", "Saw down",
+                                         "Square", "Sample & hold", "Smooth random" };
+inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
+
+/// The modulation sources, in the order the matrix indexes them.
+inline const juce::StringArray modSource { "Off", "Amp env", "Mod env 1", "Mod env 2",
+                                           "Velocity", "Key track", "Note random",
+                                           "LFO 1", "LFO 2", "Sequencer" };
+
+/// The modulation destinations, likewise. **Continuous controls only** -- a
+/// choice or a switch reconfigures rather than adjusts, so modulating one would
+/// mean a filter rebuild per chunk rather than a value change.
+inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter drive",
+                                         "PM index", "Width A", "Width B",
+                                         "Detune A", "Detune B", "Osc mix",
+                                         "Sub level", "Ring", "Fold",
+                                         "Pitch", "Pitch B", "Level" };
+
+/// The global matrix's sources: the three that exist once rather than once per
+/// note. Pointing an amp envelope at a global control has no answer when eight
+/// notes are down, which is why the voice's list is not reused here.
+inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer" };
+
+/// The global matrix's destinations: the mangle's continuous controls. **Comb
+/// time is the one this instrument exists for** -- the brief's flanger-at-rate-
+/// zero trick with something better than an automation lane behind it.
+inline const juce::StringArray globalDest { "Off", "Comb time", "Comb feedback", "Comb mix",
+                                            "Phase centre", "Vowel", "Tube", "Output" };
+
+static_assert (static_cast<int> (dsp::OscShape::saw)      == 0
+            && static_cast<int> (dsp::OscShape::pulse)    == 1
+            && static_cast<int> (dsp::OscShape::triangle) == 2
+            && static_cast<int> (dsp::OscShape::sine)     == 3
+            && static_cast<int> (dsp::OscShape::count)    == 4,
+               "the shape option list is indexed straight into OscShape");
+
+static_assert (static_cast<int> (SubShape::sine)   == 0
+            && static_cast<int> (SubShape::square) == 1
+            && static_cast<int> (SubShape::count)  == 2,
+               "the sub shape option list is indexed straight into SubShape");
+
+static_assert (static_cast<int> (dsp::SvfMode::lowpass)  == 0
+            && static_cast<int> (dsp::SvfMode::bandpass) == 1
+            && static_cast<int> (dsp::SvfMode::highpass) == 2
+            && static_cast<int> (dsp::SvfMode::notch)    == 3
+            && static_cast<int> (dsp::SvfMode::count)    == 4,
+               "the filter mode option list is indexed straight into SvfMode");
+
+static_assert (static_cast<int> (KeyboardMode::poly)   == 0
+            && static_cast<int> (KeyboardMode::mono)   == 1
+            && static_cast<int> (KeyboardMode::legato) == 2
+            && static_cast<int> (KeyboardMode::count)  == 3,
+               "the keyboard option list is indexed straight into KeyboardMode");
+
+static_assert (static_cast<int> (CombMode::off)    == 0
+            && static_cast<int> (CombMode::flange) == 1
+            && static_cast<int> (CombMode::phase)  == 2
+            && static_cast<int> (CombMode::count)  == 3,
+               "the comb option list is indexed straight into CombMode");
+
+static_assert (static_cast<int> (MangleOrder::tubeThenComb) == 0
+            && static_cast<int> (MangleOrder::combThenTube) == 1
+            && static_cast<int> (MangleOrder::count)        == 2,
+               "the order option list is indexed straight into MangleOrder");
+
+static_assert (static_cast<int> (dsp::Lfo::Wave::sine)         == 0
+            && static_cast<int> (dsp::Lfo::Wave::smoothRandom) == 6
+            && dsp::Lfo::kNumWaves == 7,
+               "the LFO wave option list is indexed straight into Lfo::Wave");
+
+static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
+            && static_cast<int> (dsp::OversamplingMode::Off)  == 1
+            && static_cast<int> (dsp::OversamplingMode::X8)   == 4,
+               "the oversampling option list is indexed straight into OversamplingMode");
+
+static_assert (static_cast<int> (ModSource::none)      == 0
+            && static_cast<int> (ModSource::sequencer) == 9
+            && static_cast<int> (ModSource::count)     == 10,
+               "the modulation source list is indexed straight into ModSource");
+
+static_assert (static_cast<int> (ModDestination::none)  == 0
+            && static_cast<int> (ModDestination::level) == 15
+            && static_cast<int> (ModDestination::count) == 16,
+               "the modulation destination list is indexed straight into ModDestination");
+
+static_assert (static_cast<int> (GlobalSource::none)      == 0
+            && static_cast<int> (GlobalSource::sequencer) == 3
+            && static_cast<int> (GlobalSource::count)     == 4,
+               "the global source list is indexed straight into GlobalSource");
+
+static_assert (static_cast<int> (GlobalDestination::none)   == 0
+            && static_cast<int> (GlobalDestination::output) == 7
+            && static_cast<int> (GlobalDestination::count)  == 8,
+               "the global destination list is indexed straight into GlobalDestination");
+} // namespace choices
+
+class SonitusProcessor final : public juce::AudioProcessor
+{
+public:
+    SonitusProcessor();
+    ~SonitusProcessor() override = default;
+
+    void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
+    void releaseResources() override {}
+
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void processBlock (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
+
+    bool supportsDoublePrecisionProcessing() const override { return true; }
+
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override { return true; }
+
+    const juce::String getName() const override { return JucePlugin_Name; }
+
+    bool acceptsMidi() const override  { return true; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+
+    /// The longest a note can ring after the last note-off: the amp release,
+    /// plus the filter's own decay at full resonance. Hosts use this to decide
+    /// how long to keep rendering after a stop, and reporting zero from an
+    /// instrument truncates every tail.
+    double getTailLengthSeconds() const override;
+
+    int getNumPrograms() override;
+    int getCurrentProgram() override { return currentProgram_; }
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
+    void changeProgramName (int, const juce::String&) override {}
+
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
+
+    [[nodiscard]] juce::AudioProcessorValueTreeState& getState() noexcept { return state_; }
+
+    [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
+
+    /// What the output is doing, for the panel's meter.
+    ///
+    /// An instrument has no input to meter, so there is one of these rather than
+    /// a pair -- but it still gets both readings. A VU and a peak differ by ten
+    /// decibels or more on a reese, which is exactly the kind of signal where
+    /// "it looks loud enough" and "it is clipping the converter" are different
+    /// questions. CLAUDE.md section 7.
+    struct MeterValues
+    {
+        std::atomic<float> outputVuDb   { -100.0f };
+        std::atomic<float> outputPeakDb { -100.0f };
+    };
+
+    [[nodiscard]] MeterValues& getMeterValues() noexcept { return meters_; }
+
+    /// Where the global modulation sources are right now, so the panel can show
+    /// the LFOs moving and light the sequencer's current step.
+    [[nodiscard]] const GlobalSources& getGlobalSources() const noexcept
+    {
+        return engine_.getGlobalSources();
+    }
+
+    [[nodiscard]] int getSequencerStep() const noexcept { return engine_.getSequencerStep(); }
+
+    /// Where the comb's first notch is actually sitting -- key tracking and the
+    /// global matrix included, rather than worked out from the knob.
+    [[nodiscard]] double getCombNotchHz() const noexcept { return engine_.getCombNotchHz(); }
+
+    // ---- tuning ------------------------------------------------------------
+
+    /// Loads a Scala scale file's **text**. Returns an empty string on success
+    /// and the reason with its line number otherwise.
+    ///
+    /// Text rather than a path, so the DSP layer never touches the filesystem
+    /// and the whole thing stays testable. The editor reads the file.
+    juce::String loadScalaText (const juce::String& text, const juce::String& name);
+
+    /// The same for a `.kbm` keyboard map.
+    juce::String loadKeyboardMapText (const juce::String& text);
+
+    /// Selects one of the built-in scales by name. Empty string on success.
+    juce::String selectBuiltInScale (const juce::String& name);
+
+    /// Back to twelve-tone equal, with no keyboard map.
+    void resetTuning();
+
+    [[nodiscard]] juce::String getScaleName() const;
+
+    /// A sentence describing the tuning currently loaded -- how many notes, what
+    /// it repeats at, and whether that is an octave.
+    [[nodiscard]] juce::String describeTuning() const;
+
+    // ---- what the panel reads ----------------------------------------------
+
+    [[nodiscard]] juce::String describeOversampling() const;
+    [[nodiscard]] juce::String describeLatency() const;
+    [[nodiscard]] juce::String describeComb() const;
+
+    [[nodiscard]] bool isPrepared() const noexcept { return prepared_; }
+    [[nodiscard]] int getActiveVoiceCount() const noexcept { return activeVoices_.load(); }
+
+private:
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    template <typename FloatType>
+    void processInternal (juce::AudioBuffer<FloatType>& buffer, juce::MidiBuffer& midi);
+
+    void pullParameters();
+    void handleMidi (const juce::MidiMessage& message);
+    void applyTuningToEngine();
+
+    juce::AudioProcessorValueTreeState state_;
+
+    Engine engine_;
+    EngineParameters parameters_;
+
+    /// The tuning lives here rather than in the engine's own `Tuning`, because
+    /// it has to survive a `prepare()` and be saved with the state. The engine's
+    /// copy is refreshed from this one.
+    dsp::Scale scale_;
+    dsp::KeyboardMap keyboardMap_;
+    bool hasKeyboardMap_ { false };
+
+    /// The `.scl` text as loaded, kept verbatim so the state can save it. A
+    /// project that reopens on another machine has to reproduce the tuning
+    /// without needing the file, which means storing the file.
+    juce::String scalaText_;
+    juce::String keyboardMapText_;
+    juce::String scaleName_;
+
+    /// Double-precision scratch: the DSP is double throughout, so a float host
+    /// buffer is converted here rather than compromising the processing.
+    juce::AudioBuffer<double> scratch_;
+    std::array<double*, 2> channelPointers_ {};
+
+    dsp::VuMeter outputMeter_[2];
+    MeterValues meters_;
+
+    int reportedLatency_ { 0 };
+    bool prepared_ { false };
+
+    std::atomic<int> activeVoices_ { 0 };
+
+    ui::AbCompare abCompare_ { state_, {} };
+
+    double sampleRate_ { 44100.0 };
+    int currentProgram_ { 0 };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SonitusProcessor)
+};
+
+} // namespace tezla::sonitus
