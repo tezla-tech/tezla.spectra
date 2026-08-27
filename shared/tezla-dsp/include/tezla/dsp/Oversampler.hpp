@@ -223,6 +223,41 @@ public:
         return pointers_.data();
     }
 
+    /// The oversampled buffers, without running the interpolation filters.
+    ///
+    /// For a **generator**. An instrument has nothing to upsample -- it makes
+    /// its audio at the internal rate -- and running the FIRs over silence is
+    /// 115,000 multiply-adds per 512-sample block at x4 to produce zeros. This
+    /// hands back exactly the buffers `upsample()` would have filled, so a
+    /// caller can write into them directly and then call `downsample()`.
+    ///
+    /// Each buffer holds `maxBlockSize * factor` frames. Writing fewer than
+    /// `numSamples * factor` leaves stale audio behind them, so a generator
+    /// fills what it is going to downsample.
+    [[nodiscard]] double* const* internalBuffers() noexcept
+    {
+        if (numStages_ == 0)
+        {
+            for (int channel = 0; channel < numChannels_; ++channel)
+            {
+                const auto c = static_cast<std::size_t> (channel);
+                pointers_[c] = passThrough_[c].data();
+            }
+
+            return pointers_.data();
+        }
+
+        const auto last = static_cast<std::size_t> (numStages_ - 1);
+
+        for (int channel = 0; channel < numChannels_; ++channel)
+        {
+            const auto c = static_cast<std::size_t> (channel);
+            pointers_[c] = buffers_[last][c].data();
+        }
+
+        return pointers_.data();
+    }
+
     /// Downsamples what upsample() handed out, back into `output`.
     void downsample (double* const* output, int numSamples) noexcept
     {

@@ -41,6 +41,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/Exact.hpp>
@@ -326,6 +327,9 @@ public:
         sub_.reset (0.0);
         syncPhase_ = 0.0;
 
+        for (auto& adaa : foldAdaa_)
+            adaa.reset();
+
         amp_.reset();
         modEnvelope1_.reset();
         modEnvelope2_.reset();
@@ -371,6 +375,9 @@ public:
             bankB_.reset();
             sub_.reset (0.0);
             syncPhase_ = 0.0;
+
+            for (auto& adaa : foldAdaa_)
+                adaa.reset();
 
             for (auto& filter : filters_)
                 filter.reset();
@@ -585,8 +592,16 @@ public:
 
         if (! dsp::isExactlyZero (fold_))
         {
-            mixLeft = folder_.evaluate (mixLeft);
-            mixRight = folder_.evaluate (mixRight);
+            // **Antiderivative antialiasing, not just oversampling.** CLAUDE.md
+            // section 7: oversampling alone never gets there, because a shaper
+            // with infinite bandwidth folds back whatever rate it is run at.
+            // Measured at x4 and 110 Hz, with the folder naked, the whole
+            // instrument read -43.8 dB of audible aliasing at half fold and
+            // -17.1 dB at full -- against -92 dB for the bare oscillator. It
+            // was by a wide margin the loudest thing in the chain, and the
+            // stage next to it in Emberdrive has been ADAA'd since it shipped.
+            mixLeft = foldAdaa_[0].process (mixLeft, folder_);
+            mixRight = foldAdaa_[1].process (mixRight, folder_);
         }
 
         const double cutoffScale = filterScale (modulator);
@@ -825,6 +840,7 @@ private:
     double syncIncrement_ { 0.0 };
 
     dsp::SineFolder folder_;
+    dsp::Adaa1<dsp::SineFolder> foldAdaa_[2];
 
     dsp::SmoothedValue<double> cutoff_;
     dsp::SmoothedValue<double> gain_;
