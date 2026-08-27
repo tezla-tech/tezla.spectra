@@ -8,6 +8,7 @@
 //   tezla-measure naive-exciter   [--fs 48000] [--freq 5000]
 //   tezla-measure halo            [--fs 48000]
 //   tezla-measure capstone        [--fs 48000]
+//   tezla-measure loudness        [--fs 48000]
 //
 // New commands get added here as plugins need them. Anything that measures a
 // nonlinearity belongs in this tool, not in a DAW screenshot.
@@ -32,6 +33,7 @@
 #include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
+#include "TranspectusEngine.hpp"
 
 namespace {
 
@@ -1003,6 +1005,344 @@ int runCapstone (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------- loudness --
+//
+// The Transpectus engine measured through its own public readings. Every number
+// here is one the panel shows, produced by the same code path, so a claim in
+// the README can be checked rather than believed.
+
+/// Feeds an engine a stereo signal in host-sized blocks, the way a DAW would.
+void runThrough (tezla::transpectus::Engine& engine,
+                 const std::vector<std::vector<double>>& x,
+                 int blockSize)
+{
+    const auto total = x[0].size();
+    std::vector<const double*> pointers (x.size());
+
+    for (std::size_t start = 0; start < total; start += static_cast<std::size_t> (blockSize))
+    {
+        const auto n = std::min (static_cast<std::size_t> (blockSize), total - start);
+
+        for (std::size_t channel = 0; channel < x.size(); ++channel)
+            pointers[channel] = x[channel].data() + start;
+
+        engine.process (pointers.data(), static_cast<int> (x.size()), static_cast<int> (n));
+    }
+}
+
+/// A stereo sine at a stated dBFS, `seconds` long.
+std::vector<std::vector<double>> stereoSine (double frequency, double dbfs,
+                                             double sampleRate, double seconds)
+{
+    const auto n = static_cast<std::size_t> (sampleRate * seconds);
+    const double amplitude = tezla::dsp::dbToGain (dbfs);
+
+    std::vector<std::vector<double>> x (2, std::vector<double> (n));
+
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double v = amplitude * std::sin (2.0 * 3.14159265358979323846 * frequency
+                                               * static_cast<double> (i) / sampleRate);
+        x[0][i] = v;
+        x[1][i] = v;
+    }
+
+    return x;
+}
+
+int runLoudness (const Args& args)
+{
+    using namespace tezla;
+
+    // ---- 1. the 48 kHz coefficient trap ---------------------------------------
+
+    std::printf ("A -23 dBFS 1 kHz sine, read at four host rates\n\n");
+    std::printf ("  %-10s %14s %14s %14s\n", "rate", "integrated", "short term", "momentary");
+
+    double worstRateError = 0.0;
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        transpectus::Engine engine;
+        engine.prepare (rate, 1024, 2);
+
+        const auto x = stereoSine (1000.0, -23.0, rate, 10.0);
+        runThrough (engine, x, 512);
+
+        std::printf ("  %-10.0f %14.3f %14.3f %14.3f\n",
+                     rate, engine.getIntegratedLufs(), engine.getShortTermLufs(),
+                     engine.getMomentaryLufs());
+
+        worstRateError = std::max (worstRateError, std::abs (engine.getIntegratedLufs() + 23.0));
+    }
+
+    std::printf ("\n  worst deviation from -23.000: %.4f LU  (EBU Tech 3341 case 1 allows 0.1)\n",
+                 worstRateError);
+    std::printf ("  BS.1770-5 tabulates its coefficients at 48 kHz only. These four agree\n");
+    std::printf ("  because the filter is designed from the analogue prototype at the actual\n");
+    std::printf ("  rate, not read off the table -- see CLAUDE.md section 6.\n\n");
+
+    // ---- 2. gating -------------------------------------------------------------
+
+    const double sampleRate = args.sampleRate;
+
+    std::printf ("Gating: what the silence around a take does to the integrated reading\n\n");
+
+    {
+        transpectus::Engine engine;
+        engine.prepare (sampleRate, 1024, 2);
+
+        // Ten seconds of programme, then ten of digital black.
+        auto x = stereoSine (1000.0, -23.0, sampleRate, 10.0);
+        const auto silence = static_cast<std::size_t> (sampleRate * 10.0);
+
+        for (auto& channel : x)
+            channel.resize (channel.size() + silence, 0.0);
+
+        runThrough (engine, x, 512);
+
+        std::printf ("  10 s at -23 dBFS + 10 s of silence : %8.3f LUFS  (ungated would read -26.0)\n",
+                     engine.getIntegratedLufs());
+    }
+
+    {
+        // The relative gate excludes the quieter half only once the two are far
+        // enough apart, and the boundary is not the 10 LU the control is named
+        // after: the gate sits 10 LU below a mean the quiet half has already
+        // dragged down. Both sides of it, measured.
+        for (const double separationDb : { 10.0, 15.0 })
+        {
+            transpectus::Engine engine;
+            engine.prepare (sampleRate, 1024, 2);
+
+            auto loud  = stereoSine (1000.0, -23.0, sampleRate, 10.0);
+            const auto quiet = stereoSine (1000.0, -23.0 - separationDb, sampleRate, 10.0);
+
+            for (std::size_t channel = 0; channel < loud.size(); ++channel)
+                loud[channel].insert (loud[channel].end(),
+                                      quiet[channel].begin(), quiet[channel].end());
+
+            runThrough (engine, loud, 512);
+
+            std::printf ("  half at -23, half %.0f dB below      : %8.3f LUFS  (%s)\n",
+                         separationDb, engine.getIntegratedLufs(),
+                         separationDb > 12.79 ? "quiet half gated out"
+                                              : "both halves counted");
+        }
+    }
+
+    std::printf ("\n  The boundary is 12.79 dB, not 10: z1/z2 > 19 is where the quiet half\n");
+    std::printf ("  stops reaching a gate that its own presence lowered.\n\n");
+
+    // ---- 3. PLR, and what limiting costs it ------------------------------------
+
+    // A stereo sine is useless here: its 3.01 dB of crest factor is cancelled
+    // exactly by the 3.01 dB of summing two correlated channels, so it reads
+    // PLR 0.00 at every level and says nothing. The question is what *limiting*
+    // costs, so the signal has to have transients and the limiter has to be
+    // real -- which it is, three folders over.
+
+    std::printf ("PLR -- true peak minus integrated loudness, on a drum pattern through Capstone\n\n");
+    std::printf ("  %-22s %10s %10s %10s %10s\n",
+                 "limiting", "dBTP", "LUFS-I", "PLR", "vs clean");
+
+    {
+        const auto n = static_cast<std::size_t> (sampleRate * 8.0);
+        std::vector<std::vector<double>> dry (2, std::vector<double> (n));
+
+        // Kick every 500 ms, snare offset by 250, hats on the eighths: a decaying
+        // sine per hit, which is the shape a drum bus actually presents to a
+        // limiter -- a high crest factor over a low mean.
+        const double twoPi = 2.0 * 3.14159265358979323846;
+
+        auto strike = [&] (double atSeconds, double frequency, double decay, double amplitude)
+        {
+            const auto start = static_cast<std::size_t> (atSeconds * sampleRate);
+
+            for (std::size_t i = start; i < n; ++i)
+            {
+                const double t = static_cast<double> (i - start) / sampleRate;
+                const double envelope = std::exp (-t / decay);
+
+                if (envelope < 1.0e-4)
+                    break;
+
+                const double v = amplitude * envelope * std::sin (twoPi * frequency * t);
+                dry[0][i] += v;
+                dry[1][i] += v;
+            }
+        };
+
+        for (double t = 0.0; t < 8.0; t += 0.5)
+        {
+            strike (t,         55.0, 0.120, 0.85);   // kick
+            strike (t + 0.25, 190.0, 0.090, 0.55);   // snare body
+            strike (t + 0.25, 3200.0, 0.045, 0.30);  // snare crack
+
+            for (double eighth = 0.0; eighth < 0.5; eighth += 0.125)
+                strike (t + eighth, 8000.0, 0.020, 0.18);
+        }
+
+        double clean = 0.0;
+
+        for (const double reductionDb : { 0.0, 3.0, 6.0, 12.0 })
+        {
+            capstone::Engine limiter;
+            limiter.prepare (sampleRate, 1024, 2);
+
+            capstone::Parameters parameters;
+            parameters.clipOn = false;
+            parameters.limitOn = reductionDb > 0.0;
+            parameters.ceilingDb = -1.0;
+            parameters.thresholdDb = -reductionDb;
+            parameters.attackMs = 1.0;
+            parameters.releaseMs = 100.0;
+            limiter.setParameters (parameters);
+
+            const auto wet = renderCapstone (limiter, dry, 512);
+
+            transpectus::Engine engine;
+            engine.prepare (sampleRate, 1024, 2);
+            runThrough (engine, wet, 512);
+
+            const double plr = engine.getPlr();
+
+            if (reductionDb == 0.0)
+                clean = plr;
+
+            char label[48];
+            std::snprintf (label, sizeof (label), "%s", reductionDb > 0.0 ? "limited" : "clean");
+            char full[64];
+            std::snprintf (full, sizeof (full), "%s %.0f dB", label, reductionDb);
+
+            std::printf ("  %-22s %10.2f %10.2f %10.2f %10.2f\n",
+                         reductionDb > 0.0 ? full : "clean",
+                         engine.getTruePeakDb(), engine.getIntegratedLufs(), plr,
+                         plr - clean);
+        }
+    }
+
+    std::printf ("\n  The last column is the whole point: it is how much transient the limiter\n");
+    std::printf ("  removed to buy that loudness. Below about 5 dB of PLR the transients are\n");
+    std::printf ("  gone, and pushing further buys level that every platform then undoes.\n\n");
+
+    // ---- 4. what each platform actually does -----------------------------------
+
+    std::printf ("What each platform does to a -8 LUFS master, and to a -20 LUFS one\n\n");
+    std::printf ("  %-14s %8s %16s %16s\n", "target", "LUFS-I", "-8 LUFS master", "-20 LUFS master");
+
+    for (int index = 0; index < transpectus::kNumLoudnessTargets; ++index)
+    {
+        double deltas[2] {};
+
+        int slot = 0;
+
+        for (const double programmeDb : { -8.0, -20.0 })
+        {
+            transpectus::Engine engine;
+            engine.prepare (sampleRate, 1024, 2);
+
+            transpectus::Parameters parameters;
+            parameters.targetIndex = index;
+            engine.setParameters (parameters);
+
+            // A sine whose integrated loudness lands on the number we want.
+            // -23 dBFS reads -23 LUFS, so the offset is the whole adjustment.
+            const auto x = stereoSine (1000.0, programmeDb, sampleRate, 10.0);
+            runThrough (engine, x, 512);
+
+            deltas[slot++] = engine.getTargetDeltaDb();
+        }
+
+        const auto& target = transpectus::kLoudnessTargets[index];
+
+        // + 0.0 so an exact zero prints as "+0.0" rather than "-0.0", which
+        // reads like a rounded-away turn-down and is the opposite of the point.
+        char loud[32], quiet[32];
+        std::snprintf (loud,  sizeof (loud),  "%+.1f dB", -deltas[0] + 0.0);
+        std::snprintf (quiet, sizeof (quiet), "%+.1f dB", -deltas[1] + 0.0);
+
+        std::printf ("  %-14s %8.1f %16s %16s\n", target.name, target.lufs, loud, quiet);
+    }
+
+    std::printf ("\n  Signed as the gain the platform applies. The zeroes are not rounding:\n");
+    std::printf ("  YouTube, Tidal and Amazon Music only ever turn a master down, so a quiet\n");
+    std::printf ("  one simply plays quiet. That is advice there and a correction elsewhere.\n\n");
+
+    // ---- 5. per-band correlation -----------------------------------------------
+
+    std::printf ("Correlation: why the full-band reading is not enough\n\n");
+    std::printf ("  %-30s %10s %10s %10s %10s\n", "signal", "full", "low", "mid", "high");
+
+    {
+        transpectus::Engine engine;
+        engine.prepare (sampleRate, 1024, 2);
+
+        const auto n = static_cast<std::size_t> (sampleRate * 2.0);
+        std::vector<std::vector<double>> x (2, std::vector<double> (n));
+
+        // A wide-ish top over a sub that is exactly out of phase -- the failure
+        // that survives headphones and cancels on a club system.
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            const double t = static_cast<double> (i) / sampleRate;
+            const double sub  = 0.10 * std::sin (2.0 * 3.14159265358979323846 * 50.0 * t);
+            const double top  = 0.30 * std::sin (2.0 * 3.14159265358979323846 * 900.0 * t);
+            const double air  = 0.20 * std::sin (2.0 * 3.14159265358979323846 * 6000.0 * t);
+
+            x[0][i] =  sub + top + air;
+            x[1][i] = -sub + top + air;
+        }
+
+        runThrough (engine, x, 512);
+
+        std::printf ("  %-30s %10.4f %10.4f %10.4f %10.4f\n", "sub inverted, everything else not",
+                     engine.getCorrelation(),
+                     engine.getBandCorrelation (dsp::StereoAnalyser::low),
+                     engine.getBandCorrelation (dsp::StereoAnalyser::mid),
+                     engine.getBandCorrelation (dsp::StereoAnalyser::high));
+
+        std::printf ("  low band mono safe: %s\n", engine.isLowBandMonoSafe() ? "yes" : "NO");
+    }
+
+    std::printf ("\n  The full-band number is dominated by whatever carries the energy, and\n");
+    std::printf ("  reads healthy while the sub cancels completely. Only the band reading\n");
+    std::printf ("  says so, which is why the panel gives the sub its own bar.\n\n");
+
+    // ---- 6. what it costs ------------------------------------------------------
+
+    std::printf ("CPU -- one core, 60 s of stereo audio in 128-sample blocks\n\n");
+
+    for (const auto mode : { dsp::TruePeakMode::Off,
+                             dsp::TruePeakMode::Standard,
+                             dsp::TruePeakMode::Strict })
+    {
+        transpectus::Engine engine;
+        engine.prepare (sampleRate, 128, 2);
+
+        transpectus::Parameters parameters;
+        parameters.truePeak = mode;
+        engine.setParameters (parameters);
+
+        const auto x = stereoSine (100.0, -12.0, sampleRate, 60.0);
+
+        const auto started = std::chrono::steady_clock::now();
+        runThrough (engine, x, 128);
+        const auto elapsed = std::chrono::duration<double> (std::chrono::steady_clock::now() - started).count();
+
+        const char* name = mode == dsp::TruePeakMode::Off      ? "true peak off"
+                         : mode == dsp::TruePeakMode::Standard ? "true peak Standard"
+                                                               : "true peak Strict";
+
+        std::printf ("  %-22s %8.3f s   %7.0fx realtime\n", name, elapsed, 60.0 / elapsed);
+    }
+
+    std::printf ("\n  An analyser runs on every channel you are watching, so this is the\n");
+    std::printf ("  number that decides whether you can leave it open.\n");
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -1016,6 +1356,7 @@ void printUsage()
     std::printf ("  naive-exciter   [--fs --freq]  host-rate baseline to beat (5 kHz default)\n");
     std::printf ("  chebyshev       [--fs --freq]  precision mode: selection, fundamental, index\n");
     std::printf ("  capstone        [--fs]  limiter true peak, clipper aliasing, look-ahead, CPU\n");
+    std::printf ("  loudness        [--fs]  LUFS at four rates, gating, PLR/PSR, correlation\n");
 }
 
 } // namespace
@@ -1041,6 +1382,7 @@ int main (int argc, char** argv)
     if (command == "halo")            return runHalo (args);
     if (command == "chebyshev")       return runChebyshev (args);
     if (command == "capstone")        return runCapstone (args);
+    if (command == "loudness")        return runLoudness (args);
 
     printUsage();
     return 1;
