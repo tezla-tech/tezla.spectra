@@ -58,6 +58,18 @@ shaves transient tips so the limiter is not asked to duck the whole mix, which
 is how a drum bus gets loud without pumping. See
 [its README](plugins/Capstone/README.md).
 
+**[Transpectus](plugins/Transpectus/)** is the one that does not touch the
+audio — its `process()` takes a `const double* const*`, so that is enforced by
+the compiler rather than by a code review. It reads loudness to ITU-R BS.1770-5,
+true peak, spectrum and stereo image, and it answers the questions that actually
+decide a master: **how much will Spotify turn this down**, and **what did the
+last 2 dB of limiting cost.** Every number it shows is either a published
+standard or a curve you measured yourself — no invented target curves, no genre
+folklore. A −23 dBFS tone reads within **0.0203 LU of −23.000 at 44.1, 48, 96
+and 192 kHz**, because BS.1770 prints its coefficients at one rate only and this
+filter is designed at whatever rate the host is running. See
+[its README](plugins/Transpectus/README.md).
+
 
 ---
 
@@ -68,8 +80,9 @@ is how a drum bus gets loud without pumping. See
 | **[Emberdrive](plugins/Emberdrive/)** | Saturation, wavefolder, rectifier, crusher, feedback, 3-band, modulation | v0.4.0 — 47/47 on Steinberg's validator |
 | **[Halo](plugins/Halo/)** | Harmonic exciter, bass enhancer, Chebyshev harmonic synthesis, modulation | v0.3.0 — 47/47 on Steinberg's validator |
 | **[Capstone](plugins/Capstone/)** | True-peak brickwall limiter and clipper for the end of the chain | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Transpectus](plugins/Transpectus/)** | Loudness, true peak, spectrum, correlation and goniometer — analysis only, bit-exact passthrough | v0.1.0 — 47/47 on Steinberg's validator |
 
-272 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+316 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 
@@ -162,6 +175,32 @@ fixed; Strict costs about four times Standard and the control says so.
 attack of zero gave a support of 4 and three samples of latency that the plugin
 would then have reported to the host as zero. Four boxes of length 1 have a
 support of 1.
+
+### A test that was only a decoration
+
+The rule at the top of this section says a passing test proves nothing until it
+has been seen to fail. Here is that happening in the small.
+
+Transpectus writes its reference curves to plain-text `.tzref` files, and those
+files are meant to move between the Windows rig and the Mac. Windows text tools
+write CRLF; the parser split on `\n` only. So the strip went in, a test went in
+alongside it, and both passed.
+
+**Then the strip was removed, and the test still passed.** `strtod` happens to
+stop at a carriage return, and `sscanf`'s `%zu` does too — so a CRLF file
+already loaded correctly, by luck, and the test had been asserting something
+that was true whether the code was there or not.
+
+Chasing why turned up the actual bug underneath. **`strtod`'s result was being
+taken on trust.** It returns `0.0` for text it cannot read and reports nothing,
+so a corrupt file loaded as ninety-six zeros — a perfectly flat reference,
+which is to say a plausible-looking measurement, from a function whose whole
+stated job was to refuse exactly that. Requiring the full line to be consumed
+fixed it, and made the carriage-return strip load-bearing at the same time:
+without it, a Windows-written file is now rejected outright.
+
+Both tests were then seen red, each for its own reason. The decoration became a
+test only because it was checked.
 
 ---
 

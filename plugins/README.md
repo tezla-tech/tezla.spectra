@@ -21,6 +21,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | `Tzem` | [`Emberdrive`](Emberdrive/) | Tezla Emberdrive | Effect — saturation, destruction, 3-band limiter, with a modulation layer | v0.4.0, builds and validates |
 | `Tzha` | [`Halo`](Halo/) | Tezla Halo | Effect — harmonic exciter and bass enhancer, with a Chebyshev precision mode and a modulation layer | v0.3.0, builds and validates |
 | `Tzcp` | [`Capstone`](Capstone/) | Tezla Capstone | Effect — true-peak brickwall limiter and clipper for the end of the chain | v0.1.0, builds and validates |
+| `Tztr` | [`Transpectus`](Transpectus/) | Tezla Transpectus | Analyser — loudness, true peak, spectrum and stereo image. Does not touch the audio | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 
