@@ -365,7 +365,17 @@ private:
 
     void pullParameters();
     void handleMidi (const juce::MidiMessage& message);
-    void applyTuningToEngine();
+
+    /// Message thread. Copies the loaded tuning into the hand-off slot and
+    /// raises the flag; the audio thread picks it up at the top of its next
+    /// block.
+    void publishTuning();
+
+    /// Audio thread. Takes the hand-off if there is one and the message thread
+    /// is not mid-write. **Never blocks** -- a failed try-lock simply leaves
+    /// the flag up and the next block gets it, which at 512 samples is 11 ms
+    /// later and inaudible for something a human just clicked.
+    void collectTuning() noexcept;
 
     juce::AudioProcessorValueTreeState state_;
 
@@ -378,6 +388,25 @@ private:
     dsp::Scale scale_;
     dsp::KeyboardMap keyboardMap_;
     bool hasKeyboardMap_ { false };
+
+    /// **The hand-off, and it is not optional.** A scale is a `std::vector`, and
+    /// the audio thread reads it inside `noteOn` to work out the frequency. A
+    /// host calls `setStateInformation` with audio running, so assigning
+    /// straight into the engine's tuning from the message thread means a
+    /// reallocation under a pointer the audio thread is dereferencing. Rare,
+    /// and a crash when it happens.
+    ///
+    /// So the message thread fills these and raises `tuningPending_`; the audio
+    /// thread *swaps* them into the engine, which allocates nothing and leaves
+    /// the old vectors here to be freed on the message thread next time.
+    dsp::Scale pendingScale_;
+    dsp::KeyboardMap pendingMap_;
+    std::atomic<bool> tuningPending_ { false };
+
+    /// Held properly by the message thread and only ever *tried* by the audio
+    /// thread, which is what keeps `processBlock` lock-free -- CLAUDE.md
+    /// section 2.2. A try-lock that fails is not a wait.
+    juce::SpinLock tuningLock_;
 
     /// The `.scl` text as loaded, kept verbatim so the state can save it. A
     /// project that reopens on another machine has to reproduce the tuning

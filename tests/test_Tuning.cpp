@@ -517,3 +517,91 @@ TEZLA_TEST (every_built_in_scale_is_usable_and_uniquely_named)
 
     CHECK (std::adjacent_find (names.begin(), names.end()) == names.end());
 }
+
+TEZLA_TEST (swapping_a_scale_in_allocates_nothing_and_keeps_the_old_one)
+{
+    // How a tuning reaches the audio thread. `setScale` copies, which means a
+    // vector assignment, which means a possible reallocation -- and the audio
+    // thread reads that vector inside note-on to work out a frequency. A host
+    // calls setStateInformation with audio running, so a copy there is a
+    // reallocation under a pointer somebody is dereferencing: rare, and a crash
+    // when it happens.
+    //
+    // A swap is a pointer exchange. The caller ends up holding the old scale
+    // and destroys it later, on whichever thread it likes.
+    Tuning tuning;
+
+    auto incoming = scales::bohlenPierce();
+
+    // The addresses before, so the test is about pointers rather than about
+    // values -- a copy would pass a value comparison.
+    const double* const incomingData = incoming.ratios.data();
+    const double* const liveData = tuning.getScale().ratios.data();
+
+    CHECK (tuning.swapScale (incoming));
+
+    // The live scale now points at what the caller handed over, and the caller
+    // holds what was live. Nothing was allocated and nothing was freed.
+    CHECK (tuning.getScale().ratios.data() == incomingData);
+    CHECK (incoming.ratios.data() == liveData);
+
+    CHECK (tuning.getScale().name == "Bohlen-Pierce");
+    CHECK (incoming.name == "12-TET");
+
+    // And it plays the scale it was given: the tritave, not the octave.
+    tuning.setReference (60, 440.0);
+
+    const double repeat = 1200.0 * std::log2 (tuning.frequencyFor (73) / tuning.frequencyFor (60));
+
+    CHECK (std::abs (repeat - 1901.955) < 0.01);
+}
+
+TEZLA_TEST (an_unusable_scale_is_refused_by_the_swap_as_well_as_the_setter)
+{
+    // The swap has to refuse for the same reason the setter does, and it has to
+    // leave the caller's scale alone when it refuses -- a caller that swapped
+    // in garbage and got nothing back would have no way to tell what happened,
+    // and would then free a scale it does not own.
+    Tuning tuning;
+
+    Scale broken;
+    broken.name = "nonsense";
+    broken.ratios = { 1.0, 0.5 };     // descending, so not usable
+    broken.repeat = 2.0;
+
+    const double* const brokenData = broken.ratios.data();
+
+    CHECK (! broken.isUsable());
+    CHECK (! tuning.swapScale (broken));
+
+    CHECK (broken.ratios.data() == brokenData);
+    CHECK (broken.name == "nonsense");
+    CHECK (tuning.getScale().name == "12-TET");
+
+    // Still in tune, which is the point of refusing.
+    CHECK (std::abs (tuning.frequencyFor (69) - 440.0) < 1.0e-9);
+}
+
+TEZLA_TEST (swapping_a_keyboard_map_moves_it_rather_than_copying_it)
+{
+    Tuning tuning;
+
+    KeyboardMap map;
+    map.size = 12;
+    map.middleNote = 60;
+    map.referenceNote = 69;
+    map.referenceHz = 432.0;
+    map.degrees = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+
+    const int* const data = map.degrees.data();
+
+    tuning.swapKeyboardMap (map);
+
+    CHECK (tuning.getKeyboardMap().degrees.data() == data);
+    CHECK (tuning.getKeyboardMap().size == 12);
+    CHECK (std::abs (tuning.getKeyboardMap().referenceHz - 432.0) < 1.0e-12);
+
+    // The caller gets the old one back -- an empty map, which is what a Tuning
+    // starts with.
+    CHECK (map.size == 0);
+}

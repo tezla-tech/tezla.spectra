@@ -625,7 +625,12 @@ void SonitusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
 
     engine_.prepare (sampleRate_, std::max (maximumExpectedSamplesPerBlock, 1));
 
-    applyTuningToEngine();
+    // `prepare` builds a fresh graph with a fresh tuning, and it is not
+    // concurrent with `processBlock`, so the hand-off is taken here and now
+    // rather than a block later -- otherwise the first note of a session could
+    // be played in the wrong scale.
+    publishTuning();
+    collectTuning();
 
     scratch_.setSize (2, std::max (maximumExpectedSamplesPerBlock, 1), false, false, true);
 
@@ -868,6 +873,10 @@ void SonitusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
     pullParameters();
     engine_.setParameters (parameters_);
 
+    // Before any MIDI is handled, so a note-on in this block is played in the
+    // scale the player just loaded rather than the one before it.
+    collectTuning();
+
     if (auto* transport = getPlayHead())
     {
         if (const auto position = transport->getPosition())
@@ -975,14 +984,34 @@ void SonitusProcessor::processBlock (juce::AudioBuffer<double>& buffer, juce::Mi
 // Tuning
 // ---------------------------------------------------------------------------
 
-void SonitusProcessor::applyTuningToEngine()
+void SonitusProcessor::publishTuning()
 {
-    engine_.tuning().setScale (scale_);
+    const juce::SpinLock::ScopedLockType lock (tuningLock_);
 
-    if (hasKeyboardMap_)
-        engine_.tuning().setKeyboardMap (keyboardMap_);
-    else
-        engine_.tuning().setKeyboardMap ({});
+    // Copied here, on the message thread, where allocating is allowed. The
+    // audio thread only ever swaps.
+    pendingScale_ = scale_;
+    pendingMap_ = hasKeyboardMap_ ? keyboardMap_ : dsp::KeyboardMap {};
+
+    tuningPending_.store (true, std::memory_order_release);
+}
+
+void SonitusProcessor::collectTuning() noexcept
+{
+    if (! tuningPending_.load (std::memory_order_acquire))
+        return;
+
+    const juce::SpinLock::ScopedTryLockType lock (tuningLock_);
+
+    // Not taken: the message thread is mid-write. Leave the flag up and try
+    // again next block rather than waiting for it.
+    if (! lock.isLocked())
+        return;
+
+    engine_.tuning().swapScale (pendingScale_);
+    engine_.tuning().swapKeyboardMap (pendingMap_);
+
+    tuningPending_.store (false, std::memory_order_release);
 }
 
 juce::String SonitusProcessor::loadScalaText (const juce::String& text, const juce::String& name)
@@ -998,7 +1027,7 @@ juce::String SonitusProcessor::loadScalaText (const juce::String& text, const ju
     scalaText_ = text;
     scaleName_ = name.isNotEmpty() ? name : juce::String (parsed.name);
 
-    applyTuningToEngine();
+    publishTuning();
 
     return {};
 }
@@ -1016,7 +1045,7 @@ juce::String SonitusProcessor::loadKeyboardMapText (const juce::String& text)
     keyboardMapText_ = text;
     hasKeyboardMap_ = true;
 
-    applyTuningToEngine();
+    publishTuning();
 
     return {};
 }
@@ -1030,7 +1059,7 @@ juce::String SonitusProcessor::selectBuiltInScale (const juce::String& name)
             scaleName_ = name;
             scalaText_.clear();
 
-            applyTuningToEngine();
+            publishTuning();
 
             return {};
         }
@@ -1046,7 +1075,7 @@ void SonitusProcessor::resetTuning()
     keyboardMapText_.clear();
     hasKeyboardMap_ = false;
 
-    applyTuningToEngine();
+    publishTuning();
 }
 
 juce::String SonitusProcessor::getScaleName() const
@@ -1507,6 +1536,11 @@ void SonitusProcessor::getStateInformation (juce::MemoryBlock& destData)
 
     state.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
 
+    // Both A/B slots, or the button is a session-only convenience: a player who
+    // built two versions of a sound and saved the project would reopen it with
+    // one of them gone.
+    state.appendChild (abCompare_.toValueTree(), nullptr);
+
     // The tuning travels with the project. A `.scl` file lives on one machine
     // and a project does not, so storing only its path would open silently
     // detuned somewhere else.
@@ -1528,6 +1562,8 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
     const auto tree = juce::ValueTree::fromXml (*xml);
 
     state_.replaceState (tree);
+
+    abCompare_.restoreFromValueTree (tree.getChildWithName ("abCompare"));
 
     const juce::String name = tree.getProperty (kScaleNameProperty, "").toString();
     const juce::String text = tree.getProperty (kScaleTextProperty, "").toString();
