@@ -1,5 +1,8 @@
 #pragma once
 
+#include <functional>
+#include <optional>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/SpectrumAnalyser.hpp>
@@ -83,6 +86,9 @@ public:
     void setShowPinkSlope (bool shouldShow);
     void setShowDifference (bool shouldShow);
 
+    /// @see ui::Goniometer::setTopRightInset
+    void setTopRightInset (int pixels) noexcept { topRightInset_ = juce::jmax (0, pixels); }
+
     /// Feeds the capture in progress, if there is one.
     void pushToCapture();
 
@@ -90,10 +96,32 @@ public:
 
     void paint (juce::Graphics&) override;
 
+    // A crosshair that reads out where the pointer is. Tracked on drag as well
+    // as move, so it keeps reading while a button is held rather than vanishing
+    // at the moment somebody is pointing at something.
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+
 private:
     /// Where a frequency sits across the width, 0 to 1. Log, so an octave takes
     /// the same room wherever it is.
     [[nodiscard]] float positionFor (double hz) const noexcept;
+
+    /// The inverse: which frequency sits at a fraction of the width.
+    [[nodiscard]] static double frequencyAt (float fraction) noexcept;
+
+    /// The plotted rectangle, inside the panel padding and below the caption.
+    /// Shared by the painting and the crosshair, because a readout computed
+    /// against a slightly different rectangle than the one drawn is a readout
+    /// that lies by a few pixels' worth of dB.
+    [[nodiscard]] juce::Rectangle<float> plotArea() const noexcept;
+
+    /// The live curve's level at a fraction of the width, interpolated between
+    /// the two display bins either side.
+    [[nodiscard]] float levelAt (float fraction) const noexcept;
+
+    void paintCrosshair (juce::Graphics&, juce::Rectangle<float>) const;
 
     void paintGrid (juce::Graphics&, juce::Rectangle<float>) const;
     void paintCurve (juce::Graphics&, juce::Rectangle<float>,
@@ -107,6 +135,35 @@ private:
 
     bool showPinkSlope_ { true };
     bool showDifference_ { false };
+    int  topRightInset_ { 0 };
+
+    /// Empty when the pointer is not over the plot.
+    std::optional<juce::Point<float>> cursor_;
+};
+
+/// A panel lifted out of the editor into a window of its own.
+///
+/// Holds its content **non-owned**: the editor still owns the component and
+/// puts it back when the window closes, so there is exactly one owner whether
+/// the panel is docked or floating. It carries its own TooltipWindow because a
+/// tooltip belongs to a component hierarchy, and a detached panel is no longer
+/// in the editor's.
+class PanelWindow final : public juce::DocumentWindow
+{
+public:
+    PanelWindow (const juce::String& name, juce::Colour background,
+                 juce::Component& content, std::function<void()> onClose);
+
+    void closeButtonPressed() override;
+
+    /// Opens next to the editor rather than on top of it.
+    void placeBeside (juce::Rectangle<int> editorArea);
+
+private:
+    std::function<void()> onClose_;
+    juce::TooltipWindow tooltips_ { this, 500 };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PanelWindow)
 };
 
 class TranspectusEditor final : public juce::AudioProcessorEditor,
@@ -114,14 +171,32 @@ class TranspectusEditor final : public juce::AudioProcessorEditor,
 {
 public:
     explicit TranspectusEditor (TranspectusProcessor& processorToUse);
-    ~TranspectusEditor() override = default;
+    ~TranspectusEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
+    /// Which of the two large panels a command refers to.
+    enum class Panel { spectrum, goniometer };
+
     void timerCallback() override;
     void buildControls();
+    void buildPanelChrome();
+
+    /// Gives one panel the whole body area, or gives the body back. Maximise
+    /// means *this and nothing else*: if you want a big spectrum and the
+    /// numbers at the same time, that is what detaching is for.
+    void setMaximised (Panel panel, bool shouldMaximise);
+
+    /// Lifts a panel into its own window, or puts it back.
+    void setDetached (Panel panel, bool shouldDetach);
+
+    [[nodiscard]] bool isDetached (Panel panel) const noexcept;
+    [[nodiscard]] juce::Component& componentFor (Panel panel) noexcept;
+
+    void updatePanelChrome();
+    void layOutSpectrumControls (juce::Rectangle<int> row);
 
     /// Formats a loudness for display, with a real "silent" rather than a large
     /// negative number that looks like a reading.
@@ -159,6 +234,19 @@ private:
     std::unique_ptr<ui::Goniometer> goniometer_;
 
     std::unique_ptr<SpectrumView> spectrum_;
+
+    // ---- maximise and detach -------------------------------------------------
+
+    /// Empty when the body is shared between the panels.
+    std::optional<Panel> maximised_;
+
+    juce::TextButton spectrumMaxButton_, spectrumPopButton_;
+    juce::TextButton goniometerMaxButton_, goniometerPopButton_;
+
+    /// Declared after the components they hold, so ordinary member destruction
+    /// tears the windows down first -- tidy rather than required; see the
+    /// destructor for what was actually measured.
+    std::unique_ptr<PanelWindow> spectrumWindow_, goniometerWindow_;
 
     juce::TextButton captureButton_ { "CAPTURE REFERENCE" };
     juce::TextButton clearReferenceButton_ { "CLEAR" };

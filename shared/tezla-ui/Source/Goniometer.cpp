@@ -52,9 +52,19 @@ void Goniometer::paint (juce::Graphics& g)
 
     auto area = bounds.reduced (8.0f);
 
-    g.setColour (palette_.dimText);
-    g.setFont (juce::FontOptions (10.5f));
-    g.drawText ("GONIOMETER", area.removeFromTop (13.0f), juce::Justification::centredLeft);
+    auto captionArea = area.removeFromTop (13.0f)
+                           .withTrimmedRight (static_cast<float> (topRightInset_));
+
+    // 58 px is about where "GONIOMETER" stops being readable at 10.5 point even
+    // squeezed. Below that the label is dropped rather than clipped: a panel
+    // captioned "GONIOMET" looks broken, and an uncaptioned one does not.
+    if (captionArea.getWidth() >= 58.0f)
+    {
+        g.setColour (palette_.dimText);
+        g.setFont (juce::FontOptions (10.5f));
+        g.drawFittedText ("GONIOMETER", captionArea.toNearestInt(),
+                          juce::Justification::centredLeft, 1, 0.8f);
+    }
 
     // Square, so a circle is a circle and the diagonals really are 45 degrees.
     const float side = juce::jmin (area.getWidth(), area.getHeight());

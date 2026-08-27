@@ -67,7 +67,9 @@ last 2 dB of limiting cost.** Every number it shows is either a published
 standard or a curve you measured yourself — no invented target curves, no genre
 folklore. A −23 dBFS tone reads within **0.0203 LU of −23.000 at 44.1, 48, 96
 and 192 kHz**, because BS.1770 prints its coefficients at one rate only and this
-filter is designed at whatever rate the host is running. See
+filter is designed at whatever rate the host is running. Point at the spectrum
+for a crosshair reading frequency, the nearest note in cents and the level
+there; either large panel can be maximised or lifted into its own window. See
 [its README](plugins/Transpectus/README.md).
 
 

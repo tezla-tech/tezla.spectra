@@ -51,6 +51,17 @@ public:
     /// the picture spans the same slice of time at every sample rate.
     void update (const dsp::StereoScope& scope);
 
+    /// Room to leave clear at the top right, for chrome whoever owns this
+    /// component places over it. The caption shrinks to fit what is left, and
+    /// stops being drawn once there is not enough room to read it -- which is
+    /// the right answer at thumbnail sizes, where a goniometer is unmistakable
+    /// and a truncated label is just noise.
+    void setTopRightInset (int pixels) noexcept
+    {
+        topRightInset_ = juce::jmax (0, pixels);
+        repaint();
+    }
+
     void paint (juce::Graphics&) override;
 
 private:
@@ -58,6 +69,7 @@ private:
 
     std::array<float, kPoints> x_ {}, y_ {};
     int filled_ { 0 };
+    int topRightInset_ { 0 };
 };
 
 } // namespace tezla::ui

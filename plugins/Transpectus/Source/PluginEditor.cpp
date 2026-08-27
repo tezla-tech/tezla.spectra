@@ -74,46 +74,53 @@ void Readout::paint (juce::Graphics& g)
     g.setColour (palette_.panel);
     g.fillRoundedRectangle (bounds, 5.0f);
 
-    auto area = bounds.reduced (10.0f, 7.0f);
+    auto area = bounds.reduced (10.0f, 5.0f);
 
-    g.setColour (palette_.dimText);
-    g.setFont (juce::FontOptions (10.5f));
-    g.drawText (caption_, area.removeFromTop (13.0f), juce::Justification::centredLeft);
-
-    auto noteArea = note_.isEmpty() ? juce::Rectangle<float>{} : area.removeFromBottom (18.0f);
+    // The note gets its own line under the pair; everything else shares one.
+    // Stacking the caption above the value cost a whole line per readout and
+    // seven readouts made the panel feel like a form to fill in.
+    auto noteArea = note_.isEmpty() ? juce::Rectangle<float>{} : area.removeFromBottom (15.0f);
 
     // Sized to the cell rather than fixed. These panels get resized a long way
     // -- the window goes from 760 to 1520 wide -- and a number that stays 26
     // point floats in the middle of a tall cell looking like a placeholder.
-    const float size = juce::jlimit (20.0f, 46.0f, area.getHeight() * 0.62f);
+    const float size = juce::jlimit (16.0f, 34.0f, area.getHeight() * 0.80f);
     const auto valueFont = juce::Font (juce::FontOptions (size, juce::Font::bold));
+    const auto unitFont  = juce::Font (juce::FontOptions (11.0f));
+
+    // The value and its unit are one right-aligned group: "-14.2 LUFS" reads as
+    // one thing, and a unit parked in the far corner reads as two.
+    const float valueWidth = juce::GlyphArrangement::getStringWidth (valueFont, value_);
+    const float unitWidth  = unit_.isEmpty()
+                                 ? 0.0f
+                                 : juce::GlyphArrangement::getStringWidth (unitFont, unit_) + 5.0f;
+
+    auto valueArea = area.removeFromRight (juce::jmin (area.getWidth(), valueWidth + unitWidth));
 
     g.setColour (warning_ ? palette_.over : palette_.text);
     g.setFont (valueFont);
-    g.drawText (value_, area, juce::Justification::centredLeft);
+    g.drawText (value_, valueArea.withTrimmedRight (unitWidth), juce::Justification::centredRight);
 
-    // The unit sits immediately after the number rather than in the far corner:
-    // "-14.2 LUFS" reads as one thing, "-14.2" with "LUFS" across the panel
-    // reads as two.
     if (! unit_.isEmpty())
     {
-        const float valueWidth = juce::GlyphArrangement::getStringWidth (valueFont, value_);
-
-        auto unitArea = area.withLeft (area.getX() + valueWidth + 6.0f);
-
-        if (unitArea.getWidth() > 8.0f)
-        {
-            g.setColour (palette_.dimText);
-            g.setFont (juce::FontOptions (11.0f));
-            g.drawText (unit_, unitArea, juce::Justification::centredLeft);
-        }
+        g.setColour (palette_.dimText);
+        g.setFont (unitFont);
+        g.drawText (unit_, valueArea.withLeft (valueArea.getRight() - unitWidth + 5.0f),
+                    juce::Justification::centredLeft);
     }
+
+    // Whatever room the number left. Fitted rather than drawn, so a long
+    // caption shrinks instead of running under the value.
+    g.setColour (palette_.dimText);
+    g.setFont (juce::FontOptions (10.5f));
+    g.drawFittedText (caption_, area.withTrimmedRight (8.0f).toNearestInt(),
+                      juce::Justification::centredLeft, 1, 0.7f);
 
     if (! note_.isEmpty())
     {
         g.setColour (warning_ ? palette_.over.withAlpha (0.9f) : palette_.accent);
-        g.setFont (juce::FontOptions (11.5f));
-        g.drawFittedText (note_, noteArea.toNearestInt(), juce::Justification::centredLeft, 1, 1.0f);
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawFittedText (note_, noteArea.toNearestInt(), juce::Justification::centredLeft, 1, 0.8f);
     }
 }
 
@@ -197,7 +204,10 @@ SpectrumView::SpectrumView (ui::Palette palette, dsp::ReferenceCurve& reference)
     // Falls slowly enough to read, holds peaks long enough to see them.
     analyser_.setBallistics (1.6f, 0.28f);
 
-    setTooltip ("The live spectrum with a peak hold behind it. The dotted line is a pink-noise "
+    setTooltip ("Point at it for a crosshair: frequency, the nearest note in cents, the "
+                "signal's level there and the level the cursor itself is at. MAX makes that "
+                "reading finer by giving the panel more pixels to spread the axis over. "
+                "The live spectrum has a peak hold behind it. The dotted line is a pink-noise "
                 "slope -- physics, not a genre target. Capture Reference measures a track you "
                 "play through the plugin and overlays its balance; Difference then shows yours "
                 "minus it, which is the EQ move stated directly.");
@@ -207,6 +217,175 @@ float SpectrumView::positionFor (double hz) const noexcept
 {
     const double clamped = juce::jlimit (kLowHz, kHighHz, hz);
     return static_cast<float> (std::log (clamped / kLowHz) / std::log (kHighHz / kLowHz));
+}
+
+double SpectrumView::frequencyAt (float fraction) noexcept
+{
+    return kLowHz * std::pow (kHighHz / kLowHz, juce::jlimit (0.0f, 1.0f, fraction));
+}
+
+juce::Rectangle<float> SpectrumView::plotArea() const noexcept
+{
+    return getLocalBounds().toFloat().reduced (8.0f, 7.0f).withTrimmedTop (13.0f);
+}
+
+float SpectrumView::levelAt (float fraction) const noexcept
+{
+    const auto& db = analyser_.getMagnitudesDb();
+
+    if (db.size() < 2)
+        return kFloorDb;
+
+    // The bins are laid out one per pixel-fraction across the width, and the
+    // analyser spaces them logarithmically -- which is why the same fraction
+    // serves for both the frequency and the bin index.
+    const float position = juce::jlimit (0.0f, 1.0f, fraction)
+                         * static_cast<float> (db.size() - 1);
+
+    const auto low = static_cast<std::size_t> (position);
+    const auto high = juce::jmin (low + 1, db.size() - 1);
+    const float t = position - static_cast<float> (low);
+
+    return db[low] + (db[high] - db[low]) * t;
+}
+
+void SpectrumView::mouseMove (const juce::MouseEvent& event)
+{
+    const auto area = plotArea();
+    const auto position = event.position;
+
+    // Only inside the plot: a crosshair over the caption would be reading off
+    // an axis that is not there.
+    auto next = area.contains (position) ? std::optional<juce::Point<float>> { position }
+                                         : std::nullopt;
+
+    if (next != cursor_)
+    {
+        cursor_ = next;
+        repaint();
+    }
+}
+
+void SpectrumView::mouseDrag (const juce::MouseEvent& event)
+{
+    mouseMove (event);
+}
+
+void SpectrumView::mouseExit (const juce::MouseEvent&)
+{
+    if (cursor_.has_value())
+    {
+        cursor_.reset();
+        repaint();
+    }
+}
+
+void SpectrumView::paintCrosshair (juce::Graphics& g, juce::Rectangle<float> area) const
+{
+    if (! cursor_.has_value())
+        return;
+
+    const auto point = *cursor_;
+
+    const float xFraction = (point.x - area.getX()) / area.getWidth();
+    const float yFraction = (point.y - area.getY()) / area.getHeight();
+
+    const double hz = frequencyAt (xFraction);
+    const float cursorDb = kTopDb - yFraction * (kTopDb - kFloorDb);
+    const float signalDb = levelAt (xFraction);
+
+    // ---- the hairlines --------------------------------------------------------
+
+    g.setColour (palette_.text.withAlpha (0.35f));
+    g.drawVerticalLine (juce::roundToInt (point.x), area.getY(), area.getBottom());
+    g.drawHorizontalLine (juce::roundToInt (point.y), area.getX(), area.getRight());
+
+    // A dot where the curve actually is at this frequency, so the signal
+    // reading below is anchored to something visible rather than asserted.
+    if (signalDb > kFloorDb)
+    {
+        const float curveY = area.getY() + area.getHeight()
+                           * juce::jlimit (0.0f, 1.0f, (kTopDb - signalDb) / (kTopDb - kFloorDb));
+
+        g.setColour (palette_.accentBright);
+        g.fillEllipse (point.x - 3.0f, curveY - 3.0f, 6.0f, 6.0f);
+    }
+
+    // ---- the readout ----------------------------------------------------------
+
+    // Rounded to an int rather than asking for zero decimal places: JUCE reads
+    // a decimal count of 0 as "use the shortest accurate representation", which
+    // turned 216 Hz into "215.799 Hz".
+    const auto frequencyText = hz >= 1000.0
+                                   ? juce::String (hz / 1000.0, hz >= 10000.0 ? 1 : 2) + " kHz"
+                                   : hz >= 100.0
+                                         ? juce::String (juce::roundToInt (hz)) + " Hz"
+                                         : juce::String (hz, 1) + " Hz";
+
+    // The nearest note, because half of what a spectrum gets used for on this
+    // rig is finding out what note a bass or a resonance is sitting on.
+    static const char* const noteNames[] { "C", "C#", "D", "D#", "E", "F",
+                                           "F#", "G", "G#", "A", "A#", "B" };
+
+    const double midi = 69.0 + 12.0 * std::log2 (hz / 440.0);
+    const int nearest = static_cast<int> (std::lround (midi));
+    const int cents = static_cast<int> (std::lround ((midi - nearest) * 100.0));
+
+    juce::String noteText = juce::String (noteNames[((nearest % 12) + 12) % 12])
+                          + juce::String (nearest / 12 - 1);
+
+    if (cents != 0)
+        noteText += (cents > 0 ? " +" : " ") + juce::String (cents);
+
+    const juce::String lines[] {
+        frequencyText + "   " + noteText,
+        "signal  " + juce::String (signalDb, 1) + " dB",
+        "cursor  " + juce::String (cursorDb, 1) + " dB",
+    };
+
+    const auto font = juce::Font (juce::FontOptions (11.0f));
+
+    float widest = 0.0f;
+
+    for (const auto& line : lines)
+        widest = juce::jmax (widest, juce::GlyphArrangement::getStringWidth (font, line));
+
+    // Two pixels of slack on top of the padding: the text is drawn into an
+    // integer rectangle, and rounding the exact measured width down is enough
+    // to earn an ellipsis on the longest line.
+    const float boxWidth = widest + 20.0f;
+    constexpr float boxHeight = 52.0f;
+
+    // Flipped to whichever side of the pointer has room, so the readout never
+    // hangs off the panel and never covers the part of the curve being pointed
+    // at.
+    auto box = juce::Rectangle<float> { point.x + 12.0f, point.y + 12.0f, boxWidth, boxHeight };
+
+    if (box.getRight() > area.getRight())
+        box.setX (point.x - 12.0f - boxWidth);
+
+    if (box.getBottom() > area.getBottom())
+        box.setY (point.y - 12.0f - boxHeight);
+
+    box = box.constrainedWithin (area);
+
+    g.setColour (palette_.background.withAlpha (0.92f));
+    g.fillRoundedRectangle (box, 4.0f);
+    g.setColour (palette_.text.withAlpha (0.22f));
+    g.drawRoundedRectangle (box, 4.0f, 1.0f);
+
+    auto text = box.reduced (9.0f, 5.0f);
+    g.setFont (font);
+
+    bool first = true;
+
+    for (const auto& line : lines)
+    {
+        g.setColour (first ? palette_.text : palette_.dimText);
+        g.drawText (line, text.removeFromTop (14.0f).toNearestInt(),
+                    juce::Justification::centredLeft);
+        first = false;
+    }
 }
 
 bool SpectrumView::update (const dsp::SpectrumCapture& capture)
@@ -310,9 +489,24 @@ void SpectrumView::paint (juce::Graphics& g)
 
     auto area = bounds.reduced (8.0f, 7.0f);
 
-    g.setColour (palette_.dimText);
-    g.setFont (juce::FontOptions (10.5f));
-    g.drawText ("SPECTRUM", area.removeFromTop (13.0f), juce::Justification::centredLeft);
+    {
+        // The caption stops short of whatever chrome the editor has put over the
+        // top-right corner. The grid below still uses the full width.
+        //
+        // NB this removeFromTop is what plotArea() mirrors; the two must agree,
+        // or the crosshair reads its dB off an axis a few pixels from the one
+        // that was drawn.
+        auto captionArea = area.removeFromTop (13.0f)
+                               .withTrimmedRight (static_cast<float> (topRightInset_));
+
+        if (captionArea.getWidth() >= 52.0f)
+        {
+            g.setColour (palette_.dimText);
+            g.setFont (juce::FontOptions (10.5f));
+            g.drawFittedText ("SPECTRUM", captionArea.toNearestInt(),
+                              juce::Justification::centredLeft, 1, 0.8f);
+        }
+    }
 
     paintGrid (g, area);
 
@@ -413,10 +607,230 @@ void SpectrumView::paint (juce::Graphics& g)
         g.fillRect (strip.withWidth (strip.getWidth()
                                      * static_cast<float> (reference_.getProgress())));
     }
+
+    // Last, so it reads over every curve rather than under one. plotArea()
+    // rather than the local `area`, which the progress bar has by now eaten
+    // into.
+    paintCrosshair (g, plotArea());
 }
 
 // ---------------------------------------------------------------------------
 // TranspectusEditor
+// ---------------------------------------------------------------------------
+
+PanelWindow::PanelWindow (const juce::String& name, juce::Colour background,
+                          juce::Component& content, std::function<void()> onClose)
+    : juce::DocumentWindow (name, background, juce::DocumentWindow::closeButton),
+      onClose_ (std::move (onClose))
+{
+    setUsingNativeTitleBar (true);
+
+    // Non-owned: the editor owns this component whether it is docked or
+    // floating, so there is never a moment with two owners or none.
+    setContentNonOwned (&content, false);
+
+    setResizable (true, false);
+    setResizeLimits (240, 200, 3000, 2400);
+    setVisible (true);
+}
+
+void PanelWindow::placeBeside (juce::Rectangle<int> editorArea)
+{
+    // Beside the editor, not centred on the screen: a window that opens on top
+    // of the thing it was detached from looks like the editor broke, and seeing
+    // both at once is the entire point of detaching.
+    auto area = juce::Rectangle<int> (editorArea.getRight() + 12, editorArea.getY(), 620, 480);
+
+    // Constrained against every display rather than the editor's own, so a
+    // second monitor is allowed and the void past the last one is not. The
+    // default constrainer only keeps a *corner* on screen, which is how a
+    // window ends up mostly off the edge and effectively lost.
+    const auto screens = juce::Desktop::getInstance().getDisplays().getTotalBounds (true);
+
+    if (! screens.isEmpty())
+    {
+        area.setSize (juce::jmin (area.getWidth(), screens.getWidth()),
+                      juce::jmin (area.getHeight(), screens.getHeight()));
+        area = area.constrainedWithin (screens);
+    }
+
+    setBounds (area);
+}
+
+void PanelWindow::closeButtonPressed()
+{
+    if (onClose_ != nullptr)
+        onClose_();
+}
+
+// ---------------------------------------------------------------------------
+
+TranspectusEditor::~TranspectusEditor()
+{
+    // Docking first makes teardown deterministic: every component ends up
+    // parented where it started, and the windows are gone before anything they
+    // referred to is.
+    //
+    // It is not load-bearing, and the comment that used to be here said it was.
+    // ResizableWindow holds its content by weak reference, so a destroyed
+    // component simply clears it -- closing the standalone with a panel
+    // detached exits 0 with this whole function removed, and exits 0 again with
+    // the member declaration order reversed on top of that. Kept because
+    // explicit teardown is cheap and does not depend on either of those facts
+    // staying true; not kept because it prevents a crash anybody has seen.
+    setDetached (Panel::spectrum, false);
+    setDetached (Panel::goniometer, false);
+}
+
+juce::Component& TranspectusEditor::componentFor (Panel panel) noexcept
+{
+    return panel == Panel::spectrum ? static_cast<juce::Component&> (*spectrum_)
+                                    : static_cast<juce::Component&> (*goniometer_);
+}
+
+bool TranspectusEditor::isDetached (Panel panel) const noexcept
+{
+    return (panel == Panel::spectrum ? spectrumWindow_ : goniometerWindow_) != nullptr;
+}
+
+void TranspectusEditor::setMaximised (Panel panel, bool shouldMaximise)
+{
+    // A detached panel is already as large as its window; maximising it inside
+    // the editor would hide everything to make room for something that is not
+    // there.
+    if (shouldMaximise && isDetached (panel))
+        return;
+
+    maximised_ = shouldMaximise ? std::optional<Panel> { panel } : std::nullopt;
+
+    updatePanelChrome();
+    resized();
+}
+
+void TranspectusEditor::setDetached (Panel panel, bool shouldDetach)
+{
+    auto& window = panel == Panel::spectrum ? spectrumWindow_ : goniometerWindow_;
+
+    if ((window != nullptr) == shouldDetach)
+        return;
+
+    auto& component = componentFor (panel);
+
+    if (shouldDetach)
+    {
+        // A maximised panel that is then detached would leave the body given
+        // over to something no longer in it.
+        if (maximised_ == panel)
+            maximised_.reset();
+
+        removeChildComponent (&component);
+
+        window = std::make_unique<PanelWindow> (
+            panel == Panel::spectrum ? "Transpectus \xe2\x80\x94 Spectrum"
+                                     : "Transpectus \xe2\x80\x94 Goniometer",
+            palette_.background, component,
+            [this, panel] { setDetached (panel, false); });
+
+        window->placeBeside (getScreenBounds());
+    }
+    else
+    {
+        // Clear the content first, so the window is not holding a component
+        // that is simultaneously being adopted by the editor.
+        window->clearContentComponent();
+        window.reset();
+
+        addAndMakeVisible (component);
+    }
+
+    updatePanelChrome();
+    resized();
+}
+
+void TranspectusEditor::updatePanelChrome()
+{
+    const auto label = [] (juce::TextButton& button, const char* text, bool enabled)
+    {
+        button.setButtonText (text);
+        button.setEnabled (enabled);
+    };
+
+    label (spectrumMaxButton_, maximised_ == Panel::spectrum ? "MIN" : "MAX",
+           ! isDetached (Panel::spectrum));
+    label (goniometerMaxButton_, maximised_ == Panel::goniometer ? "MIN" : "MAX",
+           ! isDetached (Panel::goniometer));
+
+    // Detached, the POP button stops being corner chrome and becomes the
+    // placeholder standing where the panel was -- so it gets room to say what
+    // it will bring back, which matters when the floating window has gone
+    // behind the DAW and looks lost.
+    label (spectrumPopButton_, isDetached (Panel::spectrum) ? "DOCK SPECTRUM" : "POP", true);
+    label (goniometerPopButton_, isDetached (Panel::goniometer) ? "DOCK GONIOMETER" : "POP", true);
+
+    // The chrome belongs to the panel, so it goes with it: a MAX button left
+    // floating over an empty rectangle in the editor would be a control for
+    // something that is not there.
+    const bool spectrumHere = ! isDetached (Panel::spectrum)
+                           && (! maximised_ || maximised_ == Panel::spectrum);
+    const bool goniometerHere = ! isDetached (Panel::goniometer)
+                             && (! maximised_ || maximised_ == Panel::goniometer);
+
+    spectrumMaxButton_.setVisible (spectrumHere);
+    goniometerMaxButton_.setVisible (goniometerHere);
+    spectrumPopButton_.setVisible (spectrumHere || isDetached (Panel::spectrum));
+    goniometerPopButton_.setVisible (goniometerHere || isDetached (Panel::goniometer));
+}
+
+void TranspectusEditor::buildPanelChrome()
+{
+    const auto style = [this] (juce::TextButton& button, const char* tooltip)
+    {
+        button.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.25f));
+        button.setColour (juce::TextButton::textColourOffId, palette_.dimText);
+        button.setTooltip (tooltip);
+        addAndMakeVisible (button);
+    };
+
+    // Stable IDs so the editor can be driven headlessly -- `tezla-render editor
+    // <id>...` clicks these, which is how the detach path gets exercised in a
+    // container with no window manager.
+    spectrumMaxButton_.setComponentID ("spectrum-max");
+    spectrumPopButton_.setComponentID ("spectrum-pop");
+    goniometerMaxButton_.setComponentID ("goniometer-max");
+    goniometerPopButton_.setComponentID ("goniometer-pop");
+
+    style (spectrumMaxButton_, "Gives the spectrum the whole panel. Everything else is hidden "
+                               "while it is -- if you want a large spectrum and the numbers at "
+                               "the same time, POP it into its own window instead.");
+    style (spectrumPopButton_, "Opens the spectrum in its own resizable window, so it can live "
+                               "on a second monitor while the meters stay here. Closing that "
+                               "window puts it back.");
+    style (goniometerMaxButton_, "Gives the goniometer the whole panel.");
+    style (goniometerPopButton_, "Opens the goniometer in its own resizable window.");
+
+    spectrumMaxButton_.onClick = [this]
+    {
+        setMaximised (Panel::spectrum, maximised_ != Panel::spectrum);
+    };
+
+    goniometerMaxButton_.onClick = [this]
+    {
+        setMaximised (Panel::goniometer, maximised_ != Panel::goniometer);
+    };
+
+    spectrumPopButton_.onClick = [this]
+    {
+        setDetached (Panel::spectrum, ! isDetached (Panel::spectrum));
+    };
+
+    goniometerPopButton_.onClick = [this]
+    {
+        setDetached (Panel::goniometer, ! isDetached (Panel::goniometer));
+    };
+
+    updatePanelChrome();
+}
+
 // ---------------------------------------------------------------------------
 
 TranspectusEditor::TranspectusEditor (TranspectusProcessor& processorToUse)
@@ -444,10 +858,11 @@ TranspectusEditor::TranspectusEditor (TranspectusProcessor& processorToUse)
     addAndMakeVisible (*header_);
 
     buildControls();
+    buildPanelChrome();
 
     setResizable (true, true);
     setResizeLimits (kMinWidth, kMinHeight, kMaxWidth, kMaxHeight);
-    setSize (940, 680);
+    setSize (980, 700);
 
     startTimerHz (20);
 }
@@ -575,6 +990,7 @@ void TranspectusEditor::buildControls()
     addAndMakeVisible (resetButton_);
 
     spectrum_ = std::make_unique<SpectrumView> (palette_, transpectus_.getReferenceCurve());
+    spectrum_->setComponentID ("spectrum");
     addAndMakeVisible (*spectrum_);
 
     captureButton_.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.2f));
@@ -897,73 +1313,175 @@ void TranspectusEditor::resized()
     auto body = bounds.reduced (10, 6);
 
     // The level meter down the right-hand side, as in every other plugin here.
+    // It stays whatever else the body is doing: it is the one reading you want
+    // in peripheral vision rather than looked at.
     auto meterColumn = body.removeFromRight (ui::LevelMeter::kMinimumWidth
                                              + ui::LevelMeter::kScaleWidth + 8).reduced (4, 0);
     inputMeter_->setBounds (meterColumn);
 
     body.removeFromRight (8);
 
-    // Seven readouts at a near-fixed height rather than a share of the window.
-    // They hold one number each; giving them a third of a tall window leaves the
-    // number floating in the middle of an empty panel, and the room belongs to
-    // the spectrum. They do give a little back when the window is at its
-    // smallest, because the alternative is a spectrum with no height at all.
-    const int readoutHeight = juce::jlimit (58, 76, body.getHeight() / 6);
+    // Two small buttons over a panel's top-right corner, in the strip its own
+    // caption occupies.
+    // Two small buttons over a panel's top-right corner, in the strip its own
+    // caption occupies -- and the panel is told how much room they take, so the
+    // caption gets out of the way rather than being drawn underneath them.
+    constexpr int kChromeWidth = 42 + 4 + 38 + 6;
+
+    const auto placeChrome = [] (juce::Rectangle<int> panel,
+                                 juce::TextButton& maximise, juce::TextButton& detach)
+    {
+        auto strip = panel.reduced (6, 5).removeFromTop (16);
+
+        detach.setBounds (strip.removeFromRight (42));
+        strip.removeFromRight (4);
+        maximise.setBounds (strip.removeFromRight (38));
+    };
+
+    spectrum_->setTopRightInset (kChromeWidth);
+    goniometer_->setTopRightInset (kChromeWidth);
+
+    const auto readoutsVisible = ! maximised_.has_value();
+
+    for (auto* readout : { integrated_.get(), shortTerm_.get(), momentary_.get(),
+                           truePeak_.get(), plr_.get(), psr_.get(), delta_.get() })
+        readout->setVisible (readoutsVisible);
+
+    // Everything below belongs to one panel or the other; hidden here rather
+    // than moved off-screen, so a hidden panel costs no paint at all.
+    const bool spectrumInBody   = ! isDetached (Panel::spectrum)
+                               && (! maximised_ || maximised_ == Panel::spectrum);
+    const bool goniometerInBody = ! isDetached (Panel::goniometer)
+                               && (! maximised_ || maximised_ == Panel::goniometer);
+    const bool positionRow      = ! maximised_.has_value();
+
+    const std::initializer_list<juce::Component*> spectrumControlList {
+        &captureButton_, &clearReferenceButton_, &saveReferenceButton_,
+        &loadReferenceButton_, &pinkButton_, &differenceButton_ };
+
+    for (auto* c : spectrumControlList)
+        c->setVisible (spectrumInBody);
+
+    fullCorrelation_->setVisible (positionRow);
+    lowCorrelation_->setVisible (positionRow);
+
+    // The panels themselves, and not only their controls. Leaving this out is
+    // not a layout nuisance: a hidden-by-omission panel keeps its old bounds
+    // and keeps painting, so maximising the goniometer drew the spectrum
+    // straight across the middle of it.
+    //
+    // A *detached* panel stays visible -- it is showing inside its own window,
+    // and "not in the editor's body" is not the same statement as "not on
+    // screen". Getting that wrong opens an empty window.
+    spectrum_->setVisible (isDetached (Panel::spectrum) || spectrumInBody);
+    goniometer_->setVisible (isDetached (Panel::goniometer) || goniometerInBody);
+
+    // ---- maximised: one panel, the whole body ---------------------------------
+
+    if (maximised_ == Panel::goniometer)
+    {
+        goniometer_->setBounds (body.reduced (4, 2));
+        placeChrome (goniometer_->getBounds(), goniometerMaxButton_, goniometerPopButton_);
+        return;
+    }
+
+    if (maximised_ == Panel::spectrum)
+    {
+        auto spectrumControls = body.removeFromBottom (28).reduced (4, 2);
+        layOutSpectrumControls (spectrumControls);
+
+        spectrum_->setBounds (body.reduced (4, 2));
+        placeChrome (spectrum_->getBounds(), spectrumMaxButton_, spectrumPopButton_);
+        return;
+    }
+
+    // ---- the shared body ------------------------------------------------------
+
+    // Seven readouts on two rows. The caption sits beside its number rather than
+    // above it, which is what lets a row be 44 pixels instead of 76 -- and the
+    // 64 that buys goes to the spectrum, which is where the eye spends its time.
+    const int readoutHeight = juce::jlimit (38, 50, body.getHeight() / 11);
 
     {
         auto top = body.removeFromTop (readoutHeight);
         const int width = top.getWidth() / 4;
 
-        integrated_->setBounds (top.removeFromLeft (width).reduced (4));
-        shortTerm_->setBounds  (top.removeFromLeft (width).reduced (4));
-        momentary_->setBounds  (top.removeFromLeft (width).reduced (4));
-        truePeak_->setBounds   (top.reduced (4));
+        integrated_->setBounds (top.removeFromLeft (width).reduced (3, 2));
+        shortTerm_->setBounds  (top.removeFromLeft (width).reduced (3, 2));
+        momentary_->setBounds  (top.removeFromLeft (width).reduced (3, 2));
+        truePeak_->setBounds   (top.reduced (3, 2));
     }
 
     {
-        auto second = body.removeFromTop (readoutHeight);
-        const int width = second.getWidth() / 4;
+        // PLR and PSR are one number each; VS TARGET carries a sentence, so it
+        // takes the room the other two do not need.
+        auto second = body.removeFromTop (readoutHeight + 12);
+        const int narrow = second.getWidth() / 5;
 
-        plr_->setBounds   (second.removeFromLeft (width).reduced (4));
-        psr_->setBounds   (second.removeFromLeft (width).reduced (4));
-        delta_->setBounds (second.reduced (4));
+        plr_->setBounds   (second.removeFromLeft (narrow).reduced (3, 2));
+        psr_->setBounds   (second.removeFromLeft (narrow).reduced (3, 2));
+        delta_->setBounds (second.reduced (3, 2));
     }
 
     // Position across the bottom: the goniometer square on the left with the two
     // correlation bars stacked beside it, so the picture and the numbers that
-    // summarise it are read together. The spectrum fills whatever is left --
-    // which is most of a tall window, and is where the eye spends its time.
+    // summarise it are read together. The spectrum fills whatever is left.
     {
         // Two fifths rather than a third: the goniometer is square, so its
         // height is also its width, and a strip sized for two bars leaves a
         // circle too small to read a lean off.
-        const int positionHeight = juce::jlimit (120, 190, body.getHeight() * 2 / 5);
+        const int positionHeight = juce::jlimit (120, 200, body.getHeight() * 2 / 5);
         auto position = body.removeFromBottom (positionHeight);
 
-        // Square, taken from the height, so the goniometer stays a circle at
-        // every window width.
-        goniometer_->setBounds (position.removeFromLeft (position.getHeight()).reduced (4, 4));
+        if (goniometerInBody)
+        {
+            // Square, taken from the height, so it stays a circle at every
+            // window width.
+            goniometer_->setBounds (position.removeFromLeft (position.getHeight()).reduced (4, 4));
+            placeChrome (goniometer_->getBounds(), goniometerMaxButton_, goniometerPopButton_);
+        }
+        else
+        {
+            // Detached: the bars take the whole strip rather than leaving a
+            // square hole where the picture used to be.
+            goniometerPopButton_.setBounds (position.removeFromLeft (152)
+                                                .withSizeKeepingCentre (140, 26));
+        }
 
         const int barHeight = position.getHeight() / 2;
         fullCorrelation_->setBounds (position.removeFromTop (barHeight).reduced (4, 4));
         lowCorrelation_->setBounds (position.reduced (4, 4));
     }
 
-    // The reference controls sit under the spectrum they act on.
-    auto spectrumControls = body.removeFromBottom (28).reduced (4, 2);
+    if (spectrumInBody)
+    {
+        auto spectrumControls = body.removeFromBottom (28).reduced (4, 2);
+        layOutSpectrumControls (spectrumControls);
 
-    captureButton_.setBounds (spectrumControls.removeFromLeft (160));
-    spectrumControls.removeFromLeft (6);
-    clearReferenceButton_.setBounds (spectrumControls.removeFromLeft (62));
-    spectrumControls.removeFromLeft (6);
-    saveReferenceButton_.setBounds (spectrumControls.removeFromLeft (58));
-    spectrumControls.removeFromLeft (6);
-    loadReferenceButton_.setBounds (spectrumControls.removeFromLeft (58));
-    spectrumControls.removeFromLeft (14);
-    pinkButton_.setBounds (spectrumControls.removeFromLeft (110));
-    differenceButton_.setBounds (spectrumControls.removeFromLeft (110));
+        spectrum_->setBounds (body.reduced (4, 2));
+        placeChrome (spectrum_->getBounds(), spectrumMaxButton_, spectrumPopButton_);
+    }
+    else
+    {
+        // Detached: a single button where the panel was, so there is somewhere
+        // obvious to click to get it back if the window is lost behind the DAW.
+        spectrumPopButton_.setBounds (body.reduced (4, 2)
+                                          .withSizeKeepingCentre (150, 26));
+    }
+}
 
-    spectrum_->setBounds (body.reduced (4, 2));
+void TranspectusEditor::layOutSpectrumControls (juce::Rectangle<int> row)
+{
+    captureButton_.setBounds (row.removeFromLeft (160));
+    row.removeFromLeft (6);
+    clearReferenceButton_.setBounds (row.removeFromLeft (62));
+    row.removeFromLeft (6);
+    saveReferenceButton_.setBounds (row.removeFromLeft (58));
+    row.removeFromLeft (6);
+    loadReferenceButton_.setBounds (row.removeFromLeft (58));
+    row.removeFromLeft (14);
+    pinkButton_.setBounds (row.removeFromLeft (110));
+    differenceButton_.setBounds (row.removeFromLeft (110));
 }
 
 } // namespace tezla::transpectus

@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cmath>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -63,19 +64,193 @@ double source (std::size_t index)
 }
 } // namespace
 
+/// A mouse event at a pixel, built the way JUCE builds one, so the component
+/// under test sees exactly what a real pointer would produce.
+///
+/// Needed because this container has no window manager, and X11 without one
+/// delivers no enter and no motion events at all -- a real pointer parked over
+/// a component produces nothing to photograph.
+juce::MouseEvent eventAt (juce::Component& component, float x, float y)
+{
+    auto source = juce::Desktop::getInstance().getMainMouseSource();
+    const juce::Point<float> position { x, y };
+
+    return { source, position, juce::ModifierKeys::currentModifiers, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+             &component, &component, juce::Time::getCurrentTime(), position,
+             juce::Time::getCurrentTime(), 1, false };
+}
+
+/// Depth-first search for a component by its ID.
+juce::Component* findById (juce::Component& parent, const juce::String& id)
+{
+    for (auto* child : parent.getChildren())
+    {
+        if (child->getComponentID() == id)
+            return child;
+
+        if (auto* found = findById (*child, id))
+            return found;
+    }
+
+    return nullptr;
+}
+
+/// Creates the editor, optionally clicks a list of controls by component ID,
+/// resizes it through its whole range, and destroys it.
+///
+/// An editor is the part of a plugin that never gets measured, because it has
+/// no numbers -- but it has layout arithmetic that divides by its own size, and
+/// lifetimes that outlive a click. Both are reachable here with no host and no
+/// window manager.
+///
+/// **What it cannot reach: anything that opens a native window.** This is a
+/// console app, and putting a top-level window on the desktop from one fails on
+/// X11 before any plugin code is involved -- addToDesktop alone reproduces it
+/// with no clicking at all. A control that detaches a panel therefore has to be
+/// exercised through the standalone build instead.
+int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
+{
+    if (! processor.hasEditor())
+    {
+        std::printf ("this plugin has no editor\n");
+        return 0;
+    }
+
+    std::unique_ptr<juce::AudioProcessorEditor> editor { processor.createEditorAndMakeActive() };
+
+    if (editor == nullptr)
+    {
+        std::fprintf (stderr, "the editor would not instantiate\n");
+        return 1;
+    }
+
+    std::printf ("editor created: %d x %d%s\n",
+                 editor->getWidth(), editor->getHeight(),
+                 editor->isResizable() ? ", resizable" : "");
+
+
+    int failures = 0;
+
+    for (int i = 2; i < argc; ++i)
+    {
+        juce::String id { argv[i] };
+
+        // "id@x,y" moves the pointer over that component instead of clicking
+        // it, for anything that only shows itself under a cursor.
+        if (id.contains ("@"))
+        {
+            const auto target = id.upToFirstOccurrenceOf ("@", false, false);
+            const auto where = id.fromFirstOccurrenceOf ("@", false, false);
+            const float x = where.upToFirstOccurrenceOf (",", false, false).getFloatValue();
+            const float y = where.fromFirstOccurrenceOf (",", false, false).getFloatValue();
+
+            if (auto* found = findById (*editor, target))
+            {
+                found->mouseMove (eventAt (*found, x, y));
+                std::printf ("  pointed at %s (%.0f, %.0f), which is %d x %d\n",
+                             target.toRawUTF8(), x, y, found->getWidth(), found->getHeight());
+            }
+            else
+            {
+                std::fprintf (stderr, "  no component with id %s\n", target.toRawUTF8());
+                ++failures;
+            }
+
+            continue;
+        }
+
+        // "shot:file.png" photographs the editor as it stands.
+        if (id.startsWith ("shot:"))
+        {
+            const juce::File out = juce::File::getCurrentWorkingDirectory()
+                                       .getChildFile (id.fromFirstOccurrenceOf ("shot:", false, false));
+
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), false, 2.0f);
+
+            out.deleteFile();
+            std::unique_ptr<juce::FileOutputStream> stream (out.createOutputStream());
+
+            if (stream != nullptr)
+            {
+                juce::PNGImageFormat png;
+
+                if (png.writeImageToStream (image, *stream))
+                {
+                    std::printf ("  wrote %s (%d x %d)\n", out.getFullPathName().toRawUTF8(),
+                                 image.getWidth(), image.getHeight());
+                    continue;
+                }
+            }
+
+            std::fprintf (stderr, "  could not write %s\n", out.getFullPathName().toRawUTF8());
+            ++failures;
+            continue;
+        }
+
+        if (auto* found = findById (*editor, id))
+        {
+            if (auto* button = dynamic_cast<juce::Button*> (found))
+            {
+                // The handler directly rather than triggerClick(), which posts
+                // a message: there is no modal dispatch loop in a plugin build
+                // to pump it with, and a sequence of clicks has to happen in
+                // the order it was written.
+                if (button->onClick)
+                    button->onClick();
+
+                std::printf ("  clicked %s\n", id.toRawUTF8());
+            }
+            else
+            {
+                std::fprintf (stderr, "  %s is not a button\n", id.toRawUTF8());
+                ++failures;
+            }
+        }
+        else
+        {
+            std::fprintf (stderr, "  no component with id %s\n", id.toRawUTF8());
+            ++failures;
+        }
+    }
+
+    // Through the whole resize range, because a layout that divides by a
+    // dimension has a smallest size at which it stops being sensible.
+    for (const auto& size : { std::pair<int, int> { 760, 520 }, std::pair<int, int> { 1200, 900 },
+                              std::pair<int, int> { 1520, 1040 }, std::pair<int, int> { 900, 640 } })
+        editor->setSize (size.first, size.second);   // resized() runs synchronously
+
+    std::printf ("  resized through the range\n");
+
+    // The point of the whole exercise: destroy it with whatever the clicks
+    // left open.
+    processor.editorBeingDeleted (editor.get());
+    editor.reset();
+
+    std::printf ("%s\n", failures == 0 ? "editor destroyed cleanly"
+                                       : "editor destroyed, but some ids were not found");
+    return failures == 0 ? 0 : 1;
+}
+
 int main (int argc, char** argv)
 {
     const bool dumpParameters = argc >= 2 && juce::String (argv[1]) == "params";
 
-    if (argc < 4 && ! dumpParameters)
+    const bool exerciseEditor = argc >= 2 && juce::String (argv[1]) == "editor";
+
+    if (argc < 4 && ! dumpParameters && ! exerciseEditor)
     {
         std::printf ("usage: tezla-render <samples> <blockSize> <out.raw> [id=value ...]\n"
-                     "       tezla-render params\n");
+                     "       tezla-render params\n"
+                     "       tezla-render editor [componentId | id@x,y | shot:out.png ...]\n");
         return 2;
     }
 
-    const int totalSamples = dumpParameters ? 0 : std::atoi (argv[1]);
-    const int blockSize    = dumpParameters ? 1 : std::max (1, std::atoi (argv[2]));
+    // Guarded on both commands, not just one: argv[2] does not exist for either
+    // of them, and atoi does not check.
+    const bool renderingAudio = ! dumpParameters && ! exerciseEditor;
+
+    const int totalSamples = renderingAudio ? std::atoi (argv[1]) : 0;
+    const int blockSize    = renderingAudio ? std::max (1, std::atoi (argv[2])) : 1;
 
     juce::ScopedJuceInitialiser_GUI juceInit;
 
@@ -86,6 +261,9 @@ int main (int argc, char** argv)
         std::fprintf (stderr, "the plugin would not instantiate\n");
         return 1;
     }
+
+    if (exerciseEditor)
+        return runEditorCheck (*processor, argc, argv);
 
     if (dumpParameters)
     {

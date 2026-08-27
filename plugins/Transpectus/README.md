@@ -218,6 +218,31 @@ decorative:
 **Difference** then draws live-minus-reference, which states the EQ move
 directly instead of leaving it to be eyeballed.
 
+### The crosshair
+
+Point at the spectrum and it reads out where you are pointing:
+
+```
+998 Hz   B5 +18
+signal  -32.1 dB
+cursor  -42.0 dB
+```
+
+Three things, because they answer three different questions. **Frequency with
+the nearest note in cents**, because half of what a spectrum gets used for on
+this rig is finding out what note a bass or a resonance is sitting on.
+**Signal**, the live curve's level at that frequency, with a dot on the curve so
+the number is anchored to something visible. **Cursor**, the dB of the
+horizontal hairline itself, for measuring the distance between two things.
+
+Verified against the grid rather than by eye: the panel is 864 px wide, which
+puts 1 kHz at x = 488.24 and −42 dB at y = 122.0. Pointing at exactly (488, 122)
+reads **998 Hz** and **−42.0 dB** — the 2 Hz is the quarter-pixel that got
+rounded away, and it is the whole error.
+
+The readout flips to whichever side of the pointer has room, so it never hangs
+off the panel or covers the part of the curve being pointed at.
+
 ### Where a reference lives
 
 Both places, because they answer different needs:
@@ -243,6 +268,33 @@ primary tuning loop here.
 **No captured curve from any commercial record will ever ship with this
 plugin.** The tool makes your references. It does not come with somebody
 else's.
+
+---
+
+## The panel
+
+Seven readouts, a spectrum, a goniometer and two correlation bars is a lot to
+fit, so two things give way.
+
+**Each readout is one line**, its caption beside the number rather than above
+it. That is what lets a row be 44 pixels instead of 76, and the room it frees
+goes to the spectrum.
+
+**Either large panel can take the whole body**, with MAX in its top-right
+corner. Maximise means *this and nothing else* — the readouts and the other
+panel are hidden, because a maximise that leaves half the window in place is a
+resize. On the spectrum it is also a precision control: more pixels across the
+axis is a finer crosshair reading.
+
+**Or either can be lifted into its own window**, with POP. That is the answer
+when you want the big picture *and* the numbers: the panel opens beside the
+editor — constrained to stay on screen, so it never lands in the void past the
+last monitor — and everything else stays where it was. Closing that window, or
+the DOCK button standing where the panel used to be, puts it back.
+
+The two are deliberately different tools rather than two names for the same
+one. Maximise is for looking at one thing closely; detach is for looking at two
+things at once, which is what a second monitor is for.
 
 ---
 
@@ -287,6 +339,9 @@ oversampling is a deliberate choice with a price you can see.
 | Allocations while processing | **0**, across every target and true-peak mode |
 | Allocations in the scope read the editor does each frame | **0** |
 | Silence in | every reading at its floor, no NaN |
+| Editor: create, maximise each panel, resize 760x520 to 1520x1040, destroy | clean (`tezla-render editor`) |
+| Editor: close the standalone with a panel detached | exits 0 |
+| Crosshair at the 1 kHz gridline | reads **998 Hz**, one quarter-pixel of rounding |
 | Steinberg validator | **47 tests passed, 0 failed** |
 | `tezla-tests` | **316 passed, 0 failed** on x86-64 and on ARM64 under qemu |
 
@@ -297,6 +352,11 @@ scripts\build.bat NONE -test          :: or ./scripts/build.sh NONE --test
 tezla-measure selftest                :: check the instrument first
 tezla-measure loudness                :: everything in the tables above
 tezla-ui-preview goniometer out.png   :: the six stereo shapes
+
+:: the editor with no host and no window manager: click controls by id,
+:: point at one, photograph the result
+TranspectusRender editor spectrum-max shot:big.png
+TranspectusRender editor spectrum@488,122 shot:crosshair.png
 ```
 
 ---
