@@ -1,7 +1,7 @@
 # tezla.spectra
 
-64-bit **VST3** audio plugins for Windows 11 / FL Studio 2026 — built for
-dubstep and DnB/jungle production.
+64-bit **VST3** audio plugins and instruments for Windows 11 / FL Studio 2026 —
+built for dubstep and DnB/jungle production.
 
 Analogue character first: tube, tape and transformer saturation, cabinet
 colouration, musical dynamics. Clean digital when you want it to disappear.
@@ -89,6 +89,21 @@ divider worth nine decibels of tone shaping that no cabinet impulse response can
 supply. The cabinet is synthesised from the enclosure, the cone and the
 microphone — never captured. See [its README](plugins/Anvil/README.md).
 
+**[Sonitus](plugins/Sonitus/)** is the first sound *source*: a growl and reese
+instrument for the bass this rig exists to make. Its thesis is that **every
+reese and every growl is one dense source and a moving comb** — two detuned saws
+beat, and the beating *is* a comb whose notches sweep; a flanger is the same
+comb with a knob on it; a vowel filter is the same comb shaped like a mouth.
+So the instrument makes dense harmonics, combs them under total control, drives
+them, and **keeps the sub out of it** with a split inside the instrument rather
+than three plugins later. The comb's delay is a first-class modulation
+destination — a sweep of 31.3 Hz to 1978 Hz at full depth — and its key tracking
+locks the notches onto the played note's own harmonics, so the growl comes out
+*tuned*. There is hard sync, phase modulation, seven-way unison, a wave folder,
+a zero-delay filter with drive in the loop, two modulation matrices, and **Scala
+microtuning with 22 scales generated from their definitions** — including
+Bohlen–Pierce, which repeats at 3/1 rather than the octave. See
+[its README](plugins/Sonitus/README.md).
 
 ---
 
@@ -101,8 +116,9 @@ microphone — never captured. See [its README](plugins/Anvil/README.md).
 | **[Capstone](plugins/Capstone/)** | True-peak brickwall limiter and clipper for the end of the chain | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Transpectus](plugins/Transpectus/)** | Loudness, true peak, spectrum, correlation and goniometer — analysis only, bit-exact passthrough | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Anvil](plugins/Anvil/)** | Valve amplifier, speaker load and cabinet, from the mechanisms | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Sonitus](plugins/Sonitus/)** | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, Scala microtuning | v0.1.0 — 47/47 on Steinberg's validator |
 
-416 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
+579 framework-free DSP tests pass on Linux, Windows, macOS and ARM64.
 
 See [`plugins/README.md`](plugins/README.md) for the plugin registry.
 

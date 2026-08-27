@@ -223,8 +223,8 @@ Rules:
   Windows VST3 bundle and a macOS universal VST3 + AU bundle. So MSVC and Apple
   clang both compile this tree, and the numbers agree across all four
   architectures.
-  Verified locally since, with Anvil added: 416 tests pass on x86-64 and
-  identically under `qemu-aarch64`, and all five plugins pass Steinberg's
+  Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
+  and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
   validator 47/47 on Linux.
   What is **still not observed** is the thing that matters most: nobody has
   loaded those bundles into a DAW on Windows or macOS from here. This project is
