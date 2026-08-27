@@ -89,7 +89,7 @@ public:
         // unison phase scatter differ between them -- see Voice::prepare.
         for (int index = 0; index < kMaxVoices; ++index)
             voices_[static_cast<std::size_t> (index)]
-              .prepare (sampleRate_, static_cast<std::uint64_t> (index) + 1ull);
+              .prepare (sampleRate_, static_cast<std::uint64_t> (index + 1));
 
         reset();
     }
@@ -264,7 +264,7 @@ public:
         if (mode_ == KeyboardMode::poly || monoNote_ < 0)
             return;
 
-        if (dsp::isExactlyZero (glideSeconds_) || glideCents_ == glideTargetCents_)
+        if (dsp::isExactlyZero (glideSeconds_) || dsp::isExactly (glideCents_, glideTargetCents_))
         {
             glideCents_ = glideTargetCents_;
         }

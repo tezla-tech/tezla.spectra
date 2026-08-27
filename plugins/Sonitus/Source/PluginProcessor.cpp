@@ -739,6 +739,22 @@ void SonitusProcessor::pullParameters()
             case ModDestination::detuneA:
             case ModDestination::detuneB:     v.slots[slot].depth = depth * 60.0; break;   // cents
             case ModDestination::pmIndex:     v.slots[slot].depth = depth * 8.0; break;
+
+            // The rest are already normalised, so the -1..+1 depth is the
+            // depth. Listed rather than defaulted: a destination added to the
+            // enum and forgotten here would silently get a scale of 1, and
+            // that is a bug the compiler can find instead.
+            case ModDestination::none:
+            case ModDestination::resonance:
+            case ModDestination::filterDrive:
+            case ModDestination::pulseWidthA:
+            case ModDestination::pulseWidthB:
+            case ModDestination::oscMix:
+            case ModDestination::subLevel:
+            case ModDestination::ringAmount:
+            case ModDestination::foldAmount:
+            case ModDestination::level:
+            case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }
     }
@@ -852,9 +868,9 @@ void SonitusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
     pullParameters();
     engine_.setParameters (parameters_);
 
-    if (auto* playHead = getPlayHead())
+    if (auto* transport = getPlayHead())
     {
-        if (const auto position = playHead->getPosition())
+        if (const auto position = transport->getPosition())
         {
             const auto ppq = position->getPpqPosition();
             const auto bpm = position->getBpm();

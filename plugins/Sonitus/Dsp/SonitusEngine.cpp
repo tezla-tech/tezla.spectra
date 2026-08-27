@@ -114,8 +114,8 @@ void Engine::reset() noexcept
 
 void Engine::applyPending() noexcept
 {
-    const bool tiltChanged = ! configured_ || active_.tilt != pending_.tilt;
-    const bool splitChanged = ! configured_ || active_.splitHz != pending_.splitHz;
+    const bool tiltChanged = ! configured_ || ! dsp::isExactly (active_.tilt, pending_.tilt);
+    const bool splitChanged = ! configured_ || ! dsp::isExactly (active_.splitHz, pending_.splitHz);
 
     active_ = pending_;
     configured_ = true;

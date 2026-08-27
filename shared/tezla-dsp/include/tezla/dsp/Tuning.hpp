@@ -57,6 +57,8 @@
 #include <string>
 #include <vector>
 
+#include "Exact.hpp"
+
 namespace tezla::dsp {
 
 /// A scale: the degrees within one repeat, and the interval it repeats at.
@@ -94,7 +96,7 @@ struct Scale
         if (ratios.empty() || ! (repeat > 1.0))
             return false;
 
-        if (ratios[0] != 1.0)
+        if (! isExactly (ratios[0], 1.0))
             return false;
 
         for (std::size_t i = 1; i < ratios.size(); ++i)

@@ -231,6 +231,13 @@ private:
     std::array<juce::TextButton, kNumPages> tabs_;
     int currentPage_ { 0 };
 
+    /// Pages scroll rather than squash. The MOD page carries three groups, six
+    /// voice slots and three global ones -- ten rows -- and at the minimum
+    /// window size that is taller than the space available. A knob compressed
+    /// to nothing is unusable in a way a scroll bar is not, so the grid keeps
+    /// its row height and the viewport takes the difference.
+    juce::Viewport viewport_;
+
     std::unique_ptr<StepStrip>  steps_;
     std::unique_ptr<TuningPage> tuning_;
 

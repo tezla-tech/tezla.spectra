@@ -697,6 +697,10 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     buildPages();
 
+    viewport_.setScrollBarsShown (true, false);
+    viewport_.setColour (juce::ScrollBar::thumbColourId, palette_.accent.withAlpha (0.5f));
+    addAndMakeVisible (viewport_);
+
     steps_ = std::make_unique<StepStrip> (sonitus_.getState(), palette_);
     tuning_ = std::make_unique<TuningPage> (sonitus_, palette_);
 
@@ -1113,23 +1117,19 @@ void SonitusEditor::showPage (int index)
 
     for (int i = 0; i < kNumPages; ++i)
     {
-        auto& page = pages_[static_cast<std::size_t> (i)];
         auto& tab = tabs_[static_cast<std::size_t> (i)];
 
         const bool active = i == currentPage_;
-
-        if (page != nullptr)
-        {
-            if (active)
-                addAndMakeVisible (*page);
-            else
-                page->setVisible (false);
-        }
 
         tab.setColour (juce::TextButton::buttonColourId,
                        active ? palette_.accent.withAlpha (0.55f) : palette_.panel.brighter (0.08f));
         tab.setColour (juce::TextButton::textColourOffId, active ? palette_.text : palette_.dimText);
     }
+
+    // `false`: the viewport must not take ownership -- the pages outlive the
+    // page changes and are owned by the array.
+    viewport_.setViewedComponent (pages_[static_cast<std::size_t> (currentPage_)].get(), false);
+    viewport_.setVisible (currentPage_ != kTuningPage);
 
     // The step strip belongs to the MOD page and the tuning panel is its own
     // page, so both follow the tab rather than being always on screen.
@@ -1323,12 +1323,27 @@ void SonitusEditor::resized()
     if (steps_ != nullptr && steps_->isVisible())
         steps_->setBounds (body.removeFromBottom (kStepStripHeight).reduced (0, 4));
 
-    for (auto& page : pages_)
-        if (page != nullptr && page->isVisible())
-            page->setBounds (body);
-
     if (tuning_ != nullptr && tuning_->isVisible())
         tuning_->setBounds (body);
+
+    viewport_.setBounds (body);
+
+    if (auto* page = pages_[static_cast<std::size_t> (currentPage_)].get())
+    {
+        // Sized before it is asked how tall it wants to be: the note's height
+        // depends on nothing, but the row count does not fit until the width
+        // is known, and a page that fits gets the viewport's full height so it
+        // centres rather than sitting against the top.
+        // Twice, because the two are circular: whether the scroll bar is shown
+        // depends on the page's height, and the width the page gets depends on
+        // whether the scroll bar is shown. One pass settles it, and the second
+        // is what makes the result the same whichever page was on screen
+        // before.
+        for (int pass = 0; pass < 2; ++pass)
+            page->setSize (viewport_.getMaximumVisibleWidth(),
+                           juce::jmax (viewport_.getMaximumVisibleHeight(),
+                                       page->getPreferredHeight()));
+    }
 }
 
 } // namespace tezla::sonitus
