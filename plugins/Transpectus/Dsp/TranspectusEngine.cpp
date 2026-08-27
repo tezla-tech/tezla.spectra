@@ -34,6 +34,10 @@ void Engine::prepare (double sampleRate, int maxBlockSize, int numChannels)
     // whenever it happens to tick.
     capture_.prepare (static_cast<int> (sampleRate_ * 2.0));
 
+    // Sized in seconds, so the goniometer spans the same slice of time at
+    // 44.1 as at 192 kHz rather than showing a quarter of the music.
+    scope_.prepare (sampleRate_);
+
     monoScratch_.assign (static_cast<std::size_t> (std::max (maxBlockSize, 1)), 0.0);
 
     setParameters (parameters_);
@@ -44,6 +48,7 @@ void Engine::reset()
 {
     loudness_.reset();
     stereo_.reset();
+    scope_.reset();
 
     for (auto& detector : detectors_)
         detector.reset();
@@ -87,6 +92,10 @@ void Engine::process (const double* const* channels, int numChannels, int numSam
 
     if (active >= 2)
         stereo_.process (channels, active, numSamples);
+
+    // The scope takes whatever it is given: a mono input draws the 45-degree
+    // line a mono signal is, rather than nothing.
+    scope_.push (channels, active, numSamples);
 
     // True peak, per channel, held. The hold is what makes it a delivery
     // reading rather than a flicker: a master's dBTP is its worst moment, not

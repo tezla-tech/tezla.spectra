@@ -14,6 +14,10 @@
 //   tezla-ui-preview focus-drag out.png     the same, mid-drag, with the gesture
 //                                           driven through the component and the
 //                                           frequencies it reported printed
+//   tezla-ui-preview goniometer out.png     the stereo shapes that matter, side by
+//                                           side: mono, wide, hard-panned, out of
+//                                           phase, and a sub that is inverted under
+//                                           a top that is not
 //   tezla-ui-preview meters     out.png     every state of the level meter side
 //                                           by side: silent, quiet, hot, over,
 //                                           and referenced to a ceiling. A meter
@@ -29,6 +33,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <tezla/dsp/SpectrumAnalyser.hpp>
+#include <tezla/ui/Goniometer.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/SpectrumDisplay.hpp>
 
@@ -64,9 +69,11 @@ double excited (double t)
 }
 
 /// Renders whatever the display currently holds and writes it out.
-int writeSnapshot (tezla::ui::SpectrumDisplay& display, const juce::File& destination)
+/// Photographs any component at 2x, so the result is readable on a high-DPI
+/// display rather than a 190-pixel thumbnail.
+int writeSnapshot (juce::Component& component, const juce::File& destination)
 {
-    const auto image = display.createComponentSnapshot (display.getLocalBounds(), false, 2.0f);
+    const auto image = component.createComponentSnapshot (component.getLocalBounds(), false, 2.0f);
 
     destination.deleteFile();
     std::unique_ptr<juce::FileOutputStream> stream (destination.createOutputStream());
@@ -254,6 +261,171 @@ int renderSpectrum (const juce::File& destination)
     return writeSnapshot (display, destination);
 }
 
+/// The stereo shapes a goniometer exists to tell apart.
+///
+/// Every one of these is a case where a correlation number alone is either
+/// ambiguous or actively misleading, which is the argument for having the
+/// picture at all. Fed through the real StereoScope rather than drawn by hand,
+/// so the rotation, the scaling and the striding are all being checked too.
+int renderGoniometer (const juce::File& destination)
+{
+    struct Case
+    {
+        const char* caption;
+        /// Fills one second of stereo audio.
+        void (*fill) (std::vector<double>&, std::vector<double>&);
+    };
+
+    const auto tone = [] (std::size_t i, double hz)
+    {
+        return std::sin (2.0 * std::numbers::pi * hz * static_cast<double> (i) / kSampleRate);
+    };
+
+    const Case cases[] {
+        // r = +1. A vertical line: everything in the middle.
+        { "mono", [] (std::vector<double>& l, std::vector<double>& r)
+          {
+              for (std::size_t i = 0; i < l.size(); ++i)
+              {
+                  const double v = 0.7 * std::sin (2.0 * std::numbers::pi * 220.0
+                                                   * static_cast<double> (i) / kSampleRate);
+                  l[i] = v;
+                  r[i] = v;
+              }
+          } },
+
+        // A wide mix: correlated centre with decorrelated sides. Reads about
+        // +0.6 and looks like a full ellipse.
+        { "wide", [] (std::vector<double>& l, std::vector<double>& r)
+          {
+              for (std::size_t i = 0; i < l.size(); ++i)
+              {
+                  const auto t = static_cast<double> (i) / kSampleRate;
+                  const double mid  = 0.55 * std::sin (2.0 * std::numbers::pi * 220.0 * t);
+                  const double side = 0.35 * std::sin (2.0 * std::numbers::pi * 331.0 * t);
+                  l[i] = mid + side;
+                  r[i] = mid - side;
+              }
+          } },
+
+        // Two mono tracks that never met. Also reads about 0, exactly like the
+        // wide case, and needs the opposite fix.
+        { "hard panned", [] (std::vector<double>& l, std::vector<double>& r)
+          {
+              for (std::size_t i = 0; i < l.size(); ++i)
+              {
+                  const auto t = static_cast<double> (i) / kSampleRate;
+                  l[i] = 0.75 * std::sin (2.0 * std::numbers::pi * 220.0 * t);
+                  r[i] = 0.75 * std::sin (2.0 * std::numbers::pi * 277.0 * t);
+              }
+          } },
+
+        // r = -1. Horizontal, and silent the moment anything sums to mono.
+        { "polarity inverted", [] (std::vector<double>& l, std::vector<double>& r)
+          {
+              for (std::size_t i = 0; i < l.size(); ++i)
+              {
+                  const double v = 0.7 * std::sin (2.0 * std::numbers::pi * 220.0
+                                                   * static_cast<double> (i) / kSampleRate);
+                  l[i] =  v;
+                  r[i] = -v;
+              }
+          } },
+
+        // Lopsided: the same content, 6 dB louder on the left. Correlation is
+        // still +1 -- it normalises level away by construction -- and only the
+        // picture leans.
+        { "6 dB left", [] (std::vector<double>& l, std::vector<double>& r)
+          {
+              for (std::size_t i = 0; i < l.size(); ++i)
+              {
+                  const double v = 0.7 * std::sin (2.0 * std::numbers::pi * 220.0
+                                                   * static_cast<double> (i) / kSampleRate);
+                  l[i] = v;
+                  r[i] = v * 0.5;
+              }
+          } },
+
+        // The failure this suite cares most about: a sub that cancels under a
+        // top that does not.
+        { "sub inverted", [] (std::vector<double>& l, std::vector<double>& r)
+          {
+              for (std::size_t i = 0; i < l.size(); ++i)
+              {
+                  const auto t = static_cast<double> (i) / kSampleRate;
+                  const double sub = 0.45 * std::sin (2.0 * std::numbers::pi * 50.0 * t);
+                  const double top = 0.35 * std::sin (2.0 * std::numbers::pi * 900.0 * t);
+                  l[i] =  sub + top;
+                  r[i] = -sub + top;
+              }
+          } },
+    };
+
+    (void) tone;
+
+    constexpr int size = 190;
+    constexpr int gap = 10;
+
+    const int total = static_cast<int> (std::size (cases));
+
+    struct Holder : juce::Component
+    {
+        explicit Holder (juce::Colour c) : colour (c) {}
+        void paint (juce::Graphics& g) override { g.fillAll (colour); }
+        juce::Colour colour;
+    };
+
+    tezla::ui::Palette palette;
+    palette.accent       = juce::Colour { 0xff5bb98c };   // Transpectus green
+    palette.accentBright = juce::Colour { 0xff8fe0b4 };
+
+    Holder holder { palette.background };
+    holder.setSize (3 * (size + gap) + gap, 2 * (size + gap) + gap + 34);
+
+    std::vector<std::unique_ptr<tezla::ui::Goniometer>> scopes;
+
+    for (int i = 0; i < total; ++i)
+    {
+        auto scope = std::make_unique<tezla::dsp::StereoScope>();
+        scope->prepare (kSampleRate);
+
+        const auto length = static_cast<std::size_t> (kSampleRate);
+        std::vector<double> left (length, 0.0), right (length, 0.0);
+        cases[i].fill (left, right);
+
+        // Pushed in host-sized blocks, so the ring wraps the way it does in a
+        // plugin rather than in one clean sweep.
+        for (std::size_t offset = 0; offset < length; offset += 512)
+        {
+            const auto span = std::min<std::size_t> (512, length - offset);
+            const double* pointers[2] { left.data() + offset, right.data() + offset };
+            scope->push (pointers, 2, static_cast<int> (span));
+        }
+
+        // And read the correlation the picture is supposed to explain, so the
+        // caption can state both.
+        tezla::dsp::CorrelationMeter correlation;
+        correlation.prepare (kSampleRate, 0.400);
+
+        for (std::size_t i2 = 0; i2 < length; ++i2)
+            correlation.process (left[i2], right[i2]);
+
+        auto view = std::make_unique<tezla::ui::Goniometer> (palette);
+        view->update (*scope);
+
+        const int column = i % 3;
+        const int row = i / 3;
+        view->setBounds (gap + column * (size + gap), 26 + row * (size + gap), size, size);
+
+        holder.addAndMakeVisible (*view);
+        scopes.push_back (std::move (view));
+
+        std::printf ("  %-20s r = %+.3f\n", cases[i].caption, correlation.getCorrelation());
+    }
+
+    return writeSnapshot (holder, destination);
+}
+
 /// Every state of the level meter, side by side.
 ///
 /// A standalone build in a container has no audio device, so its meters read
@@ -406,7 +578,7 @@ int main (int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag|meters> <out.png>\n");
+        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag|meters|goniometer> <out.png>\n");
         return 2;
     }
 
@@ -423,6 +595,9 @@ int main (int argc, char** argv)
 
     if (what == "meters")
         return renderMeters (destination);
+
+    if (what == "goniometer")
+        return renderGoniometer (destination);
 
     std::fprintf (stderr, "unknown preview '%s'\n", argv[1]);
     return 2;

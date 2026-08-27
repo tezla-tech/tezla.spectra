@@ -58,19 +58,21 @@ public:
     static constexpr double kAbsoluteGateLufs  = -70.0;   ///< silence never counts
     static constexpr double kRelativeGateLu    = -10.0;   ///< below the ungated mean
 
-    static constexpr double kMomentarySeconds  = 0.400;
-    static constexpr double kShortTermSeconds  = 3.000;
-
     /// A new gating block every 100 ms: 400 ms blocks at 75% overlap, as the
     /// Recommendation specifies.
     static constexpr double kBlockIntervalSeconds = 0.100;
 
-    /// The two windows, counted in those intervals.
+    /// The two windows, counted in those intervals. This is the primary form:
+    /// a window that is not a whole number of gating intervals cannot be
+    /// assembled from them at all, and the standard specifies both as integers.
     static constexpr int kMomentaryIntervals = 4;    ///< 400 ms
     static constexpr int kShortTermIntervals = 30;   ///< 3 s
 
-    static_assert (kMomentaryIntervals * kBlockIntervalSeconds == kMomentarySeconds);
-    static_assert (kShortTermIntervals * kBlockIntervalSeconds == kShortTermSeconds);
+    /// Derived, so the two cannot disagree. Writing 0.400 out and asserting it
+    /// matched was the same statement made twice -- and made in floating point,
+    /// where 4 x 0.1 is not obliged to be the double nearest 0.4.
+    static constexpr double kMomentarySeconds = kMomentaryIntervals * kBlockIntervalSeconds;
+    static constexpr double kShortTermSeconds = kShortTermIntervals * kBlockIntervalSeconds;
 
     /// Anything at or below this is reported as silence rather than as a very
     /// large negative number that looks like a reading.

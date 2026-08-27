@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/SpectrumAnalyser.hpp>
+#include <tezla/ui/Goniometer.hpp>
 #include <tezla/ui/HeaderBar.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/Palette.hpp>
@@ -143,6 +144,7 @@ private:
 
     std::unique_ptr<CorrelationBar> fullCorrelation_;
     std::unique_ptr<CorrelationBar> lowCorrelation_;
+    std::unique_ptr<ui::Goniometer> goniometer_;
 
     std::unique_ptr<SpectrumView> spectrum_;
 

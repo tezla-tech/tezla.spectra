@@ -6,14 +6,17 @@
 #include <vector>
 
 #include <tezla/dsp/BoxStackSmoother.hpp>
+#include <tezla/dsp/Correlation.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/RunningMinimum.hpp>
 #include <tezla/dsp/TruePeakDetector.hpp>
 
 #include <cmath>
 
+#include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
+#include "TranspectusEngine.hpp"
 
 using namespace tezla;
 
@@ -252,6 +255,87 @@ TEZLA_TEST (neither_engine_allocates_while_processing)
 
         CHECK (counter.count() == 0);
     }
+}
+
+TEZLA_TEST (transpectus_measures_without_allocating)
+{
+    // An analyser is the easiest place to leak an allocation, because nothing
+    // it does is audible: a std::vector grown once a block would show up as a
+    // dropout on someone else's plugin, not on this one.
+    //
+    // Every mode, because each brings a different amount of machinery: the
+    // true-peak factor changes the detector's oversampling, and switching
+    // target changes which table row the readout is computed against.
+    std::vector<double> left (256, 0.0), right (256, 0.0);
+    const double* pointers[2] { left.data(), right.data() };
+
+    tezla::transpectus::Engine engine;
+    engine.prepare (48000.0, 256, 2);
+
+    auto parameters = tezla::transpectus::Parameters {};
+    engine.setParameters (parameters);
+
+    AllocationCounter counter;
+
+    for (int block = 0; block < 60; ++block)
+    {
+        for (int i = 0; i < 256; ++i)
+        {
+            const auto t = static_cast<double> (block * 256 + i);
+            left[static_cast<std::size_t> (i)]  = 0.5 * std::sin (0.07 * t);
+            right[static_cast<std::size_t> (i)] = 0.5 * std::sin (0.09 * t);
+        }
+
+        parameters.targetIndex = block % tezla::transpectus::kNumLoudnessTargets;
+        parameters.truePeak = block % 3 == 0 ? dsp::TruePeakMode::Off
+                            : block % 3 == 1 ? dsp::TruePeakMode::Standard
+                                             : dsp::TruePeakMode::Strict;
+        parameters.monoCheckHz = 80.0 + 2.0 * block;
+        engine.setParameters (parameters);
+
+        engine.process (pointers, 2, 256);
+
+        // The readings the editor pulls every frame, including the gated
+        // integration, which walks the whole block list each time it is asked.
+        (void) engine.getIntegratedLufs();
+        (void) engine.getPlr();
+        (void) engine.getPsr();
+        (void) engine.getTargetDeltaDb();
+    }
+
+    CHECK (counter.count() == 0);
+}
+
+TEZLA_TEST (transpectus_scope_read_does_not_allocate)
+{
+    // The goniometer pulls from the scope on every editor tick. That read runs
+    // on the message thread rather than the audio one, so an allocation there
+    // is not a dropout -- but it is a per-frame allocation in a plugin the user
+    // leaves open, which is its own kind of rude.
+    std::vector<double> left (512, 0.0), right (512, 0.0);
+    const double* pointers[2] { left.data(), right.data() };
+
+    dsp::StereoScope scope;
+    scope.prepare (48000.0);
+
+    std::vector<double> outLeft (256), outRight (256);
+
+    AllocationCounter counter;
+
+    for (int block = 0; block < 40; ++block)
+    {
+        for (int i = 0; i < 512; ++i)
+        {
+            const auto t = static_cast<double> (block * 512 + i);
+            left[static_cast<std::size_t> (i)]  = 0.5 * std::sin (0.03 * t);
+            right[static_cast<std::size_t> (i)] = 0.5 * std::sin (0.05 * t);
+        }
+
+        scope.push (pointers, 2, 512);
+        (void) scope.readLatest (outLeft.data(), outRight.data(), 256, 4);
+    }
+
+    CHECK (counter.count() == 0);
 }
 
 TEZLA_TEST (limiter_smoothing_stages_do_not_allocate_while_running)

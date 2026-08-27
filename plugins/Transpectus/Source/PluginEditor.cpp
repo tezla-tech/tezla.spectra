@@ -447,7 +447,7 @@ TranspectusEditor::TranspectusEditor (TranspectusProcessor& processorToUse)
 
     setResizable (true, true);
     setResizeLimits (kMinWidth, kMinHeight, kMaxWidth, kMaxHeight);
-    setSize (900, 560);
+    setSize (940, 680);
 
     startTimerHz (20);
 }
@@ -518,6 +518,14 @@ void TranspectusEditor::buildControls()
                                  "loses level when the rig sums to mono, and headphones will "
                                  "never show it because nothing sums there.");
     addAndMakeVisible (*lowCorrelation_);
+
+    goniometer_ = std::make_unique<ui::Goniometer> (palette_);
+    goniometer_->setTooltip ("The sample pairs the correlation numbers summarise, rotated so mono "
+                             "is vertical. A tall narrow shape is a mono-ish mix; a wide one is a "
+                             "wide mix; a horizontal one is out of phase. A shape leaning left or "
+                             "right is a lopsided mix, which no correlation number will tell you. "
+                             "Fifty milliseconds of history at every sample rate.");
+    addAndMakeVisible (*goniometer_);
 
     // ---- controls ------------------------------------------------------------
 
@@ -698,6 +706,9 @@ void TranspectusEditor::timerCallback()
     fullCorrelation_->repaint();
     lowCorrelation_->repaint();
 
+    goniometer_->update (engine.getStereoScope());
+    goniometer_->repaint();
+
     // Fold the latest window onto the display bins, then feed the capture if
     // one is running -- in that order, so the capture sees the same frame the
     // user is looking at.
@@ -791,11 +802,12 @@ void TranspectusEditor::resized()
 
     body.removeFromRight (8);
 
-    // Seven readouts at a fixed height rather than a share of the window. They
-    // hold one number each; giving them a third of a tall window leaves the
+    // Seven readouts at a near-fixed height rather than a share of the window.
+    // They hold one number each; giving them a third of a tall window leaves the
     // number floating in the middle of an empty panel, and the room belongs to
-    // the spectrum.
-    constexpr int readoutHeight = 76;
+    // the spectrum. They do give a little back when the window is at its
+    // smallest, because the alternative is a spectrum with no height at all.
+    const int readoutHeight = juce::jlimit (58, 76, body.getHeight() / 6);
 
     {
         auto top = body.removeFromTop (readoutHeight);
@@ -816,12 +828,25 @@ void TranspectusEditor::resized()
         delta_->setBounds (second.reduced (4));
     }
 
-    // Correlation across the bottom, the spectrum filling whatever is left --
+    // Position across the bottom: the goniometer square on the left with the two
+    // correlation bars stacked beside it, so the picture and the numbers that
+    // summarise it are read together. The spectrum fills whatever is left --
     // which is most of a tall window, and is where the eye spends its time.
-    auto correlation = body.removeFromBottom (60);
-    const int half = correlation.getWidth() / 2;
-    fullCorrelation_->setBounds (correlation.removeFromLeft (half).reduced (4, 4));
-    lowCorrelation_->setBounds (correlation.reduced (4, 4));
+    {
+        // Two fifths rather than a third: the goniometer is square, so its
+        // height is also its width, and a strip sized for two bars leaves a
+        // circle too small to read a lean off.
+        const int positionHeight = juce::jlimit (120, 190, body.getHeight() * 2 / 5);
+        auto position = body.removeFromBottom (positionHeight);
+
+        // Square, taken from the height, so the goniometer stays a circle at
+        // every window width.
+        goniometer_->setBounds (position.removeFromLeft (position.getHeight()).reduced (4, 4));
+
+        const int barHeight = position.getHeight() / 2;
+        fullCorrelation_->setBounds (position.removeFromTop (barHeight).reduced (4, 4));
+        lowCorrelation_->setBounds (position.reduced (4, 4));
+    }
 
     // The reference controls sit under the spectrum they act on.
     auto spectrumControls = body.removeFromBottom (28).reduced (4, 2);

@@ -145,6 +145,14 @@ public:
         return capture_;
     }
 
+    /// For the editor's goniometer. The sample pairs the correlation number
+    /// summarises -- a wide mix and a hard-panned pair can read the same r,
+    /// and only the picture says which one you have.
+    [[nodiscard]] const dsp::StereoScope& getStereoScope() const noexcept
+    {
+        return scope_;
+    }
+
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate_; }
 
 private:
@@ -156,6 +164,7 @@ private:
     dsp::LoudnessMeter  loudness_;
     dsp::StereoAnalyser stereo_;
     dsp::SpectrumCapture capture_;
+    dsp::StereoScope     scope_;
 
     std::array<dsp::TruePeakDetector, kMaxChannels> detectors_;
 

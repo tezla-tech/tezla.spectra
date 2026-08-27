@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -254,6 +255,125 @@ private:
     double sampleRate_      { 48000.0 };
     double lowCrossoverHz_  { kDefaultLowCrossoverHz };
     double peakWidth_       { 0.0 };
+};
+
+
+// ---------------------------------------------------------------------------
+// StereoScope -- the sample pairs behind a goniometer
+// ---------------------------------------------------------------------------
+//
+// A correlation number says how much the channels agree. It does not say *how*
+// they disagree, and those are different questions: a mix that is wide and one
+// that is a hard-panned pair can read the same r, and they need opposite fixes.
+// The scope is the picture the number summarises.
+//
+// One buffer of interleaved pairs rather than two buffers, and that is the
+// whole design decision. Two ring buffers with two write indices can be read a
+// block apart, and a goniometer fed L from now and R from a millisecond ago
+// draws a rotation that is not in the audio -- an artefact indistinguishable
+// from a real phase problem, which is exactly what the display exists to find.
+// One index cannot tear that way.
+//
+// Sized in **seconds**, not samples, so the picture spans the same slice of
+// time at 44.1 and at 192 kHz. Drawing it thins the point cloud by striding,
+// which is a visual decimation of something already dense -- the scope is a
+// display, and the numbers next to it are the measurement.
+class StereoScope
+{
+public:
+    /// About the shortest window that still shows a bass cycle whole. Longer
+    /// smears a moving image into a blob; shorter flickers.
+    static constexpr double kDefaultSeconds = 0.050;
+
+    /// Allocates. Never call from the audio thread.
+    void prepare (double sampleRate, double seconds = kDefaultSeconds)
+    {
+        const double rate = sampleRate > 0.0 ? sampleRate : 48000.0;
+        const auto wanted = static_cast<std::size_t> (rate * std::max (seconds, 0.001));
+
+        // Power of two, so the wrap is a mask rather than a modulo.
+        std::size_t pairs = 1;
+        while (pairs < wanted)
+            pairs <<= 1;
+
+        buffer_.assign (pairs * 2, 0.0);
+        mask_ = pairs - 1;
+        write_.store (0, std::memory_order_relaxed);
+    }
+
+    void reset() noexcept
+    {
+        std::fill (buffer_.begin(), buffer_.end(), 0.0);
+        write_.store (0, std::memory_order_relaxed);
+    }
+
+    /// Audio thread. Real-time safe. A mono input is duplicated, which draws
+    /// the 45-degree line a mono signal actually is.
+    void push (const double* const* channels, int numChannels, int numSamples) noexcept
+    {
+        if (buffer_.empty() || channels == nullptr || numChannels < 1 || numSamples <= 0)
+            return;
+
+        const double* left  = channels[0];
+        const double* right = numChannels > 1 ? channels[1] : channels[0];
+
+        if (left == nullptr || right == nullptr)
+            return;
+
+        std::size_t write = write_.load (std::memory_order_relaxed);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            buffer_[write * 2]     = left[i];
+            buffer_[write * 2 + 1] = right[i];
+            write = (write + 1) & mask_;
+        }
+
+        write_.store (write, std::memory_order_release);
+    }
+
+    /// Message thread. Copies the most recent `numPairs` in chronological
+    /// order, taking every `stride`-th pair so a caller can ask for a fixed
+    /// number of points whatever the sample rate.
+    ///
+    /// Returns how many pairs were written, which is zero if the scope is not
+    /// prepared or the request does not fit.
+    [[nodiscard]] int readLatest (double* leftOut, double* rightOut,
+                                  int numPairs, int stride = 1) const noexcept
+    {
+        if (buffer_.empty() || leftOut == nullptr || rightOut == nullptr
+            || numPairs <= 0 || stride < 1)
+            return 0;
+
+        const std::size_t pairs = mask_ + 1;
+        const auto span = static_cast<std::size_t> (numPairs) * static_cast<std::size_t> (stride);
+
+        if (span > pairs)
+            return 0;
+
+        const std::size_t write = write_.load (std::memory_order_acquire);
+        std::size_t read = (write + pairs - span) & mask_;
+
+        for (int i = 0; i < numPairs; ++i)
+        {
+            leftOut[i]  = buffer_[read * 2];
+            rightOut[i] = buffer_[read * 2 + 1];
+            read = (read + static_cast<std::size_t> (stride)) & mask_;
+        }
+
+        return numPairs;
+    }
+
+    /// How many pairs the buffer holds. A caller picks its stride from this.
+    [[nodiscard]] std::size_t getCapacity() const noexcept
+    {
+        return buffer_.empty() ? 0 : mask_ + 1;
+    }
+
+private:
+    std::vector<double> buffer_;   ///< interleaved L, R
+    std::size_t mask_ { 0 };
+    std::atomic<std::size_t> write_ { 0 };
 };
 
 } // namespace tezla::dsp

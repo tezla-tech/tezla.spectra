@@ -238,3 +238,213 @@ TEZLA_TEST (correlation_running_sums_do_not_drift)
 
     CHECK (std::abs (analyser.getCorrelation() - 1.0) < 1.0e-9);
 }
+
+// ---------------------------------------------------------------------------
+// StereoScope
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// Pushes a stereo signal into a scope in host-sized blocks.
+void feedScope (StereoScope& scope, const std::vector<double>& left,
+                const std::vector<double>& right, int blockSize = 256)
+{
+    const auto total = static_cast<int> (left.size());
+
+    for (int offset = 0; offset < total; offset += blockSize)
+    {
+        const int span = std::min (blockSize, total - offset);
+        const double* pointers[2] { left.data() + offset, right.data() + offset };
+        scope.push (pointers, 2, span);
+    }
+}
+} // namespace
+
+TEZLA_TEST (scope_holds_the_same_slice_of_time_at_every_rate)
+{
+    // Sized in seconds, so the picture spans the same slice of time whatever
+    // the host is running at. A scope sized in samples would show four times
+    // less music at 192 kHz than at 48, and the display would silently change
+    // character with the session.
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        StereoScope scope;
+        scope.prepare (rate, 0.050);
+
+        const double heldSeconds = static_cast<double> (scope.getCapacity()) / rate;
+
+        // The capacity rounds up to a power of two, so it holds at least the
+        // window asked for and less than twice it.
+        CHECK (heldSeconds >= 0.050);
+        CHECK (heldSeconds < 0.100);
+    }
+}
+
+TEZLA_TEST (scope_returns_the_most_recent_pairs_in_order)
+{
+    StereoScope scope;
+    scope.prepare (48000.0, 0.050);
+
+    // A ramp, so every sample identifies itself.
+    const int total = 4096;
+    std::vector<double> left (static_cast<std::size_t> (total));
+    std::vector<double> right (static_cast<std::size_t> (total));
+
+    for (int i = 0; i < total; ++i)
+    {
+        left[static_cast<std::size_t> (i)]  = static_cast<double> (i);
+        right[static_cast<std::size_t> (i)] = static_cast<double> (-i);
+    }
+
+    feedScope (scope, left, right, 300);
+
+    std::vector<double> outLeft (256), outRight (256);
+    CHECK (scope.readLatest (outLeft.data(), outRight.data(), 256) == 256);
+
+    bool correct = true;
+
+    for (int i = 0; i < 256; ++i)
+    {
+        const double expected = static_cast<double> (total - 256 + i);
+
+        if (outLeft[static_cast<std::size_t> (i)] != expected
+            || outRight[static_cast<std::size_t> (i)] != -expected)
+            correct = false;
+    }
+
+    CHECK (correct);
+}
+
+TEZLA_TEST (scope_pairs_never_tear_across_a_block_boundary)
+{
+    // The reason there is one buffer and one write index rather than two of
+    // each. A pair read from two independently-indexed rings can come from two
+    // different moments, and a goniometer fed L from now and R from a
+    // millisecond ago draws a rotation that is not in the audio.
+    //
+    // Here right = -left exactly, so any tear shows as a pair that does not.
+    StereoScope scope;
+    scope.prepare (48000.0, 0.050);
+
+    const auto x = noise (48000, 0.8, 21u);
+    std::vector<double> inverted (x.size());
+
+    for (std::size_t i = 0; i < x.size(); ++i)
+        inverted[i] = -x[i];
+
+    // Odd block sizes, so pushes land at every alignment against the ring.
+    for (const int blockSize : { 1, 7, 61, 257, 1024 })
+    {
+        StereoScope fresh;
+        fresh.prepare (48000.0, 0.050);
+        feedScope (fresh, x, inverted, blockSize);
+
+        std::vector<double> outLeft (512), outRight (512);
+        CHECK (fresh.readLatest (outLeft.data(), outRight.data(), 512) == 512);
+
+        double worst = 0.0;
+
+        for (std::size_t i = 0; i < outLeft.size(); ++i)
+            worst = std::max (worst, std::abs (outLeft[i] + outRight[i]));
+
+        CHECK (worst == 0.0);
+    }
+}
+
+TEZLA_TEST (scope_striding_covers_the_whole_window)
+{
+    // How the display keeps a fixed point count at every rate: ask for the same
+    // number of points and stride by the ratio. The first point must still come
+    // from the start of the window, or the picture would only show its tail.
+    StereoScope scope;
+    scope.prepare (48000.0, 0.050);
+
+    const std::size_t capacity = scope.getCapacity();
+
+    std::vector<double> left (capacity), right (capacity);
+
+    for (std::size_t i = 0; i < capacity; ++i)
+    {
+        left[i]  = static_cast<double> (i);
+        right[i] = static_cast<double> (i);
+    }
+
+    feedScope (scope, left, right, 64);
+
+    const int points = 256;
+    const int stride = static_cast<int> (capacity) / points;
+
+    std::vector<double> outLeft (static_cast<std::size_t> (points));
+    std::vector<double> outRight (static_cast<std::size_t> (points));
+
+    CHECK (scope.readLatest (outLeft.data(), outRight.data(), points, stride) == points);
+
+    // First sample of the window, and the last point one stride from the end.
+    CHECK_NEAR (outLeft.front(), 0.0, 1.0e-12);
+    CHECK_NEAR (outLeft.back(), static_cast<double> (capacity - static_cast<std::size_t> (stride)), 1.0e-12);
+}
+
+TEZLA_TEST (scope_refuses_a_request_it_cannot_fill)
+{
+    // Silently returning fewer points than asked for would leave a caller
+    // drawing whatever was in its buffer from last time.
+    StereoScope scope;
+    scope.prepare (48000.0, 0.050);
+
+    const auto capacity = static_cast<int> (scope.getCapacity());
+
+    std::vector<double> left (static_cast<std::size_t> (capacity) + 16);
+    std::vector<double> right (left.size());
+
+    CHECK (scope.readLatest (left.data(), right.data(), capacity + 1) == 0);
+    CHECK (scope.readLatest (left.data(), right.data(), capacity / 2, 4) == 0);
+    CHECK (scope.readLatest (left.data(), right.data(), capacity, 1) == capacity);
+
+    StereoScope unprepared;
+    CHECK (unprepared.readLatest (left.data(), right.data(), 16) == 0);
+    CHECK (unprepared.getCapacity() == 0);
+}
+
+TEZLA_TEST (scope_duplicates_a_mono_input)
+{
+    // A mono signal is the 45-degree line, and drawing it needs the right
+    // channel to exist. Reading uninitialised zeros instead would draw a
+    // horizontal line, which on a goniometer means "hard left".
+    StereoScope scope;
+    scope.prepare (48000.0, 0.050);
+
+    const auto x = noise (2048, 0.5, 31u);
+
+    const double* mono[1] { x.data() };
+    scope.push (mono, 1, static_cast<int> (x.size()));
+
+    std::vector<double> outLeft (256), outRight (256);
+    CHECK (scope.readLatest (outLeft.data(), outRight.data(), 256) == 256);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < outLeft.size(); ++i)
+        worst = std::max (worst, std::abs (outLeft[i] - outRight[i]));
+
+    CHECK (worst == 0.0);
+}
+
+TEZLA_TEST (scope_reset_clears_the_picture)
+{
+    StereoScope scope;
+    scope.prepare (48000.0, 0.050);
+
+    const auto x = noise (4096, 0.9, 41u);
+    feedScope (scope, x, x, 256);
+    scope.reset();
+
+    std::vector<double> outLeft (256), outRight (256);
+    CHECK (scope.readLatest (outLeft.data(), outRight.data(), 256) == 256);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < outLeft.size(); ++i)
+        worst = std::max ({ worst, std::abs (outLeft[i]), std::abs (outRight[i]) });
+
+    CHECK (worst == 0.0);
+}
