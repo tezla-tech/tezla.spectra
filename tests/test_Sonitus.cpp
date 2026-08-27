@@ -1,6 +1,7 @@
 #include "TestFramework.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 #include <vector>
@@ -234,6 +235,15 @@ TEZLA_TEST (the_output_is_block_size_independent)
     parameters.sequencerToLfo1Rate = 1.5;
     parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::cutoff, 2.0 };
     parameters.voice.slots[1] = { ModSource::sequencer, ModDestination::foldAmount, 0.4 };
+
+    // The global matrix moving too, and this half is the part that used to be
+    // wrong: the mangle's controls were written once per *callback*, which is
+    // the buffer-size dependence CLAUDE.md section 7 is about. Cutting them at
+    // the control boundary with everything else is what makes this pass.
+    parameters.globalSlots[0] = { GlobalSource::lfo1, GlobalDestination::combTime, 0.7 };
+    parameters.globalSlots[1] = { GlobalSource::lfo2, GlobalDestination::tubeDrive, 0.5 };
+    parameters.globalSlots[2] = { GlobalSource::sequencer, GlobalDestination::formantMorph, 0.6 };
+    parameters.lfo2RateHz = 1.7;
 
     for (int step = 0; step < StepSequencer::kMaxSteps; ++step)
         parameters.sequencerSteps[static_cast<std::size_t> (step)]
@@ -827,4 +837,455 @@ TEZLA_TEST (the_engine_survives_a_sample_rate_change_and_a_reset)
             CHECK (buffers.right[static_cast<std::size_t> (i)] == 0.0);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The global matrix
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (a_global_slot_sweeps_the_comb_over_octaves)
+{
+    // The instrument's headline claim. The brief's original trick was a flanger
+    // with its rate pinned at zero so the *depth* knob became a direct comb
+    // control, drawn by hand on an automation lane. This is that control with a
+    // modulation source behind it, and the thing to prove is that it reaches --
+    // a sweep of a few percent would be a chorus, not a flanger.
+    //
+    // The base delay is 2 ms rather than something longer for a reason worth
+    // recording: the comb's own range is 20 us to 20 ms, so +-3 octaves only
+    // fits between 160 us and 2.5 ms. At 8 ms the downward half runs into the
+    // 20 ms ceiling and the sweep measures 18.9x instead of 64 -- which is the
+    // clamp working correctly and the test measuring the wrong thing.
+    constexpr double rate = 48000.0;
+
+    auto parameters = brutal();
+
+    parameters.combMode = CombMode::flange;
+    parameters.combTimeMs = 2.0;
+    parameters.combKeyTrack = 0.0;
+    parameters.combInverted = false;
+    parameters.lfo1Wave = Lfo::Wave::triangle;
+    parameters.lfo1RateHz = 4.0;
+
+    const auto sweepWith = [&] (double depth)
+    {
+        auto swept = parameters;
+        swept.globalSlots[0] = { GlobalSource::lfo1, GlobalDestination::combTime, depth };
+
+        Engine engine;
+        engine.prepare (rate, 64);
+        engine.setParameters (swept);
+        engine.noteOn (40, 1.0);
+
+        Buffers buffers (64);
+
+        double lowest = 1.0e9;
+        double highest = 0.0;
+
+        // Two full LFO cycles at 4 Hz, read every 64 samples: the extremes of a
+        // triangle are single instants, and a 256-sample stride misses them by
+        // enough to matter.
+        for (int block = 0; block < 375; ++block)
+        {
+            engine.process (buffers.pointers, 64);
+
+            const double notch = engine.getCombNotchHz();
+
+            lowest = std::min (lowest, notch);
+            highest = std::max (highest, notch);
+        }
+
+        return std::pair { lowest, highest };
+    };
+
+    const auto [restLow, restHigh] = sweepWith (0.0);
+
+    // Nothing pointed at it: the notch does not move at all, and it sits where
+    // 1/(2D) puts it.
+    CHECK (std::abs (restHigh - restLow) < 1.0e-9);
+    CHECK (std::abs (restLow - 250.0) < 0.001);
+
+    const auto [sweptLow, sweptHigh] = sweepWith (1.0);
+
+    // +-3 octaves is a factor of 64. Measured: 31.250 Hz to 1977.9 Hz, a ratio
+    // of 63.29 -- short of 64 only because a triangle's corners are single
+    // samples and the reading is taken every 64.
+    CHECK (sweptHigh / sweptLow > 55.0);
+    CHECK (sweptHigh > 1900.0);
+    CHECK (sweptLow < 33.0);
+}
+
+TEZLA_TEST (positive_global_modulation_raises_the_comb_rather_than_lowering_it)
+{
+    // A sign convention worth pinning, because the obvious implementation gets
+    // it backwards: the control is a *delay*, and a longer delay is a lower
+    // notch. A player turning a positive modulation up expects the sweep to go
+    // up, so the delay has to move the other way.
+    constexpr double rate = 48000.0;
+
+    auto parameters = brutal();
+
+    parameters.combMode = CombMode::flange;
+    parameters.combTimeMs = 2.0;
+    parameters.combKeyTrack = 0.0;
+    parameters.combInverted = false;
+
+    // A sequencer with every step at +1 and no glide is a constant +1: a
+    // modulation source held at full, which is what makes this readable as a
+    // single number rather than a sweep.
+    parameters.sequencerRateHz = 1.0;
+    parameters.sequencerGlide = 0.0;
+    parameters.sequencerSteps.fill (1.0);
+
+    const auto notchWith = [&] (double depth)
+    {
+        auto set = parameters;
+        set.globalSlots[0] = { GlobalSource::sequencer, GlobalDestination::combTime, depth };
+
+        Engine engine;
+        engine.prepare (rate, 256);
+        engine.setParameters (set);
+        engine.noteOn (40, 1.0);
+
+        Buffers buffers (256);
+        engine.process (buffers.pointers, 256);
+
+        return engine.getCombNotchHz();
+    };
+
+    const double rest = notchWith (0.0);
+    const double up = notchWith (1.0);
+    const double down = notchWith (-1.0);
+
+    CHECK (std::abs (rest - 250.0) < 0.001);
+
+    // Three octaves each way, exactly.
+    CHECK (std::abs (up / rest - 8.0) < 0.001);
+    CHECK (std::abs (rest / down - 8.0) < 0.001);
+}
+
+TEZLA_TEST (every_global_destination_reaches_its_control)
+{
+    // A destination list is exactly the kind of thing that silently grows a
+    // dead entry: a `case` that was never written, or one written against the
+    // wrong member. Each of the seven is checked here by measuring the thing it
+    // is supposed to move -- so a destination that does nothing fails rather
+    // than merely looking implemented.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 16000;
+
+    auto base = brutal();
+
+    base.sequencerRateHz = 1.0;
+    base.sequencerGlide = 0.0;
+    base.sequencerSteps.fill (1.0);
+
+    // Room for the destinations that add rather than scale -- and a comb that
+    // is *audible*, which is the one thing this test got wrong first time
+    // round. With the mix at zero the comb is bit-exactly transparent by
+    // design, so modulating its feedback changed nothing and the reading was
+    // exactly 0. That is the comb behaving correctly and the test measuring
+    // the wrong thing.
+    base.combMode = CombMode::flange;
+    base.combTimeMs = 2.0;
+    base.combKeyTrack = 0.0;
+    base.combFeedback = 0.0;
+    base.combMix = 0.5;
+    base.combInverted = false;
+    base.phaseFrequencyHz = 800.0;
+    base.formantMorph = 0.0;
+    base.formantMix = 1.0;
+    base.tubeDriveDb = 0.0;
+    base.outputDb = -30.0;
+
+    const auto renderWith = [&] (GlobalDestination destination, double depth)
+    {
+        auto set = base;
+        set.globalSlots[0] = { GlobalSource::sequencer, destination, depth };
+
+        Engine engine;
+        engine.prepare (rate, 256);
+
+        const auto out = play (engine, set, 40, samples);
+
+        // **RMS of the last quarter, not the peak of the whole render.** The
+        // output gain starts where `prepare` left it -- 0 dB, because prepare
+        // runs before any parameter is known -- and smooths towards whatever
+        // the patch asks for, so the first tenth of a second of every render is
+        // dominated by that ramp. Measuring the peak read the ramp rather than
+        // the setting: +24 dB of modulation measured as 1.86x.
+        double sum = 0.0;
+
+        const std::size_t from = out.size() * 3 / 4;
+
+        for (std::size_t i = from; i < out.size(); ++i)
+            sum += out[i] * out[i];
+
+        struct Result
+        {
+            double rms;
+            double notch;
+            double phase;
+        };
+
+        return Result { std::sqrt (sum / static_cast<double> (out.size() - from)),
+                        engine.getCombNotchHz(), engine.getPhaseFrequencyHz() };
+    };
+
+    const auto rest = renderWith (GlobalDestination::none, 1.0);
+
+    // comb time -- three octaves up.
+    CHECK (std::abs (renderWith (GlobalDestination::combTime, 1.0).notch / rest.notch - 8.0) < 0.001);
+
+    // phase centre -- four octaves up, clamped by the phaser's own ceiling well
+    // above where this lands.
+    CHECK (std::abs (renderWith (GlobalDestination::phaseFrequency, 1.0).phase / rest.phase - 16.0)
+             < 0.01);
+
+    // output -- +24 dB at full depth, which is a factor of 15.85 on the level.
+    // Measured: 15.848, against the 15.849 the decibels predict.
+    const double louder = renderWith (GlobalDestination::output, 1.0).rms / rest.rms;
+    CHECK (louder > 15.0);
+    CHECK (louder < 16.7);
+
+    // The four that change the *sound* rather than a readable number: each is
+    // checked by rendering with and without and requiring the output to differ
+    // by more than a rounding. A destination wired to nothing renders bit for
+    // bit the same, which is what the next test asserts from the other side.
+    for (const auto destination : { GlobalDestination::combFeedback,
+                                    GlobalDestination::combMix,
+                                    GlobalDestination::formantMorph,
+                                    GlobalDestination::tubeDrive })
+    {
+        const double changed = renderWith (destination, 1.0).rms;
+
+        CHECK (std::abs (changed - rest.rms) > 1.0e-6);
+    }
+}
+
+TEZLA_TEST (an_unpointed_global_matrix_changes_nothing_at_all)
+{
+    // The bit-exact half of the claim. Three slots with a source but no
+    // destination, and three with a destination but no source, must render
+    // identically to none at all -- otherwise the matrix is a tone control that
+    // is on by default, and every patch saved before it existed changes.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 8000;
+
+    auto parameters = brutal();
+    parameters.lfo1RateHz = 3.0;
+
+    const auto render = [&] (const EngineParameters& set)
+    {
+        Engine engine;
+        engine.prepare (rate, 256);
+
+        return play (engine, set, 40, samples);
+    };
+
+    const auto plain = render (parameters);
+
+    auto sourceOnly = parameters;
+    sourceOnly.globalSlots[0] = { GlobalSource::lfo1, GlobalDestination::none, 1.0 };
+    sourceOnly.globalSlots[1] = { GlobalSource::lfo2, GlobalDestination::none, -1.0 };
+    sourceOnly.globalSlots[2] = { GlobalSource::sequencer, GlobalDestination::none, 1.0 };
+
+    auto destinationOnly = parameters;
+    destinationOnly.globalSlots[0] = { GlobalSource::none, GlobalDestination::combTime, 1.0 };
+    destinationOnly.globalSlots[1] = { GlobalSource::none, GlobalDestination::tubeDrive, 1.0 };
+    destinationOnly.globalSlots[2] = { GlobalSource::none, GlobalDestination::output, -1.0 };
+
+    auto zeroDepth = parameters;
+    zeroDepth.globalSlots[0] = { GlobalSource::lfo1, GlobalDestination::combTime, 0.0 };
+
+    for (const auto& variant : { sourceOnly, destinationOnly, zeroDepth })
+    {
+        const auto other = render (variant);
+
+        CHECK (other.size() == plain.size());
+
+        for (std::size_t i = 0; i < plain.size(); ++i)
+            CHECK (other[i] == plain[i]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The idle skip
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (an_idle_instrument_stops_doing_arithmetic)
+{
+    // An instrument with nothing playing was not free: the mangle's filters and
+    // the oversampler's decimation FIRs ran on silence, and that measured 17.9
+    // ms/s -- 1.8% of a core -- with no note down at all. Ten idle instances in
+    // a project is a fifth of a core spent on nothing.
+    //
+    // This is a timing test, which is unusual here and needs saying: the
+    // *correctness* of the skip is what the next two tests check, and this one
+    // only asserts that it saves something. The threshold is deliberately loose
+    // -- a factor of four rather than the 25 measured -- because a shared build
+    // machine is not a quiet one.
+    constexpr double rate = 48000.0;
+
+    EngineParameters parameters;
+
+    parameters.voice.shapeA = OscShape::saw;
+    parameters.voice.levelA = 1.0;
+    parameters.voice.ampSustain = 1.0;
+    parameters.oversampling = OversamplingMode::X4;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (rate, 512);
+
+    Buffers buffers (512);
+
+    const auto secondOfSilence = [&]
+    {
+        const auto started = std::chrono::steady_clock::now();
+
+        for (int i = 0; i < static_cast<int> (rate); i += 512)
+            engine.process (buffers.pointers, 512);
+
+        return std::chrono::duration<double, std::milli> (
+                   std::chrono::steady_clock::now() - started).count();
+    };
+
+    // The first second is rendered normally, because the chain has to be seen
+    // to be silent before it can be skipped.
+    const double working = secondOfSilence();
+
+    // By the second it is skipping.
+    const double idle = secondOfSilence();
+
+    CHECK (idle * 4.0 < working);
+
+    // And it comes straight back: a note after the skip has engaged sounds, and
+    // sounds from the first block.
+    engine.noteOn (40, 1.0);
+    engine.process (buffers.pointers, 512);
+
+    CHECK (peakOf (buffers.left) > 0.01);
+}
+
+TEZLA_TEST (the_idle_skip_never_cuts_a_tail)
+{
+    // The dangerous half. A comb at high feedback rings for a long time after
+    // the note that fed it has gone, and a skip that fired on "no voices are
+    // active" rather than on "the output has been exactly zero for a second"
+    // would cut it off mid-ring -- a click, not a fade.
+    //
+    // The measurement is the **peak of the last block that was not silent**. A
+    // truncated tail leaves that at whatever it was ringing at; a tail that
+    // decayed leaves it at nothing. Measuring the largest sample-to-sample step
+    // instead does not work and it is worth saying why: this patch steps 0.425
+    // of full scale between neighbours all by itself, because a folded,
+    // tube-driven saw at 48 kHz genuinely does that. The step tells you nothing
+    // about whether the end was cut.
+    constexpr double rate = 48000.0;
+
+    const auto lastLiveBlockPeak = [&] (double feedback, int blocks)
+    {
+        auto parameters = brutal();
+
+        parameters.combMode = CombMode::flange;
+        parameters.combTimeMs = 18.0;
+        parameters.combKeyTrack = 0.0;
+        parameters.combFeedback = feedback;
+        parameters.combMix = 1.0;
+        parameters.combDamping = 0.0;
+        parameters.voice.ampRelease = 0.02;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 512);
+
+        engine.noteOn (40, 1.0);
+
+        Buffers buffers (512);
+
+        for (int block = 0; block < 20; ++block)
+            engine.process (buffers.pointers, 512);
+
+        engine.noteOff (40);
+
+        double lastLive = 0.0;
+        bool everSilent = false;
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            engine.process (buffers.pointers, 512);
+
+            const double peak = peakOf (buffers.left);
+
+            // Exactly zero, which is what a skipped block writes -- so this
+            // reads whether the skip engaged, not merely whether the tail got
+            // quiet.
+            if (peak > 0.0)
+                lastLive = peak;
+            else
+                everSilent = true;
+        }
+
+        return std::pair { lastLive, everSilent };
+    };
+
+    // Half feedback: the ring falls under the -240 dBFS threshold inside two
+    // seconds and the skip then engages. The last block that carried anything
+    // at all peaked at 3.0e-26, thirteen decades below the threshold -- a fade
+    // that ran well past the point of being cuttable, not a cut.
+    const auto [gentleTail, gentleSilent] = lastLiveBlockPeak (0.5, 280);
+
+    CHECK (gentleSilent);
+    CHECK (gentleTail < 1.0e-6);
+
+    // Full feedback: the comb is capped just under unity, so a 55-passes-a-
+    // second delay takes about ten seconds to fall that far. The instrument is
+    // *not* idle and must not be skipped -- so after four seconds it is still
+    // ringing, at 1.8e-6 (-114.8 dBFS), and never went silent once. That is
+    // the skip declining to fire rather than failing to.
+    const auto [loudTail, loudSilent] = lastLiveBlockPeak (1.0, 380);
+
+    CHECK (! loudSilent);
+    CHECK (loudTail > 0.0);
+    CHECK (loudTail < 1.0e-4);
+}
+
+TEZLA_TEST (the_lfos_keep_running_while_the_instrument_is_idle)
+{
+    // The skip freezes the audio path, not the clocks. A player who set a
+    // two-second sweep and then stopped playing expects to find it where it
+    // would have been, not where it was when the last note ended -- so the
+    // global sources are advanced even on a skipped block.
+    constexpr double rate = 48000.0;
+
+    EngineParameters parameters;
+
+    parameters.lfo1Wave = Lfo::Wave::sine;
+    parameters.lfo1RateHz = 0.5;
+    parameters.oversampling = OversamplingMode::Off;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (rate, 512);
+
+    Buffers buffers (512);
+
+    // Well past the point the skip engages.
+    for (int block = 0; block < 200; ++block)
+        engine.process (buffers.pointers, 512);
+
+    double lowest = 1.0;
+    double highest = -1.0;
+
+    // Two more seconds, entirely skipped. A frozen LFO would sit at one value.
+    for (int block = 0; block < 190; ++block)
+    {
+        engine.process (buffers.pointers, 512);
+
+        lowest = std::min (lowest, engine.getGlobalSources().lfo1);
+        highest = std::max (highest, engine.getGlobalSources().lfo1);
+    }
+
+    CHECK (highest - lowest > 1.9);
 }

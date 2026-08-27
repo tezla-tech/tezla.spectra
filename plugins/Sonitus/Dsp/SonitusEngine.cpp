@@ -108,6 +108,8 @@ void Engine::reset() noexcept
     sinceControl_ = 0;
     beatsIntoBlock_ = 0.0;
     sources_ = {};
+    combModulation_ = 1.0;
+    idleSamples_ = 0;
 }
 
 void Engine::applyPending() noexcept
@@ -145,30 +147,99 @@ void Engine::applyPending() noexcept
     if (tiltChanged)
         updateTilt();
 
-    // Drive in front and a matching trim behind, so the control adds harmonics
-    // rather than volume -- the same arrangement Anvil's preamp uses.
-    tubeGain_.setTarget (decibelsToGain (std::clamp (active_.tubeDriveDb, 0.0,
-                                                     kMaximumTubeDriveDb)));
-
-    outputGain_.setTarget (decibelsToGain (active_.outputDb));
-
+    // The unmodulated half of the mangle: the controls no global slot can
+    // reach, so once per block is exactly often enough. Everything the matrix
+    // *can* drive is set in `applyGlobalModulation` instead, on the control
+    // boundary -- setting it here as well would write the unmodulated value
+    // over the modulated one once per callback, which is a buffer-size
+    // dependence rather than a control.
     comb_.setKeyTrack (active_.combKeyTrack);
-    comb_.setFeedback (active_.combFeedback);
     comb_.setDamping (active_.combDamping);
     comb_.setSpread (active_.combSpread);
     comb_.setWetInverted (active_.combInverted);
-    comb_.setMix (active_.combMode == CombMode::flange ? active_.combMix : 0.0);
 
-    phaser_.setFrequencyHz (active_.phaseFrequencyHz);
     phaser_.setStages (active_.phaseStages);
-    phaser_.setFeedback (active_.combFeedback);
     phaser_.setSpread (active_.combSpread);
     phaser_.setWetInverted (active_.combInverted);
-    phaser_.setMix (active_.combMode == CombMode::phase ? active_.combMix : 0.0);
 
-    formant_.setMorph (active_.formantMorph);
     formant_.setSharpness (active_.formantSharpness);
     formant_.setMix (active_.formantMix);
+}
+
+double Engine::globalModulationFor (GlobalDestination destination) const noexcept
+{
+    double total = 0.0;
+
+    for (const auto& slot : active_.globalSlots)
+    {
+        if (slot.destination != destination || slot.source == GlobalSource::none)
+            continue;
+
+        double value = 0.0;
+
+        switch (slot.source)
+        {
+            case GlobalSource::lfo1:      value = sources_.lfo1; break;
+            case GlobalSource::lfo2:      value = sources_.lfo2; break;
+            case GlobalSource::sequencer: value = sources_.sequencer; break;
+
+            case GlobalSource::none:
+            case GlobalSource::count:
+            default: break;
+        }
+
+        total += slot.depth * value;
+    }
+
+    return total;
+}
+
+void Engine::applyGlobalModulation() noexcept
+{
+    // Scaled into each destination's own units. The two that are frequencies
+    // move in **octaves**, because a comb delay and a filter centre are pitches
+    // in disguise: an additive sweep would crawl at the bottom of the range and
+    // leap at the top, which is the wrong shape for the thing being swept.
+    static constexpr double kCombOctaves = 3.0;
+    static constexpr double kPhaseOctaves = 4.0;
+    static constexpr double kTubeDecibels = 24.0;
+    static constexpr double kOutputDecibels = 24.0;
+
+    // Drive in front and a matching trim behind, so the control adds harmonics
+    // rather than volume -- the same arrangement Anvil's preamp uses.
+    const double tubeDb = std::clamp (
+        active_.tubeDriveDb + kTubeDecibels * globalModulationFor (GlobalDestination::tubeDrive),
+        0.0, kMaximumTubeDriveDb);
+
+    tubeGain_.setTarget (decibelsToGain (tubeDb));
+
+    outputGain_.setTarget (decibelsToGain (
+        active_.outputDb + kOutputDecibels * globalModulationFor (GlobalDestination::output)));
+
+    const double feedback = std::clamp (
+        active_.combFeedback + globalModulationFor (GlobalDestination::combFeedback), -1.0, 1.0);
+
+    const double mix = std::clamp (
+        active_.combMix + globalModulationFor (GlobalDestination::combMix), 0.0, 1.0);
+
+    comb_.setFeedback (feedback);
+    comb_.setMix (active_.combMode == CombMode::flange ? mix : 0.0);
+
+    phaser_.setFeedback (feedback);
+    phaser_.setMix (active_.combMode == CombMode::phase ? mix : 0.0);
+
+    phaser_.setFrequencyHz (active_.phaseFrequencyHz
+        * std::pow (2.0, kPhaseOctaves * globalModulationFor (GlobalDestination::phaseFrequency)));
+
+    formant_.setMorph (std::clamp (
+        active_.formantMorph + globalModulationFor (GlobalDestination::formantMorph), 0.0, 1.0));
+
+    // The comb's own delay, which is what this whole section is for. Negative
+    // modulation is *up* in frequency, because the delay and the notch are
+    // reciprocal -- a positive sweep on a comb should raise the notch, which is
+    // what a player expects and the opposite of what the delay does.
+    combModulation_ = std::pow (2.0,
+        -kCombOctaves * globalModulationFor (GlobalDestination::combTime));
 }
 
 void Engine::updateTilt() noexcept
@@ -190,7 +261,7 @@ void Engine::updateTilt() noexcept
 
 double Engine::combDelaySeconds() const noexcept
 {
-    return std::clamp (active_.combTimeMs * 0.001, dsp::Comb::kMinimumSeconds,
+    return std::clamp (active_.combTimeMs * 0.001 * combModulation_, dsp::Comb::kMinimumSeconds,
                        dsp::Comb::kMaximumSeconds);
 }
 
@@ -307,6 +378,11 @@ void Engine::mangle (double& left, double& right) noexcept
 
 void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
 {
+    // Whether every sample of this chunk came out exactly zero, which is what
+    // the idle skip is counted in. Tracked here rather than scanned afterwards
+    // because the samples are already in registers.
+    bool silent = true;
+
     for (int i = 0; i < numSamples; ++i)
     {
         double sampleLeft = 0.0;
@@ -320,7 +396,15 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
 
         left[i] = sampleLeft * gain;
         right[i] = sampleRight * gain;
+
+        silent = silent && std::abs (left[i]) < kIdleThreshold
+                        && std::abs (right[i]) < kIdleThreshold;
     }
+
+    if (silent && voices_.activeVoiceCount() == 0)
+        idleSamples_ += numSamples;
+    else
+        idleSamples_ = 0;
 }
 
 void Engine::process (double* const* output, int numSamples) noexcept
@@ -362,6 +446,30 @@ void Engine::process (double* const* output, int numSamples) noexcept
     const int factor = oversampler_.getFactor();
     const int internalSamples = numSamples * factor;
 
+    // **An idle instrument costs nothing.** Once the whole chain has been
+    // bit-exactly silent for a second with no voice sounding, the render and
+    // the decimation filters are skipped and the host gets zeros.
+    //
+    // The global sources are still advanced, because they free-run: a slow LFO
+    // that stopped while nothing was playing would be at the wrong phase when
+    // the next note arrived, and a player who set a two-second sweep would find
+    // it frozen. That costs a handful of arithmetic per block against the
+    // thousands of filter taps this skips.
+    //
+    // Nothing can wake by itself from here: every stage after the voices is
+    // linear or bounded, so a state parked below -240 dBFS with no input stays
+    // there, and the counter resets the instant a voice is allocated.
+    if (idleSamples_ >= static_cast<int> (internalRate_ * kIdleSecondsBeforeSkipping)
+        && voices_.activeVoiceCount() == 0)
+    {
+        advanceGlobalSources (internalSamples);
+
+        for (int channel = 0; channel < 2; ++channel)
+            std::fill (output[channel], output[channel] + numSamples, 0.0);
+
+        return;
+    }
+
     // An instrument has nothing to upsample -- it makes its audio at the
     // internal rate -- so it writes straight into the oversampler's own buffers
     // and only the decimation filters run.
@@ -383,6 +491,10 @@ void Engine::process (double* const* output, int numSamples) noexcept
             advanceGlobalSources (Voice::kControlIntervalSamples);
             voices_.advanceGlide (Voice::kControlIntervalSamples);
             voices_.applyControls (active_.voice, sources_);
+
+            // After the sources have moved and before the comb is aimed: the
+            // matrix reads the one and writes the other.
+            applyGlobalModulation();
 
             aimComb();
 

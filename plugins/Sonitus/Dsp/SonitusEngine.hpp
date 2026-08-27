@@ -106,8 +106,64 @@ enum class MangleOrder
     count
 };
 
+/// What a global modulation slot is driven by.
+///
+/// **Append-only** -- a choice parameter stores an index.
+///
+/// Only the global sources are here, and deliberately: the per-voice ones (an
+/// amp envelope, velocity, a note's random) have one value *per sounding note*,
+/// and the mangle is one chain shared by all of them. "Amp envelope drives the
+/// comb" has no answer with eight voices down. The per-voice matrix in
+/// `VoiceParameters` is where those belong.
+enum class GlobalSource
+{
+    none = 0,
+    lfo1,
+    lfo2,
+    sequencer,
+
+    count
+};
+
+/// What a global modulation slot drives: the mangle's continuous controls.
+///
+/// **Append-only.**
+///
+/// `combTime` is the one this instrument exists for. The brief's original trick
+/// was a flanger with its rate pinned at zero so the *depth* knob became a
+/// direct comb control, drawn by hand on an automation lane. This is that
+/// control with a modulation source behind it -- an envelope, another LFO, or
+/// the step sequencer -- which is the thing an automation lane cannot do in
+/// time with the note.
+enum class GlobalDestination
+{
+    none = 0,
+    combTime,
+    combFeedback,
+    combMix,
+    phaseFrequency,
+    formantMorph,
+    tubeDrive,
+    output,
+
+    count
+};
+
+struct GlobalSlot
+{
+    GlobalSource source { GlobalSource::none };
+    GlobalDestination destination { GlobalDestination::none };
+    double depth { 0.0 };               ///< -1 .. +1
+};
+
 struct EngineParameters
 {
+    /// Three global slots. Fewer than the voice's six, because there are eight
+    /// destinations rather than sixteen and only three sources to point at them.
+    static constexpr int kGlobalSlots = 3;
+
+    std::array<GlobalSlot, kGlobalSlots> globalSlots {};
+
     // ---- the voice ---------------------------------------------------------
 
     VoiceParameters voice;
@@ -193,6 +249,34 @@ public:
     /// The widest the tube's drive control reaches.
     static constexpr double kMaximumTubeDriveDb = 36.0;
 
+    /// How long the chain has to have been **bit-exactly** silent, with no
+    /// voice sounding, before the render is skipped altogether.
+    ///
+    /// An idle instrument is not free otherwise, and this one measured 17.9
+    /// ms/s -- 1.8% of a core -- with nothing playing at all: the mangle's
+    /// filters and the oversampler's decimation FIRs run whether or not there
+    /// is anything to run them on. Ten idle instances in a project is a fifth
+    /// of a core spent on silence.
+    ///
+    /// A whole second of it, because the test has to be one that cannot be
+    /// passed by a signal happening to cross zero: a resonance that could stay
+    /// under the threshold for a second is below 1 Hz.
+    static constexpr double kIdleSecondsBeforeSkipping = 1.0;
+
+    /// How quiet counts as silent, in absolute amplitude.
+    ///
+    /// **Not exactly zero, and that was measured rather than assumed.** A comb
+    /// at half feedback decays geometrically, so it reaches 4.1e-29 in three
+    /// seconds and takes another sixteen to reach the smallest double the
+    /// denormal flush leaves. Waiting for a bit-exact zero would mean the skip
+    /// essentially never fired with the comb switched on.
+    ///
+    /// -240 dBFS is forty decibels below one step of 24-bit audio, and every
+    /// stage downstream of the frozen state is linear or attenuating -- so a
+    /// tail parked here cannot become audible again however the controls are
+    /// moved, and resuming from it is continuous rather than a step.
+    static constexpr double kIdleThreshold = 1.0e-12;
+
     void prepare (double sampleRate, int maxBlockSize);
     void reset() noexcept;
 
@@ -245,8 +329,24 @@ public:
     /// modulation display, and for tests.
     [[nodiscard]] const GlobalSources& getGlobalSources() const noexcept { return sources_; }
 
+    /// Which step the sequencer is on. The panel lights it, which is the only
+    /// way to tell a pattern that is running from one that is stopped -- and
+    /// with the rate at a quarter of a step per beat, "stopped" and "slow" look
+    /// identical for four seconds at a time.
+    [[nodiscard]] int getSequencerStep() const noexcept { return sequencer_.getStepIndex(); }
+
+    /// Where the comb's first notch is *actually* sitting -- modulation and key
+    /// tracking included. The panel shows this rather than a figure worked out
+    /// from the knob, because the knob is wrong whenever anything is sweeping
+    /// it, which in this instrument is most of the time.
+    [[nodiscard]] double getCombNotchHz() const noexcept { return comb_.firstNotchHz(); }
+
+    /// The phaser's centre as it is actually running, likewise.
+    [[nodiscard]] double getPhaseFrequencyHz() const noexcept { return phaser_.getFrequencyHz(); }
+
 private:
     void applyPending() noexcept;
+    void applyGlobalModulation() noexcept;
     void aimComb() noexcept;
     void rebuildForRate() noexcept;
     void advanceGlobalSources (int samples) noexcept;
@@ -255,6 +355,10 @@ private:
     void updateTilt() noexcept;
 
     [[nodiscard]] double combDelaySeconds() const noexcept;
+
+    /// How much the global matrix is adding to one destination, in that
+    /// destination's own units. Zero when nothing points at it.
+    [[nodiscard]] double globalModulationFor (GlobalDestination destination) const noexcept;
 
     double sampleRate_ { 48000.0 };
     double internalRate_ { 48000.0 };
@@ -286,6 +390,15 @@ private:
 
     dsp::SmoothedValue<double> outputGain_;
     dsp::SmoothedValue<double> tubeGain_;
+
+    /// The global matrix's contribution to the comb's delay, as a ratio. Kept
+    /// rather than recomputed because `combDelaySeconds` is const and is asked
+    /// for the *running* delay, not the knob's.
+    double combModulation_ { 1.0 };
+
+    /// How many consecutive internal samples the whole chain has produced
+    /// **exactly** zero for, with no voice sounding. See `kIdleSamplesSeconds`.
+    int idleSamples_ { 0 };
 
     double ppq_ { -1.0 };
     double bpm_ { 120.0 };
