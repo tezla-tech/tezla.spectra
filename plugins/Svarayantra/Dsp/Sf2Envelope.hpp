@@ -127,6 +127,11 @@ public:
     [[nodiscard]] Phase phase() const noexcept { return phase_; }
     [[nodiscard]] bool isFinished() const noexcept { return phase_ == Phase::finished; }
 
+    /// The level as it stands, without advancing -- for control-rate readers
+    /// that sample the envelope at timer boundaries while next() runs at the
+    /// audio rate.
+    [[nodiscard]] double currentLevel() const noexcept { return level_; }
+
     /// True once the envelope can never be heard again -- finished, or
     /// sustaining at exactly zero. The voice uses this to retire.
     [[nodiscard]] bool isEffectivelySilent() const noexcept
