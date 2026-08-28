@@ -1,3 +1,10 @@
+// Copyright (c) 2026 The Tezla <thetezla@proton.me>
+// Created by The Tezla -- https://github.com/wingit33/tezla.tech
+// Music: https://soundcloud.com/thetezla | https://thetezla.bandcamp.com
+// Built with development assistance from Claude (Anthropic).
+// SPDX-License-Identifier: AGPL-3.0-only
+// GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
+
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -516,7 +523,9 @@ class DegreeTable final : public juce::Component
 public:
     explicit DegreeTable (ui::Palette palette) : palette_ (palette) {}
 
-    void setScale (const dsp::Scale& scale);
+    /// `rootHz` is degree 0's sounding frequency; the Hz column is the ratios
+    /// multiplied by it, so it moves live as the A4 control is dragged.
+    void setScale (const dsp::Scale& scale, double rootHz);
 
     void paint (juce::Graphics& g) override;
 
@@ -532,7 +541,7 @@ public:
 private:
     struct Row
     {
-        juce::String degree, ratio, cents, step;
+        juce::String degree, ratio, cents, step, hz;
         bool isRepeat { false };
     };
 
@@ -589,6 +598,14 @@ private:
     WrappingLabel    storyLabel_;
     DegreeTable      degreeTable_;
     juce::Viewport   tableViewport_;
+
+    /// The pitch standard: what the tradition tuned to, in bold, with a
+    /// button to apply it when it names a number -- and the A4 control that
+    /// moves the whole tuning, .kbm reference included, by one ratio.
+    WrappingLabel    pitchLoreLabel_;
+    juce::TextButton applyPitchButton_;
+    juce::Slider     concertSlider_;
+    juce::Label      concertLabel_;
 
     std::unique_ptr<juce::FileChooser> chooser_;
 

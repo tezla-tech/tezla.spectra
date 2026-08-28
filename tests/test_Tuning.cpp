@@ -1,3 +1,10 @@
+// Copyright (c) 2026 The Tezla <thetezla@proton.me>
+// Created by The Tezla -- https://github.com/wingit33/tezla.tech
+// Music: https://soundcloud.com/thetezla | https://thetezla.bandcamp.com
+// Built with development assistance from Claude (Anthropic).
+// SPDX-License-Identifier: AGPL-3.0-only
+// GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
+
 #include "TestFramework.hpp"
 
 #include <algorithm>
@@ -1057,4 +1064,93 @@ TEZLA_TEST (nearest_fraction_finds_ratios_and_refuses_temperament)
     CHECK (! nearestFraction (std::pow (2.0, 7.0 / 12.0)).found);
     CHECK (! nearestFraction (std::pow (2.0, 17.0 / 53.0)).found);
     CHECK (! nearestFraction (0.0).found);
+}
+
+// ---------------------------------------------------------------------------
+// Concert pitch
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (concert_pitch_scales_the_whole_tuning_by_one_ratio)
+{
+    // Default: A440 exactly, and the control reads back what it is.
+    Tuning tuning;
+    CHECK_NEAR (tuning.frequencyFor (69), 440.0, 1.0e-12);
+    CHECK_NEAR (tuning.getConcertPitch(), 440.0, 1.0e-12);
+
+    // At 432, A is 432 -- and *every* note moved by the same 432/440.
+    // Intervals untouched: the control is one ratio over the lot, which is
+    // what lets it mean something even in a tuning with no A in it.
+    tuning.setConcertPitch (432.0);
+    CHECK_NEAR (tuning.frequencyFor (69), 432.0, 1.0e-12);
+    CHECK_NEAR (tuning.frequencyFor (60), 261.6255653005986 * 432.0 / 440.0, 1.0e-9);
+
+    Tuning reference;
+
+    for (int note = 12; note <= 120; ++note)
+        CHECK_NEAR (tuning.frequencyFor (note) / reference.frequencyFor (note),
+                    432.0 / 440.0, 1.0e-12);
+
+    // A non-octave scale scales identically: the tritave stays an exact 3x.
+    CHECK (tuning.setScale (scales::bohlenPierce()));
+    tuning.setRootNote (60);
+    CHECK_NEAR (tuning.frequencyFor (73) / tuning.frequencyFor (60), 3.0, 1.0e-12);
+
+    // A keyboard map's own reference is scaled too -- not fought with.
+    Tuning mapped;
+    CHECK (mapped.setScale (scales::justMajor()));
+
+    KeyboardMap map;
+    map.size = 7;
+    map.middleNote = 60;
+    map.referenceNote = 60;
+    map.referenceHz = 300.0;
+    map.formalOctaveDegree = 0;
+    map.degrees = { 0, 1, 2, 3, 4, 5, 6 };
+    mapped.setKeyboardMap (map);
+
+    CHECK_NEAR (mapped.frequencyFor (60), 300.0, 1.0e-12);
+
+    mapped.setConcertPitch (432.0);
+    CHECK_NEAR (mapped.frequencyFor (60), 300.0 * 432.0 / 440.0, 1.0e-12);
+
+    // Nonsense is clamped, not obeyed.
+    mapped.setConcertPitch (0.0);
+    CHECK_NEAR (mapped.getConcertPitch(), 440.0, 1.0e-12);
+
+    mapped.setConcertPitch (10000.0);
+    CHECK_NEAR (mapped.getConcertPitch(), Tuning::kMaximumConcertHz, 1.0e-12);
+}
+
+TEZLA_TEST (the_scales_that_had_a_pitch_standard_say_so)
+{
+    // The panel's bold line: traditions with something real to say about
+    // absolute pitch carry it -- including the honest "nothing survives" of
+    // Babylon and Greece -- and the pure interval systems stay empty, where
+    // the panel shows the generic line instead of inventing a frequency.
+    const auto everything = scales::all();
+
+    const char* withLore[] = { "12-TET",
+                               "Quarter-comma meantone", "Werckmeister III",
+                               "Kirnberger III", "Vallotti",
+                               "Archytas enharmonic", "Archytas diatonic",
+                               "Archytas chromatic", "Ptolemy even diatonic",
+                               "Nid qabli (Babylonian)", "Isartum (Babylonian)",
+                               "Embubum (Babylonian)", "Kitmum (Babylonian)",
+                               "Pitum (Babylonian)", "Nis gabrim (Babylonian)",
+                               "Qablitum (Babylonian)",
+                               "Shur (Persian)", "Chahargah (Persian)",
+                               "Rast (Zalzal, just)", "Rast (Turkish, AEU)",
+                               "Twelve lu (China)", "Partch 43", "5-TET" };
+
+    for (const char* name : withLore)
+    {
+        const auto* scale = findScale (everything, name);
+
+        CHECK (scale != nullptr);
+        CHECK (! scale->pitchStandard.empty());
+    }
+
+    // Partch's is the one that fixes a number: 1/1 at G-392.
+    CHECK (findScale (everything, "Partch 43")->pitchStandard.find ("392")
+             != std::string::npos);
 }

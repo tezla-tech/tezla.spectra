@@ -593,10 +593,20 @@ The rules that follow:
 
 ### Our licence, and what we can take
 
-**This project is AGPLv3** — see `LICENSE`. That is not a choice so much as a
-consequence: we build against JUCE's free tier, which is AGPLv3, so the plugins
-already were. Declaring it explicitly is what makes other people's code safe to
-use.
+**This project is AGPLv3** (SPDX `AGPL-3.0-only`) — see `LICENSE` — **with an
+attribution-preservation term under AGPLv3 §7(b), stated in `NOTICE.md`**:
+copyright is held by The Tezla, development assistance by Claude (Anthropic)
+is credited, and redistributions must keep the notice intact. The AGPL is not
+a choice so much as a consequence: we build against JUCE's free tier, which is
+AGPLv3, so the plugins already were. Declaring it explicitly is what makes
+other people's code safe to use.
+
+**Every new first-party source file carries the standard header** — the six
+comment lines at the top of any existing `.hpp`/`.cpp`/CMake/script file
+(copyright, links, Claude credit, SPDX, the NOTICE pointer). Copy it from a
+neighbour when creating a file; it is what makes the attribution term
+enforceable file by file. Never stamp it on third-party material —
+`technical references/` stays as its authors wrote it.
 
 Compatible, and usable with attribution: **MIT, BSD, Apache-2.0, LGPL, GPLv3,
 GPLv2-or-later.**

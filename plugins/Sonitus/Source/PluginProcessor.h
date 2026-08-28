@@ -1,3 +1,10 @@
+// Copyright (c) 2026 The Tezla <thetezla@proton.me>
+// Created by The Tezla -- https://github.com/wingit33/tezla.tech
+// Music: https://soundcloud.com/thetezla | https://thetezla.bandcamp.com
+// Built with development assistance from Claude (Anthropic).
+// SPDX-License-Identifier: AGPL-3.0-only
+// GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
+
 #pragma once
 
 #include <tezla/dsp/Divisions.hpp>
@@ -459,6 +466,18 @@ public:
 
     [[nodiscard]] juce::String getScaleName() const;
 
+    /// The pitch standard, as what A440 is moved to -- one ratio over the
+    /// whole tuning, .kbm reference included. Clamped to Tuning's 380-500 Hz.
+    /// Deliberately not a parameter: like the scale it is a rig decision that
+    /// presets must not reset, saved beside the scale in the plugin state.
+    void setConcertPitch (double hz);
+    [[nodiscard]] double getConcertPitch() const noexcept { return concertPitchHz_; }
+
+    /// Degree 0's note and sounding frequency, for the panel's Hz column --
+    /// middle C without a map, the map's middle note with one.
+    [[nodiscard]] int getRootNote() const;
+    [[nodiscard]] double getRootHz() const;
+
     /// The scale as loaded -- degrees, repeat, and for the built-ins the
     /// construction and story the tuning panel shows. Message thread only,
     /// like every other panel accessor: the engine has its own copy.
@@ -506,6 +525,8 @@ private:
     /// it has to survive a `prepare()` and be saved with the state. The engine's
     /// copy is refreshed from this one.
     dsp::Scale scale_;
+    double concertPitchHz_ { 440.0 };
+    double pendingConcertHz_ { 440.0 };
     dsp::KeyboardMap keyboardMap_;
     bool hasKeyboardMap_ { false };
 

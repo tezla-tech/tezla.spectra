@@ -1,3 +1,10 @@
+// Copyright (c) 2026 The Tezla <thetezla@proton.me>
+// Created by The Tezla -- https://github.com/wingit33/tezla.tech
+// Music: https://soundcloud.com/thetezla | https://thetezla.bandcamp.com
+// Built with development assistance from Claude (Anthropic).
+// SPDX-License-Identifier: AGPL-3.0-only
+// GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
+
 #include "PluginEditor.h"
 
 #include <algorithm>
@@ -1992,10 +1999,15 @@ void StepStrip::resized()
 // TuningPage
 // ---------------------------------------------------------------------------
 
-void DegreeTable::setScale (const dsp::Scale& scale)
+void DegreeTable::setScale (const dsp::Scale& scale, double rootHz)
 {
     rows_.clear();
     rows_.reserve (static_cast<std::size_t> (scale.size()) + 1);
+
+    const auto formatHz = [] (double hz)
+    {
+        return juce::String (hz, hz < 1000.0 ? 2 : 1);
+    };
 
     for (int degree = 0; degree < scale.size(); ++degree)
     {
@@ -2017,6 +2029,7 @@ void DegreeTable::setScale (const dsp::Scale& scale)
 
         row.cents = juce::String (scale.cents (degree), 1);
         row.step = juce::String (1200.0 * std::log2 (next / ratio), 1);
+        row.hz = rootHz > 0.0 ? formatHz (rootHz * ratio) : juce::String ("-");
 
         rows_.push_back (std::move (row));
     }
@@ -2034,6 +2047,7 @@ void DegreeTable::setScale (const dsp::Scale& scale)
 
     repeat.cents = juce::String (scale.repeatCents(), 1);
     repeat.step = "";
+    repeat.hz = rootHz > 0.0 ? formatHz (rootHz * scale.repeat) : juce::String ("-");
     repeat.isRepeat = true;
 
     rows_.push_back (std::move (repeat));
@@ -2050,12 +2064,14 @@ void DegreeTable::paint (juce::Graphics& g)
 
     const int width = getWidth();
 
-    // Four columns: degree, ratio, cents, step. The ratio column gets the
-    // most room because 177147/131072 is a real resident.
-    const int degreeRight = 30;
-    const int ratioRight = juce::jmin (degreeRight + 110, width / 2 + 20);
-    const int centsRight = ratioRight + 62;
-    const int stepRight = juce::jmin (centsRight + 56, width - 4);
+    // Five columns: degree, ratio, cents, step, and the sounding frequency.
+    // The ratio column gets the most room because 177147/131072 is a real
+    // resident; the Hz column is what moves when the A4 control does.
+    const int degreeRight = 26;
+    const int ratioRight = degreeRight + 100;
+    const int centsRight = ratioRight + 58;
+    const int stepRight = centsRight + 50;
+    const int hzRight = juce::jmin (stepRight + 74, width - 4);
 
     g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
     g.setColour (palette_.dimText);
@@ -2065,6 +2081,8 @@ void DegreeTable::paint (juce::Graphics& g)
     g.drawText ("CENTS", ratioRight, 0, centsRight - ratioRight, kHeaderHeight,
                 juce::Justification::centredRight);
     g.drawText ("STEP", centsRight, 0, stepRight - centsRight, kHeaderHeight,
+                juce::Justification::centredRight);
+    g.drawText ("HZ", stepRight, 0, hzRight - stepRight, kHeaderHeight,
                 juce::Justification::centredRight);
 
     g.setFont (mono);
@@ -2091,6 +2109,10 @@ void DegreeTable::paint (juce::Graphics& g)
 
         g.setColour (palette_.dimText);
         g.drawText (row.step, centsRight, y, stepRight - centsRight, kRowHeight,
+                    juce::Justification::centredRight);
+
+        g.setColour (row.isRepeat ? palette_.accent : palette_.text);
+        g.drawText (row.hz, stepRight, y, hzRight - stepRight, kRowHeight,
                     juce::Justification::centredRight);
     }
 }
@@ -2207,6 +2229,68 @@ TuningPage::TuningPage (SonitusProcessor& processorToUse, ui::Palette palette)
     tableViewport_.setScrollBarThickness (14);
     addAndMakeVisible (tableViewport_);
 
+    // The pitch standard: the tradition's own tuning practice, bold, with a
+    // button when it names a number the A4 control can be set to.
+    pitchLoreLabel_.setColour (juce::Label::textColourId, palette_.text);
+    pitchLoreLabel_.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    pitchLoreLabel_.setJustificationType (juce::Justification::topLeft);
+    addAndMakeVisible (pitchLoreLabel_);
+
+    applyPitchButton_.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.12f));
+    applyPitchButton_.setColour (juce::TextButton::textColourOffId, palette_.accent);
+    applyPitchButton_.setTooltip (
+        "Sets the A4 control to the pitch standard this scale's tradition names -- A415 for "
+        "the baroque temperaments, ISO A440 for 12-TET. Scales whose tradition left no "
+        "number (Babylon, Greece, Persia...) have no button, because inventing one would "
+        "be a lie.");
+    applyPitchButton_.onClick = [this]
+    {
+        const double suggested = sonitus_.getScale().suggestedConcertHz;
+
+        if (suggested > 0.0)
+        {
+            sonitus_.setConcertPitch (suggested);
+            refresh();
+        }
+    };
+    applyPitchButton_.setComponentID ("apply-pitch");
+    addAndMakeVisible (applyPitchButton_);
+
+    // A4: the whole tuning scaled by one ratio against 440. The table's Hz
+    // column follows the drag live.
+    concertLabel_.setText ("A4", juce::dontSendNotification);
+    concertLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+    concertLabel_.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    concertLabel_.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (concertLabel_);
+
+    concertSlider_.setSliderStyle (juce::Slider::LinearBar);
+    concertSlider_.setRange (dsp::Tuning::kMinimumConcertHz, dsp::Tuning::kMaximumConcertHz, 0.1);
+    concertSlider_.setValue (440.0, juce::dontSendNotification);
+    concertSlider_.setDoubleClickReturnValue (true, 440.0);
+    concertSlider_.setTextValueSuffix (" Hz");
+    concertSlider_.setNumDecimalPlacesToDisplay (1);
+    concertSlider_.setColour (juce::Slider::trackColourId, palette_.panel.brighter (0.18f));
+    concertSlider_.setColour (juce::Slider::textBoxTextColourId, palette_.text);
+    concertSlider_.setTooltip (
+        "The pitch standard, as what A440 is moved to: the whole tuning -- keyboard map "
+        "reference included -- scales by this against 440, so it means something even in a "
+        "scale with no A in it. A440 has only been the standard since 1939 (ISO 16, 1955); "
+        "the 19th-century French diapason normal was 435, scientific pitch C-256 gives "
+        "430.5, and 432 is a modern preference with no historical orchestra behind it -- "
+        "all one drag away. Double-click returns to 440. Saved with the project, and "
+        "presets do not touch it.");
+    concertSlider_.onValueChange = [this]
+    {
+        if (updating_)
+            return;
+
+        sonitus_.setConcertPitch (concertSlider_.getValue());
+        refresh();
+    };
+    concertSlider_.setComponentID ("concert-pitch");
+    addAndMakeVisible (concertSlider_);
+
     refresh();
 }
 
@@ -2220,7 +2304,7 @@ void TuningPage::refresh()
     // table speak for the numbers.
     const auto& scale = sonitus_.getScale();
 
-    degreeTable_.setScale (scale);
+    degreeTable_.setScale (scale, sonitus_.getRootHz());
 
     constructionLabel_.setText (
         scale.construction.empty()
@@ -2235,6 +2319,29 @@ void TuningPage::refresh()
                             "gave cents.")
             : juce::String (scale.story),
         juce::dontSendNotification);
+
+    // The pitch standard, bold -- and honestly generic when the scale is an
+    // interval system with no frequency of its own.
+    pitchLoreLabel_.setText (
+        scale.pitchStandard.empty()
+            ? juce::String ("No inherent pitch standard: this scale fixes intervals, not "
+                            "frequencies. A440 is the modern default; the A4 control moves "
+                            "the whole tuning together.")
+            : juce::String (scale.pitchStandard),
+        juce::dontSendNotification);
+
+    // The Apply button exists only when the tradition names a number.
+    const double suggested = scale.suggestedConcertHz;
+
+    applyPitchButton_.setVisible (suggested > 0.0);
+
+    if (suggested > 0.0)
+        applyPitchButton_.setButtonText ("Apply A" + juce::String (suggested, 0));
+
+    {
+        const juce::ScopedValueSetter<bool> sliderGuard (updating_, true);
+        concertSlider_.setValue (sonitus_.getConcertPitch(), juce::dontSendNotification);
+    }
 
     const auto name = sonitus_.getScaleName();
 
@@ -2335,6 +2442,12 @@ void TuningPage::resized()
     row.removeFromLeft (6);
     resetButton_.setBounds (row.removeFromLeft (90).reduced (0, 2));
 
+    // The pitch standard control lives on the same row: A4, then the value.
+    row.removeFromLeft (14);
+    concertLabel_.setBounds (row.removeFromLeft (24));
+    row.removeFromLeft (4);
+    concertSlider_.setBounds (row.removeFromLeft (juce::jmin (130, row.getWidth())).reduced (0, 3));
+
     bounds.removeFromTop (8);
     descriptionLabel_.setBounds (bounds.removeFromTop (18));
 
@@ -2343,11 +2456,12 @@ void TuningPage::resized()
 
     bounds.removeFromTop (6);
 
-    // The info panel: the degree table on the left, the theorem and the story
-    // on the right. The table scrolls -- Partch has 43 rows and 53-TET has 53
-    // -- and the prose wraps in the room that remains.
+    // The info panel: the degree table on the left; the theorem, the pitch
+    // standard (with its Apply button when the tradition names a number) and
+    // the story on the right. The table scrolls -- Partch has 43 rows and
+    // 53-TET has 53 -- and the prose wraps in the room that remains.
     auto info = bounds;
-    auto tableArea = info.removeFromLeft (juce::jmin (300, info.getWidth() * 2 / 5));
+    auto tableArea = info.removeFromLeft (juce::jmin (350, info.getWidth() * 2 / 5));
 
     tableViewport_.setBounds (tableArea);
     degreeTable_.setSize (tableArea.getWidth() - tableViewport_.getScrollBarThickness(),
@@ -2356,6 +2470,12 @@ void TuningPage::resized()
     info.removeFromLeft (12);
 
     constructionLabel_.setBounds (info.removeFromTop (44));
+    info.removeFromTop (4);
+
+    pitchLoreLabel_.setBounds (info.removeFromTop (46));
+
+    auto applyRow = info.removeFromTop (22);
+    applyPitchButton_.setBounds (applyRow.removeFromLeft (110).reduced (0, 1));
     info.removeFromTop (4);
 
     const int explanation = 46;
