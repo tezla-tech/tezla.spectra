@@ -835,6 +835,31 @@ TEZLA_TEST (naive_shape_sample_is_the_waveform_the_audio_path_makes)
     CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.3, 0.3, 0.0), 1.0, 1e-12);
     CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.65, 0.3, 0.0), 0.0, 1e-12);
     CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.15, 0.3, 0.0), 0.0, 1e-12);
+
+    // The morphable shapes reach the audio path through cached, split state
+    // -- Dome's integer powers by squaring, Harmonic's powers cached apart
+    // from its Nyquist fades -- and this pins all of that machinery, at
+    // several morphs, against the static that recomputes from scratch with
+    // std::pow. At a near-zero increment the fades are all open and the
+    // harmonic-count clamps all wide, so the two paths must agree.
+    for (const auto shape : { OscShape::vintage, OscShape::dome,
+                              OscShape::doubleSaw, OscShape::harmonic })
+        for (const double morph : { 0.0, 0.3, 0.55, 1.0 })
+            for (int i = 0; i < 97; ++i)
+            {
+                const double phase = static_cast<double> (i) / 97.0;
+
+                Oscillator osc;
+                osc.setShape (shape);
+                osc.setMorph (morph);
+                osc.setIncrement (1.0e-9);
+                osc.reset (phase);
+
+                const double naive = Oscillator::naiveShapeSample (shape, phase, 0.41, morph);
+                const double heard = osc.advance();
+
+                CHECK_NEAR (heard, naive, 1.0e-6);
+            }
 }
 
 // ---------------------------------------------------------------------------

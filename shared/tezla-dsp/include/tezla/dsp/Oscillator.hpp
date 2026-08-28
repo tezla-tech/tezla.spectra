@@ -203,7 +203,12 @@ public:
     /// total, at every morph value.
     void setMorph (double morph) noexcept
     {
-        morph_ = std::clamp (morph, 0.0, 1.0);
+        const double clamped = std::clamp (morph, 0.0, 1.0);
+
+        if (isExactly (clamped, morph_))
+            return;
+
+        morph_ = clamped;
         refreshShapeState();
     }
 
@@ -337,13 +342,27 @@ public:
     /// for something above Nyquist, which no amount of band-limiting fixes.
     void setIncrement (double increment) noexcept
     {
-        increment_ = std::clamp (increment, 0.0, 0.49);
+        const double clamped = std::clamp (increment, 0.0, 0.49);
 
-        // Dome's harmonic-count clamp and Harmonic's Nyquist fades depend on
-        // the increment, so a pitch change re-derives them. Control-rate: the
-        // banks push increments once per chunk, not per sample.
-        if (shape_ == OscShape::dome || shape_ == OscShape::harmonic)
-            refreshShapeState();
+        if (isExactly (clamped, increment_))
+            return;
+
+        increment_ = clamped;
+
+        // Only what the pitch actually feeds is re-derived on a pitch change:
+        // Dome's harmonic-count clamp and Harmonic's Nyquist fades, both a
+        // short loop of cheap arithmetic. The morph-derived work -- Harmonic's
+        // sixteen powers above all -- must NOT be re-run from here. The unison
+        // bank pushes increments on its drift timer, and when this call did
+        // the full re-derivation on a push that arrived every sample, one
+        // three-note Harmonic chord measured 226% of a core against 16% for
+        // saw -- millions of pow() calls a second, all producing the answers
+        // already cached. The no-op guard above is the other half of the same
+        // rule (CLAUDE.md section 7): an unchanged pitch re-derives nothing.
+        if (shape_ == OscShape::dome)
+            refreshDomeClamp();
+        else if (shape_ == OscShape::harmonic)
+            refreshHarmonicFades();
     }
 
     [[nodiscard]] double getIncrement() const noexcept { return increment_; }
@@ -585,11 +604,16 @@ private:
 
             case OscShape::dome:
             {
+                // Integer powers by squaring, not std::pow: the exponents are
+                // small integers by construction, the two in use are adjacent
+                // (hi is lo times one more x), and libm's general pow at this
+                // call rate was the bulk of the shape's measured cost.
                 const double x = 0.5 - 0.5 * std::cos (6.283185307179586 * phase);
-                const double lo = (std::pow (x, static_cast<double> (domeKLo_)) - domeMeanLo_)
-                                    * domeScaleLo_;
-                const double hi = (std::pow (x, static_cast<double> (domeKHi_)) - domeMeanHi_)
-                                    * domeScaleHi_;
+                const double powerLo = powInteger (x, domeKLo_);
+                const double powerHi = domeKHi_ > domeKLo_ ? powerLo * x : powerLo;
+
+                const double lo = (powerLo - domeMeanLo_) * domeScaleLo_;
+                const double hi = (powerHi - domeMeanHi_) * domeScaleHi_;
 
                 return lo + domeBlend_ * (hi - lo);
             }
@@ -630,8 +654,9 @@ private:
         }
     }
 
-    /// Re-derives every cached coefficient the current shape needs. Called
-    /// from the setters, which are control-rate.
+    /// Re-derives every cached coefficient the current shape needs, from the
+    /// morph down. Called from setShape and setMorph -- the pitch-only parts
+    /// have their own refreshers below, so a pitch change never pays for this.
     void refreshShapeState() noexcept
     {
         switch (shape_)
@@ -648,38 +673,13 @@ private:
             }
 
             case OscShape::dome:
-            {
                 // Integer exponents blended, because the finite-series
                 // identity -- sin^2k has exactly k harmonics -- holds for
                 // integers only. A blend of two band-limited waveforms is
                 // band-limited; a fractional exponent is not.
-                const double k = 1.0 + 15.0 * morph_;
-
-                // No harmonic above Nyquist: k harmonics of the fundamental
-                // must fit under half the rate, with the house 0.45 margin.
-                const int kMax = increment_ > 0.0
-                    ? std::max (1, static_cast<int> (0.45 / increment_))
-                    : 16;
-
-                domeKLo_ = std::clamp (static_cast<int> (k), 1, kMax);
-                domeKHi_ = std::min (domeKLo_ + 1, kMax);
-                domeBlend_ = std::clamp (k - static_cast<double> (domeKLo_), 0.0, 1.0);
-
-                // The mean of x^k over a cycle, exactly: m(1) = 1/2 and
-                // m(k) = m(k-1) * (2k-1) / 2k -- the central binomial over 4^k
-                // without computing either.
-                domeMeanLo_ = 0.5;
-                for (int n = 2; n <= domeKLo_; ++n)
-                    domeMeanLo_ *= (2.0 * n - 1.0) / (2.0 * n);
-
-                domeMeanHi_ = domeMeanLo_;
-                if (domeKHi_ > domeKLo_)
-                    domeMeanHi_ *= (2.0 * domeKHi_ - 1.0) / (2.0 * domeKHi_);
-
-                domeScaleLo_ = 1.0 / (1.0 - domeMeanLo_);
-                domeScaleHi_ = 1.0 / (1.0 - domeMeanHi_);
+                domeK_ = 1.0 + 15.0 * morph_;
+                refreshDomeClamp();
                 break;
-            }
 
             case OscShape::doubleSaw:
                 doubleOffset_ = 0.5 * morph_;
@@ -687,6 +687,9 @@ private:
 
             case OscShape::harmonic:
             {
+                // The sixteen powers are the expensive part and depend on the
+                // morph alone, so they are cached here and the Nyquist fades
+                // -- which depend on the pitch -- are applied from the cache.
                 const double p = 1.0 + 2.0 * morph_;
 
                 double norm = 0.0;
@@ -694,25 +697,10 @@ private:
                     norm += std::pow (static_cast<double> (n), -p);
 
                 for (int n = 1; n <= kHarmonicCount; ++n)
-                {
-                    const double raw = std::pow (static_cast<double> (n), -p) / norm;
+                    harmonicRaw_[static_cast<std::size_t> (n - 1)]
+                        = std::pow (static_cast<double> (n), -p) / norm;
 
-                    // Fade each partial out across 0.40..0.48 of the rate's
-                    // half, so a pitch sweep slides partials away instead of
-                    // popping them.
-                    const double x = static_cast<double> (n) * increment_;
-                    double gain = 1.0;
-
-                    if (x >= 0.24)
-                        gain = 0.0;
-                    else if (x > 0.20)
-                    {
-                        const double u = (0.24 - x) / 0.04;
-                        gain = u * u * (3.0 - 2.0 * u);
-                    }
-
-                    harmonicAmp_[static_cast<std::size_t> (n - 1)] = raw * gain;
-                }
+                refreshHarmonicFades();
                 break;
             }
 
@@ -725,6 +713,78 @@ private:
             default:
                 break;
         }
+    }
+
+    /// The pitch-fed half of Dome's state: how many harmonics fit under
+    /// Nyquist, and the means and scales for the two integer exponents in
+    /// use. A short loop of rationals, cheap enough for every drift tick.
+    void refreshDomeClamp() noexcept
+    {
+        // No harmonic above Nyquist: k harmonics of the fundamental must fit
+        // under half the rate, with the house 0.45 margin.
+        const int kMax = increment_ > 0.0
+            ? std::max (1, static_cast<int> (0.45 / increment_))
+            : 16;
+
+        domeKLo_ = std::clamp (static_cast<int> (domeK_), 1, kMax);
+        domeKHi_ = std::min (domeKLo_ + 1, kMax);
+        domeBlend_ = std::clamp (domeK_ - static_cast<double> (domeKLo_), 0.0, 1.0);
+
+        // The mean of x^k over a cycle, exactly: m(1) = 1/2 and
+        // m(k) = m(k-1) * (2k-1) / 2k -- the central binomial over 4^k
+        // without computing either.
+        domeMeanLo_ = 0.5;
+        for (int n = 2; n <= domeKLo_; ++n)
+            domeMeanLo_ *= (2.0 * n - 1.0) / (2.0 * n);
+
+        domeMeanHi_ = domeMeanLo_;
+        if (domeKHi_ > domeKLo_)
+            domeMeanHi_ *= (2.0 * domeKHi_ - 1.0) / (2.0 * domeKHi_);
+
+        domeScaleLo_ = 1.0 / (1.0 - domeMeanLo_);
+        domeScaleHi_ = 1.0 / (1.0 - domeMeanHi_);
+    }
+
+    /// The pitch-fed half of Harmonic's state: each cached amplitude, faded
+    /// out across 0.40..0.48 of the rate's half so a pitch sweep slides
+    /// partials away instead of popping them. The powers in harmonicRaw_ are
+    /// deliberately not recomputed here.
+    void refreshHarmonicFades() noexcept
+    {
+        for (int n = 1; n <= kHarmonicCount; ++n)
+        {
+            const double x = static_cast<double> (n) * increment_;
+            double gain = 1.0;
+
+            if (x >= 0.24)
+                gain = 0.0;
+            else if (x > 0.20)
+            {
+                const double u = (0.24 - x) / 0.04;
+                gain = u * u * (3.0 - 2.0 * u);
+            }
+
+            harmonicAmp_[static_cast<std::size_t> (n - 1)]
+                = harmonicRaw_[static_cast<std::size_t> (n - 1)] * gain;
+        }
+    }
+
+    /// x^k for small non-negative integer k, by squaring: five multiplies at
+    /// the largest exponent Dome uses, against a libm pow call per sample.
+    [[nodiscard]] static double powInteger (double base, int exponent) noexcept
+    {
+        double result = 1.0;
+        double power = base;
+
+        for (int e = exponent; e > 0; e >>= 1)
+        {
+            if ((e & 1) != 0)
+                result *= power;
+
+            power *= power;
+        }
+
+        return result;
     }
 
     [[nodiscard]] static double wrapUnit (double value) noexcept
@@ -754,6 +814,10 @@ private:
     double vintageNorm_ { 0.0 };
     double vintageMean_ { 0.0 };
 
+    /// The unclamped exponent the morph asked for; the clamp against the
+    /// current pitch happens in refreshDomeClamp.
+    double domeK_       { 1.0 };
+
     int    domeKLo_     { 1 };
     int    domeKHi_     { 2 };
     double domeBlend_   { 0.0 };
@@ -765,6 +829,10 @@ private:
     double doubleOffset_ { 0.0 };
 
     double harmonicAmp_[static_cast<std::size_t> (kHarmonicCount)] {};
+
+    /// The morph-derived amplitudes before the Nyquist fades -- the sixteen
+    /// pow() results refreshHarmonicFades reads instead of recomputing.
+    double harmonicRaw_[static_cast<std::size_t> (kHarmonicCount)] {};
 
     std::uint64_t noiseState_ { 0x9e3779b97f4a7c15ull };
     double noiseLowpass_     { 0.0 };

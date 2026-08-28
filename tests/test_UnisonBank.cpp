@@ -439,3 +439,31 @@ TEZLA_TEST (a_silent_bank_is_silent)
         CHECK (std::isfinite (right));
     }
 }
+
+TEZLA_TEST (a_frequency_change_reaches_the_oscillators_on_the_next_sample)
+{
+    // The drift timer batches the increment pushes -- that batching is where
+    // a five-times CPU regression was hiding when the pushes ran per sample --
+    // and it must never delay a *control* change: a stolen voice retriggered
+    // at a new pitch that plays even half a millisecond of the old one is a
+    // smeared attack. Every setter that rebuilds the increments zeroes the
+    // countdown, so the change lands on the very next sample.
+    UnisonBank bank;
+    bank.prepare (48000.0);
+    bank.setShape (OscShape::saw);
+    bank.setVoiceCount (3);
+    bank.setFrequency (110.0);
+    bank.reset();
+
+    double left = 0.0, right = 0.0;
+
+    for (int i = 0; i < 100; ++i)   // land mid-interval, not on a boundary
+        bank.process (0.0, left, right);
+
+    bank.setFrequency (220.0);
+    bank.process (0.0, left, right);
+
+    // Voice 1 is the centre of a three-voice stack: no detune offset, no
+    // drift by default, so its increment is exactly the note.
+    CHECK_NEAR (bank.voice (1).getIncrement(), 220.0 / 48000.0, 1.0e-12);
+}

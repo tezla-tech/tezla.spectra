@@ -101,12 +101,31 @@ public:
     /// sounding like modulation, which is what the LFOs are for.
     static constexpr double kDriftHz = 0.35;
 
+    /// How often the drift moves and the increments are pushed at the
+    /// oscillators, in samples. CLAUDE.md section 7: anything too expensive to
+    /// recompute per sample gets a timer counted in samples -- and this one
+    /// was recomputed per sample for months while a comment in Oscillator.hpp
+    /// claimed otherwise. Per sample, the push cost a pow(2, drift) per
+    /// oscillator and, for the shapes whose state depends on pitch, the whole
+    /// shape re-derivation: one three-note Harmonic chord measured **226% of
+    /// a core** against 16% for the same chord on saw, all of it sixteen
+    /// pow() calls per oscillator per sample that produced the same answers
+    /// every time. On this timer the same chord costs what the saw costs.
+    /// The step this quantises the drift into is microscopic -- the wander's
+    /// corner is 0.35 Hz, so 32 samples move it by around a millionth of its
+    /// range -- and the timer is counted in samples, so the output cannot
+    /// depend on the host's buffer size.
+    static constexpr int kIncrementIntervalSamples = 32;
+
     void prepare (double sampleRate) noexcept
     {
         sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
 
-        // A one-pole at kDriftHz, so the wander is bounded and smooth.
-        driftCoefficient_ = std::clamp (6.283185307179586 * kDriftHz / sampleRate_, 0.0, 1.0);
+        // A one-pole at kDriftHz, stepped once per interval rather than per
+        // sample, so the wander is bounded and smooth at any rate.
+        driftCoefficient_ = std::clamp (6.283185307179586 * kDriftHz
+                                          * kIncrementIntervalSamples / sampleRate_,
+                                        0.0, 1.0);
 
         updateIncrements();
     }
@@ -143,6 +162,7 @@ public:
         }
 
         driftCountdown_ = 0;
+        incrementCountdown_ = 0;
     }
 
     /// 1 to 7. One voice is a plain oscillator and costs what one costs.
@@ -193,7 +213,16 @@ public:
     }
 
     /// How far each oscillator is allowed to wander, in cents.
-    void setDrift (double cents) noexcept { driftCents_ = std::clamp (cents, 0.0, 50.0); }
+    void setDrift (double cents) noexcept
+    {
+        const double wanted = std::clamp (cents, 0.0, 50.0);
+
+        if (isExactly (wanted, driftCents_))
+            return;
+
+        driftCents_ = wanted;
+        incrementCountdown_ = 0;
+    }
 
     void setFrequency (double hz) noexcept
     {
@@ -246,7 +275,26 @@ public:
     /// One sample, into a stereo pair. `phaseMod` is applied to every voice.
     void process (double phaseMod, double& left, double& right) noexcept
     {
-        advanceDrift();
+        // The drift and the increment push live on the sample-counted timer
+        // above, not in the sample loop -- see kIncrementIntervalSamples for
+        // the measurement that put them there. A control change zeroes the
+        // countdown, so nothing waits for the timer to notice it.
+        if (incrementCountdown_ <= 0)
+        {
+            advanceDrift();
+
+            for (int i = 0; i < voiceCount_; ++i)
+            {
+                const auto index = static_cast<std::size_t> (i);
+
+                // The drift rides on top of the detune, as a further ratio.
+                voices_[index].setIncrement (increments_[index] * driftRatio (index));
+            }
+
+            incrementCountdown_ = kIncrementIntervalSamples;
+        }
+
+        --incrementCountdown_;
 
         left = 0.0;
         right = 0.0;
@@ -254,10 +302,6 @@ public:
         for (int i = 0; i < voiceCount_; ++i)
         {
             const auto index = static_cast<std::size_t> (i);
-
-            // The drift rides on top of the detune, as a further ratio.
-            voices_[index].setIncrement (increments_[index] * driftRatio (index));
-
             const double value = voices_[index].advance (phaseMod);
 
             left  += value * gainL_[index];
@@ -311,11 +355,17 @@ private:
         // sqrt(N), not N: the voices are uncorrelated once their phases have
         // scattered, so that is how their sum actually grows.
         normalisation_ = 1.0 / std::sqrt (static_cast<double> (voiceCount_));
+
+        // A frequency, detune or count change reaches the oscillators on the
+        // next sample, not up to an interval late: a stolen voice retriggered
+        // at a new pitch must never play the old one first.
+        incrementCountdown_ = 0;
     }
 
-    /// A bounded random walk per voice, refreshed on a timer rather than every
-    /// sample -- the target only needs to move slowly, and the one-pole between
-    /// here and the pitch does the smoothing.
+    /// A bounded random walk per voice: targets redrawn every 50 ms, a
+    /// one-pole at kDriftHz walking towards them. Called once per increment
+    /// interval, so the countdown -- still measured in samples -- moves by the
+    /// interval per call.
     void advanceDrift() noexcept
     {
         if (driftCountdown_ <= 0)
@@ -326,7 +376,7 @@ private:
             driftCountdown_ = static_cast<int> (sampleRate_ * 0.05);
         }
 
-        --driftCountdown_;
+        driftCountdown_ -= kIncrementIntervalSamples;
 
         for (int i = 0; i < kMaxVoices; ++i)
         {
@@ -363,6 +413,10 @@ private:
     std::array<double, kMaxVoices> driftTarget_ {};
     double driftCoefficient_ { 0.0 };
     int    driftCountdown_   { 0 };
+
+    /// Samples until the next drift step and increment push. Zero forces one
+    /// on the next sample, which is how control changes land immediately.
+    int    incrementCountdown_ { 0 };
 
     std::uint64_t seed_ { 0x5bf03635c1e5a2b3ull };
     SmallRandom random_;
