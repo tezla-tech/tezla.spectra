@@ -398,7 +398,33 @@ void Engine::advanceGlobalSources (int samples) noexcept
 
         if (active_.lfo1Retrigger) lfo1_.reset();
         if (active_.lfo2Retrigger) lfo2_.reset();
+
+        // **The fade restarts on every note, retriggered or not.** The two
+        // controls are separate ideas -- one is about the waveform's phase and
+        // the other about its depth -- and tying the fade to the retrigger
+        // switch would give a knob that silently did nothing half the time.
+        lfo1Fade_ = 0.0;
+        lfo2Fade_ = 0.0;
     }
+
+    // The fade itself. Raised cosine rather than a straight ramp, so it arrives
+    // without a corner: a linear fade reaches full depth and stops dead, which
+    // on a slow vibrato is audible as the moment the wobble "switches on".
+    const auto faded = [samples, this] (double& progress, double seconds)
+    {
+        if (seconds <= 0.0)
+        {
+            progress = 1.0;
+            return 1.0;
+        }
+
+        progress = std::min (1.0, progress + samples / (seconds * internalRate_));
+
+        return 0.5 - 0.5 * std::cos (std::numbers::pi * progress);
+    };
+
+    const double lfo1Depth = faded (lfo1Fade_, active_.lfo1AttackSeconds);
+    const double lfo2Depth = faded (lfo2Fade_, active_.lfo2AttackSeconds);
 
     // **Key tracking.** At full, the rate is proportional to the played note,
     // so an octave up is twice the speed. The beating that gives a reese its
@@ -445,8 +471,8 @@ void Engine::advanceGlobalSources (int samples) noexcept
     lfo2_.setRateHz (std::clamp (
         keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, controlNyquist));
 
-    sources_.lfo1 = lfo1_.advance (samples);
-    sources_.lfo2 = lfo2_.advance (samples);
+    sources_.lfo1 = lfo1_.advance (samples) * lfo1Depth;
+    sources_.lfo2 = lfo2_.advance (samples) * lfo2Depth;
 }
 
 void Engine::mangle (double& left, double& right) noexcept

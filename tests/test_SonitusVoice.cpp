@@ -61,9 +61,9 @@ VoiceParameters basic()
     parameters.levelB = 0.0;
     parameters.subLevel = 0.0;
     parameters.cutoffHz = 18000.0;
-    parameters.ampAttack = 0.001;
-    parameters.ampSustain = 1.0;
-    parameters.ampRelease = 0.05;
+    parameters.amp.attack = 0.001;
+    parameters.amp.sustain = 1.0;
+    parameters.amp.release = 0.05;
     parameters.level = 1.0;
     parameters.ampVelocity = 0.0;
 
@@ -766,9 +766,9 @@ TEZLA_TEST (the_mod_envelopes_are_per_voice)
     auto parameters = basic();
 
     parameters.cutoffHz = 300.0;
-    parameters.modAttack1 = 0.5;
-    parameters.modDecay1 = 0.5;
-    parameters.modSustain1 = 1.0;
+    parameters.mod1.attack = 0.5;
+    parameters.mod1.decay = 0.5;
+    parameters.mod1.sustain = 1.0;
     parameters.slots[0] = { ModSource::modEnvelope1, ModDestination::cutoff, 4.0 };
 
     const auto run = [&] (double seconds)
@@ -946,9 +946,9 @@ TEZLA_TEST (stealing_prefers_the_quietest_released_voice)
     manager.prepare (rate);
 
     auto parameters = basic();
-    parameters.ampAttack = 0.001;
-    parameters.ampSustain = 1.0;
-    parameters.ampRelease = 3.0;
+    parameters.amp.attack = 0.001;
+    parameters.amp.sustain = 1.0;
+    parameters.amp.release = 3.0;
 
     manager.setPolyphony (2);
 
@@ -1047,8 +1047,8 @@ TEZLA_TEST (legato_retriggers_only_from_silence)
         manager.setMode (mode);
 
         auto parameters = basic();
-        parameters.ampAttack = 0.5;
-        parameters.ampSustain = 1.0;
+        parameters.amp.attack = 0.5;
+        parameters.amp.sustain = 1.0;
 
         manager.noteOn (48, 0.8);
 
@@ -1369,8 +1369,8 @@ TEZLA_TEST (a_deep_pitch_modulation_actually_sweeps_five_octaves)
     parameters.levelB = 1.0;
     parameters.cutoffHz = 20000.0;
     parameters.resonance = 0.0;
-    parameters.ampAttack = 0.001;
-    parameters.ampSustain = 1.0;
+    parameters.amp.attack = 0.001;
+    parameters.amp.sustain = 1.0;
     parameters.ampVelocity = 0.0;
 
     // Velocity into pitch B, so the depth can be swept without a moving source.

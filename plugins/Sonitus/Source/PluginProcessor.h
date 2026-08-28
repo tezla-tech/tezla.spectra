@@ -62,24 +62,39 @@ inline constexpr auto filterFm    = "filterFm";
 inline constexpr auto filterVel   = "filterVel";
 
 // ---- envelopes -------------------------------------------------------------
-inline constexpr auto ampAttack   = "ampAttack";
-inline constexpr auto ampDecay    = "ampDecay";
-inline constexpr auto ampSustain  = "ampSustain";
-inline constexpr auto ampRelease  = "ampRelease";
-inline constexpr auto ampShape    = "ampShape";
-inline constexpr auto ampVelocity = "ampVelocity";
+//
+// AHDSR: a **hold** between the attack and the decay, and a **bipolar tension**
+// on each of the three timed segments in place of the single one-way shape the
+// three used to share. The old `<x>Shape` ids are gone rather than kept as
+// aliases -- nothing has shipped and nobody has a project with them in, and a
+// dead id that silently does nothing is worse than one that is simply absent.
+inline constexpr auto ampAttack    = "ampAttack";
+inline constexpr auto ampHold      = "ampHold";
+inline constexpr auto ampDecay     = "ampDecay";
+inline constexpr auto ampSustain   = "ampSustain";
+inline constexpr auto ampRelease   = "ampRelease";
+inline constexpr auto ampAttackT   = "ampAttackT";
+inline constexpr auto ampDecayT    = "ampDecayT";
+inline constexpr auto ampReleaseT  = "ampReleaseT";
+inline constexpr auto ampVelocity  = "ampVelocity";
 
-inline constexpr auto env1Attack  = "env1Attack";
-inline constexpr auto env1Decay   = "env1Decay";
-inline constexpr auto env1Sustain = "env1Sustain";
-inline constexpr auto env1Release = "env1Release";
-inline constexpr auto env1Shape   = "env1Shape";
+inline constexpr auto env1Attack   = "env1Attack";
+inline constexpr auto env1Hold     = "env1Hold";
+inline constexpr auto env1Decay    = "env1Decay";
+inline constexpr auto env1Sustain  = "env1Sustain";
+inline constexpr auto env1Release  = "env1Release";
+inline constexpr auto env1AttackT  = "env1AttackT";
+inline constexpr auto env1DecayT   = "env1DecayT";
+inline constexpr auto env1ReleaseT = "env1ReleaseT";
 
-inline constexpr auto env2Attack  = "env2Attack";
-inline constexpr auto env2Decay   = "env2Decay";
-inline constexpr auto env2Sustain = "env2Sustain";
-inline constexpr auto env2Release = "env2Release";
-inline constexpr auto env2Shape   = "env2Shape";
+inline constexpr auto env2Attack   = "env2Attack";
+inline constexpr auto env2Hold     = "env2Hold";
+inline constexpr auto env2Decay    = "env2Decay";
+inline constexpr auto env2Sustain  = "env2Sustain";
+inline constexpr auto env2Release  = "env2Release";
+inline constexpr auto env2AttackT  = "env2AttackT";
+inline constexpr auto env2DecayT   = "env2DecayT";
+inline constexpr auto env2ReleaseT = "env2ReleaseT";
 
 // ---- keyboard --------------------------------------------------------------
 inline constexpr auto keyMode     = "keyMode";
@@ -93,11 +108,13 @@ inline constexpr auto lfo1Rate    = "lfo1Rate";
 inline constexpr auto lfo1Smooth  = "lfo1Smooth";
 inline constexpr auto lfo1Retrig  = "lfo1Retrig";
 inline constexpr auto lfo1Key     = "lfo1Key";
+inline constexpr auto lfo1Att     = "lfo1Att";
 inline constexpr auto lfo2Wave    = "lfo2Wave";
 inline constexpr auto lfo2Rate    = "lfo2Rate";
 inline constexpr auto lfo2Smooth  = "lfo2Smooth";
 inline constexpr auto lfo2Retrig  = "lfo2Retrig";
 inline constexpr auto lfo2Key     = "lfo2Key";
+inline constexpr auto lfo2Att     = "lfo2Att";
 
 inline constexpr auto seqRate     = "seqRate";
 inline constexpr auto seqLength   = "seqLength";

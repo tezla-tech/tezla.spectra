@@ -160,28 +160,66 @@ through one envelope and glides between its notes.
 
 ### ENV
 
-Three ADSRs — amp, and two spare — each drawn as **the shape it is**, with three
-draggable corners: attack across, decay across and sustain up and down on the
-middle one, release across. The five knobs beside each graph do the same job to
-the sample; the graph is for finding a shape, the knobs are for pinning it down.
-Double-click a corner to put it back to its default.
+Three **AHDSR** envelopes — amp, and two spare — each drawn as the shape it is,
+with four draggable corners: attack across, hold across, decay across and
+sustain up and down on the third, release across. The knobs beside each graph do
+the same job to the sample; the graph is for finding a shape, the knobs for
+pinning it down. Double-click a corner for its default.
 
-The curve drawn is the curve that plays. The segments are the same exponentials
-`dsp::Adsr` runs, reading the same overshoot constants, so **Shape** bends the
-picture exactly as far as it bends the sound. At zero the segments are nearly
-straight, which sounds mechanical because nothing physical decays linearly;
-turned up they are the sharp exponential of a capacitor discharging — and
-crucially, **not** slower, because the time constant is corrected for the shape.
+**Hold** is the H, and it sits at *full level* for a set time between the attack
+and the decay. It is what makes a plucked or gated sound possible without setting
+the sustain to 1 and shortening the note — which is not the same thing, because
+the release would then start from wherever the key was let go rather than from
+the top. At 0 the stage is skipped entirely rather than entered for no samples.
 
-The horizontal axis is the knobs' own travel rather than seconds: each segment
-gets a fixed slice of the width and fills the fraction of it that its parameter
-is along its range. So a handle sits exactly where its knob does, and a 5 ms
-attack beside a 5 s release is still visible. A linear time axis would put every
-useful attack in the first three pixels.
+#### Tension is bipolar, and there is one per segment
+
+The old single **Shape** control ran from "sharp analogue" to "nearly straight"
+and no further, because the trick it was built on — aim past the destination and
+stop early — only bends a curve **one way**. No value of the overshoot gives the
+opposite.
+
+The other half is the mirror, and it falls out of the same recursion with one
+sign change. For a segment from A to B:
+
+| tension | aims at | and then | shape |
+|---|---|---|---|
+| positive | `B + d(T−1)` | **approaches** it | fast then slow — a capacitor charging |
+| negative | `A − d(T−1)` | **recedes** from it | slow then fast — the same curve reflected |
+
+Both are `level = target + (level − target)·c`, one multiply-add. The only
+difference is that the second uses `1/c`: receding from a target is approaching
+it with time running backwards, and the escape factor that lands exactly on B is
+precisely the reciprocal of the approach factor. So the mirror costs a division
+at design time and **nothing per sample**, and the segment still lasts exactly
+the time it was asked for.
+
+Zero is straight — or as straight as the arithmetic allows. `|tension| = 0` maps
+to an overshoot of 32, where the curve is 0.004 off a line at its midpoint;
+exactly linear is the limit T → ∞ and degenerates the time expression, so it is
+approached rather than reached.
+
+Each of the three timed segments has its own, because they want different ones: a
+percussive envelope is usually a sharp positive decay under a straight attack,
+and a swell is the reverse.
+
+Measured at the half-way point of a 100 ms attack, which is where a curve and a
+line are furthest apart:
+
+| tension | −1.00 | −0.50 | 0.00 | +0.50 | +1.00 |
+|---|---|---|---|---|---|
+| level at 50 ms | 0.179 | 0.455 | **0.504** | 0.545 | 0.821 |
+
+The old control could only produce the right-hand half of that. And the mirror is
+checked point by point rather than by eye: `level(u, −t) == 1 − level(1−u, +t)`
+to within one sample of grid offset, at three tensions.
+
+**The curve drawn on the panel is the curve that plays** — same arithmetic, same
+constants, per segment — so a graph that looks wrong is a graph telling the
+truth about something wrong.
 
 The bar down the right of each graph is that envelope's live output on the most
-recently played note — the same tracked note the comb and the vowel filter
-follow.
+recently played note.
 
 ### MOD
 
@@ -212,6 +250,15 @@ is right for a wobble that should keep its place across a phrase; retriggered is
 right for anything that has to line up with the note. On a reese the difference
 is the whole sound — with it on, every note gets the same phase relationship and
 the growl is repeatable.
+
+**Attack** fades an LFO's *depth* in from nothing over a set time, restarting on
+every note. Delayed vibrato is the classic use — the note arrives steady and the
+movement creeps in after it — and on a filter it is a sweep that opens up rather
+than one already going. It restarts whether or not Retrig is on: the two are
+separate ideas, one about the waveform's phase and the other about its depth, and
+tying the fade to the retrigger switch would give a knob that silently did
+nothing half the time. Eased rather than ramped, so it arrives without the corner
+a straight fade leaves at the top.
 
 **Key track** makes an LFO's rate follow the played note, referenced to middle C.
 At 100% an octave up doubles the rate, so the modulation keeps its relationship
@@ -533,7 +580,7 @@ it would have been when the next note arrives.
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **613 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **617 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.
@@ -595,6 +642,22 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+**AHDSR, and tension that goes both ways.** A hold stage at full level between
+the attack and the decay, and the single one-way Shape control replaced by three
+**bipolar** tensions — one per timed segment. Zero is straight, positive is the
+analogue curve, negative is that curve reflected. See ENV above for the
+arithmetic and the numbers. The `<x>Shape` parameter ids are gone rather than
+kept as dead aliases; nothing has shipped and an id that silently does nothing is
+worse than one that is absent.
+
+**An attack on each LFO** — a fade-in on its depth, restarting per note.
+
+**A new palette: hot pink, and five siblings a golden angle apart.** Every page
+wears its own accent, all at one OKLCH lightness and each at its own hue's chroma
+limit in sRGB. The tab row is a colour key. See PluginEditor.cpp for why the
+golden angle is the right spacing and why there is no such thing as a colour that
+makes anyone more creative.
 
 **Kargyraa.** The third throat-singing mechanism, and the only one that changes
 the source rather than the filter: alternate cycles of the waveform damped,

@@ -202,9 +202,14 @@ class EnvelopeEditor final : public juce::Component,
                              public juce::SettableTooltipClient
 {
 public:
-    EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
-                    juce::String attackId, juce::String decayId, juce::String sustainId,
-                    juce::String releaseId, juce::String shapeId);
+    /// The eight parameters one envelope is made of.
+    struct Ids
+    {
+        juce::String attack, hold, decay, sustain, release;
+        juce::String attackTension, decayTension, releaseTension;
+    };
+
+    EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette, Ids ids);
 
     /// Re-reads the parameters and repaints if any of them moved. Driven by the
     /// editor's timer rather than one of its own -- the panel already ticks at
@@ -226,12 +231,16 @@ private:
     /// at once -- across is the decay time, up and down is the sustain level --
     /// which is what makes the graph quicker than the knobs rather than merely
     /// prettier.
-    enum class Handle { none, attack, decaySustain, release };
+    enum class Handle { none, attack, hold, decaySustain, release };
 
     struct Geometry
     {
         juce::Rectangle<float> plot;
-        float attackX {}, decayX {}, holdEndX {}, releaseX {};
+
+        /// The five boundaries, left to right: the end of the attack, the end
+        /// of the hold, the end of the decay, the end of the sustain's drawn
+        /// stretch, and the end of the release.
+        float attackX {}, holdX {}, decayX {}, sustainEndX {}, releaseX {};
         float sustainY {};
     };
 
@@ -240,27 +249,30 @@ private:
     [[nodiscard]] juce::Point<float> handlePosition (Handle handle, const Geometry& g) const;
 
     [[nodiscard]] float normalised (const juce::String& id) const;
+    [[nodiscard]] float plain (const juce::String& id) const;
     void setNormalised (const juce::String& id, float value, bool gesture);
 
     /// The level an `Adsr` segment is at, a fraction `u` of the way through it,
-    /// travelling from `from` to `to`. The library's arithmetic, not an
-    /// approximation of it.
-    [[nodiscard]] static double segment (double u, double from, double to, double overshoot);
+    /// travelling from `from` to `to` at `tension`. The library's arithmetic,
+    /// not an approximation of it -- including the mirror for a negative
+    /// tension, which is the half of the control a curve drawn by eye would
+    /// get wrong.
+    [[nodiscard]] static double segment (double u, double from, double to, double tension);
 
-    void appendSegment (juce::Path& path, float x0, float y0, float x1, float y1,
-                        double from, double to, double overshoot) const;
+    void appendSegment (juce::Path& path, float x0, float x1,
+                        double from, double to, double tension) const;
 
     juce::AudioProcessorValueTreeState& state_;
     ui::Palette palette_;
 
-    juce::String attackId_, decayId_, sustainId_, releaseId_, shapeId_;
+    Ids ids_;
 
     Handle dragging_ { Handle::none };
     Handle hovered_ { Handle::none };
 
     /// What the graph was last drawn from, so a repaint only happens when
     /// something moved. Deliberately impossible starting values.
-    float shown_[5] { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+    float shown_[8] { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
     float shownLevel_ { -1.0f };
 
     float level_ { 0.0f };
@@ -293,8 +305,7 @@ private:
     };
 
     void addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
-                   const juce::String& detail, const char* attackId, const char* decayId,
-                   const char* sustainId, const char* releaseId, const char* shapeId,
+                   const juce::String& detail, const EnvelopeEditor::Ids& ids,
                    const char* extraId, const juce::String& extraName,
                    const juce::String& extraTooltip);
 
@@ -412,6 +423,15 @@ private:
     /// component still points at it is a use-after-free with no symptom until
     /// the host repaints.
     ui::KnobLookAndFeel lookAndFeel_;
+
+    /// One per page, each carrying that page's accent.
+    ///
+    /// JUCE resolves a look and feel by walking *up* the component tree, so
+    /// setting one on a page is enough to colour every knob, box and switch
+    /// inside it -- there is nothing to pass down by hand and nothing to forget
+    /// to pass. They are declared after the editor's own so they are destroyed
+    /// before it, and cleared from their pages in the destructor either way.
+    std::array<std::unique_ptr<ui::KnobLookAndFeel>, 6> pageLookAndFeels_;
 
     juce::TooltipWindow tooltips_ { this, 500 };
 
