@@ -154,7 +154,7 @@ Zero-delay-feedback state variable, with drive inside the loop.
   a bass wants.
 - **FM** is oscillator A on the cutoff at audio rate — not a wobble.
 
-Keyboard: **Poly / Mono / Legato**, up to eight voices, glide, bend range.
+Keyboard: **Poly / Mono / Legato**, 1–32 voices (16 by default), glide, bend range.
 Legato does not retrigger the envelopes, so a phrase played without gaps runs
 through one envelope and glides between its notes.
 
@@ -537,16 +537,43 @@ One second of audio in 512-sample blocks, after two seconds of pre-roll.
 
 | | ms/s | core |
 |---|---|---|
-| idle, nothing playing | **0.4** | 0.04% |
-| 8 voices, 1 unison each (16 oscillators) | 268 | 27% |
-| 8 voices, 3 unison each (48 oscillators) | 307 | 31% |
-| 8 voices, 7 unison each (112 oscillators) | 372 | 37% |
+| idle, nothing playing, all 32 slots | **0.5** | 0.05% |
+| 8 voices, 1 unison each (16 oscillators) | 387 | 39% |
+| 8 voices, 3 unison each (48 oscillators) | 422 | 42% |
+| 8 voices, 7 unison each (112 oscillators) | 504 | 50% |
 
 **The voices dominate, not the oscillators.** Seven times the oscillators costs
 about a third more; an eighth of the *voices* costs an eighth, because the
 filter, the envelopes and the folder's antialiasing are per voice and the
 unison bank is not. **Mono is the lever, not unison** — and a reese is one voice
 anyway.
+
+### Polyphony: 32 slots, 16 by default
+
+**The ceiling is free and the notes are not**, and the two are worth separating
+because they look like the same number:
+
+| notes held | ms/s | core | per voice |
+|---|---|---|---|
+| 1 | 94 | 9% | 94 |
+| 2 | 135 | 14% | 68 |
+| 4 | 217 | 22% | 54 |
+| 8 | 386 | 39% | 48 |
+| 16 | 724 | 72% | 45 |
+| 32 | 1431 | 143% | 45 |
+
+Thirty-two *idle* slots plus the whole mangle cost 0.5 ms/s — five hundredths
+of a core, and the same figure the engine read when the ceiling was eight —
+because `Voice::process` returns on its first line when the amp envelope is
+idle and `applyControls` skips inactive voices entirely. A *sounding* voice
+costs about 45 ms/s; the first note carries the mangle's fixed 50 on top.
+
+So the Voices control decides the bill and `kMaxVoices` only decides whether
+you are allowed to run one up. It defaults to **16** — about 72% of one core
+with all sixteen ringing, and more than any sane arrangement holds at once. The
+ceiling above that is for a pad whose releases overlap, where most of the
+sounding voices are tails on their way out. Thirty-two genuinely sounding at
+once is more than a core, which is why it is the ceiling and not the default.
 
 Idle was 17.9 ms/s until the engine learned to stop: once the chain has been
 below −240 dBFS for a second with no voice sounding, the render and the

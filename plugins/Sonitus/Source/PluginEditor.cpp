@@ -87,9 +87,22 @@ const juce::Colour kGroupPanel { 0xff34373a };
 
 /// The three stops the brushed metal is built from: the specular band, the
 /// shoulder below it, and the shadow at both ends.
-const juce::Colour kMetalHigh { 0xff9fa3a7 };   // L 0.690
-const juce::Colour kMetalMid  { 0xff7b7e82 };   // L 0.580
-const juce::Colour kMetalLow  { 0xff4c4f52 };   // L 0.425
+///
+/// **The whole chassis sits below the darkest panel.** The first version was a
+/// bright polished silver -- specular band at L 0.713 against panels at 0.284 --
+/// and it was wrong twice over. It read as the loudest thing in the window, so
+/// the panels looked like holes cut in a bright plate rather than lit surfaces
+/// on a dark one; and the meter's scale labels, which are dim text at L 0.720,
+/// landed on it at **1.03:1**. That is not low contrast, it is the same colour.
+///
+/// So: anodised rather than polished. The specular band is L 0.263, under the
+/// page panel's 0.284, and the shadow at the ends reaches 0.139. The gradient
+/// still has 0.12 of lightness to move through, which is more than twice the
+/// step between the page panel and a group panel, so it still reads as a
+/// surface with a light on it. The same scale labels now read 6.22:1.
+const juce::Colour kMetalHigh { 0xff222528 };   // L 0.263  C 0.007  H 248
+const juce::Colour kMetalMid  { 0xff15171a };   // L 0.204
+const juce::Colour kMetalLow  { 0xff07090c };   // L 0.139
 
 /// Each page's own accent, and its bright partner. Golden-angle hues, one
 /// lightness, each at its own chroma limit -- see the comment above.
@@ -310,12 +323,16 @@ void MetalBackground::render (int width, int height, float highlightAt)
             const double noise = hashed (static_cast<std::uint64_t> (y)
                                            + static_cast<std::uint64_t> (pass) * 7919ull);
 
-            // Centred on zero, so the grain lightens as often as it darkens
-            // and the average brightness is the gradient's.
-            const float alpha = static_cast<float> (std::abs (noise)) * (pass == 0 ? 0.075f : 0.038f);
+            // **Always subtractive.** The first version was centred on zero, so
+            // the grain lightened as often as it darkened and the average
+            // brightness stayed the gradient's -- tidy, but it put bright lines
+            // on the backdrop, competing with the panels in front of it. A
+            // brushed surface is scratched *into* the metal, so every mark is
+            // a place where less light comes back. Darker than the gradient it
+            // sits on, always, and by an amount that varies.
+            const float alpha = static_cast<float> (std::abs (noise)) * (pass == 0 ? 0.16f : 0.085f);
 
-            g.setColour ((noise > 0.0 ? juce::Colours::white : juce::Colours::black)
-                           .withAlpha (alpha));
+            g.setColour (juce::Colours::black.withAlpha (alpha));
             g.fillRect (0.0f, static_cast<float> (y), static_cast<float> (width), thickness);
         }
     }
@@ -1703,7 +1720,7 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     header_->onTooltipsToggled = [this] (bool enabled)
     {
         sonitus_.setTooltipsEnabled (enabled);
-        setTooltipsEnabled (enabled);
+        tooltips_.setEnabled (enabled);
     };
 
     header_->setActiveSlot (sonitus_.getAbCompare().isSlotB());
@@ -1712,7 +1729,7 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     header_->attachSuiteControls (sonitus_.getState(), nullptr, ids::output, ids::oversampling);
     addAndMakeVisible (*header_);
 
-    setTooltipsEnabled (sonitus_.getTooltipsEnabled());
+    tooltips_.setEnabled (sonitus_.getTooltipsEnabled());
 
     buildPages();
 
@@ -1813,14 +1830,6 @@ SonitusEditor::~SonitusEditor()
         steps_->setLookAndFeel (nullptr);
 
     setLookAndFeel (nullptr);
-}
-
-void SonitusEditor::setTooltipsEnabled (bool enabled)
-{
-    // Created and destroyed rather than shown and hidden. A TooltipWindow is a
-    // top-level component that watches the mouse for as long as it exists, and
-    // there is no way to tell it to stop; not having one is the off switch.
-    tooltips_ = enabled ? std::make_unique<juce::TooltipWindow> (this, 500) : nullptr;
 }
 
 ControlPage* SonitusEditor::controlPage (int index) const
@@ -2011,9 +2020,12 @@ void SonitusEditor::buildPages()
         "sound played rather than typed. A reese is one voice: mono costs a fourteenth of poly.");
 
     filter->addKnob (ids::polyphony, "Voices",
-        "How many notes at once, up to eight. Stealing takes a free voice first, then the "
-        "quietest released one, then the oldest held one -- so a held chord survives a passing "
-        "melody.");
+        "How many notes at once, up to 32, and this is the control that decides the CPU bill: "
+        "a sounding voice costs about 4.5% of one core, so sixteen ringing at once is roughly "
+        "three quarters of it. The slots you do not use are free -- an idle voice returns "
+        "immediately -- so set this for the widest chord or the longest overlapping release "
+        "you actually play. Stealing takes a free voice first, then the quietest released one, "
+        "then the oldest held one, so a held chord survives a passing melody.");
 
     filter->addKnob (ids::glide, "Glide",
         "How long a slide from one note to the next takes. In Legato it only happens between "

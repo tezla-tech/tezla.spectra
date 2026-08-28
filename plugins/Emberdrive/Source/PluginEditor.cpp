@@ -263,6 +263,19 @@ EmberdriveEditor::EmberdriveEditor (EmberdriveProcessor& processorToUse)
     auto& ab = processor_.getAbCompare();
     header_->onSwapRequested = [&ab] { ab.swapSlots(); };
     header_->onCopyRequested = [&ab] { ab.copyToOtherSlot(); };
+
+    // The TIPS button. The flag lives on the processor so it survives the
+    // window being closed, and the header is told the current value rather
+    // than assuming its own default -- reopening a panel whose tips were off
+    // must not turn them back on.
+    header_->onTooltipsToggled = [this] (bool enabled)
+    {
+        processor_.setTooltipsEnabled (enabled);
+        tooltips_.setEnabled (enabled);
+    };
+
+    header_->setTooltipsEnabled (processor_.getTooltipsEnabled());
+    tooltips_.setEnabled (processor_.getTooltipsEnabled());
     ab.onChanged = [this]
     {
         auto& compare = processor_.getAbCompare();

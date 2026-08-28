@@ -251,6 +251,17 @@ public:
     /// Which stage the tone stack sits after. 0 means in front of everything.
     [[nodiscard]] int getToneStackPosition() const noexcept { return toneStackAfter_; }
 
+    /// The output stage's loop gain, after PowerAmp's stability clamp.
+    ///
+    /// Worth exposing because it is what the presence and resonance controls
+    /// have to work with. Both act by shunting the feedback away at one end of
+    /// the spectrum, so the most either can lift that end is the negative
+    /// feedback the loop is applying -- `20*log10(1 + loopGain)`. The three
+    /// lanes shipped at 0.60, 0.15 and 0.32, which is 4.1, 1.2 and 2.4 dB, and
+    /// both controls were inaudible for that reason alone. See
+    /// PowerAmp::process and PowerAmp::kMaximumLoopGain.
+    [[nodiscard]] double getLoopGain() const noexcept { return loopGain_; }
+
     /// Anvil's own Auto, which targets roughly **384 kHz** internally where the
     /// house table in CLAUDE.md section 6 targets 192.
     ///
@@ -455,6 +466,10 @@ private:
 
     std::array<std::vector<double>, kMaxChannels> dry_ {};
     std::array<double*, kMaxChannels> dryPointers_ {};
+
+    /// The loop gain the current voicing builds. Set in applyVoicing, read by
+    /// getLoopGain -- a fact about the graph rather than a meter.
+    double loopGain_ { 0.0 };
 
     double sagMeter_  { 0.0 };
     double fluxMeter_ { 0.0 };

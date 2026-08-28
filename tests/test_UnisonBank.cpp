@@ -264,6 +264,96 @@ TEZLA_TEST (spread_widens_without_changing_the_level)
     CHECK (wideDifference > 0.2);
 }
 
+TEZLA_TEST (spread_takes_effect_without_touching_any_other_control)
+{
+    // The bug this pins, reported from the DAW: turning the spread knob did
+    // nothing until the *detune* knob was also moved, at which point the new
+    // spread appeared all at once. The pan gains are computed in
+    // `updateIncrements` alongside the detuned increments, and `setSpread`
+    // wrote the member without calling it -- so the width only ever changed as
+    // a side effect of some other setter that did.
+    //
+    // The test therefore has to change spread on a bank that is already
+    // running and touch nothing else. Setting it before `reset`, as every
+    // other test here does, walks straight past the bug.
+    auto bank = made (7, 45.0, 0.0);
+
+    constexpr std::size_t kSettle = static_cast<std::size_t> (kRate * 0.5);
+    constexpr std::size_t kWindow = static_cast<std::size_t> (kRate * 1.5);
+
+    const auto narrow = render (bank, kSettle + kWindow);
+
+    bank.setSpread (1.0);
+
+    const auto wide = render (bank, kSettle + kWindow);
+
+    double narrowDifference = 0.0;
+    for (std::size_t i = kSettle; i < narrow.left.size(); ++i)
+        narrowDifference = std::max (narrowDifference,
+                                     std::abs (narrow.left[i] - narrow.right[i]));
+
+    double wideDifference = 0.0;
+    for (std::size_t i = kSettle; i < wide.left.size(); ++i)
+        wideDifference = std::max (wideDifference,
+                                   std::abs (wide.left[i] - wide.right[i]));
+
+    CHECK (narrowDifference < 1.0e-12);
+    CHECK (wideDifference > 0.2);
+
+    // Closing it again has to work too, and has to land exactly back on mono
+    // rather than nearly there -- the pan law is only equal-power if the
+    // gains are recomputed, and a stale gain would leave a residue here.
+    bank.setSpread (0.0);
+
+    const auto closed = render (bank, kSettle + kWindow);
+
+    double closedDifference = 0.0;
+    for (std::size_t i = kSettle; i < closed.left.size(); ++i)
+        closedDifference = std::max (closedDifference,
+                                     std::abs (closed.left[i] - closed.right[i]));
+
+    CHECK (closedDifference < 1.0e-12);
+}
+
+TEZLA_TEST (a_live_spread_change_lands_where_the_preset_would_have)
+{
+    // The other half of the same bug: turning the knob to 0.6 mid-note must
+    // give the same stack as loading a preset that was already at 0.6, and
+    // must do it without disturbing where the oscillators had got to.
+    //
+    // The change therefore has to happen *after* both banks have run, or the
+    // test cannot see the failure it is for. Both are at the same phase at the
+    // moment of the change, because spread reaches only the pan gains -- so a
+    // `setSpread` that reset a phase, an increment or the normalisation puts
+    // one bank back to the start while the other carries on, and every sample
+    // after that diverges.
+    auto turned = made (7, 45.0, 0.0);
+    auto loaded = made (7, 45.0, 0.6);
+
+    constexpr std::size_t kRun = static_cast<std::size_t> (kRate * 0.25);
+
+    for (std::size_t i = 0; i < kRun; ++i)
+    {
+        double l = 0.0, r = 0.0;
+        turned.process (0.0, l, r);
+        loaded.process (0.0, l, r);
+    }
+
+    turned.setSpread (0.6);
+
+    for (std::size_t i = 0; i < kRun; ++i)
+    {
+        double turnedLeft = 0.0, turnedRight = 0.0;
+        double loadedLeft = 0.0, loadedRight = 0.0;
+
+        turned.process (0.0, turnedLeft, turnedRight);
+        loaded.process (0.0, loadedLeft, loadedRight);
+
+        CHECK (turnedLeft == loadedLeft);
+        CHECK (turnedRight == loadedRight);
+    }
+}
+
 TEZLA_TEST (drift_wanders_slowly_and_stays_bounded)
 {
     // A static detune gives a periodic churn the ear locks onto within a bar.

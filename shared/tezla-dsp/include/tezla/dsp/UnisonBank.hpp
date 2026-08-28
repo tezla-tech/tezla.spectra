@@ -167,7 +167,24 @@ public:
 
     /// 0 keeps the stack in the middle; 1 puts the outermost pair hard left and
     /// right. The centre voice, when there is one, stays centred either way.
-    void setSpread (double spread) noexcept { spread_ = std::clamp (spread, 0.0, 1.0); }
+    ///
+    /// **This has to recompute, and for a long time it did not.** The pan gains
+    /// live in `updateIncrements` alongside the detuned increments -- one loop
+    /// fills both -- so a setter that only assigned `spread_` left the old gains
+    /// in place until something *else* forced a rebuild. The symptom was exactly
+    /// that: move the spread knob and nothing happens, then touch detune and the
+    /// spread you set a minute ago suddenly appears. It is the same shape of
+    /// mistake as a filter that only re-designs when its Q moves.
+    void setSpread (double spread) noexcept
+    {
+        const double wanted = std::clamp (spread, 0.0, 1.0);
+
+        if (isExactly (wanted, spread_))
+            return;
+
+        spread_ = wanted;
+        updateIncrements();
+    }
 
     /// How far each oscillator is allowed to wander, in cents.
     void setDrift (double cents) noexcept { driftCents_ = std::clamp (cents, 0.0, 50.0); }

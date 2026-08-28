@@ -45,6 +45,7 @@ git clone https://github.com/tezla-tech/tezla.spectra.git
 cd tezla.spectra
 
 ./scripts/build.sh Emberdrive --install
+./scripts/build.sh --installbuild            # copy an existing build; no rebuild
 ```
 
 That builds both formats and copies them into your user plug-in folders. Open

@@ -116,6 +116,16 @@ public:
 
     [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
 
+    /// Whether the panel shows its hover tooltips.
+    ///
+    /// Not a parameter -- it changes nothing about the sound, so it has no
+    /// business in an automation lane or in a preset. It lives here rather than
+    /// in the editor because the editor is destroyed every time the window is
+    /// closed, and a setting that forgot itself on every close would be worse
+    /// than not having the switch.
+    [[nodiscard]] bool getTooltipsEnabled() const noexcept { return tooltipsEnabled_; }
+    void setTooltipsEnabled (bool enabled) noexcept { tooltipsEnabled_ = enabled; }
+
     /// What the true-peak control is costing and buying, in plain words, at the
     /// host's actual rate. The tooltip reads this rather than making the user
     /// work it out.
@@ -160,6 +170,13 @@ private:
     bool prepared_ { false };
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
+
+
+    /// See getTooltipsEnabled. Defaults on: the tooltips are how this
+
+    /// workshop documents itself, so a new user gets them.
+
+    bool tooltipsEnabled_ { true };
 
     dsp::VuMeter inputMeter_[Engine::kMaxChannels];
     dsp::VuMeter outputMeter_[Engine::kMaxChannels];

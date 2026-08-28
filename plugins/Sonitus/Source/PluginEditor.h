@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/Palette.hpp>
@@ -477,9 +478,8 @@ private:
     /// Held by pointer so it can be *destroyed*, which is the only reliable way
     /// to turn tooltips off: JUCE has no "disabled" state for one, and setting
     /// the delay enormous still shows a tip to anybody who rests on a control.
-    std::unique_ptr<juce::TooltipWindow> tooltips_;
+    ui::TooltipHost tooltips_ { *this };
 
-    void setTooltipsEnabled (bool enabled);
 
     /// The brushed metal behind everything, cached at the window's size.
     MetalBackground metal_;

@@ -103,6 +103,10 @@ juce::Component* findById (juce::Component& parent, const juce::String& id)
 /// lifetimes that outlive a click. Both are reachable here with no host and no
 /// window manager.
 ///
+/// `state:<name>` prints one non-parameter property out of the plugin's saved
+/// state, which is how a control that changes something other than a parameter
+/// gets checked -- the tooltip switch being the case it was written for.
+///
 /// **What it cannot reach: anything that opens a native window.** This is a
 /// console app, and putting a top-level window on the desktop from one fails on
 /// X11 before any plugin code is involved -- addToDesktop alone reproduces it
@@ -304,6 +308,48 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             continue;
         }
 
+        // "state:<name>" prints one non-parameter property from the plugin's
+        // saved state, so a control that changes something other than a
+        // parameter can be checked from outside.
+        //
+        // The TIPS button is why this exists. It changes no parameter -- the
+        // tooltip switch is a panel preference, stored beside the A/B slots --
+        // so `params` cannot see it and neither could anything else. Clicking
+        // the button and reading the flag back is the whole proof that the
+        // callback is wired, and it was wired in one plugin of six.
+        if (id.startsWith ("state:"))
+        {
+            const auto wanted = id.fromFirstOccurrenceOf ("state:", false, false);
+
+            juce::MemoryBlock block;
+            processor.getStateInformation (block);
+
+            // getStateInformation writes XML through copyXmlToBinary, so this
+            // is the same round trip the host does.
+            const auto xml = juce::AudioProcessor::getXmlFromBinary (block.getData(),
+                                                                     static_cast<int> (block.getSize()));
+
+            if (xml == nullptr)
+            {
+                std::fprintf (stderr, "  the state did not parse as XML\n");
+                ++failures;
+                continue;
+            }
+
+            const auto tree = juce::ValueTree::fromXml (*xml);
+
+            if (! tree.hasProperty (wanted))
+            {
+                std::fprintf (stderr, "  no state property named %s\n", wanted.toRawUTF8());
+                ++failures;
+                continue;
+            }
+
+            std::printf ("  %s = %s\n", wanted.toRawUTF8(),
+                         tree.getProperty (wanted).toString().toRawUTF8());
+            continue;
+        }
+
         // "shot:file.png" photographs the editor as it stands.
         if (id.startsWith ("shot:"))
         {
@@ -364,6 +410,19 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
         {
             if (auto* button = dynamic_cast<juce::Button*> (found))
             {
+                // **A toggle has to be flipped before its handler runs**, and
+                // getting this wrong made every toggle in the suite untestable
+                // from here. JUCE flips a `setClickingTogglesState` button on
+                // the mouse event and calls onClick afterwards, so a handler
+                // that reads `getToggleState()` -- which is how every one of
+                // ours is written -- sees the new value. Calling onClick on its
+                // own leaves the old one, and the control reports that nothing
+                // changed however correctly it is wired. The TIPS button looked
+                // exactly as dead as the five that genuinely were.
+                if (button->getClickingTogglesState())
+                    button->setToggleState (! button->getToggleState(),
+                                            juce::dontSendNotification);
+
                 // The handler directly rather than triggerClick(), which posts
                 // a message: there is no modal dispatch loop in a plugin build
                 // to pump it with, and a sequence of clicks has to happen in
@@ -371,7 +430,9 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
                 if (button->onClick)
                     button->onClick();
 
-                std::printf ("  clicked %s\n", id.toRawUTF8());
+                std::printf ("  clicked %s%s\n", id.toRawUTF8(),
+                             button->getClickingTogglesState()
+                               ? (button->getToggleState() ? " (now on)" : " (now off)") : "");
             }
             else
             {

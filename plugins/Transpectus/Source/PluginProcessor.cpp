@@ -1,4 +1,6 @@
 #include "PluginProcessor.h"
+
+#include <tezla/ui/StateIds.hpp>
 #include "PluginEditor.h"
 
 #include <algorithm>
@@ -217,6 +219,10 @@ void TranspectusProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
     state.appendChild (abCompare_.toValueTree(), nullptr);
 
+    // A panel preference rather than a parameter, so it rides in the state tree
+    // rather than in the parameter layout -- see getTooltipsEnabled.
+    state.setProperty (ui::stateIds::tooltipsEnabled, tooltipsEnabled_, nullptr);
+
     // The captured reference travels with the project. Text rather than a blob,
     // so it stays readable in a saved session file.
     if (reference_.hasCurve())
@@ -249,6 +255,7 @@ void TranspectusProcessor::setStateInformation (const void* data, int sizeInByte
 
     state_.replaceState (tree);
     abCompare_.restoreFromValueTree (tree.getChildWithName ("abCompare"));
+    tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
 
     // A reference that fails to load leaves the plugin with none rather than
     // with half of one -- fromText refuses anything it cannot trust.

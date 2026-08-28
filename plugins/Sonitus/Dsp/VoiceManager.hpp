@@ -72,7 +72,28 @@ enum class KeyboardMode
 class VoiceManager
 {
 public:
-    static constexpr int kMaxVoices = 8;
+    /// How many voices the manager holds.
+    ///
+    /// **A ceiling, not a bill.** `Voice::process` returns on its first line
+    /// when its amplitude envelope is idle, so a slot nobody is playing costs
+    /// one branch per sample and nothing else -- the measured cost is per
+    /// *sounding* voice. Raising this buys headroom for overlapping pads with
+    /// long releases, where most of the voices at any moment are release tails,
+    /// and costs memory rather than CPU.
+    ///
+    /// Measured, in `tezla-measure sonitus`, at 48 kHz with the whole mangle
+    /// running: thirty-two *idle* slots cost 0.5 ms per second of audio -- five
+    /// hundredths of one core, and the same figure the engine read when this
+    /// ceiling was eight. A *sounding* voice costs about 44 ms/s, so sixteen
+    /// held at once is 72% of a core and thirty-two is 143%.
+    ///
+    /// That is the whole argument: the ceiling is memory and the notes are the
+    /// bill. Thirty-two sounding at once is more than one core and also more
+    /// than any arrangement actually holds -- it is there for a pad whose
+    /// releases overlap, where most of the sounding voices are tails on their
+    /// way out. The Voices control decides how many may sound, and defaults to
+    /// sixteen.
+    static constexpr int kMaxVoices = 32;
 
     /// How many notes can be held at once in mono mode before the oldest is
     /// forgotten. Ten fingers, and nobody is holding more than that on purpose.
@@ -114,7 +135,7 @@ public:
     void setMode (KeyboardMode mode) noexcept { mode_ = mode; }
     [[nodiscard]] KeyboardMode getMode() const noexcept { return mode_; }
 
-    /// How many voices polyphony may use, 1 to 8.
+    /// How many voices polyphony may use, 1 to `kMaxVoices`.
     void setPolyphony (int voices) noexcept
     {
         polyphony_ = std::clamp (voices, 1, kMaxVoices);

@@ -915,6 +915,19 @@ TranspectusEditor::TranspectusEditor (TranspectusProcessor& processorToUse)
         header_->setOtherSlotFilled (transpectus_.getAbCompare().otherSlotFilled());
     };
 
+    // The TIPS button. The flag lives on the processor so it survives the
+    // window being closed, and the header is told the current value rather
+    // than assuming its own default -- reopening a panel whose tips were off
+    // must not turn them back on.
+    header_->onTooltipsToggled = [this] (bool enabled)
+    {
+        transpectus_.setTooltipsEnabled (enabled);
+        tooltips_.setEnabled (enabled);
+    };
+
+    header_->setTooltipsEnabled (transpectus_.getTooltipsEnabled());
+    tooltips_.setEnabled (transpectus_.getTooltipsEnabled());
+
     addAndMakeVisible (*header_);
 
     buildControls();

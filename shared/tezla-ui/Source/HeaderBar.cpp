@@ -154,6 +154,14 @@ HeaderBar::HeaderBar (juce::AudioProcessorValueTreeState& state,
         button->setColour (juce::TextButton::textColourOnId, palette_.accentBright);
     }
 
+    // Named so `tezla-render <plugin> editor hit:tips click` can reach them.
+    // The TIPS button is the reason these exist: it was wired in one plugin of
+    // six and there was no way to tell from outside, because a button that
+    // calls back into nothing looks exactly like one that works.
+    swapButton_.setComponentID ("ab");
+    copyButton_.setComponentID ("copy");
+    tipsButton_.setComponentID ("tips");
+
     setActiveSlot (false);
 }
 

@@ -1588,6 +1588,73 @@ int runAnvil (const Args& args)
 
     // ---- 5. what it costs ------------------------------------------------------
 
+    // ---- the feedback loop, and what presence and resonance can reach --------
+    //
+    // A user reported both controls as doing nothing, and they were right. Both
+    // work by shunting the feedback away at one end of the spectrum, so neither
+    // can lift that end by more than the loop was holding it down -- the
+    // negative feedback *is* the control's authority. The lanes shipped with
+    // loop gains of 0.60, 0.15 and 0.32, which is 4.1, 1.2 and 2.4 dB, and the
+    // controls measured 3.7, 1.0 and 2.0: correct, and useless.
+    //
+    // Measured small-signal, so the output stage is not limiting. A pinned
+    // stage stays pinned however the loop is shaped, which is why the figure
+    // collapses at high drive -- what moves there is the harmonic structure,
+    // not the level.
+
+    std::printf ("The feedback loop: what presence and resonance can actually reach\n\n");
+
+    std::printf ("  %-9s %10s %12s %14s %14s\n",
+                 "lane", "loop gain", "NFB", "presence 6 kHz", "resonance 40 Hz");
+
+    for (int lane = 0; lane < 3; ++lane)
+    {
+        anvil::Parameters base;
+
+        base.voicing = static_cast<anvil::Voicing> (lane);
+        base.cabinet = anvil::CabinetChoice::none;
+        base.gainDb = 0.0;
+
+        anvil::Engine probe;
+        probe.setParameters (base);
+        probe.prepare (rate, 128, 2);
+
+        const double loop = probe.getLoopGain();
+
+        auto level = [&] (double presence, double resonance, double hz)
+        {
+            auto p = base;
+            p.presence = presence;
+            p.resonance = resonance;
+
+            const auto rendered = renderAnvil (p, rate, std::pow (10.0, -48.0 / 20.0), hz, window);
+
+            double sum = 0.0;
+            for (const double s : rendered)
+                sum += s * s;
+
+            return 20.0 * std::log10 (std::max (std::sqrt (sum / static_cast<double> (rendered.size())),
+                                                1.0e-30));
+        };
+
+        const double presenceLift  = level (1.0, 0.0, 6000.0) - level (0.0, 0.0, 6000.0);
+        const double resonanceLift = level (0.0, 1.0, 40.0)   - level (0.0, 0.0, 40.0);
+
+        std::printf ("  %-9s %10.2f %10.1f dB %11.1f dB %13.1f dB\n",
+                     laneNames[lane], loop, 20.0 * std::log10 (1.0 + loop),
+                     presenceLift, resonanceLift);
+    }
+
+    std::printf ("\n  The lift a shunt can produce is the negative feedback beside it, because\n");
+    std::printf ("  that is what the shunt is removing. These lanes shipped at 0.60, 0.15\n");
+    std::printf ("  and 0.32 of loop gain -- 4.1, 1.2 and 2.4 dB -- and the controls\n");
+    std::printf ("  measured 3.7, 1.0 and 2.0: correct, and useless.\n\n");
+    std::printf ("  5.6 dB is the ceiling and not a choice. The loop carries a one-sample\n");
+    std::printf ("  delay, so its pole sits at minus the loop gain and it is stable only\n");
+    std::printf ("  below 1. PowerAmp::kMaximumLoopGain holds it at 0.9. Going deeper means\n");
+    std::printf ("  solving the loop implicitly through two stateful ADAA shapers, which is\n");
+    std::printf ("  a project rather than a patch.\n\n");
+
     std::printf ("CPU, one stereo instance, milliseconds per second of audio at %.0f Hz\n\n", rate);
 
     for (const auto mode : { dsp::OversamplingMode::Off, dsp::OversamplingMode::X2,
@@ -1903,6 +1970,74 @@ int runSonitus (const Args& args)
     std::printf ("  envelopes and the folder's antialiasing are per voice and the unison\n");
     std::printf ("  bank is not. So mono is the setting that saves CPU -- and a reese is one\n");
     std::printf ("  voice anyway. Turning unison down is the wrong lever.\n\n");
+
+    // How much does the *ceiling* cost, as opposed to the notes? The manager
+    // iterates every slot every sample, so raising kMaxVoices to 32 adds 24
+    // loop iterations per sample whether or not anybody is playing them. The
+    // sweep below holds a rising number of notes with the ceiling fixed at 32,
+    // so the difference between two rows is the marginal cost of a *sounding*
+    // voice and the first row plus the idle figure above is what the ceiling
+    // itself costs.
+    std::printf ("  Held notes, ceiling fixed at %d slots, unison 1, mangle running:\n\n",
+                 sonitus::VoiceManager::kMaxVoices);
+
+    std::printf ("  %-14s %10s %8s %14s\n", "notes held", "ms/s", "core", "per voice");
+
+    double previousMs = 0.0;
+
+    for (const int held : { 1, 2, 4, 8, 16, 32 })
+    {
+        auto parameters = harmonicPatch();
+
+        parameters.keyboard = sonitus::KeyboardMode::poly;
+        parameters.polyphony = sonitus::VoiceManager::kMaxVoices;
+        parameters.voice.levelB = 1.0;
+        parameters.voice.unisonA = 1;
+        parameters.voice.unisonB = 1;
+        parameters.combMode = sonitus::CombMode::flange;
+        parameters.combMix = 0.8;
+        parameters.combFeedback = 0.7;
+        parameters.formantMix = 0.6;
+
+        sonitus::Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 512);
+
+        // Spread over three octaves so no two voices share a frequency and the
+        // filter and envelope of each is doing genuinely different work.
+        for (int note = 0; note < held; ++note)
+            engine.noteOn (28 + note, 0.9);
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        engine.process (channels, 512);
+
+        const auto started = std::chrono::steady_clock::now();
+
+        for (int i = 0; i < static_cast<int> (rate); i += 512)
+            engine.process (channels, 512);
+
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        const double ms = std::chrono::duration<double, std::milli> (elapsed).count();
+
+        std::printf ("  %2d %-11s %10.1f %7.1f%% %12.1f ms\n", held,
+                     held == 1 ? "note" : "notes", ms, ms / 10.0, ms / held);
+
+        if (held == 1)
+            previousMs = ms;
+    }
+
+    std::printf ("\n  **The ceiling is free; the notes are not.** Thirty-two idle slots and\n");
+    std::printf ("  the whole mangle cost 0.5 ms/s -- five hundredths of one core -- because\n");
+    std::printf ("  Voice::process returns on its first line when the amp envelope is idle\n");
+    std::printf ("  and applyControls skips inactive voices entirely. One held note costs\n");
+    std::printf ("  %.0f ms/s, which is %.0f times the whole idle engine. So the Voices\n",
+                 previousMs, previousMs / 0.5);
+    std::printf ("  control decides the bill and kMaxVoices only decides whether the player\n");
+    std::printf ("  is allowed to run one up. Sixteen is the default because it is the most\n");
+    std::printf ("  a sane arrangement holds at once; the ceiling is there for pads whose\n");
+    std::printf ("  releases overlap, where most of the sounding voices are tails.\n\n");
 
     // ---- 4. tuning ------------------------------------------------------------
 

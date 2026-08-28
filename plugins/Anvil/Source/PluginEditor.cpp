@@ -336,6 +336,19 @@ AnvilEditor::AnvilEditor (AnvilProcessor& processorToUse)
         header_->setOtherSlotFilled (anvil_.getAbCompare().otherSlotFilled());
     };
 
+    // The TIPS button. The flag lives on the processor so it survives the
+    // window being closed, and the header is told the current value rather
+    // than assuming its own default -- reopening a panel whose tips were off
+    // must not turn them back on.
+    header_->onTooltipsToggled = [this] (bool enabled)
+    {
+        anvil_.setTooltipsEnabled (enabled);
+        tooltips_.setEnabled (enabled);
+    };
+
+    header_->setTooltipsEnabled (anvil_.getTooltipsEnabled());
+    tooltips_.setEnabled (anvil_.getTooltipsEnabled());
+
     header_->setActiveSlot (anvil_.getAbCompare().isSlotB());
     header_->setOtherSlotFilled (anvil_.getAbCompare().otherSlotFilled());
 

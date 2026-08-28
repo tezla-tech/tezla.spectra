@@ -171,6 +171,14 @@ struct PowerAmpParameters
 
     /// How much of the output is fed back. Zero is no loop at all, which is a
     /// perfectly ordinary way to build a guitar amplifier.
+    ///
+    /// This is the loop gain, and it is **clamped to `kMaximumLoopGain`** --
+    /// see `process`. Above 1 the loop's pole leaves the unit circle and the
+    /// only thing standing between it and a Nyquist oscillation is the
+    /// saturator, which CLAUDE.md section 7 is explicit is not a bound. The
+    /// clamp is in the class rather than in the caller because a caller that
+    /// forgets it produces something that measures fine on the signal it was
+    /// tried with and blows up on the next one.
     double feedback { 0.35 };
 
     /// Presence: how much of the high end is shunted *out of the feedback
@@ -247,6 +255,19 @@ class PowerAmp
 public:
     /// The flux state is bounded to this multiple of the core's capacity, so
     /// the integrator cannot wind up however it is driven.
+    /// The most loop gain the delayed loop may carry.
+    ///
+    /// The loop is `y[n] = A*x[n] - b*y[n-1]`, whose pole is at -b, so it is
+    /// stable for `b < 1` and for nothing else. Measured on the real stage,
+    /// which saturates: alternation sets in by a loop gain of 2.4 and at 3.0
+    /// the output reached 1e82 within 8000 samples. 0.9 leaves a margin
+    /// against the sag and flux paths, which move the operating point.
+    ///
+    /// It also fixes the ceiling on the presence and resonance controls at
+    /// `20*log10(1 + 0.9)` = 5.6 dB, since a shunt can only give back what
+    /// the loop is taking away.
+    static constexpr double kMaximumLoopGain = 0.9;
+
     static constexpr double kFluxLimit = 12.0;
 
     /// How far the rail is allowed to fall, as a fraction of nominal.
@@ -321,7 +342,31 @@ public:
         // Previous sample's output, so there is no algebraic loop to solve. The
         // loop's authority is whatever the valves' incremental gain still is,
         // which is the point: it lets go on its own when they clip.
-        const double driven = x * parameters_.drive - parameters_.feedback * shapedFeedback();
+        //
+        // **That unit delay caps the negative feedback at about 6 dB, and the
+        // cap is the whole story of the presence and resonance controls.** A
+        // loop of `y[n] = A(x - b*y[n-1])` has its pole at -A*b, so it is
+        // stable only while the loop gain `A*b` stays under 1, and the most
+        // negative feedback available is therefore 20*log10(1 + A*b) < 6 dB.
+        // Presence works by shunting the feedback away above a corner, so it
+        // can never lift the top by more than the loop was holding it down:
+        // that bound *is* the control's authority.
+        //
+        // The first version shipped with loop gains of 0.15 to 0.60, which is
+        // 1.2 to 4.1 dB, and a user reported both controls as doing nothing.
+        // They were right. The voicings now sit just under the bound instead --
+        // see AnvilEngine.cpp -- and `effectiveFeedback_` keeps them there.
+        //
+        // Enclosing the gain (`(x - b*fb) * A` rather than `x*A - b*fb`) was
+        // tried and does not help: it makes the loop gain `A*b` explicitly
+        // rather than implicitly, and the same bound applies. Measured, it
+        // oscillated at Nyquist from a loop gain of about 2 and diverged to
+        // 1e82 at 3, with nothing but the saturator in the way -- exactly the
+        // undefeatable-bound failure CLAUDE.md section 7 describes. Getting
+        // past 6 dB needs the delay gone, which means solving the loop
+        // implicitly through two stateful ADAA shapers. That is a project, not
+        // a patch.
+        const double driven = x * parameters_.drive - effectiveFeedback_ * shapedFeedback();
 
         // ---- class AB handover ------------------------------------------------
 
@@ -427,6 +472,10 @@ private:
         clip_.setKnee (parameters_.knee);
         crossover_.crossover = Crossover { parameters_.crossoverDepth, parameters_.crossoverWidth };
 
+        // The bound that cannot be defeated, applied where the coefficient is
+        // computed rather than where it is used. See kMaximumLoopGain.
+        effectiveFeedback_ = std::clamp (parameters_.feedback, 0.0, kMaximumLoopGain);
+
         // One-pole coefficients. The corners are far below Nyquist, so the
         // small-angle form is exact enough and costs no transcendental.
         constexpr double twoPi = 6.283185307179586;
@@ -469,6 +518,9 @@ private:
     double lowState_       { 0.0 };
     double highState_      { 0.0 };
     double feedbackState_  { 0.0 };
+    /// `parameters_.feedback` after the stability clamp. See kMaximumLoopGain.
+    double effectiveFeedback_ { 0.0 };
+
     double presenceState_  { 0.0 };
     double resonanceState_ { 0.0 };
 

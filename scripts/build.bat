@@ -13,7 +13,8 @@ rem    build.bat Emberdrive               one plugin
 rem    build.bat Emberdrive,Foo           a list
 rem    build.bat NONE -test               DSP core + tests only, no JUCE
 rem    build.bat -config Debug            Debug build
-rem    build.bat -install                 also copy to the system VST3 folder
+rem    build.bat --install                also copy to the system VST3 folder
+rem    build.bat --installbuild           copy an existing build, skip building
 rem    build.bat -clean                   wipe the build folder first
 rem    build.bat -juce C:\dev\JUCE        use a JUCE you already have
 rem    build.bat -list                    show available plugins
@@ -25,6 +26,7 @@ set "PLUGINS=ALL"
 set "CONFIG=Release"
 set "BUILDDIR=%REPO%\build"
 set "DO_INSTALL=0"
+set "INSTALL_ONLY=0"
 set "DO_TEST=0"
 set "DO_CLEAN=0"
 set "GENERATOR="
@@ -32,20 +34,30 @@ set "JUCEARGS="
 
 :parse
 if "%~1"=="" goto after_parse
-if /I "%~1"=="-help"    goto usage
-if /I "%~1"=="--help"   goto usage
-if /I "%~1"=="/?"       goto usage
-if /I "%~1"=="-list"    goto opt_list
-if /I "%~1"=="-clean"   goto opt_clean
-if /I "%~1"=="-install" goto opt_install
-if /I "%~1"=="-test"    goto opt_test
-if /I "%~1"=="-config"  goto opt_config
-if /I "%~1"=="-plugins" goto opt_plugins
-if /I "%~1"=="-builddir" goto opt_builddir
-if /I "%~1"=="-juce"        goto opt_juce
-if /I "%~1"=="-juce-system" goto opt_juce_system
-if /I "%~1"=="-ninja"   goto opt_ninja
-if /I "%~1"=="-vs"      goto opt_vs
+
+rem One leading dash or two, both work.
+rem
+rem Every other tool takes --install, and typing it here used to fall through
+rem to the line at the end of this block that treats an unrecognised argument
+rem as the plugin list -- so "build.bat --install" quietly configured a build of
+rem a plugin named "--install" and never mentioned the option at all.
+set "ARG=%~1"
+if "!ARG:~0,2!"=="--" set "ARG=!ARG:~1!"
+
+if /I "!ARG!"=="-help"    goto usage
+if /I "!ARG!"=="/?"       goto usage
+if /I "!ARG!"=="-list"    goto opt_list
+if /I "!ARG!"=="-clean"   goto opt_clean
+if /I "!ARG!"=="-install" goto opt_install
+if /I "!ARG!"=="-installbuild" goto opt_install_only
+if /I "!ARG!"=="-test"    goto opt_test
+if /I "!ARG!"=="-config"  goto opt_config
+if /I "!ARG!"=="-plugins" goto opt_plugins
+if /I "!ARG!"=="-builddir" goto opt_builddir
+if /I "!ARG!"=="-juce"        goto opt_juce
+if /I "!ARG!"=="-juce-system" goto opt_juce_system
+if /I "!ARG!"=="-ninja"   goto opt_ninja
+if /I "!ARG!"=="-vs"      goto opt_vs
 rem Anything else is taken as the plugin list, so "build.bat Emberdrive" works.
 set "PLUGINS=%~1"
 shift
@@ -60,6 +72,16 @@ shift
 goto parse
 :opt_install
 set "DO_INSTALL=1"
+shift
+goto parse
+:opt_install_only
+rem Copy what is already in the build folder, and do nothing else.
+rem
+rem For the common case: you have just built by hand and want the bundles where
+rem FL Studio will look for them. Going through CMake again to be told there is
+rem nothing to do is a wait for no reason.
+set "DO_INSTALL=1"
+set "INSTALL_ONLY=1"
 shift
 goto parse
 :opt_test
@@ -117,6 +139,11 @@ shift
 goto parse
 
 :after_parse
+
+rem --installbuild does no configuring, no building and no tool checks: the
+rem build folder either has bundles in it or it does not, and cmake has no part
+rem in answering that.
+if "%INSTALL_ONLY%"=="1" goto collect
 
 rem ---------------------------------------------------------------- tools ----
 rem Probed by running them rather than by asking `where`: this also catches a
@@ -205,6 +232,7 @@ if "%DO_TEST%"=="1" (
 )
 
 rem -------------------------------------------------------------- install ----
+:collect
 set "FOUND=0"
 echo.
 echo Built VST3 bundles:
@@ -212,40 +240,74 @@ for /d /r "%BUILDDIR%" %%D in (*.vst3) do (
     echo    %%D
     set "FOUND=1"
 )
-if "%FOUND%"=="0" echo    ^(none -- no plugin targets were selected^)
+if "%FOUND%"=="1" goto have_bundles
+if "%INSTALL_ONLY%"=="1" goto nothing_built
+echo    ^(none -- no plugin targets were selected^)
+goto after_found
+
+:nothing_built
+echo    ^(none^)
+echo.
+echo ERROR: --installbuild found no .vst3 bundles in
+echo        "%BUILDDIR%".
+echo        There is nothing built to install. Build first, or point at a
+echo        different folder with -builddir ^<dir^>.
+exit /b 1
+
+:have_bundles
+:after_found
 
 if "%DO_INSTALL%"=="1" goto do_install
 if "%FOUND%"=="1" (
     echo.
-    echo Re-run with -install from an Administrator prompt to copy these to
-    echo "%CommonProgramFiles%\VST3".
+    echo Re-run with --install to copy these to "%CommonProgramFiles%\VST3",
+    echo or --installbuild to copy them without building again.
 )
 goto done
 
 :do_install
-net session >nul 2>&1
-if errorlevel 1 (
-    echo.
-    echo ERROR: -install writes to "%CommonProgramFiles%\VST3", which needs
-    echo        an elevated prompt. Right-click Command Prompt, "Run as
-    echo        administrator", and run this again.
-    exit /b 1
-)
 echo.
 echo Installing to "%CommonProgramFiles%\VST3"...
-for /d /r "%BUILDDIR%" %%D in (*.vst3) do (
-    echo    %%~nxD
-    xcopy /E /I /Y /Q "%%D" "%CommonProgramFiles%\VST3\%%~nxD" >nul
-    if errorlevel 1 (
-        echo ERROR: failed to copy %%~nxD
-        exit /b 1
-    )
-)
+
+rem **No elevation check before trying.** The VST3 folder is writable by an
+rem ordinary account once somebody has granted it Modify, which is the sane way
+rem to set a machine up -- and a script that refuses up front makes having done
+rem that pointless. So: attempt the copy, and explain the fix only if it fails.
+if not exist "%CommonProgramFiles%\VST3" mkdir "%CommonProgramFiles%\VST3" 2>nul
+
+rem A flag rather than errorlevel, because `if errorlevel` after the loop only
+rem sees the *last* call: with one bundle failing and the next succeeding it
+rem would read zero and the script would say "Done" having not installed one of
+rem them. Every bundle is attempted either way, so one locked file does not hide
+rem the rest.
+set "INSTALL_FAILED=0"
+for /d /r "%BUILDDIR%" %%D in (*.vst3) do call :install_one "%%D" "%%~nxD"
+if "!INSTALL_FAILED!"=="1" exit /b 1
+
 echo Done. In FL Studio: Options ^> Manage plugins ^> Find more plugins.
 
 :done
 echo.
 exit /b 0
+
+:install_one
+xcopy /E /I /Y /Q %1 "%CommonProgramFiles%\VST3\%~2" >nul
+if errorlevel 1 goto install_failed
+echo    %~2
+exit /b 0
+
+:install_failed
+set "INSTALL_FAILED=1"
+echo.
+echo ERROR: could not copy %~2 into "%CommonProgramFiles%\VST3".
+echo.
+echo        Usually the folder is not writable by this account. Either grant
+echo        your user Modify on it once (Properties, Security), or run this
+echo        from an Administrator prompt.
+echo.
+echo        The other cause is a DAW holding the old bundle open -- close it
+echo        and try again.
+exit /b 1
 
 :list_plugins
 rem Quoting the wildcard -- for /d %%D in ("%REPO%\plugins\*") -- silently
@@ -275,11 +337,14 @@ echo   build.bat                       all plugins, Release
 echo   build.bat Emberdrive            one plugin
 echo   build.bat Emberdrive,Foo        a list of plugins
 echo   build.bat NONE -test            DSP core + tests only ^(no JUCE, seconds^)
+echo   build.bat --installbuild        install what is already built, no rebuild
+echo.
+echo Options take one dash or two: -install and --install are the same.
 echo.
 echo Options:
 echo   -config ^<cfg^>   Debug ^| Release ^| RelWithDebInfo ^| MinSizeRel
-echo   -install        copy the built .vst3 bundles to the system VST3 folder
-echo                   ^(needs an Administrator prompt^)
+echo   --install       copy the built .vst3 bundles to the system VST3 folder
+echo   --installbuild  copy an existing build and skip building entirely
 echo   -test           run the DSP unit tests after building
 echo   -clean          delete the build folder first
 echo   -builddir ^<d^>   use a different build folder
