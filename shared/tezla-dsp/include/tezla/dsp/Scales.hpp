@@ -264,6 +264,117 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
     return scale;
 }
 
+/// The harmonic series again, an octave higher up it.
+///
+/// Sixteen steps rather than eight, and the steps get smaller as they climb --
+/// which is the point: it is a scale whose own intervals are the intervals the
+/// comb's key tracking lands on, so the two agree by construction rather than
+/// by luck.
+[[nodiscard]] inline Scale harmonicSeriesHigh()
+{
+    Scale scale;
+
+    scale.name = "Harmonic series 16-32";
+    scale.ratios.clear();
+    scale.repeat = 2.0;
+
+    for (int harmonic = 16; harmonic < 32; ++harmonic)
+        scale.ratios.push_back (harmonic / 16.0);
+
+    return scale;
+}
+
+/// The **undertone** series: the harmonic series reflected.
+///
+/// Where the overtone series divides a string into equal parts, this multiplies
+/// it -- 16/16, 16/15, 16/14 and so on up to 16/9 -- so the steps grow as they
+/// climb instead of shrinking. It is the minor-shaped mirror of the major-shaped
+/// harmonic series, and Harry Partch and Hugo Riemann both built theories on the
+/// symmetry.
+///
+/// **It belongs in this instrument in particular**, because kargyraa is exactly
+/// this idea in the time domain: a subharmonic that is the source divided rather
+/// than a second note added. A scale of subharmonics under a voice that is
+/// generating one is a thing very few instruments can do at all.
+[[nodiscard]] inline Scale undertoneSeries()
+{
+    Scale scale;
+
+    scale.name = "Undertone series 16-9";
+    scale.ratios.clear();
+    scale.repeat = 2.0;
+
+    for (int divisor = 16; divisor > 8; --divisor)
+        scale.ratios.push_back (16.0 / divisor);
+
+    return scale;
+}
+
+/// Just intonation extended to the seventh harmonic.
+///
+/// Five-limit just intonation is built from 2, 3 and 5 and has no home for 7/4
+/// -- the harmonic that a brass instrument plays and that a saw wave has plenty
+/// of. Adding it gives the flat seventh its pure form, 969 cents rather than
+/// 12-TET's 1000, which on a sustained bass is the difference between a seventh
+/// that beats and one that locks.
+[[nodiscard]] inline Scale justSevenLimit()
+{
+    Scale scale;
+
+    scale.name = "Just 7-limit";
+    scale.repeat = 2.0;
+    scale.ratios = { 1.0,
+                     16.0 / 15.0,   // 112 c
+                     9.0 / 8.0,     // 204 c
+                     7.0 / 6.0,     // 267 c -- septimal minor third
+                     5.0 / 4.0,     // 386 c
+                     4.0 / 3.0,     // 498 c
+                     7.0 / 5.0,     // 583 c -- septimal tritone
+                     3.0 / 2.0,     // 702 c
+                     8.0 / 5.0,     // 814 c
+                     5.0 / 3.0,     // 884 c
+                     7.0 / 4.0,     // 969 c -- the harmonic seventh
+                     15.0 / 8.0 };  // 1088 c
+
+    return scale;
+}
+
+/// A Pythagorean chain run out to seventeen notes rather than twelve.
+///
+/// Twelve fifths do not close -- they overshoot by a Pythagorean comma, 23.46
+/// cents -- and a twelve-note Pythagorean scale hides that in one unusable
+/// "wolf" fifth. Seventeen notes keep going instead of hiding it, which is what
+/// medieval Arabic theory did with the same arithmetic, and gives both a sharp
+/// and a flat for each of the five black keys.
+[[nodiscard]] inline Scale pythagoreanSeventeen()
+{
+    Scale scale;
+
+    scale.name = "Pythagorean 17";
+    scale.repeat = 2.0;
+    scale.ratios.clear();
+
+    // Eight fifths up and eight down from the tonic, each folded into the
+    // octave. Derived rather than tabulated: the whole scale is 3/2.
+    for (int step = -8; step <= 8; ++step)
+    {
+        double ratio = std::pow (1.5, step);
+
+        while (ratio >= 2.0) ratio /= 2.0;
+        while (ratio < 1.0)  ratio *= 2.0;
+
+        scale.ratios.push_back (ratio);
+    }
+
+    std::sort (scale.ratios.begin(), scale.ratios.end());
+
+    return scale;
+}
+
+[[nodiscard]] inline Scale seventeenToneEqual() { return equalDivisions ("17-TET", 17); }
+[[nodiscard]] inline Scale twentyTwoToneEqual() { return equalDivisions ("22-TET", 22); }
+[[nodiscard]] inline Scale fortyOneToneEqual() { return equalDivisions ("41-TET", 41); }
+
 // ---------------------------------------------------------------------------
 // Historical temperaments
 // ---------------------------------------------------------------------------
@@ -441,6 +552,10 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         justMinor(),
         pythagorean(),
         harmonicSeries(),
+        harmonicSeriesHigh(),
+        undertoneSeries(),
+        justSevenLimit(),
+        pythagoreanSeventeen(),
         quarterCommaMeantone(),
         werckmeisterThree(),
         kirnbergerThree(),
@@ -454,8 +569,11 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         carlosGamma(),
         fiveToneEqual(),
         sevenToneEqual(),
+        seventeenToneEqual(),
         nineteenToneEqual(),
+        twentyTwoToneEqual(),
         quarterTones(),
+        fortyOneToneEqual(),
         thirtyOneToneEqual(),
         fiftyThreeToneEqual(),
     };

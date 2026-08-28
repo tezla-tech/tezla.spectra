@@ -179,8 +179,14 @@ public:
     {
         auto layout = juce::LookAndFeel_V4::getSliderLayout (slider);
 
-        if (slider.getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag
-            || slider.getSliderStyle() == juce::Slider::Rotary)
+        // **Only when the caller asked for the value underneath.** Applying
+        // this to every rotary took a header knob with its value set to the
+        // *right* and stacked it anyway, leaving the knob a third of the height
+        // it had been given and the number in the wrong place. The stock layout
+        // already handles the other positions correctly.
+        if (slider.getTextBoxPosition() == juce::Slider::TextBoxBelow
+            && (slider.getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag
+                || slider.getSliderStyle() == juce::Slider::Rotary))
         {
             auto bounds = slider.getLocalBounds();
             const int textHeight = slider.getTextBoxHeight();

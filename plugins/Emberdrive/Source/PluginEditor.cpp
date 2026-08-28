@@ -271,6 +271,9 @@ EmberdriveEditor::EmberdriveEditor (EmberdriveProcessor& processorToUse)
     };
     header_->setActiveSlot (ab.isSlotB());
     header_->setOtherSlotFilled (ab.otherSlotFilled());
+
+    // The suite-wide pair, in the header rather than at the bottom of a page.
+    header_->attachSuiteControls (processor_.getValueTreeState(), ids::mix, ids::output, ids::oversampling);
     addAndMakeVisible (*header_);
 
     buildPages();

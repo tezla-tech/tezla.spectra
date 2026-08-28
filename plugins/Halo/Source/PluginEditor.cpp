@@ -320,6 +320,9 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     };
     header_->setActiveSlot (ab.isSlotB());
     header_->setOtherSlotFilled (ab.otherSlotFilled());
+
+    // The suite-wide pair, in the header rather than at the bottom of a page.
+    header_->attachSuiteControls (halo_.getValueTreeState(), nullptr, ids::output, ids::oversampling);
     addAndMakeVisible (*header_);
 
     spectrum_ = std::make_unique<ui::SpectrumDisplay> (palette_);

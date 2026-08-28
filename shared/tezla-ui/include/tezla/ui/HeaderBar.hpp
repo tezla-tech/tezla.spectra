@@ -62,6 +62,38 @@ public:
     std::function<void()> onSwapRequested;
     std::function<void()> onCopyRequested;
 
+    /// Called when the tooltip switch is flipped, with its new state.
+    ///
+    /// The header only owns the button. Whether a tooltip window exists at all
+    /// is the editor's business, and what the setting is worth remembering
+    /// between sessions is the processor's.
+    std::function<void (bool)> onTooltipsToggled;
+
+    /// Sets the switch without calling back, for restoring a saved state.
+    void setTooltipsEnabled (bool enabled);
+
+    /// Puts the plugin's **output trim** and **oversampling** in the header,
+    /// beside A/B and COPY.
+    ///
+    /// These two are the same control on every plugin in the suite and they are
+    /// the last thing anybody touches, so they belong somewhere fixed rather
+    /// than at the bottom of whichever page happened to have room. Finding the
+    /// output trim on the MANGLE tab of one plugin and the DRIVE tab of the next
+    /// is the sort of thing that is only annoying twenty times a day.
+    ///
+    /// The dry/wet **mix** joins them, for the same reason: on an effect it is
+    /// the control you reach for from whichever page you happen to be on.
+    ///
+    /// Any id may be null, and then that control is left out. Capstone has no
+    /// global oversampling, Transpectus has none of the three, and neither Halo
+    /// nor Capstone has a dry/wet at all -- Halo's `amount` is how much
+    /// harmonic content is *generated*, which is a drive and not a blend, and
+    /// putting it here labelled MIX would be a lie about what it does.
+    void attachSuiteControls (juce::AudioProcessorValueTreeState& state,
+                              const char* mixParameterId,
+                              const char* outputParameterId,
+                              const char* oversamplingParameterId);
+
     /// Which slot is live, so the button can show it.
     void setActiveSlot (bool isSlotB);
 
@@ -85,6 +117,23 @@ private:
 
     juce::TextButton swapButton_ { "A / B" };
     juce::TextButton copyButton_ { "COPY" };
+    juce::TextButton tipsButton_ { "TIPS" };
+
+    juce::Slider mixSlider_;
+    juce::Label mixLabel_ { {}, "MIX" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAttachment_;
+
+    juce::Slider outputSlider_;
+    juce::Label outputLabel_ { {}, "OUT" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAttachment_;
+
+    juce::ComboBox oversamplingBox_;
+    juce::Label oversamplingLabel_ { {}, "OS" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> oversamplingAttachment_;
+
+    bool hasMix_ { false };
+    bool hasOutput_ { false };
+    bool hasOversampling_ { false };
 
     bool hasBypass_ { true };
     bool slotB_ { false };

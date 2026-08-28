@@ -118,7 +118,7 @@ Bohlen–Pierce, which repeats at 3/1 rather than the octave. See
 | **[Anvil](plugins/Anvil/)** | Valve amplifier, speaker load and cabinet, from the mechanisms | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Sonitus](plugins/Sonitus/)** | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, Scala microtuning | v0.1.0 — 47/47 on Steinberg's validator |
 
-617 framework-free DSP tests pass on Linux x86-64, which is where development
+618 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS
