@@ -21,6 +21,7 @@ inline constexpr auto octaveA     = "octaveA";
 inline constexpr auto semitonesA  = "semitonesA";
 inline constexpr auto centsA      = "centsA";
 inline constexpr auto widthA      = "widthA";
+inline constexpr auto morphA      = "morphA";
 inline constexpr auto unisonA     = "unisonA";
 inline constexpr auto detuneA     = "detuneA";
 inline constexpr auto spreadA     = "spreadA";
@@ -33,6 +34,7 @@ inline constexpr auto octaveB     = "octaveB";
 inline constexpr auto semitonesB  = "semitonesB";
 inline constexpr auto centsB      = "centsB";
 inline constexpr auto widthB      = "widthB";
+inline constexpr auto morphB      = "morphB";
 inline constexpr auto unisonB     = "unisonB";
 inline constexpr auto detuneB     = "detuneB";
 inline constexpr auto spreadB     = "spreadB";
@@ -224,7 +226,7 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "Detune A", "Detune B", "Osc mix",
                                          "Sub level", "Ring", "Fold",
                                          "Pitch", "Pitch B", "Level",
-                                         "Kargyraa" };
+                                         "Kargyraa", "Morph A", "Morph B" };
 
 /// How many oscillator cycles one kargyraa modulator cycle spans.
 ///
@@ -299,7 +301,9 @@ static_assert (static_cast<int> (ModSource::none)      == 0
 static_assert (static_cast<int> (ModDestination::none)     == 0
             && static_cast<int> (ModDestination::level)    == 15
             && static_cast<int> (ModDestination::kargyraa) == 16
-            && static_cast<int> (ModDestination::count)    == 17,
+            && static_cast<int> (ModDestination::morphA)   == 17
+            && static_cast<int> (ModDestination::morphB)   == 18
+            && static_cast<int> (ModDestination::count)    == 19,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0

@@ -150,13 +150,69 @@ public:
     void setShape (OscShape shape) noexcept { shape_ = shape; }
     [[nodiscard]] OscShape getShape() const noexcept { return shape_; }
 
-    /// Pulse width, 0.02 to 0.98. Only the pulse shape reads it.
+    /// Pulse width, 0.02 to 0.98. The pulse reads it as duty; the triangle
+    /// reads it as skew -- at 0.5 the triangle is symmetric, and pushed to
+    /// either end it leans towards a saw. No other shape reads it.
     void setWidth (double width) noexcept
     {
         width_ = std::clamp (width, kMinimumWidth, 1.0 - kMinimumWidth);
     }
 
     [[nodiscard]] double getWidth() const noexcept { return width_; }
+
+    /// The shape's own tweak, 0 to 1, in the Surge sense: what it means
+    /// depends on the shape, and 0 is always that shape's canonical self.
+    ///
+    /// **The four original shapes ignore it entirely** -- they are frozen for
+    /// project compatibility, and their morphable descendants are the new
+    /// shapes (Dome grows out of the sine, Double saw out of the saw; the
+    /// triangle's skew was always Width). A test asserts the ignoring is
+    /// total, at every morph value.
+    void setMorph (double morph) noexcept
+    {
+        morph_ = std::clamp (morph, 0.0, 1.0);
+    }
+
+    [[nodiscard]] double getMorph() const noexcept { return morph_; }
+
+    /// The ideal (un-band-limited) waveform of a shape, for anything that
+    /// draws or checks one -- the on-panel preview renders exactly this, so
+    /// the picture and the sound cannot drift apart.
+    ///
+    /// One deliberate divergence from the audio path: `triangle` here is the
+    /// actual triangle -- rising to +1 at the skew point, falling after --
+    /// while the audio path synthesises it by *integrating a corrected
+    /// square*, because integrating the correction is what band-limits it.
+    /// The two describe the same waveform; this is the shape, that is the
+    /// method.
+    [[nodiscard]] static double naiveShapeSample (OscShape shape, double phase,
+                                                  double width, double morph) noexcept
+    {
+        const double clampedWidth = std::clamp (width, kMinimumWidth, 1.0 - kMinimumWidth);
+        phase -= std::floor (phase);
+        (void) morph;   // read by the shapes still to come
+
+        switch (shape)
+        {
+            case OscShape::saw:
+                return 2.0 * phase - 1.0;
+
+            case OscShape::pulse:
+                return phase < clampedWidth ? 1.0 : -1.0;
+
+            case OscShape::triangle:
+                return phase < clampedWidth
+                    ? 2.0 * phase / clampedWidth - 1.0
+                    : 1.0 - 2.0 * (phase - clampedWidth) / (1.0 - clampedWidth);
+
+            case OscShape::sine:
+                return std::sin (6.283185307179586 * phase);
+
+            case OscShape::count:
+            default:
+                return 0.0;
+        }
+    }
 
     /// Cycles per sample. Kept below a half so the oscillator cannot be asked
     /// for something above Nyquist, which no amount of band-limiting fixes.
@@ -370,6 +426,7 @@ private:
     double phase_     { 0.0 };
     double increment_ { 0.0 };
     double width_     { 0.5 };
+    double morph_     { 0.0 };
 
     double triangleState_ { 0.0 };
 

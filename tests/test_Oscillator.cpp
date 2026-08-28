@@ -771,3 +771,68 @@ TEZLA_TEST (oscillator_is_silent_before_it_is_told_a_frequency)
         CHECK (! osc.didWrap());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Morph: the shape's own tweak, and what it must NOT touch
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_original_four_shapes_ignore_morph_to_the_bit)
+{
+    // The compatibility contract in one test: saw, pulse, triangle and sine
+    // are frozen -- their morphable relatives are the new shapes -- so a
+    // project that never heard of morph reopens identical, and so does one
+    // where a curious hand swept the knob with a legacy shape selected.
+    for (const auto shape : { OscShape::saw, OscShape::pulse, OscShape::triangle, OscShape::sine })
+        for (const double morph : { 0.25, 1.0 })
+        {
+            Oscillator plain;
+            plain.setShape (shape);
+            plain.setWidth (0.3);
+            plain.setIncrement (110.0 / 48000.0);
+            plain.reset();
+
+            Oscillator morphed;
+            morphed.setShape (shape);
+            morphed.setWidth (0.3);
+            morphed.setMorph (morph);
+            morphed.setIncrement (110.0 / 48000.0);
+            morphed.reset();
+
+            for (int i = 0; i < 4800; ++i)
+                CHECK (plain.advance() == morphed.advance());
+        }
+}
+
+TEZLA_TEST (naive_shape_sample_is_the_waveform_the_audio_path_makes)
+{
+    // One definition serves the DSP, the tests and the on-panel preview; this
+    // pins the two ends together. For saw, pulse and sine the audio path's
+    // uncorrected waveform IS the static function. The triangle is the
+    // documented exception -- the audio path integrates a corrected square --
+    // so its check is against the integral's known shape instead: peak at the
+    // skew point, straight flanks.
+    for (const auto shape : { OscShape::saw, OscShape::pulse, OscShape::sine })
+        for (int i = 0; i < 97; ++i)
+        {
+            const double phase = static_cast<double> (i) / 97.0;
+
+            // A slow oscillator barely corrects, so its output approaches the
+            // naive shape away from the discontinuities.
+            Oscillator osc;
+            osc.setShape (shape);
+            osc.setWidth (0.41);
+            osc.setIncrement (1.0e-9);
+            osc.reset (phase);
+
+            const double naive = Oscillator::naiveShapeSample (shape, phase, 0.41, 0.0);
+            const double heard = osc.advance();
+
+            CHECK_NEAR (heard, naive, 1.0e-6);
+        }
+
+    // The triangle: rises to +1 exactly at the skew point, -1 at the ends.
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.0, 0.3, 0.0), -1.0, 1e-12);
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.3, 0.3, 0.0), 1.0, 1e-12);
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.65, 0.3, 0.0), 0.0, 1e-12);
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.15, 0.3, 0.0), 0.0, 1e-12);
+}

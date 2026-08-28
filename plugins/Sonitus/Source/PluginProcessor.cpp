@@ -232,7 +232,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     const auto addOscillator = [&layout] (const char* shapeId, const char* octaveId,
                                           const char* semitoneId, const char* centsId,
-                                          const char* widthId, const char* unisonId,
+                                          const char* widthId, const char* morphId,
+                                          const char* unisonId,
                                           const char* detuneId, const char* spreadId,
                                           const char* driftId, const char* levelId,
                                           const juce::String& prefix, float defaultLevel)
@@ -256,6 +257,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
             juce::ParameterID { widthId, kSchemaV1 }, prefix + " width",
             juce::NormalisableRange<float> { 0.02f, 0.98f }, 0.5f, percentAttributes()));
 
+        // The shape's own tweak, in the Surge sense: its meaning depends on
+        // the shape and 0 is always that shape's canonical self. The original
+        // four shapes ignore it entirely, which is what keeps old projects
+        // bit-exact -- the morphable relatives of saw, sine and triangle are
+        // the new shapes.
+        layout.add (std::make_unique<Parameter> (
+            juce::ParameterID { morphId, kSchemaV2 }, prefix + " morph",
+            juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
         layout.add (std::make_unique<Integer> (
             juce::ParameterID { unisonId, kSchemaV1 }, prefix + " unison", 1, 7, 1));
 
@@ -277,11 +287,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     };
 
     addOscillator (ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
-                   ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
+                   ids::morphA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
                    "Osc A", 1.0f);
 
     addOscillator (ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
-                   ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
+                   ids::morphB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
                    "Osc B", 0.0f);
 
     layout.add (std::make_unique<Boolean> (
@@ -896,6 +906,7 @@ void SonitusProcessor::pullParameters()
     v.semitonesA = valueOf (state_, ids::semitonesA);
     v.centsA = valueOf (state_, ids::centsA);
     v.widthA = valueOf (state_, ids::widthA);
+    v.morphA = valueOf (state_, ids::morphA);
     v.unisonA = indexOf (state_, ids::unisonA);
     v.detuneA = valueOf (state_, ids::detuneA);
     v.spreadA = valueOf (state_, ids::spreadA);
@@ -907,6 +918,7 @@ void SonitusProcessor::pullParameters()
     v.semitonesB = valueOf (state_, ids::semitonesB);
     v.centsB = valueOf (state_, ids::centsB);
     v.widthB = valueOf (state_, ids::widthB);
+    v.morphB = valueOf (state_, ids::morphB);
     v.unisonB = indexOf (state_, ids::unisonB);
     v.detuneB = valueOf (state_, ids::detuneB);
     v.spreadB = valueOf (state_, ids::spreadB);
@@ -1024,6 +1036,8 @@ void SonitusProcessor::pullParameters()
             // sum to 0..1, so full depth reaches either end of the control from
             // wherever the knob is set.
             case ModDestination::kargyraa:
+            case ModDestination::morphA:
+            case ModDestination::morphB:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }

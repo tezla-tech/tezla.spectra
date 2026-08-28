@@ -133,6 +133,10 @@ enum class ModDestination
     /// is an index into this list -- CLAUDE.md section 8.
     kargyraa,
 
+    /// The two morphs. Appended for the same reason.
+    morphA,
+    morphB,
+
     count
 };
 
@@ -193,6 +197,7 @@ struct VoiceParameters
     double semitonesA { 0.0 };         ///< -12 .. +12
     double centsA { 0.0 };             ///< -100 .. +100
     double widthA { 0.5 };             ///< pulse width / triangle skew
+    double morphA { 0.0 };             ///< the shape's own tweak, 0 = canonical
     int unisonA { 1 };                 ///< 1 .. 7
     double detuneA { 0.0 };            ///< cents
     double spreadA { 0.0 };            ///< 0 .. 1
@@ -206,6 +211,7 @@ struct VoiceParameters
     double semitonesB { 0.0 };
     double centsB { 0.0 };
     double widthB { 0.5 };
+    double morphB { 0.0 };
     int unisonB { 1 };
     double detuneB { 0.0 };
     double spreadB { 0.0 };
@@ -553,6 +559,7 @@ public:
 
         configureBank (bankA_, parameters.shapeA,
                        parameters.widthA + amount (ModDestination::pulseWidthA),
+                       parameters.morphA + amount (ModDestination::morphA),
                        parameters.unisonA,
                        parameters.detuneA + amount (ModDestination::detuneA),
                        parameters.spreadA, parameters.driftA, nominalA);
@@ -563,6 +570,7 @@ public:
 
         configureBank (bankB_, parameters.shapeB,
                        parameters.widthB + amount (ModDestination::pulseWidthB),
+                       parameters.morphB + amount (ModDestination::morphB),
                        parameters.unisonB,
                        parameters.detuneB + amount (ModDestination::detuneB),
                        parameters.spreadB, parameters.driftB,
@@ -796,11 +804,13 @@ private:
         return std::pow (2.0, octaves + semitones / 12.0 + cents / 1200.0);
     }
 
-    void configureBank (UnisonBank& bank, OscShape shape, double width, int unison,
+    void configureBank (UnisonBank& bank, OscShape shape, double width, double morph,
+                        int unison,
                         double detune, double spread, double drift, double frequency) noexcept
     {
         bank.setShape (shape);
         bank.setWidth (width);
+        bank.setMorph (std::clamp (morph, 0.0, 1.0));
         bank.setVoiceCount (unison);
         bank.setDetuneCents (detune);
         bank.setSpread (spread);

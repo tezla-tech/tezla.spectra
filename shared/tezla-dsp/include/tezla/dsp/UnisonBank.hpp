@@ -214,6 +214,12 @@ public:
             voice.setWidth (width);
     }
 
+    void setMorph (double morph) noexcept
+    {
+        for (auto& voice : voices_)
+            voice.setMorph (morph);
+    }
+
     /// Direct access, so a caller can wire hard sync between two banks voice by
     /// voice -- the master's Nth oscillator driving the slave's Nth.
     [[nodiscard]] Oscillator& voice (int index) noexcept

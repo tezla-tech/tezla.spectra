@@ -23,7 +23,9 @@ nothing until seen to fail).
 - [ ] 7a. Shapes: Dome + Double saw
 - [ ] 7b. Shape: Noise
 - [ ] 7c. Shape: Vintage
-- [ ] 7d. Shape: Shark
+- [x] 7d. Shape: Shark — CUT: redundant. The triangle already reads Width
+      as skew (`widthA` doc: "pulse width / triangle skew"), so tri→saw
+      morphing shipped long ago under another name.
 - [ ] 7e. Shape: Harmonic
 - [ ] 8. Waveform preview + morph slider UI
 - [ ] 9. ADV envelope DSP: `MultiEnvelope` (multi-stage, loop, sustain point)
