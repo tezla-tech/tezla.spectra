@@ -50,7 +50,15 @@ compiles cleanly, runs happily and does nothing there — which is exactly how a
 denormal guard that only handled x86 reached a release. This job catches that
 class of bug in about a minute on a 1× runner, rather than waiting on a Mac.
 
-Reproduce it locally with `gcc-aarch64-linux-gnu` and `qemu-user` installed:
+**Currently switched off, deliberately — see CLAUDE.md §2.3.** The job is
+skipped on the default `windows` run, and the local reproduction below should
+not be run either, until the x86-64 Windows build is bug-squashed and
+feature-complete. The technique is right; the timing is not, and every minute
+spent here is a minute not spent on the platform the plugins are actually being
+played on. It is written down so it is ready when the gate lifts.
+
+Reproduce it locally, once it does, with `gcc-aarch64-linux-gnu` and `qemu-user`
+installed:
 
 ```bash
 cmake -B build-arm -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -75,7 +83,8 @@ workflow form takes `windows` (the default) or `all`; a tag push covers Windows.
 `all` adds the macOS DSP tests, the macOS plugin build and the emulated ARM64
 suite.
 
-That is a phase rather than a policy. The rig is Windows 11 and FL Studio and
+That is a phase rather than a policy, and CLAUDE.md §2.3 says when it ends: the
+x86-64 Windows build being finished. The rig is Windows 11 and FL Studio and
 the loop that matters is build → load → play → say what is wrong; nobody has
 loaded any of these in a Mac DAW yet, so a macOS build is an artefact nobody
 downloads. It is also the most expensive thing in the workflow — see **Cost**.
