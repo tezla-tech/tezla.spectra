@@ -84,12 +84,12 @@ be band-limited (ADAA, or a smooth shaper) as well. These numbers are pinned in
 
 | Source | Licence | Relevance |
 |---|---|---|
-| Zavalishin, *The Art of VA Filter Design* ([free PDF](https://www.native-instruments.com/fileadmin/ni_media/downloads/pdf/VAFilterDesign_2.1.0.pdf)) | book | The standard text on topology-preserving transform / zero-delay-feedback filters. Read this before writing any filter whose cutoff is modulated. **Not fetched** — the egress proxy refuses `native-instruments.com` with a 403 at the CONNECT stage, so `curl` is no help either. `SvfFilter.hpp` was derived from the TPT equations rather than read off the page, and then measured against the analogue prototype; the measurements are in `tests/test_SvfFilter.cpp` and below. What a reading would settle is the nonlinear part: the book discusses solving the zero-delay feedback *through* a saturator by iteration, and this implementation keeps the linear solve and shapes the integrator states afterwards. That is a standard simplification, but "standard" here is second-hand. |
+| Zavalishin, *The Art of VA Filter Design* (v2.1.2) | book | The standard text on TPT / zero-delay-feedback filters. **Read** — saved under [`technical references/sonitus/`](../technical%20references/sonitus/). It settled the open question about `SvfFilter`'s nonlinearity, and the answer was that the question had been framed wrongly; see below. |
 | Robert Bristow-Johnson, *Audio EQ Cookbook* | public | The biquad coefficient formulas implemented in `shared/tezla-dsp/include/tezla/dsp/Biquad.hpp`. |
 | [Surge XT](https://github.com/surge-synthesizer/surge) | GPLv3 | Filters, waveshapers, oversampling, and a well-organised large plugin codebase. Read for architecture; do not copy. |
 | [Calf Studio Gear](https://github.com/calf-studio-gear/calf) | LGPL/GPL | Classic effect topologies, clearly written. |
 | [Faust libraries](https://faustlibraries.grame.fr/) | permissive | Reference implementations worth comparing our measurements against. |
-| Laakso, Valimaki, Karjalainen & Laine, *"Splitting the Unit Delay"*, IEEE Signal Processing Magazine 13(1), 1996 | paper | Fractional-delay filter design. `Comb.hpp` uses the 4-point Lagrange kernel from it, derived rather than copied — the closed form for four points is short enough that a reimplementation is checkable, and `tests/test_Comb.cpp` checks it. **Not fetched**; the kernel and its properties are from general reference. |
+| Laakso, Välimäki, Karjalainen & Laine, *"Splitting the Unit Delay"*, IEEE Signal Processing Magazine 13(1), 1996 | paper | Fractional-delay filter design. `Comb.hpp` uses the 4-point Lagrange kernel. **Read** — saved under [`technical references/sonitus/`](../technical%20references/sonitus/), as page images with no text layer. The derived kernel matches its Design Guide 1 term for term, and the paper supplies two justifications the implementation had only assumed; see below. |
 | Peterson & Barney, *"Control Methods Used in a Study of the Vowels"*, JASA 24(2), 1952 | paper | The vowel data in `Formant.hpp`, from **Table II**. **Read** — saved to [`technical references/sonitus/`](../technical%20references/sonitus/). The fifteen *frequencies* quoted from general reference were exactly right. The *amplitudes* were not: they had been one constant set of three for every vowel, where the paper gives them per vowel over a thirty-decibel span. See below. |
 
 **Measured caveat on biquads.** Computing coefficients from the actual sample
@@ -179,6 +179,89 @@ page allows it (*"The lower limit is 0, which is possible since degree 0 of 1/1
 is implicit"*). A scale with no pitch lines has no repeat interval and cannot
 tune a keyboard, so it is refused with that as the reason rather than silently
 loaded as something unplayable.
+
+### What Zavalishin settled about the filter's nonlinearity
+
+The open question was recorded as *"the book discusses solving the zero-delay
+feedback through a saturator by iteration, and this implementation keeps the
+linear solve and shapes the integrator states afterwards; that is a standard
+simplification, but standard here is second-hand."*
+
+**The question was framed wrongly, and the book says so directly.** §6.3, on
+feedback-loop saturation: *"…the resonance amount is increased by increasing the
+amount of the feedback (thus e.g. the SVF filter doesn't fall into this
+category)."* And §6.11, explicitly:
+
+> As with 1-pole filters, the feedback in SVF is also not one creating the
+> resonance, respectively the discussion from Section 6.3 does not apply either,
+> and thus we can't simply put a saturator into the feedback loop. Actually, the
+> purpose of the feedback in SVF is kind of an opposite of creating the
+> resonance. The function of the feedback path containing the bandpass signal is
+> to **dampen** the otherwise self-oscillating structure.
+
+So the iterative machinery of §6.4–6.6 is about ladders and Sallen–Key filters,
+not this one. `SvfFilter.hpp`'s comment already said the same thing in its own
+words — *"in a ladder the resonance is positive feedback and saturating it
+reduces the resonance; in a state-variable the resonance is reduced damping"* —
+which is the derivation arriving where the book is.
+
+The book's own route for an SVF is an **antisaturator** (`sinh`, faster than
+linear) in parallel with the damping gain, so damping grows as level rises. Of
+that structure he writes: *"The antisaturator in Fig. 6.52 effectively makes the
+state of the first integrator saturate."* **That is what railing the integrator
+states does, reached directly instead of through the damping path.** The
+difference that remains: his nonlinearity sits inside the ZDF solve, so it
+changes the solve; ours is applied to the state after an exact linear solve, so
+the instantaneous response stays exactly linear and only the stored state is
+bounded.
+
+The book also supplies a test the implementation did not have. Of the SVF's
+three outputs: *"Note that yHP + yBP1 + yLP = x, as for the linear SVF."* That is
+an exact algebraic identity of the solve rather than a property of the response,
+so it catches a wrong denominator or a wrong state update with no spectral
+measurement that could itself be at fault. Measured worst error across
+resonance and cutoff sweeps: **6.7e-16**. Breaking the denominator fails it
+twelve times over.
+
+Two things worth taking from it later, recorded rather than done:
+
+- **§6.7, second-order saturation curves.** Replacing `tanh x` with `x/(1+|x|)`
+  turns the nonlinear ZDF equation into a quadratic with an analytic solution —
+  the route if we ever want the nonlinearity genuinely inside the loop without
+  iterating.
+- **Self-oscillation below R = 0.** The antisaturator route is what lets an SVF
+  be driven past self-oscillation deliberately, which our fixed rail does not
+  offer. Noted in the Sonitus roadmap.
+
+### What Laakso settled about the comb's interpolator
+
+The 4-point kernel in `Comb.hpp` was derived rather than copied. It matches the
+paper's Design Guide 1 table term for term, with **D = 1 + fraction** — and a
+test now checks the closed form against the paper's *general* product formula
+(Eq. 42) rather than against a transcription of the same table, worst error
+**4.4e-16** across a thousand fractions.
+
+Two things the paper supplies that had only been assumed:
+
+- **Why the delay is centred**, which was found here the hard way as an
+  off-by-one that made the comb's loop a sample too long. Eq. 21: the smallest
+  error for a given order is obtained when the delay sits at the *"center of
+  gravity"* of the ideal impulse response — for odd order N, `M_opt = Int(D) −
+  (N−1)/2`, which for four taps puts the interpolation point between the middle
+  two. That is exactly where the fix landed.
+- **Why Lagrange is the right family for a comb specifically:** *"The maximum of
+  the magnitude response never exceeds unity when the delay is near to the half
+  filter length. This is important in applications including feedback."* A comb
+  *is* a feedback application, and an interpolator with gain anywhere above unity
+  would compound every pass round the loop — the feedback cap bounds the
+  coefficient, not the loop gain. Measured across 101 fractions and the whole
+  band, the peak magnitude is 1.0 exactly, at DC, and never above.
+
+The paper's own caveat is also worth recording: *"if a 4-tap Lagrange FD filter
+is not good enough for a given purpose, it may be better to use an LS-based FIR
+filter design method instead."* Ours is good enough — 0.225 dB of gain spread
+across a swept fraction at 8 kHz, against linear interpolation's 1.248 — and the
+alternative is named if it ever is not.
 
 ## Tuning
 

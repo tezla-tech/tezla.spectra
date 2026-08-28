@@ -726,3 +726,116 @@ TEZLA_TEST (silence_in_silence_out)
             CHECK (silent);
         }
 }
+
+TEZLA_TEST (the_three_outputs_sum_back_to_the_input)
+{
+    // Zavalishin states this of the SVF and it is worth having as a test:
+    // "Note that yHP + yBP1 + yLP = x, as for the linear SVF" -- where yBP1 is
+    // the damped bandpass, our `k * bp`.
+    //
+    // It is an exact algebraic identity of the zero-delay solve rather than a
+    // property of the response, which is what makes it useful: it fails
+    // immediately if the denominator, the state update or the highpass
+    // expression is wrong, and it does so without any spectral measurement
+    // that could itself be at fault. Substituting the solve gives
+    //
+    //     hp*(1 + kg + g^2) + s1*(k + g) + s2  =  driven
+    //
+    // and the first term's bracket is exactly the reciprocal that was folded
+    // into `denominator`, so the whole thing collapses.
+    //
+    // Three filters in three modes, identically configured: they see the same
+    // input and their states evolve identically, so the three returns are the
+    // three nodes of one filter.
+    constexpr double rate = 48000.0;
+
+    for (const double resonance : { 0.0, 0.3, 0.7, 1.0 })
+    {
+        for (const double cutoff : { 60.0, 800.0, 6000.0 })
+        {
+            SvfFilter hp, bp, lp;
+
+            const auto set = [&] (SvfFilter& filter, SvfMode mode)
+            {
+                filter.prepare (rate);
+                filter.setMode (mode);
+                filter.setCutoffHz (cutoff);
+                filter.setResonance (resonance);
+                filter.setDrive (0.0);
+            };
+
+            set (hp, SvfMode::highpass);
+            set (bp, SvfMode::bandpass);
+            set (lp, SvfMode::lowpass);
+
+            // The damping gain, which is what turns the raw bandpass into the
+            // yBP1 the identity is written in.
+            const double k = 1.0 / hp.getQ();
+
+            double worst = 0.0;
+
+            for (int i = 0; i < 4000; ++i)
+            {
+                // Deliberately awkward: a burst that loads the state, then
+                // silence that has to unload it.
+                const double input = i < 2000
+                                       ? 0.8 * std::sin (i * 0.37) + 0.3 * std::sin (i * 0.041)
+                                       : 0.0;
+
+                const double sum = hp.process (input) + k * bp.process (input) + lp.process (input);
+
+                worst = std::max (worst, std::abs (sum - input));
+            }
+
+            // Measured worst across the whole sweep: 6.7e-16, which is the
+            // rounding of the sum and nothing else.
+            CHECK (worst < 1.0e-12);
+        }
+    }
+}
+
+TEZLA_TEST (the_rail_bounds_the_state_without_touching_the_damping)
+{
+    // The distinction Zavalishin draws, and the reason the drive is applied
+    // where it is. Section 6.11: "the feedback in SVF is also not one creating
+    // the resonance ... thus we can't simply put a saturator into the feedback
+    // loop. Actually, the purpose of the feedback in SVF is kind of an opposite
+    // of creating the resonance. The function of the feedback path containing
+    // the bandpass signal is to dampen the otherwise self-oscillating
+    // structure."
+    //
+    // So saturating `k * bp` would *reduce* the damping as the level rose,
+    // which is the opposite of what a saturator does in a ladder and would run
+    // away rather than settle. His own fix -- an antisaturator in parallel with
+    // the damping gain -- he describes as one that "effectively makes the state
+    // of the first integrator saturate", which is what this does directly.
+    //
+    // The test is that it holds: full drive, full resonance, a signal well past
+    // full scale, and the state stays inside the rail's ceiling.
+    constexpr double rate = 48000.0;
+
+    SvfFilter filter;
+
+    filter.prepare (rate);
+    filter.setMode (SvfMode::bandpass);
+    filter.setCutoffHz (200.0);
+    filter.setResonance (1.0);      // Q = 500
+    filter.setDrive (1.0);
+
+    double worst = 0.0;
+
+    for (int i = 0; i < 200000; ++i)
+    {
+        // Driven at its own corner, which is the worst case for a resonator:
+        // every cycle adds to what is already stored.
+        const double input = 4.0 * std::sin (2.0 * std::numbers::pi * 200.0 * i / rate);
+
+        worst = std::max (worst, std::abs (filter.process (input)));
+
+        CHECK (std::isfinite (worst));
+    }
+
+    // Bounded, and by the rail rather than by luck: two integrator states each
+    // held to the ceiling, times the drive trim.
+    CHECK (worst < 100.0);
+}
