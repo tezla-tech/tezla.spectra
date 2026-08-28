@@ -40,6 +40,7 @@
 
 #include <cstdint>
 
+#include <tezla/dsp/SmoothedValue.hpp>
 #include <tezla/dsp/Tuning.hpp>
 
 #include "Sf2File.hpp"
@@ -54,6 +55,14 @@ public:
     static constexpr int kMaxVoices = 64;
     static constexpr int kControlIntervalSamples = 32;
 
+    SvaraEngine() noexcept
+    {
+        // A SmoothedValue constructs at zero, and an instrument whose
+        // default output gain is silence fails every measurement that never
+        // touches the trim -- which is exactly how this line got here.
+        outputGain_.setCurrentAndTarget (1.0);
+    }
+
     void prepare (double sampleRate) noexcept
     {
         sampleRate_ = sampleRate;
@@ -61,6 +70,8 @@ public:
         for (auto& voice : voices_)
             voice.prepare (sampleRate);
 
+        outputGain_.prepare (sampleRate, 0.02);
+        outputGain_.setCurrentAndTarget (outputGain_.getTarget());
         controlCountdown_ = 0;
         sustainDown_ = false;
         bendNormalized_ = 0.0;
@@ -188,7 +199,8 @@ public:
         modWheel_ = amount < 0.0 ? 0.0 : amount > 1.0 ? 1.0 : amount;
     }
 
-    void setOutputGain (double gain) noexcept { outputGain_ = gain; }
+    /// Linear gain, smoothed over ~20 ms so a trim sweep never zippers.
+    void setOutputGain (double gain) noexcept { outputGain_.setTarget (gain); }
 
     /// All keys up, all voices released -- MIDI panic without the click.
     void allNotesOff() noexcept
@@ -246,13 +258,11 @@ public:
             at += chunk;
         }
 
-        if (outputGain_ != 1.0)
+        for (int i = 0; i < count; ++i)
         {
-            for (int i = 0; i < count; ++i)
-            {
-                left[i] *= outputGain_;
-                right[i] *= outputGain_;
-            }
+            const double gain = outputGain_.next();
+            left[i] *= gain;
+            right[i] *= gain;
         }
     }
 
@@ -297,7 +307,7 @@ private:
     double bendNormalized_ { 0.0 };
     double bendRangeSemitones_ { 2.0 };
     double modWheel_ { 0.0 };
-    double outputGain_ { 1.0 };
+    tezla::dsp::SmoothedValue<double> outputGain_;
 };
 
 } // namespace tezla::svarayantra

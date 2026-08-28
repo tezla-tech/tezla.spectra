@@ -24,6 +24,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | `Tztr` | [`Transpectus`](Transpectus/) | Tezla Transpectus | Analyser — loudness, true peak, spectrum and stereo image. Does not touch the audio | v0.1.0, builds and validates |
 | `Tzan` | [`Anvil`](Anvil/) | Tezla Anvil | Effect — valve amplifier, speaker load and cabinet, modelled from the mechanisms | v0.1.0, builds and validates |
 | `Tzso` | [`Sonitus`](Sonitus/) | Tezla Sonitus | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, and Scala microtuning | v0.1.0, builds and validates |
+| `Tzsv` | [`Svarayantra`](Svarayantra/) | Tezla Svarayantra | **Instrument** — SoundFont (.sf2) player with the full microtuning engine: the 44 built-in scales, `.scl`/`.kbm`, concert pitch. Sanskrit *svara-yantra*, "the note-machine". Plan: [`Svarayantra/PLAN.md`](Svarayantra/PLAN.md) | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 
@@ -36,7 +37,6 @@ something else in the meantime:
 |------|------|--------------|
 | `Ferrite` | `Tzfe` | Plugin #2 — the tape machine proper: wow, flutter, hysteresis, head bump |
 | `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
-| `Svara-yantra` | `Tzsv` | **Instrument** — SoundFont (.sf2) player with the full microtuning engine: the 44 built-in scales, `.scl`/`.kbm`, concert pitch and the tuning panel, applied to sampled instruments. Sanskrit *svara-yantra*, "the note-machine" — *svara* the musical note the shruti divide, *yantra* the machine, as in Jantar Mantar. Folder and identifiers `Svarayantra`. Plan: [`Svarayantra/PLAN.md`](Svarayantra/PLAN.md). Queued after Sonitus phase 4 |
 
 ---
 
