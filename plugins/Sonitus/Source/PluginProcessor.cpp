@@ -491,6 +491,69 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::env2Snap, kSchemaV2 }, "Env 2 snap", false));
 
+    // ---- ADV envelopes ------------------------------------------------------
+    //
+    // Three multi-stage breakpoint envelopes, ninety parameters built by
+    // ids::adv rather than typed. Everything defaults to a disabled, sensible
+    // four-point ADSR-ish curve, so switching one on does something audible
+    // before any editing and a project that never heard of them is untouched.
+    for (int envelope = 0; envelope < 3; ++envelope)
+    {
+        const auto prefix = "ADV " + juce::String (envelope + 1);
+
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { ids::adv (envelope, "Enable"), kSchemaV2 },
+            prefix + " enable", false));
+
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { ids::adv (envelope, "Loop"), kSchemaV2 },
+            prefix + " loop", false));
+
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { ids::adv (envelope, "Snap"), kSchemaV2 },
+            prefix + " snap", false));
+
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { ids::adv (envelope, "Points"), kSchemaV2 },
+            prefix + " points", 2, dsp::MultiEnvelope::kMaxPoints, 4));
+
+        // Displayed 1-based; the engine subtracts one.
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { ids::adv (envelope, "Sustain"), kSchemaV2 },
+            prefix + " sustain point", 1, dsp::MultiEnvelope::kMaxPoints, 3));
+
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { ids::adv (envelope, "LoopStart"), kSchemaV2 },
+            prefix + " loop start", 1, dsp::MultiEnvelope::kMaxPoints, 1));
+
+        constexpr float defaultSeconds[] { 0.01f, 0.25f, 0.05f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f };
+        constexpr float defaultLevel[]   { 1.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f, 0.0f, 0.0f, 0.0f, 0.0f };
+
+        for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
+        {
+            const auto n = juce::String (point + 1);
+
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { ids::adv (envelope, "T" + n), kSchemaV2 },
+                prefix + " time " + n,
+                skewedRange (0.0f, 20.0f, 0.12f),
+                defaultSeconds[point], timeAttributes()));
+
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { ids::adv (envelope, "L" + n), kSchemaV2 },
+                prefix + " level " + n,
+                juce::NormalisableRange<float> { 0.0f, 1.0f },
+                defaultLevel[point], percentAttributes()));
+
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { ids::adv (envelope, "C" + n), kSchemaV2 },
+                prefix + " tension " + n,
+                juce::NormalisableRange<float> { -1.0f, 1.0f },
+                defaultTension[point], percentAttributes()));
+        }
+    }
+
     // ---- keyboard -----------------------------------------------------------
 
     layout.add (std::make_unique<Choice> (
@@ -977,6 +1040,28 @@ void SonitusProcessor::pullParameters()
     pullEnvelope (v.mod2, ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
                   ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT);
     v.mod2.snap = valueOf (state_, ids::env2Snap) > 0.5f;
+
+    for (int envelope = 0; envelope < 3; ++envelope)
+    {
+        auto& adv = v.adv[static_cast<std::size_t> (envelope)];
+
+        adv.enable = valueOf (state_, ids::adv (envelope, "Enable")) > 0.5f;
+        adv.loop = valueOf (state_, ids::adv (envelope, "Loop")) > 0.5f;
+        adv.snap = valueOf (state_, ids::adv (envelope, "Snap")) > 0.5f;
+        adv.points = static_cast<int> (std::lround (valueOf (state_, ids::adv (envelope, "Points"))));
+        adv.sustain = static_cast<int> (std::lround (valueOf (state_, ids::adv (envelope, "Sustain")))) - 1;
+        adv.loopStart = static_cast<int> (std::lround (valueOf (state_, ids::adv (envelope, "LoopStart")))) - 1;
+
+        for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
+        {
+            const auto n = juce::String (point + 1);
+            const auto i = static_cast<std::size_t> (point);
+
+            adv.seconds[i] = valueOf (state_, ids::adv (envelope, "T" + n));
+            adv.level[i] = valueOf (state_, ids::adv (envelope, "L" + n));
+            adv.tension[i] = valueOf (state_, ids::adv (envelope, "C" + n));
+        }
+    }
 
     v.level = 1.0;
 

@@ -2754,3 +2754,121 @@ TEZLA_TEST (every_shape_plays_through_the_whole_voice_and_dies_away)
         CHECK (tail < 1.0e-6);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The ADV envelopes
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (an_enabled_adv_envelope_modulates_and_a_disabled_one_reads_zero)
+{
+    // ADV 1 on the cutoff, full negative depth: the filter closes as the
+    // envelope rises, so the enabled render must differ audibly from the
+    // disabled one -- and the disabled one must not differ from never having
+    // had the feature at all, which the raw-file comparison proved at the
+    // commit. Slot source index 10 is ADV 1; the static_asserts pin it.
+    const auto render = [] (bool enabled)
+    {
+        EngineParameters parameters;
+        parameters.tubeDriveDb = 0.0;
+        parameters.combMode = CombMode::off;
+        parameters.formantMix = 0.0;
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.voice.cutoffHz = 4000.0;
+        parameters.voice.adv[0].enable = enabled;
+        parameters.voice.adv[0].points = 2;
+        parameters.voice.adv[0].sustain = 1;
+        parameters.voice.adv[0].seconds = { 0.3, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1 };
+        parameters.voice.adv[0].level = { 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        parameters.voice.slots[0] = { ModSource::advEnv1, ModDestination::cutoff, -4.0 };
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (45, 1.0);
+
+        Buffers buffers (256);
+        std::vector<double> out;
+
+        for (int block = 0; block < 200; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+            for (const double sample : buffers.left)
+                out.push_back (sample);
+        }
+
+        return out;
+    };
+
+    const auto with = render (true);
+    const auto without = render (false);
+
+    double difference = 0.0;
+    for (std::size_t i = 24000; i < with.size(); ++i)
+        difference = std::max (difference, std::abs (with[i] - without[i]));
+
+    CHECK (difference > 1.0e-3);
+
+    for (const double sample : with)
+        CHECK (std::isfinite (sample));
+}
+
+TEZLA_TEST (the_global_matrix_reads_the_tracked_notes_adv_envelope)
+{
+    // ADV 1, looping, driving the master Output in the global matrix: a
+    // 24 dB pump at the loop rate, which no note's own movement can imitate.
+    // The first draft aimed at the tube instead and measured nothing -- the
+    // route was fine, but a few dB of drive pump hides inside a bass note's
+    // natural level motion. A test's effect has to clear the signal's own
+    // weather.
+    const auto render = [] (bool enabled)
+    {
+        EngineParameters parameters;
+        parameters.tubeDriveDb = 0.0;
+        parameters.combMode = CombMode::off;
+        parameters.formantMix = 0.0;
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.voice.adv[0].enable = enabled;
+        parameters.voice.adv[0].loop = true;
+        parameters.voice.adv[0].points = 2;
+        parameters.voice.adv[0].sustain = 1;
+        parameters.voice.adv[0].loopStart = 0;
+        parameters.voice.adv[0].seconds = { 0.05, 0.05, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1 };
+        parameters.voice.adv[0].level = { 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        parameters.globalSlots[0] = { GlobalSource::advEnv1, GlobalDestination::output, -1.0 };
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (45, 1.0);
+
+        Buffers buffers (256);
+        std::vector<double> rms;
+
+        for (int block = 0; block < 300; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+
+            double sum = 0.0;
+            for (const double sample : buffers.left)
+                sum += sample * sample;
+            rms.push_back (std::sqrt (sum / 256.0));
+        }
+
+        double low = 1.0e9, high = 0.0;
+        for (std::size_t i = 100; i < rms.size(); ++i)
+        {
+            low = std::min (low, rms[i]);
+            high = std::max (high, rms[i]);
+        }
+
+        return high / std::max (low, 1.0e-12);
+    };
+
+    const double pumping = render (true);
+    const double still = render (false);
+
+    // A full-depth Output swing is 24 dB, a ratio near 16; the note's own
+    // block-to-block movement is nowhere near.
+    CHECK (pumping > 4.0);
+    CHECK (still < 2.5);
+}

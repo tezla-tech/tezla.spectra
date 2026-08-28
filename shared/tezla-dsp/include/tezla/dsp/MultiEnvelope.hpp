@@ -182,6 +182,19 @@ public:
         return level_;
     }
 
+    /// Runs `numSamples` and returns the final level -- the control-rate tick,
+    /// the same shape as Adsr::skip. Parked or finished costs one branch.
+    double skip (int numSamples) noexcept
+    {
+        if (finished_ || sustaining_)
+            return level_;
+
+        for (int i = 0; i < numSamples; ++i)
+            (void) process();
+
+        return level_;
+    }
+
     [[nodiscard]] double getValue() const noexcept { return level_; }
     [[nodiscard]] bool isFinished() const noexcept { return finished_; }
     [[nodiscard]] bool isSustaining() const noexcept { return sustaining_; }

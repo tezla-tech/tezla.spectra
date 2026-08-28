@@ -142,6 +142,12 @@ enum class GlobalSource
     modEnvelope2,
     velocity,
 
+    /// The tracked note's ADV envelopes. **Appended** -- stored by index,
+    /// CLAUDE.md section 8.
+    advEnv1,
+    advEnv2,
+    advEnv3,
+
     count
 };
 

@@ -138,6 +138,15 @@ inline constexpr auto seqToLfoRate = "seqToLfoRate";
     return "seq" + juce::String (index + 1);
 }
 
+/// `adv1Enable`, `adv2T5`, and the rest of the ninety ADV-envelope names --
+/// built for the same reason as `step`: ninety hand-typed identifiers invite
+/// the typo that silently points one at nothing. `field` is e.g. "Enable",
+/// "T5", "L2", "C8". These are parameter IDs and therefore frozen forever.
+[[nodiscard]] inline juce::String adv (int envelope, const juce::String& field)
+{
+    return "adv" + juce::String (envelope + 1) + field;
+}
+
 /// `modSource1` / `modDest1` / `modDepth1`, and so on.
 [[nodiscard]] inline juce::String modSource (int slot) { return "modSource" + juce::String (slot + 1); }
 [[nodiscard]] inline juce::String modDest (int slot)   { return "modDest" + juce::String (slot + 1); }
@@ -218,7 +227,8 @@ inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 /// The modulation sources, in the order the matrix indexes them.
 inline const juce::StringArray modSource { "Off", "Amp env", "Mod env 1", "Mod env 2",
                                            "Velocity", "Key track", "Note random",
-                                           "LFO 1", "LFO 2", "Sequencer" };
+                                           "LFO 1", "LFO 2", "Sequencer",
+                                           "ADV 1", "ADV 2", "ADV 3" };
 
 /// The modulation destinations, likewise. **Continuous controls only** -- a
 /// choice or a switch reconfigures rather than adjusts, so modulating one would
@@ -240,7 +250,8 @@ inline const juce::StringArray kargyraaDivisor { "/2  true kargyraa", "/3", "/4"
 /// note. Pointing an amp envelope at a global control has no answer when eight
 /// notes are down, which is why the voice's list is not reused here.
 inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer",
-                                             "Amp env", "Mod env 1", "Mod env 2", "Velocity" };
+                                             "Amp env", "Mod env 1", "Mod env 2", "Velocity",
+                                             "ADV 1", "ADV 2", "ADV 3" };
 
 /// The global matrix's destinations: the mangle's continuous controls. **Comb
 /// time is the one this instrument exists for** -- the brief's flanger-at-rate-
@@ -302,7 +313,9 @@ static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
 
 static_assert (static_cast<int> (ModSource::none)      == 0
             && static_cast<int> (ModSource::sequencer) == 9
-            && static_cast<int> (ModSource::count)     == 10,
+            && static_cast<int> (ModSource::advEnv1)   == 10
+            && static_cast<int> (ModSource::advEnv3)   == 12
+            && static_cast<int> (ModSource::count)     == 13,
                "the modulation source list is indexed straight into ModSource");
 
 static_assert (static_cast<int> (ModDestination::none)     == 0
@@ -317,7 +330,9 @@ static_assert (static_cast<int> (GlobalSource::none)         == 0
             && static_cast<int> (GlobalSource::sequencer)    == 3
             && static_cast<int> (GlobalSource::ampEnvelope)  == 4
             && static_cast<int> (GlobalSource::velocity)     == 7
-            && static_cast<int> (GlobalSource::count)        == 8,
+            && static_cast<int> (GlobalSource::advEnv1)      == 8
+            && static_cast<int> (GlobalSource::advEnv3)      == 10
+            && static_cast<int> (GlobalSource::count)        == 11,
                "the global source list is indexed straight into GlobalSource");
 
 static_assert (static_cast<int> (GlobalDestination::none)            == 0
