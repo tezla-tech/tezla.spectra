@@ -57,6 +57,8 @@
 #include <string>
 #include <vector>
 
+#include "Exact.hpp"
+
 namespace tezla::dsp {
 
 /// A scale: the degrees within one repeat, and the interval it repeats at.
@@ -94,7 +96,7 @@ struct Scale
         if (ratios.empty() || ! (repeat > 1.0))
             return false;
 
-        if (ratios[0] != 1.0)
+        if (! isExactly (ratios[0], 1.0))
             return false;
 
         for (std::size_t i = 1; i < ratios.size(); ++i)
@@ -177,6 +179,42 @@ public:
     }
 
     [[nodiscard]] const Scale& getScale() const noexcept { return scale_; }
+
+    /// Exchanges the live scale with `other`, and **allocates nothing**.
+    ///
+    /// This is how a tuning reaches the audio thread. `setScale` copies, which
+    /// means a vector assignment, which means a possible allocation and a
+    /// window in which the pointer the audio thread is reading has been freed.
+    /// A swap is a pointer exchange: the caller ends up holding the old scale
+    /// and destroys it later, on whichever thread it likes.
+    ///
+    /// Refuses an unusable scale, like `setScale`, and leaves `other` alone
+    /// when it does -- a caller that swapped in garbage and got nothing back
+    /// would have no way to tell.
+    bool swapScale (Scale& other) noexcept
+    {
+        if (! other.isUsable())
+            return false;
+
+        scale_.name.swap (other.name);
+        scale_.ratios.swap (other.ratios);
+        std::swap (scale_.repeat, other.repeat);
+
+        return true;
+    }
+
+    /// The same for the keyboard map, for the same reason.
+    void swapKeyboardMap (KeyboardMap& other) noexcept
+    {
+        other.degrees.swap (map_.degrees);
+        std::swap (other.size, map_.size);
+        std::swap (other.firstNote, map_.firstNote);
+        std::swap (other.lastNote, map_.lastNote);
+        std::swap (other.middleNote, map_.middleNote);
+        std::swap (other.referenceNote, map_.referenceNote);
+        std::swap (other.referenceHz, map_.referenceHz);
+        std::swap (other.formalOctaveDegree, map_.formalOctaveDegree);
+    }
 
     void setKeyboardMap (const KeyboardMap& map) { map_ = map; }
     [[nodiscard]] const KeyboardMap& getKeyboardMap() const noexcept { return map_; }

@@ -701,7 +701,7 @@ TEZLA_TEST (sync_at_the_same_frequency_is_no_sync_at_all)
 
     for (int i = 0; i < 4000; ++i)
     {
-        master.advance();
+        (void) master.advance();
 
         if (master.didWrap())
             slave.sync (master.getWrapFraction());

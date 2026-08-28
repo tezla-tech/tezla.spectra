@@ -114,8 +114,8 @@ void Engine::reset() noexcept
 
 void Engine::applyPending() noexcept
 {
-    const bool tiltChanged = ! configured_ || active_.tilt != pending_.tilt;
-    const bool splitChanged = ! configured_ || active_.splitHz != pending_.splitHz;
+    const bool tiltChanged = ! configured_ || ! dsp::isExactly (active_.tilt, pending_.tilt);
+    const bool splitChanged = ! configured_ || ! dsp::isExactly (active_.splitHz, pending_.splitHz);
 
     active_ = pending_;
     configured_ = true;
@@ -273,6 +273,15 @@ void Engine::aimComb() noexcept
     // go.
     comb_.setDelaySeconds (combDelaySeconds());
     comb_.setNoteHz (voices_.trackedFrequency());
+
+    // Published where the panel can read it without racing the audio thread.
+    // This is the boundary the comb is actually aimed on, so it is also the
+    // only place the figure is true.
+    readouts_.combNotchHz.store (comb_.firstNotchHz(), std::memory_order_relaxed);
+    readouts_.sequencerStep.store (sequencer_.getStepIndex(), std::memory_order_relaxed);
+    readouts_.lfo1.store (sources_.lfo1, std::memory_order_relaxed);
+    readouts_.lfo2.store (sources_.lfo2, std::memory_order_relaxed);
+    readouts_.sequencer.store (sources_.sequencer, std::memory_order_relaxed);
 }
 
 void Engine::advanceGlobalSources (int samples) noexcept

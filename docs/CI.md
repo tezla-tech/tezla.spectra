@@ -70,6 +70,20 @@ Windows and macOS build the actual plugins and upload them as run artifacts:
 | Windows | VST3 | x86-64 |
 | macOS | VST3 + Audio Unit | universal (arm64 + x86_64) |
 
+**Only Windows, unless you ask for more.** The "platforms" box on the Run
+workflow form takes `windows` (the default) or `all`; a tag push covers Windows.
+`all` adds the macOS DSP tests, the macOS plugin build and the emulated ARM64
+suite.
+
+That is a phase rather than a policy. The rig is Windows 11 and FL Studio and
+the loop that matters is build → load → play → say what is wrong; nobody has
+loaded any of these in a Mac DAW yet, so a macOS build is an artefact nobody
+downloads. It is also the most expensive thing in the workflow — see **Cost**.
+When Mac testing starts, run `all` and this paragraph is what changes.
+
+A Windows-only release says so in its own notes rather than quietly shipping
+half of what the notes describe.
+
 Find them under **Actions → the run → Artifacts**, at the bottom of the page.
 They are kept for 30 days.
 
@@ -134,10 +148,35 @@ macOS runner minutes bill at **10×** on private repositories; Windows at 2×,
 Linux at 1×. The macOS plugin build is the expensive job, and building a
 universal binary compiles everything twice.
 
-This is why nothing runs automatically any more. If you later want the cheap
-`test` job back on every push while leaving the expensive `build` job manual,
-split it into a second workflow file with its own `on: push` — a single workflow
-cannot give one job a trigger the others do not have.
+Measured, from run 38:
+
+| Job | Duration |
+|---|---|
+| DSP tests (Linux) | 47 s |
+| DSP tests (macOS) | 1 m 05 |
+| DSP tests (Windows) | 1 m 17 |
+| DSP tests (ARM64, emulated) | 6 m 31 |
+| Plugins (Windows) | 9 m 20 |
+| **Plugins (macOS)** | **6 h 04, then cancelled** |
+
+**Two lessons in that table, and neither is the obvious one.**
+
+The emulated ARM64 job is the one people notice, and it is 2% of the wall time.
+Cutting it saves nothing worth having, and it is the only thing here that
+catches an AArch64-specific numerical bug — it found the FMA-contraction one,
+which was invisible on x86-64 and always active on ARM.
+
+The macOS plugin build is everything, and the cause was **link-time
+optimisation**, not the platform. Identical work took Windows nine minutes under
+MSVC's LTCG. JUCE's recommended flag is a plain `-flto`, which on Apple clang
+means *monolithic* LTO — the whole program merged into one module and optimised
+on one core — for six plugins in two formats, twice over for a universal binary.
+`TEZLA_LTO` is now **off** by default; see [`BUILD.md`](BUILD.md#a-note-on-tezla_lto).
+
+If you later want the cheap `test` job back on every push while leaving the
+expensive `build` job manual, split it into a second workflow file with its own
+`on: push` — a single workflow cannot give one job a trigger the others do
+not have.
 
 ---
 

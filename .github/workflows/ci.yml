@@ -24,6 +24,18 @@ name: CI
 # column of cancelled runs and burned macOS minutes (billed at 10x on private
 # repositories) on builds nobody was going to download. Run it when you want an
 # answer.
+#
+# **Windows only, by default.** The rig is Windows 11 and FL Studio, and the
+# loop that matters is build -> load -> play -> say what is wrong. macOS is not
+# in that loop yet: nobody has loaded any of these in a Mac DAW, so a macOS
+# build is an artefact nobody downloads, and it is by far the most expensive
+# thing here -- run 38's macOS plugin job spent six hours in the link before it
+# was cancelled. The emulated ARM64 suite goes with it, since Apple Silicon is
+# what it is for.
+#
+# To cover everything -- before a release, or once macOS testing starts --
+# choose **all** in the "platforms" box. A tag push covers Windows only; tag a
+# release after a manual `all` run has passed if you want Mac binaries in it.
 on:
   push:
     tags: ['v*']
@@ -33,15 +45,23 @@ on:
         description: 'Cut a release with this version (e.g. v0.5.0). Leave empty to just test and build.'
         required: false
         type: string
+      platforms:
+        description: 'Which platforms to cover. Windows is the rig; macOS is expensive and not being tested yet.'
+        required: false
+        default: windows
+        type: choice
+        options: [windows, all]
 
 # Named so a dispatched run says what it is doing in the runs list, rather than
 # repeating the commit subject of whatever happened to be at the top.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
-      && (inputs.release_version != ''
-          && format('Release {0}', inputs.release_version)
-          || 'Manual test and build')
-      || format('Release {0}', github.ref_name) }}
+      && format('{0} ({1})',
+                inputs.release_version != ''
+                  && format('Release {0}', inputs.release_version)
+                  || 'Manual test and build',
+                inputs.platforms)
+      || format('Release {0} (windows)', github.ref_name) }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,6 +72,59 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # What this run covers, decided once so the three jobs below cannot disagree.
+  #
+  # A job listed in `needs` that gets skipped skips its dependents too, unless
+  # they say otherwise -- which is why `build` and `release` below carry an
+  # explicit `if` that accepts a skipped ARM64 job. That is the one sharp edge
+  # in this arrangement and it is easy to trip over when adding a job.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      tests: ${{ steps.decide.outputs.tests }}
+      plugins: ${{ steps.decide.outputs.plugins }}
+      arm64: ${{ steps.decide.outputs.arm64 }}
+    steps:
+      - id: decide
+        shell: bash
+        run: |
+          # Empty on a tag push, because a tag carries no inputs. Windows is
+          # the default there for the same reason it is the default here.
+          platforms="${{ inputs.platforms }}"
+          [ -n "$platforms" ] || platforms=windows
+
+          if [ "$platforms" = "all" ]; then
+            tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"macOS"}]'
+            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-latest","name":"macOS","artifact":"macos-vst3-au"}]'
+            arm64=true
+          else
+            # Linux stays even on a Windows run: it is 47 seconds, it is the
+            # cheapest runner there is, and a numerical difference between GCC
+            # and MSVC is exactly the kind of thing one compiler alone hides.
+            tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"}]'
+            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"}]'
+            arm64=false
+          fi
+
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
+          echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Covering: $platforms"
+            echo
+            echo "- DSP tests: $(echo "$tests" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
+            echo "- ARM64 (emulated): $arm64"
+            echo "- Plugins: $(echo "$plugins" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
+            if [ "$platforms" != "all" ]; then
+              echo
+              echo "_macOS is skipped. Choose **all** in the platforms box to include it._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
   # The framework-free DSP, on all three platforms. No JUCE, no download, no GUI
   # stack -- this is the whole point of keeping the DSP independent of the
   # plugin framework, and it means a platform-specific numerical bug shows up in
@@ -59,14 +132,12 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     name: DSP tests (${{ matrix.name }})
+    needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest,  name: Linux }
-          - { os: windows-latest, name: Windows }
-          - { os: macos-latest,   name: macOS }
+        include: ${{ fromJSON(needs.plan.outputs.tests) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +176,8 @@ jobs:
   # ---------------------------------------------------------------------------
   test-arm64:
     name: DSP tests (ARM64, emulated)
+    needs: plan
+    if: needs.plan.outputs.arm64 == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -141,14 +214,19 @@ jobs:
   # ---------------------------------------------------------------------------
   build:
     name: Plugins (${{ matrix.name }})
-    needs: [test, test-arm64]
+    needs: [plan, test, test-arm64]
+    # `test-arm64` is skipped on a Windows-only run, and a skipped dependency
+    # skips its dependents unless they say otherwise. Spelt out rather than
+    # `always()`, so a genuine ARM64 failure still stops the build.
+    if: >-
+      ${{ !cancelled()
+          && needs.test.result == 'success'
+          && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: windows-latest, name: Windows, artifact: windows-vst3 }
-          - { os: macos-latest,   name: macOS,   artifact: macos-vst3-au }
+        include: ${{ fromJSON(needs.plan.outputs.plugins) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -270,8 +348,15 @@ jobs:
   release:
     name: Release
     # Two routes in: a version tag, or a manual run with a version typed in.
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != ''
-    needs: [test, test-arm64, build]
+    # Same shape as `build` above, and for the same reason: a Windows-only run
+    # skips the ARM64 job, and a skipped dependency would otherwise skip this.
+    if: >-
+      ${{ !cancelled()
+          && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != '')
+          && needs.test.result == 'success'
+          && needs.build.result == 'success'
+          && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
+    needs: [plan, test, test-arm64, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -335,6 +420,14 @@ jobs:
 
           **Windows** — copy the `.vst3` folder into
           `C:\Program Files\Common Files\VST3\`, then rescan in your DAW.
+          NOTES
+
+          # The macOS half is written **only if a macOS build was actually in
+          # this run**. A Windows-only release that told people how to clear the
+          # quarantine on files it does not contain would be describing a
+          # download that is not there.
+          if ls release/*-macos-*.zip >/dev/null 2>&1; then
+          cat >> release-notes.md <<'NOTES'
 
           **macOS** — copy `.vst3` into `~/Library/Audio/Plug-Ins/VST3/` and
           `.component` into `~/Library/Audio/Plug-Ins/Components/`.
@@ -356,15 +449,36 @@ jobs:
           killall -9 AudioComponentRegistrar
           ```
 
+          NOTES
+          fi
+
+          cat >> release-notes.md <<'NOTES'
+
           ### Formats
 
+          Windows builds are VST3, 64-bit only.
+          NOTES
+
+          if ls release/*-macos-*.zip >/dev/null 2>&1; then
+          cat >> release-notes.md <<'NOTES'
           macOS builds are universal (Apple Silicon and Intel) and include both
           VST3 and Audio Unit — Logic and GarageBand load nothing but AU.
-          Windows builds are VST3, 64-bit only.
 
-          Full instructions: [docs/BUILD-MACOS.md](docs/BUILD-MACOS.md) and
-          [docs/BUILD.md](docs/BUILD.md).
+          Full instructions: [docs/BUILD.md](docs/BUILD.md) and
+          [docs/BUILD-MACOS.md](docs/BUILD-MACOS.md).
           NOTES
+          else
+          cat >> release-notes.md <<'NOTES'
+
+          _This release is **Windows only**. The rig is Windows and FL Studio,
+          and macOS is not being tested yet — the code builds and validates on
+          it, but nobody has loaded these in a Mac DAW. To include Mac binaries,
+          run CI with the platforms box set to **all** and tag from that._
+
+          Full instructions: [docs/BUILD.md](docs/BUILD.md).
+          NOTES
+          fi
+
           cat release-notes.md
 
       - name: Create the release

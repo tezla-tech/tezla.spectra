@@ -57,12 +57,33 @@ template <typename Float>
     return { std::cos (w), std::sin (w) / (static_cast<Float>(2) * safeQ) };
 }
 
+/// Divides through by a0.
+///
+/// **Five divisions rather than one reciprocal and five multiplications, and
+/// that is deliberate.** `a0 * (1 / a0)` is not exactly 1 -- the reciprocal is
+/// rounded, and the product comes back a unit in the last place either side.
+/// `a0 / a0` is exactly 1, because IEEE division is correctly rounded and the
+/// exact quotient is representable.
+///
+/// It matters because it is what makes a **0 dB shelf or peak bit-exactly the
+/// identity**. At unity gain every one of those designs produces a numerator
+/// equal to its denominator term for term, so after an exact division b0 is
+/// 1.0, b1 is a1 and b2 is a2 bit for bit -- and transposed direct form II then
+/// carries it: the first output is `1.0 * x + 0`, and both state updates are a
+/// value minus itself, so the state stays exactly zero forever.
+///
+/// With the reciprocal it was not: a 0 dB high shelf at 700 Hz leaked, and
+/// CLAUDE.md section 7 asks a stage permanently in the signal path for a
+/// bit-exact bypass at its neutral setting rather than an almost-transparent
+/// one. Sonitus's tilt, Emberdrive's voicing and Anvil's stack are all always
+/// in the path.
+///
+/// The cost is nil: this runs when coefficients are designed, never per sample.
 template <typename Float>
 [[nodiscard]] inline BiquadCoefficients<Float> normalise (Float b0, Float b1, Float b2,
                                                           Float a0, Float a1, Float a2) noexcept
 {
-    const Float inverseA0 = Float{1} / a0;
-    return { b0 * inverseA0, b1 * inverseA0, b2 * inverseA0, a1 * inverseA0, a2 * inverseA0 };
+    return { b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0 };
 }
 
 } // namespace detail

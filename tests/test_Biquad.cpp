@@ -181,3 +181,63 @@ TEZLA_TEST (biquad_is_stable_with_a_corner_above_nyquist)
     CHECK (std::isfinite (value));
     CHECK (std::abs (value) < 10.0);
 }
+
+TEZLA_TEST (a_shelf_at_zero_decibels_is_bit_exactly_the_identity)
+{
+    // CLAUDE.md section 7: any stage permanently in the signal path needs a
+    // **bit-exact** bypass at its neutral setting, not merely a transparent
+    // one. "Almost identity" means every existing project changes the day the
+    // plugin updates.
+    //
+    // Sonitus's tilt is two shelves that are always in the path, and Emberdrive
+    // and Anvil have their own. So this is a claim about the library rather
+    // than about any one plugin, and it is not obvious: the numerator and the
+    // denominator are computed by different expressions and only happen to
+    // agree. At a gain of 0 dB, A is 1 and A-1 is 0, which collapses both to
+    // the same three terms -- and every step that differs between them is a
+    // multiplication by a power of two or an addition of a zero, all of which
+    // are exact in IEEE arithmetic.
+    //
+    // Transposed direct form II then carries it: with b0 = 1 and b1 = a1 and
+    // b2 = a2 bit for bit, the first output is x + 0 and both state updates are
+    // a value minus itself, so the state stays exactly zero forever.
+    //
+    // **It did not hold when this was written, and the reason was one line in
+    // `normalise`.** Dividing through by `a0` as a reciprocal and five
+    // multiplications leaves `b0` a unit in the last place off 1.0, because
+    // `a0 * (1 / a0)` is not exactly 1 -- and from there the state never
+    // settles. Five divisions cost nothing at design time and are exact.
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        for (const double corner : { 40.0, 700.0, 5000.0, 15000.0 })
+        {
+            for (const double q : { 0.4, 0.5, 0.707, 2.0 })
+            {
+                Biquad<double> low;
+                Biquad<double> high;
+                Biquad<double> bell;
+
+                low.setCoefficients (design::lowShelf<double> (corner, q, 0.0, rate));
+                high.setCoefficients (design::highShelf<double> (corner, q, 0.0, rate));
+
+                // The peaking filter collapses the same way -- A is 1, so
+                // `alpha * A` and `alpha / A` are the same number -- and it is
+                // the one Emberdrive's voicing and Halo's tone use.
+                bell.setCoefficients (design::peak<double> (corner, q, 0.0, rate));
+
+                // Deliberately awkward input: a step, a burst, and silence, so
+                // the state is loaded and then asked to return to rest.
+                for (int i = 0; i < 2000; ++i)
+                {
+                    const double input = i < 4 ? 0.0
+                                      : i < 900 ? std::sin (i * 0.31) * 0.8 + (i == 500 ? 0.9 : 0.0)
+                                      : 0.0;
+
+                    CHECK (low.process (input) == input);
+                    CHECK (high.process (input) == input);
+                    CHECK (bell.process (input) == input);
+                }
+            }
+        }
+    }
+}
