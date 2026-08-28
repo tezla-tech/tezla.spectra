@@ -107,6 +107,16 @@ two schools of Rast and Partch's 43 tones to Bohlen–Pierce and a golden-ratio
 repeat, each shown in the panel with its construction, its history and every
 degree in a table. See [its README](plugins/Sonitus/README.md).
 
+**[Svarayantra](plugins/Svarayantra/)** points that whole microtuning engine at
+**sampled instruments**: a SoundFont (.sf2) player whose pitch comes from the
+tuning, not the key number — Bohlen–Pierce on a piano, 22 shruti on a flute,
+A432 moving every sample by exactly 432/440, drum zones correctly ignoring all
+of it. The parser refuses a file it cannot fully read (with the guilty chunk
+named), the project stores the font's *path* and the tuning's *text*, and the
+whole engine costs about 3% of a core at all 64 voices. Sanskrit
+*svara-yantra*, "the note-machine", स्वरयन्त्र in its own header. See
+[its README](plugins/Svarayantra/README.md).
+
 ---
 
 ## Status
@@ -119,8 +129,9 @@ degree in a table. See [its README](plugins/Sonitus/README.md).
 | **[Transpectus](plugins/Transpectus/)** | Loudness, true peak, spectrum, correlation and goniometer — analysis only, bit-exact passthrough | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Anvil](plugins/Anvil/)** | Valve amplifier, speaker load and cabinet, from the mechanisms | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Sonitus](plugins/Sonitus/)** | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, Scala microtuning | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Svarayantra](plugins/Svarayantra/)** | **Instrument** — microtuned SoundFont player: the tuning engine applied to samples | v0.1.0 — 47/47 on Steinberg's validator |
 
-665 framework-free DSP tests pass on Linux x86-64, which is where development
+707 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS

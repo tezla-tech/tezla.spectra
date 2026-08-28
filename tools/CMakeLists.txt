@@ -21,7 +21,10 @@ if(TEZLA_BUILD_TOOLS)
     file(GLOB _plugin_dsp_dirs    CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/../plugins/*/Dsp")
 
     add_executable(tezla-measure measure_main.cpp ${_plugin_dsp_sources})
-    target_include_directories(tezla-measure PRIVATE ${_plugin_dsp_dirs})
+    # tests/ for Sf2TestBuilder: the svarayantra command plays the same
+    # test-built soundfont the suite measures -- no sample data is shipped.
+    target_include_directories(tezla-measure PRIVATE ${_plugin_dsp_dirs}
+        "${CMAKE_CURRENT_LIST_DIR}/../tests")
     target_link_libraries(tezla-measure PRIVATE
         tezla::dsp
         tezla::measure

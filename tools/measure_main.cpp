@@ -45,6 +45,8 @@
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
 #include "SonitusEngine.hpp"
+#include "Sf2TestBuilder.hpp"
+#include "SvaraEngine.hpp"
 #include "TranspectusEngine.hpp"
 
 namespace {
@@ -2196,6 +2198,143 @@ int runSonitus (const Args& args)
     return 0;
 }
 
+
+// ---------------------------------------------------------------------------
+// svarayantra
+// ---------------------------------------------------------------------------
+
+namespace svarayantraMeasure
+{
+
+/// A playable rig around the test-built sine font: the whole instrument, no
+/// sample data shipped. Period 100 at 48 kHz is a 480 Hz source.
+struct SvaraRig
+{
+    tezla::svarayantra::Sf2File file;
+    tezla::svarayantra::Sf2Model model;
+    tezla::svarayantra::SvaraEngine engine;
+
+    explicit SvaraRig (double rate, sf2test::SimpleFont font)
+    {
+        const auto bytes = font.build();
+
+        if (! file.parse (bytes.data(), bytes.size()).ok)
+            std::abort();   // the builder and parser are both ours
+
+        model.build (file);
+        engine.prepare (rate);
+        engine.setFont (&file, &model);
+    }
+};
+
+} // namespace svarayantraMeasure
+
+int runSvarayantra (const Args& args)
+{
+    using namespace tezla;
+    using namespace svarayantraMeasure;
+
+    const double rate = args.sampleRate;
+    constexpr std::size_t window = 1 << 14;
+    constexpr int kRootKey = 57;
+    constexpr int period = 100;   // source tone = rate / period
+
+    // ---- 1. resampling aliasing through the whole instrument ---------------
+
+    std::printf ("Hermite resampling through the full engine: a test-built %.0f Hz sine\n",
+                 rate / period);
+    std::printf ("font played at intervals from its root. Audible-band inharmonic energy\n");
+    std::printf ("relative to the tone, %.0f Hz host rate.\n\n", rate);
+    std::printf ("  %-18s %9s\n", "interval", "aliasing");
+
+    struct Case { const char* name; int key; };
+    const Case cases[] = {
+        { "unison", kRootKey },
+        { "up a fourth", kRootKey + 5 },
+        { "up an octave", kRootKey + 12 },
+        { "down a fifth", kRootKey - 7 },
+        { "down an octave", kRootKey - 12 },
+    };
+
+    for (const auto& testCase : cases)
+    {
+        SvaraRig rig (rate, sf2test::sineFont (period, 4,
+                                               static_cast<std::uint32_t> (rate), kRootKey));
+
+        // The OUTPUT tone is the 480 Hz source shifted by the interval, not
+        // the key's own MIDI pitch -- and nudging the concert pitch is what
+        // lands it exactly on an FFT bin so the analysis is honest.
+        const double nominal = (rate / period)
+                                 * std::exp2 ((testCase.key - kRootKey) / 12.0);
+        const double exact = measure::binExactFrequency (nominal, rate, window);
+        rig.engine.tuning().setConcertPitch (440.0 * exact / nominal);
+
+        rig.engine.noteOn (testCase.key, 127);
+
+        std::vector<double> left (window), right (window);
+        rig.engine.process (left.data(), right.data(), static_cast<int> (window));
+        rig.engine.process (left.data(), right.data(), static_cast<int> (window));
+
+        const auto analysis = measure::analyseHarmonics (left, rate, exact);
+        std::printf ("  %-18s %8.1f dB\n", testCase.name, analysis.audibleAliasingDb);
+    }
+
+    // ---- 2. CPU: cost per held voice ---------------------------------------
+
+    std::printf ("\nCPU: one second of audio at %.0f Hz, 512-sample blocks, looped sine\n", rate);
+    std::printf ("voices held. Percent of one core, plain path and filtered+vibrato.\n\n");
+    std::printf ("  %-8s %10s %14s\n", "voices", "plain", "filter+vib");
+
+    for (const int voices : { 1, 8, 16, 32, 64 })
+    {
+        double results[2] {};
+
+        for (int lane = 0; lane < 2; ++lane)
+        {
+            auto font = sf2test::sineFont (period, 4,
+                                           static_cast<std::uint32_t> (rate), kRootKey);
+
+            if (lane == 1)
+            {
+                font.instrumentGens.push_back ({ 8, 8000 });    // initialFilterFc
+                font.instrumentGens.push_back ({ 9, 200 });     // 20 dB of resonance
+            }
+
+            SvaraRig rig (rate, std::move (font));
+
+            if (lane == 1)
+                rig.engine.setModWheel (1.0);
+
+            for (int voice = 0; voice < voices; ++voice)
+                rig.engine.noteOn (30 + voice, 100);
+
+            std::vector<double> left (512), right (512);
+            const int blocks = static_cast<int> (rate) / 512;
+
+            // Warm up, then time.
+            for (int i = 0; i < 8; ++i)
+                rig.engine.process (left.data(), right.data(), 512);
+
+            const auto started = std::chrono::steady_clock::now();
+
+            for (int block = 0; block < blocks; ++block)
+                rig.engine.process (left.data(), right.data(), 512);
+
+            const double seconds = std::chrono::duration<double> (
+                std::chrono::steady_clock::now() - started).count();
+            const double audioSeconds = blocks * 512.0 / rate;
+
+            results[lane] = 100.0 * seconds / audioSeconds;
+        }
+
+        std::printf ("  %-8d %9.2f%% %13.2f%%\n", voices, results[0], results[1]);
+    }
+
+    std::printf ("\nEvery figure is the whole engine: player, envelopes, pan, control\n");
+    std::printf ("timer. The font is built in memory by the same builder the tests use.\n");
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -2212,6 +2351,7 @@ void printUsage()
     std::printf ("  loudness        [--fs]  LUFS at four rates, gating, PLR/PSR, correlation\n");
     std::printf ("  anvil           [--fs]  amplifier aliasing, lane THD, transformer flux, CPU\n");
     std::printf ("  sonitus         [--fs]  instrument aliasing, comb notches, tuning, CPU\n");
+    std::printf ("  svarayantra     [--fs]  soundfont engine aliasing and CPU per voice\n");
 }
 
 } // namespace
@@ -2240,6 +2380,7 @@ int main (int argc, char** argv)
     if (command == "loudness")        return runLoudness (args);
     if (command == "anvil")           return runAnvil (args);
     if (command == "sonitus")         return runSonitus (args);
+    if (command == "svarayantra")     return runSvarayantra (args);
 
     printUsage();
     return 1;
