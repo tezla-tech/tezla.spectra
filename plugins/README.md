@@ -36,6 +36,7 @@ something else in the meantime:
 |------|------|--------------|
 | `Ferrite` | `Tzfe` | Plugin #2 — the tape machine proper: wow, flutter, hysteresis, head bump |
 | `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
+| `Svara` | `Tzsv` | **Instrument** — SoundFont (.sf2) player with the full microtuning engine: the 44 built-in scales, `.scl`/`.kbm`, concert pitch and the tuning panel, applied to sampled instruments. Sanskrit *svara*, "musical note"; tagline *svara-yantra*, "the note-machine". Plan: [`Svara/PLAN.md`](Svara/PLAN.md). Queued after Sonitus phase 4 |
 
 ---
 
