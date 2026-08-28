@@ -1735,7 +1735,9 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     viewport_.setComponentID ("pages");
     viewport_.setScrollBarsShown (true, false);
-    viewport_.setScrollBarThickness (9);
+    // 14 px, up from 9: the user could not tell the pages scrolled at all.
+    // The width pairs with the rail-and-thumb drawing in KnobLookAndFeel.
+    viewport_.setScrollBarThickness (14);
     addAndMakeVisible (viewport_);
 
     // The MOD page's palette, because that is the only page it appears on --
@@ -2093,28 +2095,9 @@ void SonitusEditor::buildPages()
         "of speeds, in octaves. With LFO 1 on the cutoff this is a wobble that changes tempo on "
         "the step, which is the thing that used to take an automation lane and a steady hand.");
 
-    mod->addHeading ("VOICE MATRIX -- one set of these per sounding note", 6);
-
-    for (int slot = 0; slot < VoiceParameters::kSlots; ++slot)
-    {
-        const auto number = juce::String (slot + 1);
-
-        mod->addChoice (ids::modSource (slot), "Src " + number,
-            "What drives slot " + number + ". These are the per-note sources: each voice has its "
-            "own envelopes, its own velocity and its own note-on random, so eight notes modulate "
-            "eight different ways.");
-
-        mod->addChoice (ids::modDest (slot), "To " + number,
-            "What slot " + number + " drives. Continuous controls only -- a switch reconfigures "
-            "rather than adjusts, and modulating one would mean rebuilding a filter every chunk.");
-
-        mod->addKnob (ids::modDepth (slot), "Depth " + number,
-            "How much, and which way. **The law is square, so this knob is fine at the bottom and "
-            "enormous at the top**: a tenth of the travel on Pitch is 72 cents and the end of it "
-            "is six octaves. Ten octaves on Cutoff, an octave on Detune, sixteen on PM. "
-            "Full depth is meant to be too much -- that is what it is for.");
-    }
-
+    // The global matrix first: it is the one the user reaches for -- the comb,
+    // the formant and the tube live there -- and the first thing on a page
+    // should be the thing the page is opened for.
     mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note", 6);
 
     for (int slot = 0; slot < EngineParameters::kGlobalSlots; ++slot)
@@ -2137,6 +2120,28 @@ void SonitusEditor::buildPages()
             "so a full-depth sweep drives into the ends and stays there. Tube moves 36 dB, "
             "Harmonic walks 23 partials. Output is the one held back at 24 dB: it is a level "
             "rather than a character, and a level swinging under an envelope is a hazard.");
+    }
+
+    mod->addHeading ("VOICE MATRIX -- one set of these per sounding note", 6);
+
+    for (int slot = 0; slot < VoiceParameters::kSlots; ++slot)
+    {
+        const auto number = juce::String (slot + 1);
+
+        mod->addChoice (ids::modSource (slot), "Src " + number,
+            "What drives slot " + number + ". These are the per-note sources: each voice has its "
+            "own envelopes, its own velocity and its own note-on random, so eight notes modulate "
+            "eight different ways.");
+
+        mod->addChoice (ids::modDest (slot), "To " + number,
+            "What slot " + number + " drives. Continuous controls only -- a switch reconfigures "
+            "rather than adjusts, and modulating one would mean rebuilding a filter every chunk.");
+
+        mod->addKnob (ids::modDepth (slot), "Depth " + number,
+            "How much, and which way. **The law is square, so this knob is fine at the bottom and "
+            "enormous at the top**: a tenth of the travel on Pitch is 72 cents and the end of it "
+            "is six octaves. Ten octaves on Cutoff, an octave on Detune, sixteen on PM. "
+            "Full depth is meant to be too much -- that is what it is for.");
     }
 
     pages_[kModPage] = std::move (mod);
