@@ -65,6 +65,7 @@ void Engine::rebuildForRate() noexcept
         // sub band is the one place in this instrument where a steep high-pass
         // would be actively harmful.
         subBlocker_[channel].prepare (internalRate_, 5.0);
+        fullBlocker_[channel].prepare (internalRate_, 5.0);
 
         tube_[channel].prepare (internalRate_);
     }
@@ -75,6 +76,7 @@ void Engine::rebuildForRate() noexcept
 
     outputGain_.prepare (internalRate_, 0.02);
     tubeGain_.prepare (internalRate_, 0.02);
+    splitMix_.prepare (internalRate_, 0.03);
 
     configured_ = false;
 }
@@ -93,6 +95,7 @@ void Engine::reset() noexcept
     {
         split_[channel].reset();
         subBlocker_[channel].reset();
+        fullBlocker_[channel].reset();
         tube_[channel].reset();
         tiltLow_[channel].reset();
         tiltHigh_[channel].reset();
@@ -104,6 +107,7 @@ void Engine::reset() noexcept
 
     outputGain_.setCurrentAndTarget (decibelsToGain (pending_.outputDb));
     tubeGain_.setCurrentAndTarget (1.0);
+    splitMix_.setCurrentAndTarget (pending_.subSplit ? 1.0 : 0.0);
 
     sinceControl_ = 0;
     seenNoteOns_ = voices_.getNoteOnCount();
@@ -143,6 +147,12 @@ void Engine::applyPending() noexcept
     if (splitChanged)
         for (auto& split : split_)
             split.setCrossover (active_.splitHz);
+
+    // A target, not a jump: the SPLIT switch is a routing change, and a
+    // routing change lands as a 30 ms crossfade -- CLAUDE.md section 7 puts
+    // discrete switches behind crossfades. Setting an unchanged target is a
+    // natural no-op, so this needs no guard.
+    splitMix_.setTarget (active_.subSplit ? 1.0 : 0.0);
 
     if (tiltChanged)
         updateTilt();
@@ -478,6 +488,22 @@ void Engine::advanceGlobalSources (int samples) noexcept
 void Engine::mangle (double& left, double& right) noexcept
 {
     // ---- the split ---------------------------------------------------------
+    //
+    // `splitMix_` is the SPLIT switch, smoothed: at 1 the split is in (the
+    // path that shipped), at 0 the whole signal goes down the body chain
+    // untouched and only a 5 Hz DC blocker stands between the mangle and the
+    // output -- the "pure" setting for splitting on a DAW bus instead.
+    //
+    // The blend below is arithmetic rather than a branch on purpose.
+    // Multiplying by exactly 1.0 and adding exactly 0.0 changes no bits, so
+    // with the switch on this function is sample-for-sample the one that
+    // shipped -- verified by raw-file comparison when the switch landed -- and
+    // the toggle is a 30 ms crossfade instead of a click (CLAUDE.md section
+    // 7). The split filters and both blockers stay fed in every setting so
+    // their state is warm the moment the switch flips: two LR4s are noise
+    // next to the mangle, and a cold crossover handed a sustained bass note
+    // would spend the whole fade settling instead of crossfading.
+    const double splitMix = splitMix_.next();
 
     double subLeft = 0.0;
     double subRight = 0.0;
@@ -487,9 +513,10 @@ void Engine::mangle (double& left, double& right) noexcept
     split_[0].process (left, subLeft, bodyLeft);
     split_[1].process (right, subRight, bodyRight);
 
-    // A DC blocker on the sub and nowhere else. Everything above the split has
-    // a nonlinearity in front of it and makes DC by construction; the sub is
-    // the one band where the high-pass itself would be audible.
+    // A DC blocker on the sub and nowhere else in the split path. Everything
+    // above the split has a nonlinearity in front of it and makes DC by
+    // construction; the sub is the one band where the high-pass itself would
+    // be audible.
     subLeft = subBlocker_[0].process (subLeft);
     subRight = subBlocker_[1].process (subRight);
 
@@ -500,6 +527,10 @@ void Engine::mangle (double& left, double& right) noexcept
         subLeft = sum;
         subRight = sum;
     }
+
+    // With the split out, the body chain gets the raw signal.
+    bodyLeft = splitMix * bodyLeft + (1.0 - splitMix) * left;
+    bodyRight = splitMix * bodyRight + (1.0 - splitMix) * right;
 
     // ---- the body ----------------------------------------------------------
 
@@ -543,8 +574,16 @@ void Engine::mangle (double& left, double& right) noexcept
     bodyLeft = tiltHigh_[0].process (tiltLow_[0].process (bodyLeft));
     bodyRight = tiltHigh_[1].process (tiltLow_[1].process (bodyRight));
 
-    left = subLeft + bodyLeft;
-    right = subRight + bodyRight;
+    // The sub leg only exists while the split does.
+    left = splitMix * subLeft + bodyLeft;
+    right = splitMix * subRight + bodyRight;
+
+    // The pure path's DC blocker, blended the same way. It processes in every
+    // setting -- its state has to be warm for the fade -- but with the split
+    // in it contributes exactly nothing, and the sum above is bit-identical
+    // to the pre-switch engine.
+    left = splitMix * left + (1.0 - splitMix) * fullBlocker_[0].process (left);
+    right = splitMix * right + (1.0 - splitMix) * fullBlocker_[1].process (right);
 }
 
 void Engine::renderChunk (double* left, double* right, int numSamples) noexcept

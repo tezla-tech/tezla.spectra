@@ -26,7 +26,7 @@ nothing until seen to fail).
 - [ ] 7d. Shape: Shark
 - [ ] 7e. Shape: Harmonic
 - [ ] 8. Waveform preview + morph slider UI
-- [ ] 9. ADV envelope DSP: delay stage + loop in `Adsr`
+- [ ] 9. ADV envelope DSP: `MultiEnvelope` (multi-stage, loop, sustain point)
 - [ ] 10. ADV Envelopes 1–3: params, sources, matrix, ENV page
 - [ ] 11. Docs, measurements, validator, final sweep
 
@@ -354,32 +354,48 @@ compact.
 
 ---
 
-## 9. ADV envelope DSP: delay + loop in `Adsr`
+## 9. ADV envelope DSP: `MultiEnvelope`
 
-**Probe:** `grep -n "setDelaySeconds\|setLoop" shared/tezla-dsp/include/tezla/dsp/Adsr.hpp`.
+**Probe:** `ls shared/tezla-dsp/include/tezla/dsp/MultiEnvelope.hpp`.
 
-The ADV envelopes are ordinary `Adsr`s plus two abilities, added to the class
-(so mod env 1/2 could use them later) and switched off by default:
+Amended from the first draft on the user's direction: the ADV envelopes are
+**multi-stage breakpoint envelopes** in the FM8 spirit, not AHDSRs with
+extras. A new framework-free class rather than a change to `Adsr` — the three
+existing envelopes then carry zero regression risk, and a delay stage falls
+out for free (a first segment that sits at level 0).
 
-- **Delay**: a silent stage before attack, 0–4 s. Append a `delay` stage to
-  `AdsrStage` (append, like `hold` was — the enum is runtime state but the
-  house rule is uniform). `noteOn` enters delay when the time is > 0.
-- **Loop**: `setLoop (bool)`. When looping and decay completes (arrival at
-  sustain, honouring `startedDecayAbove_` direction logic), re-enter attack
-  **from the current level** — the segment-from-current-level machinery the
-  tension rework already built. `noteOff` exits to release from wherever it
-  is, loop or not. Loop OFF is today's behaviour, bit-exact.
-- Loop + snap (step 5) compose: a looped AHD with snapped times is a synced
-  rhythmic modulator — that combination is the FM8-style payoff, say so in
-  the tooltips.
+The model, `shared/tezla-dsp/include/tezla/dsp/MultiEnvelope.hpp`:
 
-**Tests:** delay 0 + loop off ⇒ bit-exact against today across a random
-parameter sweep; loop period = A+H+D exactly; loop with release-during-loop
-releases from the mid-loop level without a step; silence…
-`tests/test_Adsr.cpp` already has the harness patterns. Break-check the loop
-by making it re-enter from zero (the step it must not produce).
+- Up to **8 points**, `count` active (2..8). Point i carries
+  `(timeSeconds 0..20, level 0..1, tension −1..+1)`: the segment that
+  *arrives* at that point. Point 0's time is the travel from the note-on
+  level (0 from silence; current level on retrigger — the same
+  from-current-level anti-click rule the AHDSR rework established).
+- **Sustain index** (0..count−1): arriving there with the gate held parks the
+  envelope. Points after it are the release chain, traversed from wherever
+  the envelope is when the gate lifts. If sustain is the last point, release
+  falls to 0 over the final point's time.
+- **Loop** (bool) + **loop start** index (≤ sustain): with the gate held,
+  arriving at the sustain point travels back to the loop-start point — the
+  return leg uses the loop-start point's own time and tension — then forward
+  again, indefinitely. Loop + snap = a tempo-locked rhythmic modulator, which
+  is the payoff.
+- Tension math is **shared with `Adsr`**, not copied: extract Adsr's
+  `overshootFor`/`targetFor`/`coefficientFor` statics into a small common
+  header (or make them public statics on Adsr and call them) so one
+  definition of the curve serves both classes and the editor. The
+  `EnvelopeEditor::segment` drawing function must keep agreeing with it.
+- `process()` per sample, `isFinished` when the release chain completes
+  (value holds at the final level — a mod source may legitimately end
+  non-zero; the amp envelope still owns the voice's lifetime).
 
----
+**Tests** (`tests/test_MultiEnvelope.cpp`): each segment arrives at its
+target level in exactly its stated time; the loop period is exactly the sum
+of its legs; noteOff mid-loop releases from the current level without a
+step; tension curves match Adsr's for the same tension value (shared math =
+same numbers, assert to 1e-15); count 2 behaves as a simple AD; silence and
+re-noteOn from silence starts at 0. Break-check the loop by making the
+return leg jump instead of glide.
 
 ## 10. ADV Envelopes 1–3: params, sources, matrix, page
 
@@ -390,11 +406,14 @@ in the spirit of FM8's extra envelopes (workflow inspiration only; nothing is
 copied from NI — §2.1).
 
 - Params per envelope (kSchemaV2), prefix `adv1`/`adv2`/`adv3`: `Enable`
-  (bool, **default OFF**), `Delay`, `Attack`, `Hold`, `Decay`, `Sustain`,
-  `Release`, `AttackT`, `DecayT`, `ReleaseT`, `Loop` (bool), `Snap` (bool).
-  Reuse the `EnvelopeIds` struct + `addEnvelope` lambda
-  (`PluginProcessor.cpp:370–382`) extended for the four new fields — one
-  path, not a second copy.
+  (bool, **default OFF**), `Loop` (bool), `Snap` (bool), `Points` (int 2..8),
+  `Sustain` (int 1..8, displayed 1-based), `LoopStart` (int 1..8), and per
+  point i=1..8 `T<i>` (seconds 0..20, skewed), `L<i>` (0..100 %),
+  `C<i>` (tension −100..+100 %). Build the per-point IDs with a function,
+  the way `ids::step(i)` builds the sequencer's — 27 hand-typed names invite
+  the typo that silently points one at nothing. Defaults when enabled: a
+  4-point ADSR-ish curve, so switching one on does something audible before
+  any editing.
 - Voice (`SonitusVoice.hpp`): three more `Adsr` members. **Disabled costs
   nothing**: skip their `process` and `noteOn` when disabled; the matrix
   reads 0 from a disabled source. The 32-voice ceiling argument
@@ -409,13 +428,17 @@ copied from NI — §2.1).
   likewise. Update both static_asserts.
 - ENV page: three collapsed rows under the existing three editors. Disabled =
   one compact strip (name + ENABLE pill, ids `adv1Enable`…); enabling swells
-  it into a full `EnvelopeEditor` block with DELAY/LOOP/SNAP pills. The page
+  it into a **`MultiEnvelopeEditor`** — a new graph component: the active
+  points draggable (x = that segment's time, y = level), the sustain point
+  marked, the loop region shaded; POINTS/SUSTAIN/LOOP-START as small
+  steppers beside the graph, LOOP and SNAP as pills. Graph curves drawn with
+  the shared tension math. The page
   scrolls (step 2's scrollbars are why that order). `getPreferredHeight`
   (`PluginEditor.cpp:1283`) must account for expanded state.
 
 **Tests:** all-disabled renders bit-exact with pre-step-10 output; an enabled
 ADV env routed to cutoff modulates it; loop+snap period is exact against
-bpm; state save/load round-trips the enables.
+bpm; state save/load round-trips the enables and every point.
 
 ---
 

@@ -18,7 +18,13 @@ namespace
 // forever: the version hint feeds the VST3 parameter ID, so moving it on a live
 // parameter is indistinguishable from renaming it. CLAUDE.md section 8.
 constexpr int kSchemaV1 = 1;
-constexpr int kStateSchemaVersion = kSchemaV1;
+
+/// Phase 3. Every parameter added by the phase-3 work carries this, and
+/// existing parameters keep V1 forever -- the version hint feeds the VST3
+/// parameter ID, so bumping a live one is indistinguishable from renaming it.
+constexpr int kSchemaV2 = 2;
+
+constexpr int kStateSchemaVersion = kSchemaV2;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// Where the tuning is stashed inside the state tree.
@@ -630,6 +636,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::subMono, kSchemaV1 }, "Sub to mono", true));
 
+    // Default ON, which is the engine that shipped -- a project saved before
+    // this parameter existed reopens sounding the same (CLAUDE.md section 8).
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::subSplit, kSchemaV2 }, "Sub split", true));
+
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::order, kSchemaV1 }, "Order", choices::order, 0));
 
@@ -1030,6 +1041,7 @@ void SonitusProcessor::pullParameters()
 
     p.splitHz = valueOf (state_, ids::splitHz);
     p.subMono = valueOf (state_, ids::subMono) > 0.5f;
+    p.subSplit = valueOf (state_, ids::subSplit) > 0.5f;
 
     p.order = static_cast<MangleOrder> (indexOf (state_, ids::order));
     p.tubeDriveDb = valueOf (state_, ids::tubeDrive);

@@ -2147,6 +2147,12 @@ void SonitusEditor::buildPages()
 
     mangle->addHeading ("THE SPLIT -- the sub bypasses everything below", 5);
 
+    mangle->addToggle (ids::subSplit, "Split on",
+        "The whole crossover, on or off. Off is the pure path: no split, no sub mono, the "
+        "complete signal through the mangle and one gentle DC blocker on the way out -- for "
+        "when you want to band-split on a DAW mixer bus yourself instead of inside the "
+        "instrument. Costs nothing either way; the toggle crossfades over 30 ms.");
+
     mangle->addKnob (ids::splitHz, "Split",
         "Where the sub is taken out of the mangle. Below this the signal gets a DC blocker and "
         "nothing else -- no tube, no comb, no formant. This is inside the instrument rather than "

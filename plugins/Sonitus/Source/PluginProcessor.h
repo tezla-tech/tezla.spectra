@@ -141,6 +141,7 @@ inline constexpr auto seqToLfoRate = "seqToLfoRate";
 // ---- the split and the mangle ----------------------------------------------
 inline constexpr auto splitHz     = "splitHz";
 inline constexpr auto subMono     = "subMono";
+inline constexpr auto subSplit    = "subSplit";
 
 inline constexpr auto order       = "order";
 inline constexpr auto tubeDrive   = "tubeDrive";

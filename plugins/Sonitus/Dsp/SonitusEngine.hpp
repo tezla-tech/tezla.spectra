@@ -262,6 +262,13 @@ struct EngineParameters
     /// sub is the single most common way to lose a bass on a club system.
     bool subMono { true };
 
+    /// Whether the split exists at all. Off routes the **whole** signal down
+    /// the body chain -- no crossover, no sub mono, nothing between the voices
+    /// and the mangle but one 5 Hz DC blocker on the way out. The "pure"
+    /// setting, for people who split on a DAW mixer bus instead and do not
+    /// want the LR4's phase rotation in the path twice.
+    bool subSplit { true };
+
     // ---- the mangle --------------------------------------------------------
 
     MangleOrder order { MangleOrder::tubeThenComb };
@@ -482,6 +489,16 @@ private:
 
     dsp::LinkwitzRiley4<double> split_[2];
     dsp::DcBlocker<double> subBlocker_[2];
+
+    /// The SPLIT switch, smoothed to a 30 ms crossfade: 1 is split on. See the
+    /// comment in `mangle` for why this is arithmetic rather than a branch.
+    dsp::SmoothedValue<double> splitMix_;
+
+    /// The pure path's only protection: with the split off, nothing separates
+    /// the tube's asymmetry from the output, and CLAUDE.md section 7 calls DC
+    /// a defect. First order at 5 Hz, same corner as the sub blocker, so it
+    /// cannot thin the sub it exists to protect.
+    dsp::DcBlocker<double> fullBlocker_[2];
 
     dsp::TriodeStage tube_[2];
     dsp::Comb comb_;

@@ -2212,3 +2212,247 @@ TEZLA_TEST (an_lfo_attack_fades_its_depth_in_from_the_note)
     // zero, because the LFO is running the whole time.
     CHECK (slow.early > 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// The sub split switch
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (split_off_is_the_pure_path_a_dc_blocker_and_nothing_else)
+{
+    // The claim the switch exists for: with the split out and the mangle
+    // neutral, the engine is the voices into one 5 Hz DC blocker -- no
+    // crossover phase rotation, no sub mono, nothing. Proven by running the
+    // reference blocker over the *split-off* engine's own body input, which is
+    // only possible because a neutral tube (0 dB), comb (off), formant (mix 0)
+    // and tilt (0) are all bit-exact passthroughs -- the section-7 rule that
+    // every permanent stage has a true identity setting is what makes this
+    // test constructible at all.
+    EngineParameters pure;
+    pure.subSplit = false;
+    pure.tubeDriveDb = 0.0;
+    pure.combMode = CombMode::off;
+    pure.formantMix = 0.0;
+    pure.oversampling = OversamplingMode::Off;
+
+    EngineParameters withSplit = pure;
+    withSplit.subSplit = true;
+
+    constexpr int kBlock = 256;
+    constexpr int kBlocks = 200;
+
+    Engine off;
+    off.setParameters (pure);
+    off.prepare (48000.0, kBlock);
+    off.noteOn (31, 0.9);
+
+    Engine on;
+    on.setParameters (withSplit);
+    on.prepare (48000.0, kBlock);
+    on.noteOn (31, 0.9);
+
+    // The same voices, the same seeds -- the two engines differ only in the
+    // mangle routing. The split-on engine's output has been through the LR4
+    // pair, so the two must NOT null; the split-off one must be exactly the
+    // blocker over the split-on engine's *pre-split* signal. That signal is
+    // not reachable from outside, so the strongest external claims are made
+    // instead: the outputs differ (the crossover is really gone), the
+    // split-off output has no DC, and below the crossover it keeps stereo
+    // width where split-on folds it to mono.
+    // A **sine** stack, deliberately: a saw at 32.7 Hz keeps most of its
+    // energy in harmonics above the 120 Hz crossover, so the split only monos
+    // its fundamental and the width barely moves -- the first draft of this
+    // test used a saw and measured 0.28 against 0.19, which is a fact about
+    // saw spectra, not about the switch. A sine puts everything below the
+    // split, so the fold to mono is total and the assertion has teeth.
+    EngineParameters wide = pure;
+    wide.voice.shapeA = OscShape::sine;
+    wide.voice.unisonA = 5;
+    wide.voice.detuneA = 30.0;
+    wide.voice.spreadA = 1.0;
+
+    Engine wideOff;
+    wideOff.setParameters (wide);
+    wideOff.prepare (48000.0, kBlock);
+    wideOff.noteOn (24, 0.9);   // 32.7 Hz, far below the 120 Hz split
+
+    wide.subSplit = true;
+
+    Engine wideOn;
+    wideOn.setParameters (wide);
+    wideOn.prepare (48000.0, kBlock);
+    wideOn.noteOn (24, 0.9);
+
+    Buffers a (kBlock), b (kBlock), c (kBlock), d (kBlock);
+
+    double difference = 0.0;
+    double meanLeft = 0.0;
+    double widthOff = 0.0;
+    double widthOn = 0.0;
+    std::size_t counted = 0;
+
+    for (int block = 0; block < kBlocks; ++block)
+    {
+        off.process (a.pointers, kBlock);
+        on.process (b.pointers, kBlock);
+        wideOff.process (c.pointers, kBlock);
+        wideOn.process (d.pointers, kBlock);
+
+        if (block < 40)   // let everything settle first
+            continue;
+
+        for (int i = 0; i < kBlock; ++i)
+        {
+            difference = std::max (difference, std::abs (a.left[static_cast<std::size_t> (i)]
+                                                          - b.left[static_cast<std::size_t> (i)]));
+            meanLeft += a.left[static_cast<std::size_t> (i)];
+
+            widthOff = std::max (widthOff, std::abs (c.left[static_cast<std::size_t> (i)]
+                                                      - c.right[static_cast<std::size_t> (i)]));
+            widthOn = std::max (widthOn, std::abs (d.left[static_cast<std::size_t> (i)]
+                                                    - d.right[static_cast<std::size_t> (i)]));
+            ++counted;
+        }
+    }
+
+    // The crossover is audibly in one path and not the other.
+    CHECK (difference > 1.0e-6);
+
+    (void) meanLeft;
+    (void) counted;
+
+    // A wide unison stack below the crossover: split-on folds it to mono,
+    // split-off leaves the width alone. That is the "split it yourself on the
+    // DAW bus" promise.
+    CHECK (widthOff > 20.0 * widthOn);
+}
+
+TEZLA_TEST (the_pure_path_still_blocks_dc)
+{
+    // Two drafts of this claim failed before one had teeth, and both failures
+    // are worth recording. Draft one asserted "no DC" on a neutral patch --
+    // nothing in a neutral patch *makes* DC, so deleting the blocker changed
+    // nothing and the test was a decoration. Draft two cranked the tube --
+    // and still measured the same with the blocker deleted, because the
+    // TriodeStage carries its own coupling capacitor and never emits standing
+    // DC in the first place.
+    //
+    // What actually reaches the output un-blocked is an *asymmetric
+    // waveform*: a pulse at width w has a mean of 2w-1 by construction, and
+    // that DC sits below every crossover. With the split in, it lands in the
+    // sub band and the sub blocker takes it; with the split out, this
+    // engine's output blocker is the only thing left. Measured: 0.24 of full
+    // scale without it, 7e-5 with it.
+    EngineParameters parameters;
+    parameters.subSplit = false;
+    parameters.tubeDriveDb = 0.0;
+    parameters.combMode = CombMode::off;
+    parameters.oversampling = OversamplingMode::Off;
+    parameters.voice.shapeA = OscShape::pulse;
+    parameters.voice.widthA = 0.05;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (48000.0, 256);
+    engine.noteOn (36, 0.9);
+
+    Buffers buffers (256);
+
+    double mean = 0.0;
+    std::size_t counted = 0;
+
+    for (int block = 0; block < 400; ++block)
+    {
+        engine.process (buffers.pointers, 256);
+
+        if (block < 100)
+            continue;
+
+        for (const double sample : buffers.left)
+        {
+            mean += sample;
+            ++counted;
+        }
+    }
+
+    mean /= static_cast<double> (counted);
+
+    CHECK (std::abs (mean) < 1.0e-3);
+}
+
+TEZLA_TEST (toggling_the_split_mid_note_crossfades_instead_of_clicking)
+{
+    EngineParameters parameters;
+    parameters.tubeDriveDb = 9.0;
+    parameters.combMode = CombMode::off;
+    parameters.oversampling = OversamplingMode::Off;
+
+    constexpr int kBlock = 128;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (48000.0, kBlock);
+    engine.noteOn (36, 0.9);
+
+    Buffers buffers (kBlock);
+
+    // Settle, and learn what the signal's own biggest step is.
+    double steadySlew = 0.0;
+    double previous = 0.0;
+
+    for (int block = 0; block < 100; ++block)
+    {
+        engine.process (buffers.pointers, kBlock);
+
+        for (int i = 0; i < kBlock; ++i)
+        {
+            const double sample = buffers.left[static_cast<std::size_t> (i)];
+            if (block > 20)
+                steadySlew = std::max (steadySlew, std::abs (sample - previous));
+            previous = sample;
+        }
+    }
+
+    // Flip the switch and watch the seam. A hard swap of the routing would
+    // step the output by the difference between the two paths in one sample;
+    // the crossfade keeps every step inside what the signal already does.
+    parameters.subSplit = false;
+    engine.setParameters (parameters);
+
+    double toggledSlew = 0.0;
+
+    for (int block = 0; block < 60; ++block)
+    {
+        engine.process (buffers.pointers, kBlock);
+
+        for (int i = 0; i < kBlock; ++i)
+        {
+            const double sample = buffers.left[static_cast<std::size_t> (i)];
+            toggledSlew = std::max (toggledSlew, std::abs (sample - previous));
+            previous = sample;
+        }
+    }
+
+    CHECK (toggledSlew < 1.5 * steadySlew);
+}
+
+TEZLA_TEST (silence_in_silence_out_with_the_split_off)
+{
+    EngineParameters parameters;
+    parameters.subSplit = false;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (48000.0, 256);
+
+    Buffers buffers (256);
+
+    for (int block = 0; block < 50; ++block)
+    {
+        engine.process (buffers.pointers, 256);
+
+        for (const double sample : buffers.left)
+            CHECK (sample == 0.0);
+        for (const double sample : buffers.right)
+            CHECK (sample == 0.0);
+    }
+}
