@@ -75,6 +75,7 @@ inline constexpr auto ampDecay     = "ampDecay";
 inline constexpr auto ampSustain   = "ampSustain";
 inline constexpr auto ampRelease   = "ampRelease";
 inline constexpr auto ampAttackT   = "ampAttackT";
+inline constexpr auto ampSnap     = "ampSnap";
 inline constexpr auto ampDecayT    = "ampDecayT";
 inline constexpr auto ampReleaseT  = "ampReleaseT";
 inline constexpr auto ampVelocity  = "ampVelocity";
@@ -87,6 +88,7 @@ inline constexpr auto env1Release  = "env1Release";
 inline constexpr auto env1AttackT  = "env1AttackT";
 inline constexpr auto env1DecayT   = "env1DecayT";
 inline constexpr auto env1ReleaseT = "env1ReleaseT";
+inline constexpr auto env1Snap    = "env1Snap";
 
 inline constexpr auto env2Attack   = "env2Attack";
 inline constexpr auto env2Hold     = "env2Hold";
@@ -96,6 +98,7 @@ inline constexpr auto env2Release  = "env2Release";
 inline constexpr auto env2AttackT  = "env2AttackT";
 inline constexpr auto env2DecayT   = "env2DecayT";
 inline constexpr auto env2ReleaseT = "env2ReleaseT";
+inline constexpr auto env2Snap    = "env2Snap";
 
 // ---- keyboard --------------------------------------------------------------
 inline constexpr auto keyMode     = "keyMode";

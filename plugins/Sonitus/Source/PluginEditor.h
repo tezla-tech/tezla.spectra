@@ -349,7 +349,7 @@ private:
     void addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
                    const juce::String& detail, const EnvelopeEditor::Ids& ids,
                    const char* extraId, const juce::String& extraName,
-                   const juce::String& extraTooltip);
+                   const juce::String& extraTooltip, const char* snapId = nullptr);
 
     ui::Palette palette_;
     std::vector<Block> blocks_;

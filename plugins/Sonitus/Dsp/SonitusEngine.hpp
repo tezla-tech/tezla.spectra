@@ -474,6 +474,7 @@ private:
     void advanceGlobalSources (int samples) noexcept;
     void renderChunk (double* left, double* right, int numSamples) noexcept;
     void mangle (double& left, double& right) noexcept;
+    [[nodiscard]] const VoiceParameters& snappedVoice() noexcept;
     void updateTilt() noexcept;
 
     [[nodiscard]] double combDelaySeconds() const noexcept;
@@ -520,6 +521,11 @@ private:
 
     dsp::Biquad<double> tiltLow_[2];
     dsp::Biquad<double> tiltHigh_[2];
+
+    /// The voice parameters with any snapped envelope times applied -- see
+    /// snappedVoice() in the cpp. A member rather than a local so the copy is
+    /// storage reuse, not an allocation.
+    VoiceParameters snappedVoice_;
 
     dsp::SmoothedValue<double> outputGain_;
     dsp::SmoothedValue<double> tubeGain_;

@@ -458,6 +458,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                    ids::ampRelease, ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT },
                  "Amp", 0.8f);
 
+    // Snap-to-tempo, one per envelope. The quantising happens in the engine,
+    // which knows the live tempo -- Engine::snappedVoice.
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::ampSnap, kSchemaV2 }, "Amp snap", false));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::ampVelocity, kSchemaV1 }, "Velocity to level",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.5f, percentAttributes()));
@@ -466,9 +471,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                    ids::env1Release, ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT },
                  "Env 1", 0.0f);
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::env1Snap, kSchemaV2 }, "Env 1 snap", false));
+
     addEnvelope ({ ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
                    ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
                  "Env 2", 0.0f);
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::env2Snap, kSchemaV2 }, "Env 2 snap", false));
 
     // ---- keyboard -----------------------------------------------------------
 
@@ -943,14 +954,17 @@ void SonitusProcessor::pullParameters()
 
     pullEnvelope (v.amp, ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain,
                   ids::ampRelease, ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT);
+    v.amp.snap = valueOf (state_, ids::ampSnap) > 0.5f;
 
     v.ampVelocity = valueOf (state_, ids::ampVelocity);
 
     pullEnvelope (v.mod1, ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain,
                   ids::env1Release, ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT);
+    v.mod1.snap = valueOf (state_, ids::env1Snap) > 0.5f;
 
     pullEnvelope (v.mod2, ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
                   ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT);
+    v.mod2.snap = valueOf (state_, ids::env2Snap) > 0.5f;
 
     v.level = 1.0;
 

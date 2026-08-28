@@ -2606,3 +2606,102 @@ TEZLA_TEST (a_phase_locked_lfo_repeats_the_bar_after_a_rewind)
 
     CHECK (difference > 1.0e-3);
 }
+
+// ---------------------------------------------------------------------------
+// Envelope snap-to-tempo
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (snap_seconds_lands_on_note_lengths_and_leaves_attacks_alone)
+{
+    // 120 bpm: a beat is 0.5 s, so "1/4" is 0.5, "1/16" is 0.125, "1/32" is
+    // 0.0625, "1 bar" is 2.0, "8 bars" is 16.0.
+    CHECK_NEAR (snapSeconds (0.47, 120.0), 0.5, 1.0e-12);
+    CHECK_NEAR (snapSeconds (0.10, 120.0), 0.125, 1.0e-12);          // 1/16
+    CHECK_NEAR (snapSeconds (1.9, 120.0), 2.0, 1.0e-12);
+    CHECK_NEAR (snapSeconds (20.0, 120.0), 16.0, 1.0e-12);           // past the top: 8 bars
+
+    // Nearest in log distance, not linear -- and 90 ms is the case that tells
+    // the two apart. Its neighbours are 1/32 (62.5 ms) and 1/16 (125 ms):
+    // linearly it is 27.5 ms from the 1/32 and 35 from the 1/16, so linear
+    // picks the 1/32; as a *ratio* it is 1.44x the one and 1.39x under the
+    // other, so log picks the 1/16 -- which is what "about a sixteenth" means
+    // to an ear.
+    CHECK_NEAR (snapSeconds (0.090, 120.0), 0.125, 1.0e-12);
+
+    // The pluck guard: anything under half a 1/32 passes through untouched.
+    CHECK (snapSeconds (0.004, 120.0) == 0.004);
+    CHECK (snapSeconds (0.0, 120.0) == 0.0);
+    CHECK (snapSeconds (0.031, 120.0) == 0.031);
+    CHECK_NEAR (snapSeconds (0.032, 120.0), 0.0625, 1.0e-12);
+
+    // And the grid moves with the tempo.
+    CHECK_NEAR (snapSeconds (0.30, 174.0), 60.0 / 174.0, 1.0e-12);   // a 1/4 at 174
+}
+
+TEZLA_TEST (a_snapped_amp_decay_is_the_division_and_unsnapped_is_the_knob)
+{
+    // Engine-level: decay 0.47 s with snap on at 120 bpm behaves as 0.5 s.
+    // Measured from the amplitude envelope of the rendered note: play, let the
+    // decay run to a low sustain, and find the time the level crosses the
+    // midpoint between peak and sustain. Crude, but it distinguishes 0.47
+    // from 0.5 easily -- and it is the *sound*, not the parameter.
+    const auto midpointCrossing = [] (bool snap)
+    {
+        EngineParameters parameters;
+        parameters.tubeDriveDb = 0.0;
+        parameters.combMode = CombMode::off;
+        parameters.formantMix = 0.0;
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.voice.shapeA = OscShape::sine;
+        parameters.voice.amp.attack = 0.001;
+        parameters.voice.amp.hold = 0.0;
+        parameters.voice.amp.decay = 0.47;
+        parameters.voice.amp.sustain = 0.1;
+        parameters.voice.amp.decayTension = 0.0;   // straight, so time reads clean
+        parameters.voice.amp.snap = snap;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.setTransport (-1.0, 120.0, false);
+        engine.noteOn (69, 1.0);
+
+        Buffers buffers (256);
+        std::vector<double> level;
+
+        for (int block = 0; block < 48000 * 2 / 256; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+
+            double peak = 0.0;
+            for (const double sample : buffers.left)
+                peak = std::max (peak, std::abs (sample));
+            level.push_back (peak);
+        }
+
+        double top = 0.0;
+        std::size_t topAt = 0;
+        for (std::size_t i = 0; i < level.size(); ++i)
+            if (level[i] > top) { top = level[i]; topAt = i; }
+
+        const double floor = 0.1 * top;
+        const double midpoint = 0.5 * (top + floor);
+
+        for (std::size_t i = topAt; i < level.size(); ++i)
+            if (level[i] < midpoint)
+                return static_cast<double> (i) * 256.0 / 48000.0;
+
+        return -1.0;
+    };
+
+    const double snapped = midpointCrossing (true);
+    const double raw = midpointCrossing (false);
+
+    // A straight decay crosses its midpoint at half its duration; the exact
+    // point does not matter, only that the two differ by the ratio of the two
+    // decay times. 0.5 / 0.47 = 1.064: small but far beyond the measurement's
+    // block-quantised jitter.
+    CHECK (snapped > 0.0);
+    CHECK (raw > 0.0);
+    CHECK_NEAR (snapped / raw, 0.5 / 0.47, 0.03);
+}

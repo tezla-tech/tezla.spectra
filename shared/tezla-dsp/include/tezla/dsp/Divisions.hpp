@@ -62,4 +62,41 @@ inline constexpr int defaultDivision = 3;
     return 1.0 / divisionSeconds (index, bpm);
 }
 
+/// Snaps a time to the nearest note length at a tempo. For envelope stages.
+///
+/// Nearest in **log time**, because musical nearness is a ratio: 90 ms is
+/// "about a 1/16" at 120 bpm (125 ms) rather than "about a 1/32" (62.5 ms),
+/// even though the linear distances say otherwise.
+///
+/// Values below half the shortest division pass through unchanged -- an
+/// instant attack must stay instant, and quantising 4 ms up to a 1/32 would
+/// turn every pluck into a swell. Values past the longest division snap to
+/// it, which is what snapping means.
+[[nodiscard]] inline double snapSeconds (double seconds, double bpm) noexcept
+{
+    const double shortest = divisionSeconds (8, bpm);   // "1/32"
+
+    if (! (seconds > 0.5 * shortest))
+        return seconds;
+
+    double bestSeconds = seconds;
+    double bestDistance = 1.0e300;
+
+    for (int index = 0; index < numDivisions; ++index)
+    {
+        const double candidate = divisionSeconds (index, bpm);
+        const double distance = candidate > 0.0 && seconds > 0.0
+            ? (candidate > seconds ? candidate / seconds : seconds / candidate)
+            : 1.0e300;
+
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestSeconds = candidate;
+        }
+    }
+
+    return bestSeconds;
+}
+
 } // namespace tezla::dsp

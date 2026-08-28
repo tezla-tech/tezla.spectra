@@ -736,7 +736,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
         {
             advanceGlobalSources (Voice::kControlIntervalSamples);
             voices_.advanceGlide (Voice::kControlIntervalSamples);
-            voices_.applyControls (active_.voice, sources_);
+            voices_.applyControls (snappedVoice(), sources_);
 
             // After the sources have moved and before the comb is aimed: the
             // matrix reads the one and writes the other.
@@ -756,6 +756,42 @@ void Engine::process (double* const* output, int numSamples) noexcept
     }
 
     oversampler_.downsample (output, numSamples);
+}
+
+const VoiceParameters& Engine::snappedVoice() noexcept
+{
+    // Envelope snap-to-tempo, applied here and not in the JUCE layer, for two
+    // reasons that are really one: the engine is what knows the live tempo,
+    // and the engine is what the tests can reach. Snapping in the parameter
+    // pull would freeze the grid at whatever the tempo was when the knob last
+    // moved, and would put the behaviour on the wrong side of the
+    // framework-free line (CLAUDE.md section 4).
+    //
+    // The copy is control-rate and small, and only taken when some envelope
+    // actually asks for the grid.
+    const auto& raw = active_.voice;
+
+    if (! (raw.amp.snap || raw.mod1.snap || raw.mod2.snap))
+        return raw;
+
+    snappedVoice_ = raw;
+
+    const auto snapEnvelope = [this] (VoiceParameters::Envelope& envelope)
+    {
+        if (! envelope.snap)
+            return;
+
+        envelope.attack = dsp::snapSeconds (envelope.attack, bpm_);
+        envelope.hold = dsp::snapSeconds (envelope.hold, bpm_);
+        envelope.decay = dsp::snapSeconds (envelope.decay, bpm_);
+        envelope.release = dsp::snapSeconds (envelope.release, bpm_);
+    };
+
+    snapEnvelope (snappedVoice_.amp);
+    snapEnvelope (snappedVoice_.mod1);
+    snapEnvelope (snappedVoice_.mod2);
+
+    return snappedVoice_;
 }
 
 } // namespace tezla::sonitus

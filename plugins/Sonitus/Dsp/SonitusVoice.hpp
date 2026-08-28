@@ -300,6 +300,12 @@ struct VoiceParameters
         double attackTension { 0.35 };
         double decayTension { 0.35 };
         double releaseTension { 0.35 };
+
+        /// Quantise the four times to note lengths at the host tempo. Applied
+        /// by the *engine*, which is the one that knows the tempo -- see
+        /// Engine::snappedVoice. Off by default: the raw seconds are the
+        /// pre-snap behaviour, bit for bit.
+        bool snap { false };
     };
 
     Envelope amp { 0.005, 0.0, 0.200, 0.8, 0.150, 0.35, 0.35, 0.35 };

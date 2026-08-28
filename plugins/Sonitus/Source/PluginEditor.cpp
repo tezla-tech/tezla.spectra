@@ -1203,23 +1203,23 @@ EnvelopePage::EnvelopePage (juce::AudioProcessorValueTreeState& state, ui::Palet
               { ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain, ids::ampRelease,
                 ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT },
               ids::ampVelocity, "Velocity",
-              "How much of the level comes from how hard the note was played.");
+              "How much of the level comes from how hard the note was played.", ids::ampSnap);
 
     addBlock (state, "MOD ENVELOPE 1", "point it at something in MOD",
               { ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain, ids::env1Release,
                 ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT },
-              nullptr, {}, {});
+              nullptr, {}, {}, ids::env1Snap);
 
     addBlock (state, "MOD ENVELOPE 2", "and the mangle takes these too",
               { ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain, ids::env2Release,
                 ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
-              nullptr, {}, {});
+              nullptr, {}, {}, ids::env2Snap);
 }
 
 void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
                              const juce::String& detail, const EnvelopeEditor::Ids& ids_,
                              const char* extraId, const juce::String& extraName,
-                             const juce::String& extraTooltip)
+                             const juce::String& extraTooltip, const char* snapId)
 {
     Block block;
 
@@ -1270,6 +1270,19 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
 
     if (extraId != nullptr)
         knob (extraId, extraName, extraTooltip);
+
+    // The tempo grid. A toggle rather than a knob, in the same cell grid.
+    if (snapId != nullptr)
+    {
+        auto cell = std::make_unique<ToggleCell> (state, snapId, "Snap",
+            "Quantises Attack, Hold, Decay and Release to note lengths at the host tempo -- "
+            "nearest in musical distance, from 1/32 up to 8 bars. Times under half a 1/32 pass "
+            "through untouched, so an instant attack stays instant. The knobs keep their "
+            "positions; the sound follows the grid, live, when the tempo changes.",
+            palette_);
+        addAndMakeVisible (*cell);
+        block.knobs.push_back (std::move (cell));
+    }
 
     blocks_.push_back (std::move (block));
 }
