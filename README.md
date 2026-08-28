@@ -443,16 +443,28 @@ rate. Manual override is always available if you want to spend or save CPU.
 
 ## Licensing
 
-**This project is licensed under the GNU Affero General Public License v3** —
-see [`LICENSE`](LICENSE). That follows from the toolchain rather than being a
-separate choice: these plugins are built against JUCE's free tier, which is
-AGPLv3, so they already were. Saying so explicitly is what lets other people's
-open-source DSP be used here, and what tells you what you may do with ours.
+**Copyright (c) 2026 The Tezla.** Created by [The
+Tezla](https://github.com/wingit33/tezla.tech) —
+[soundcloud.com/thetezla](https://soundcloud.com/thetezla) ·
+[thetezla.bandcamp.com](https://thetezla.bandcamp.com) — with development
+assistance from Claude (Anthropic). Copyright rests with The Tezla; the AI
+assistance is credited as the tool it is.
+
+**This project is licensed under the GNU Affero General Public License v3**
+(SPDX: `AGPL-3.0-only`) — see [`LICENSE`](LICENSE) — **with an
+attribution-preservation term** under AGPLv3 §7(b), stated in
+[`NOTICE.md`](NOTICE.md): redistributions, modified or not, must keep the
+copyright headers and the attribution notice intact. The AGPL follows from the
+toolchain rather than being a separate choice: these plugins are built against
+JUCE's free tier, which is AGPLv3, so they already were. Saying so explicitly
+is what lets other people's open-source DSP be used here, and what tells you
+what you may do with ours.
 
 In practice: use it, modify it, ship it, as long as what you ship stays under
-the same licence and its source stays available. If you need a plugin you can
-close, JUCE sells a commercial licence and you would need to replace anything
-here that came from an AGPL or GPL source.
+the same licence, its source stays available, and the attribution stays
+intact. If you need a plugin you can close, JUCE sells a commercial licence
+and you would need to replace anything here that came from an AGPL or GPL
+source.
 
 Third-party dependencies and any externally derived DSP are listed with their
 licences in [`docs/DSP-REFERENCES.md`](docs/DSP-REFERENCES.md). The rule for
