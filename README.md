@@ -101,9 +101,11 @@ destination — a sweep of 31.3 Hz to 1978 Hz at full depth — and its key trac
 locks the notches onto the played note's own harmonics, so the growl comes out
 *tuned*. There is hard sync, phase modulation, seven-way unison, a wave folder,
 a zero-delay filter with drive in the loop, two modulation matrices, and **Scala
-microtuning with 22 scales generated from their definitions** — including
-Bohlen–Pierce, which repeats at 3/1 rather than the octave. See
-[its README](plugins/Sonitus/README.md).
+microtuning with 44 scales generated from their definitions** — from the seven
+Old Babylonian tunings of the Hurrian hymns through Persian dastgah frames,
+two schools of Rast and Partch's 43 tones to Bohlen–Pierce and a golden-ratio
+repeat, each shown in the panel with its construction, its history and every
+degree in a table. See [its README](plugins/Sonitus/README.md).
 
 ---
 
@@ -118,7 +120,7 @@ Bohlen–Pierce, which repeats at 3/1 rather than the octave. See
 | **[Anvil](plugins/Anvil/)** | Valve amplifier, speaker load and cabinet, from the mechanisms | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Sonitus](plugins/Sonitus/)** | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, Scala microtuning | v0.1.0 — 47/47 on Steinberg's validator |
 
-655 framework-free DSP tests pass on Linux x86-64, which is where development
+663 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS

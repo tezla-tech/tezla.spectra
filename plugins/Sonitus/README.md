@@ -450,7 +450,8 @@ away. Set aside from the vocal reading, it is a hole you can put anywhere.
 
 ### TUNING
 
-Scala `.scl` scale files and `.kbm` keyboard maps, plus 22 built-in scales.
+Scala `.scl` scale files and `.kbm` keyboard maps, plus **44 built-in scales**
+— and a panel that says what each one *is*.
 
 **This belongs in this instrument rather than being a bolt-on**, because the
 comb key-tracks onto harmonics of the played note. In twelve-tone equal
@@ -460,16 +461,32 @@ instead of churning. The difference is large on a bass.
 
 | group | scales |
 |---|---|
-| pure | just major, just minor, Pythagorean, harmonic series 8–16 |
+| pure | just major/minor, 7-limit, Pythagorean (12 and 17), harmonic series 8–16 and 16–32, undertone series, **Partch 43** |
 | historical | quarter-comma meantone, Werckmeister III, Kirnberger III, Vallotti |
-| ancient | Archytas' enharmonic, diatonic and chromatic tetrachords |
-| non-octave | **Bohlen–Pierce** (repeats at 3/1), **Carlos Alpha / Beta / Gamma** |
-| equal | 5, 7, 12, 19, 24, 31, 53 |
+| ancient Greece | Archytas' enharmonic, diatonic and chromatic; **Ptolemy's even diatonic** (the 12/11 neutral second, 2nd century AD) |
+| **Old Babylonian** | the seven tunings of the tablets — **nīd qabli** (the Hurrian hymn tuning, ~1400 BC, the oldest named tuning of the oldest written music), išartum, embūbum, kitmum, pītum, nīš gabrim, qablītum — the diatonic's seven modes from a chain of pure fifths, a millennium before Pythagoras |
+| ancient China | the **twelve lü** by the san fen sun yi rule — the one-way chain of fifths of the Yellow Bell |
+| **Persian dastgah** | **Shur** and **Chahargah** on Farhat's theoretical intervals — the koron neutral seconds (135/165 cents) and the 270-cent plus tone |
+| maqam theory | **Rast** twice: al-Farabi's just ratios with Zalzal's 27/22 neutral third, and the Turkish Arel–Ezgi–Uzdilek Rast on the 53-comma grid — 30 cents apart on the third, both on purpose |
+| non-octave | **Bohlen–Pierce** (repeats at 3/1), **Carlos Alpha / Beta / Gamma** (divisions of the fifth), **Golden phi** (seven equal parts of 833.09 cents — the golden ratio as the repeat) |
+| equal | 5, 7, 12, 17, 19, 22, 24, 31, 41, 53 |
+
+**The panel shows the selected scale's theorem and its story.** Every built-in
+carries its construction — the one sentence of arithmetic its degrees fall out
+of — and a few sentences of where it comes from and why it matters, beside a
+degree table: exact fraction where the degree is one (the detector accepts
+near-exact rationals only, so a tempered degree never wears a fraction it did
+not earn), cents, and the step to the next degree, with the repeat interval as
+the last row. A scale loaded from a file gets the same table computed from its
+own numbers.
 
 Every one is **generated from its definition** rather than shipped from an
 archive — a Pythagorean scale is a chain of 3/2s, Bohlen–Pierce is thirteen
-equal steps of 3/1. That is arithmetic, and it is also how CLAUDE.md §2.1 and
-§9 want it done.
+equal steps of 3/1, the Babylonian seven are rotations of six pure fifths, and
+Partch's 43 (the one list with no generating rule) is reproduced with
+attribution and verified for the symmetry its book claims. That is arithmetic,
+and it is also how CLAUDE.md §2.1 and §9 want it done; the access honesty for
+the historical numbers is in `docs/DSP-REFERENCES.md`.
 
 The parser refuses a file it cannot fully read and says which line stopped it.
 That is not caution for its own sake: Transpectus's `.tzref` loader took
@@ -639,7 +656,7 @@ multiply:
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **655 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **663 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.

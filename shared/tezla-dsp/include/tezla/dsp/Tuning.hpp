@@ -90,6 +90,16 @@ struct Scale
     std::vector<double> ratios { 1.0 };
     double repeat { 2.0 };
 
+    /// The construction, in one sentence -- the theorem the scale is generated
+    /// from ("a chain of pure 3/2s, -5 to +6 fifths"). Display text: the panel
+    /// shows it beside the degree table, so the player can see *why* the
+    /// numbers are what they are. Empty for a scale loaded from a file.
+    std::string construction;
+
+    /// Where it comes from and why it matters, a few sentences. Same audience
+    /// as `construction`; same emptiness for file-loaded scales.
+    std::string story;
+
     [[nodiscard]] int size() const noexcept { return static_cast<int> (ratios.size()); }
 
     /// The degree's size in cents above the tonic. For display and for tests;
@@ -124,6 +134,85 @@ struct Scale
         return true;
     }
 };
+
+/// A whole-number ratio recovered from a double, when the double *is* one.
+///
+/// For the tuning panel's degree table: a just degree stored as the double
+/// nearest 27/22 should read "27/22", and an equal-tempered degree should
+/// *not* read as whatever fraction happens to pass nearby. The test is
+/// therefore **near-exactness, not closeness**: the built-in scales compute
+/// their rational degrees as one division of exact integers, so the double
+/// sits within an ulp or two of p/q -- while the best fraction under any
+/// sane denominator cap misses a tempered degree by a factor of a thousand
+/// or more. A cents tolerance cannot make that distinction: convergents get
+/// inside a hundredth of a cent of *anything* once denominators reach a few
+/// hundred, which is exactly the lie this must not tell.
+///
+/// The denominator cap covers the deep 3-limit ratios -- the twelve lu run
+/// up to 177147/131072 and deserve to be printed as what they are.
+struct Fraction
+{
+    long long numerator { 0 };
+    long long denominator { 1 };
+    bool found { false };
+};
+
+/// Recovers p/q by continued fractions, accepted only if the input matches
+/// the fraction to within `relativeTolerance` -- a few ulps, not a musical
+/// distance. Continued fractions rather than a search because their
+/// convergents are provably the best approximations at each denominator
+/// size; the loop is a couple of dozen iterations at most.
+[[nodiscard]] inline Fraction nearestFraction (double ratio,
+                                               long long maximumDenominator = 200000,
+                                               double relativeTolerance = 1.0e-13) noexcept
+{
+    Fraction result;
+
+    if (! (ratio > 0.0))
+        return result;
+
+    // Convergents p/q of the continued-fraction expansion.
+    long long p0 = 0, q0 = 1;
+    long long p1 = 1, q1 = 0;
+    double remainder = ratio;
+
+    for (int term = 0; term < 40; ++term)
+    {
+        const double floored = std::floor (remainder);
+
+        if (floored > 1.0e15)
+            break;
+
+        const long long a = static_cast<long long> (floored);
+        const long long p2 = a * p1 + p0;
+        const long long q2 = a * q1 + q0;
+
+        if (q2 > maximumDenominator)
+            break;
+
+        p0 = p1; q0 = q1;
+        p1 = p2; q1 = q2;
+
+        const double approximation = static_cast<double> (p1) / static_cast<double> (q1);
+
+        if (std::abs (approximation / ratio - 1.0) < relativeTolerance)
+        {
+            result.numerator = p1;
+            result.denominator = q1;
+            result.found = true;
+            return result;
+        }
+
+        const double fractional = remainder - floored;
+
+        if (fractional < 1.0e-12)
+            break;
+
+        remainder = 1.0 / fractional;
+    }
+
+    return result;
+}
 
 /// A Scala keyboard map: which scale degree each key plays.
 ///

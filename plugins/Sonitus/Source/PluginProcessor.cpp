@@ -897,7 +897,9 @@ SonitusProcessor::SonitusProcessor()
                                 .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       state_ (*this, nullptr, kStateTypeName, createParameterLayout())
 {
-    scale_ = dsp::Tuning::twelveToneEqual();
+    // scales:: rather than the Tuning class's bare builder, so the default
+    // scale arrives with the construction and story the tuning panel shows.
+    scale_ = dsp::scales::twelveToneEqual();
     scaleName_ = scale_.name;
 }
 
@@ -1448,7 +1450,10 @@ juce::String SonitusProcessor::selectBuiltInScale (const juce::String& name)
 
 void SonitusProcessor::resetTuning()
 {
-    scale_ = dsp::Tuning::twelveToneEqual();
+    // The scales:: builder rather than the Tuning class's bare default, so
+    // even the reset scale arrives with its construction and story -- the
+    // panel shows them, and a blank panel on the default was the bug.
+    scale_ = dsp::scales::twelveToneEqual();
     scaleName_ = scale_.name;
     scalaText_.clear();
     keyboardMapText_.clear();
