@@ -540,6 +540,34 @@ build\bin\Release\tezla-measure sonitus
 `selftest` verifies the analysis chain itself before you trust any number it
 produces about a plugin.
 
+### Checking the editors
+
+`tests/` is framework-free by design, which leaves the JUCE layer with no
+coverage: layout arithmetic, click wiring and component lifetimes are not
+reachable from a unit test. `tezla-render` drives a plugin's real editor
+offscreen instead, and `scripts/check-editors.sh` runs it across the suite.
+
+Needs a build configured with the renderer, and an X server or `xvfb-run`:
+
+```bash
+cmake -B build-plugin -DTEZLA_BUILD_RENDER=ON
+cmake --build build-plugin -j
+./scripts/check-editors.sh
+```
+
+Ad hoc, one plugin at a time — `hit:` asks whether a click at a component's
+centre would actually reach it, a bare id clicks it, `state:` prints one
+non-parameter property, and `shot:` photographs the panel:
+
+```bash
+BIN=build-plugin/plugins/Sonitus/SonitusRender_artefacts/Release/SonitusRender
+xvfb-run -a "$BIN" editor hit:tips tips state:tooltipsEnabled shot:panel.png
+```
+
+The TIPS button is why the script exists: it was wired in one plugin of six,
+and from outside a button whose callback is null looks exactly like one that
+works.
+
 ---
 
 ## 8. Troubleshooting

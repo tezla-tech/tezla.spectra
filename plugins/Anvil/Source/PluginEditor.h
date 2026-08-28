@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/HeaderBar.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/Palette.hpp>
@@ -131,7 +132,7 @@ private:
 
     AnvilProcessor& anvil_;
 
-    juce::TooltipWindow tooltips_ { this, 500 };
+    ui::TooltipHost tooltips_ { *this };
 
     ui::Palette palette_;
     std::unique_ptr<ui::HeaderBar> header_;

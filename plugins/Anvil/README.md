@@ -99,20 +99,25 @@ different places for exactly this reason, and the three voicings follow suit.
 
 ## The three voicings
 
-| | valves | stack after | feedback | sag | core | stack |
-|---|---|---|---|---|---|---|
-| **Clean** | 1 | 1 | 0.60 | 10% / 25 ms | 32 Hz | American |
-| **Vintage** | 2 | 1 | 0.15 | 32% / 55 ms | 58 Hz | British |
-| **Modern** | 3 | 2 | 0.32 | 16% / 20 ms | 40 Hz | Modern |
+| | valves | stack after | feedback | NFB | sag | core | stack |
+|---|---|---|---|---|---|---|---|
+| **Clean** | 1 | 1 | 0.85 | 5.3 dB | 10% / 25 ms | 32 Hz | American |
+| **Vintage** | 2 | 1 | 0.70 | 4.6 dB | 32% / 55 ms | 58 Hz | British |
+| **Modern** | 3 | 2 | 0.88 | 5.5 dB | 16% / 20 ms | 40 Hz | Modern |
+
+The feedback column is the **loop gain**, and it sets the ceiling on what
+Presence and Resonance can do — see below. These lanes shipped at 0.60, 0.15
+and 0.32, which is 4.1, 1.2 and 2.4 dB of negative feedback, and a user
+reported both controls as inaudible. They were right, and the numbers say why.
 
 `Gain` means the same thing on each — every lane carries an input scale that
 makes it so. THD at 220 Hz, −12 dBFS in, cabinet off, master at its default:
 
 | lane | −6 dB | 0 dB | +6 dB | +12 dB | +24 dB |
 |---|---|---|---|---|---|
-| clean | −56.3 | −49.4 | −42.9 | −37.8 | −26.2 |
-| vintage | −37.3 | −38.5 | −19.0 | −10.7 | −7.5 |
-| modern | −14.2 | −9.5 | −8.2 | −6.4 | −2.2 |
+| clean | −56.6 | −50.1 | −43.6 | −38.1 | −26.2 |
+| vintage | −38.3 | −40.1 | −28.9 | −13.0 | −8.2 |
+| modern | −19.8 | −11.1 | −9.1 | −7.0 | −2.6 |
 
 **The clean lane is not a quieter version of the dirty one.** CLAUDE.md's second
 priority asks for a setting that genuinely gets out of the way, and at the
@@ -217,6 +222,38 @@ can do the first and cannot do the second, and it is the second you hear.
 Resonance at 90% is the mirror: +2.66 dB at 60 Hz, and 5 kHz unchanged to two
 decimal places.
 
+### How far either can reach, and why it is 5.6 dB
+
+**A shunt can only give back what the loop was taking away.** Both controls work
+by removing the feedback at one end of the spectrum, so the negative feedback
+the loop applies — `20·log10(1 + loopGain)` — *is* the control's entire
+authority. Nothing about the shunt itself can exceed it.
+
+That is what made both controls inaudible in the first release. The lanes
+carried loop gains of 0.60, 0.15 and 0.32, so presence had 4.1, 1.2 and 2.4 dB
+to work with and measured 3.7, 1.0 and 2.0 — doing exactly what it should, with
+nothing to do it to. The loops are now set just under the stability bound and
+the same measurement reads 4.9, 3.8 and 5.2 dB, with resonance at 4.4, 3.6 and
+4.3. `tezla-measure anvil` prints the table.
+
+**5.6 dB is a ceiling, not a choice.** The loop carries a one-sample delay —
+`y[n] = A·x[n] − b·y[n−1]` — so its pole sits at `−b` and it is stable only
+below a loop gain of 1. Past that the saturator is the only thing in the way,
+which CLAUDE.md §7 is explicit is not a bound: measured, the stage begins
+alternating at Nyquist by a loop gain of 2.4 and reaches 1e82 within 8000
+samples at 3.0. `PowerAmp::kMaximumLoopGain` holds it at 0.9, and a test sweeps
+past it and asks for the oscillation by name.
+
+A real amplifier gets 10–20 dB of negative feedback because its loop is
+continuous rather than delayed. Matching that means solving the loop implicitly
+through two stateful ADAA shapers, which is a project of its own rather than a
+patch, and it is the obvious next thing to do to this stage.
+
+Setting the loops deeper cost a little of each lane's dirt, because that is what
+negative feedback is for: vintage's THD at +12 dB of gain went from −10.7 to
+−13.0 dB. Every lane's *level* is unchanged — the makeup trims were
+recalibrated, and all three land within 0.05 dB of where they were.
+
 Resonance is the same trick at the other end, and with a core that saturates on
 flux it is a great deal — it is the control that makes a low note bloom.
 
@@ -238,9 +275,9 @@ Measured at maximum gain with five valves, **worst of a sweep from 82 Hz to
 
 | lane | off | ×2 | ×4 | ×8 |
 |---|---|---|---|---|
-| clean | −43.6 | −53.0 | −67.0 | **−89.3** |
-| vintage | −35.6 | −43.9 | −46.3 | **−66.0** |
-| modern | −29.3 | −38.0 | −46.5 | **−65.0** |
+| clean | −43.0 | −52.0 | −66.2 | **−88.9** |
+| vintage | −33.1 | −41.3 | −43.5 | **−63.4** |
+| modern | −27.5 | −35.7 | −44.2 | **−62.4** |
 
 CLAUDE.md §7 asks for nothing above −60 dBFS at maximum drive. Only ×8 delivers
 that, so that is what Auto picks. The priority order in §1 puts fidelity above
@@ -347,7 +384,7 @@ with far too little bottom end.
 |---|---|
 | Steinberg validator | **47/47** |
 | DSP tests | 416 pass on x86-64 **and on ARM64 under emulation**, identically |
-| Aliasing at maximum drive, swept | −65.0 dBFS worst lane, spec is −60 |
+| Aliasing at maximum drive, swept | −62.4 dBFS worst lane, spec is −60 |
 | Auto at 44.1 / 48 / 96 kHz | all under −60 dBFS |
 | Block-size independence, controls sweeping | < 1e-9 between 64 and 512 |
 | Bypass | bit-exact and latency-matched |

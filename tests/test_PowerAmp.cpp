@@ -442,6 +442,114 @@ TEZLA_TEST (power_amp_never_runs_away)
 // Presence and resonance, which are feedback controls rather than tone controls
 // ---------------------------------------------------------------------------
 
+TEZLA_TEST (the_loop_gain_is_clamped_below_one_however_it_is_asked_for)
+{
+    // The loop is `y[n] = A*x[n] - b*y[n-1]`, whose pole sits at -b. Above 1 it
+    // is unstable and the only thing in the way is the saturator, which
+    // CLAUDE.md section 7 says is not a bound.
+    //
+    // Measured before the clamp existed, driving a 110 Hz sine at 0.3: neighbour
+    // samples began disagreeing with their own trend at a loop gain of 2.4, and
+    // at 3.0 the output reached 1e82 inside 8000 samples. So this sweeps past
+    // the bound and asks for the oscillation by name -- a Nyquist component
+    // makes each sample sit off the line between its neighbours, which nothing
+    // in a 110 Hz sine through a saturator otherwise does.
+    for (const double asked : { 0.0, 0.5, 0.9, 1.5, 4.0, 40.0 })
+    {
+        PowerAmpParameters parameters;
+        parameters.feedback = asked;
+        parameters.drive = 4.0;
+        parameters.knee = 0.7;
+
+        auto amp = made (parameters);
+
+        std::vector<double> y;
+        y.reserve (8000);
+
+        for (int i = 0; i < 8000; ++i)
+            y.push_back (amp.process (0.3 * std::sin (2.0 * std::numbers::pi * 110.0 * i / kRate)));
+
+        int alternating = 0;
+
+        for (std::size_t i = 4001; i + 1 < y.size(); ++i)
+        {
+            CHECK (std::isfinite (y[i]));
+
+            const double curl = y[i] - 0.5 * (y[i - 1] + y[i + 1]);
+
+            if (std::abs (curl) > 0.02 * std::max (std::abs (y[i]), 1.0e-9))
+                ++alternating;
+        }
+
+        // A clean 110 Hz sine through a saturator has essentially none of this.
+        CHECK (alternating < 40);
+
+        // And the swing stays where the valves put it, rather than where the
+        // loop would like to.
+        for (const double s : y)
+            CHECK (std::abs (s) < 4.0);
+    }
+}
+
+TEZLA_TEST (presence_authority_is_the_negative_feedback_and_nothing_more)
+{
+    // The claim the Anvil voicings are tuned against, and the reason a user
+    // could not hear either control: a shunt gives back exactly what the loop
+    // was taking away, so `20*log10(1 + loopGain)` is the ceiling on both.
+    //
+    // Small signal on purpose. A limiting output stage is pinned whatever the
+    // loop does, and measuring there reads zero for a control that is working.
+    auto liftAt = [] (double feedback, double hz, bool presence)
+    {
+        auto rms = [&] (double amount)
+        {
+            PowerAmpParameters parameters;
+            parameters.feedback = feedback;
+            parameters.drive = 1.0;
+            parameters.presence = presence ? amount : 0.0;
+            parameters.resonance = presence ? 0.0 : amount;
+            parameters.presenceHz = 700.0;
+            parameters.resonanceHz = 180.0;
+
+            auto amp = made (parameters);
+
+            double sum = 0.0;
+            constexpr int kSettle = 4000;
+            constexpr int kWindow = 8000;
+
+            for (int i = 0; i < kSettle + kWindow; ++i)
+            {
+                const double y = amp.process (0.02 * std::sin (2.0 * std::numbers::pi * hz * i / kRate));
+
+                if (i >= kSettle)
+                    sum += y * y;
+            }
+
+            return std::sqrt (sum / kWindow);
+        };
+
+        return 20.0 * std::log10 (std::max (rms (1.0), 1.0e-30)
+                                    / std::max (rms (0.0), 1.0e-30));
+    };
+
+    for (const double feedback : { 0.15, 0.35, 0.70, 0.85 })
+    {
+        const double ceiling = 20.0 * std::log10 (1.0 + feedback);
+
+        const double presenceLift = liftAt (feedback, 8000.0, true);
+        const double resonanceLift = liftAt (feedback, 30.0, false);
+
+        // Close to the ceiling, and never past it -- past it would mean the
+        // shunt was adding treble rather than removing correction, which is the
+        // thing the comment in shapedFeedback insists it is not.
+        CHECK (presenceLift <= ceiling + 0.15);
+        CHECK (presenceLift > ceiling - 1.2);
+
+        CHECK (resonanceLift <= ceiling + 0.15);
+        CHECK (resonanceLift > ceiling - 1.6);
+    }
+}
+
 TEZLA_TEST (power_amp_presence_removes_correction_rather_than_adding_treble)
 {
     // The control on the back of an amplifier is a capacitor from the feedback

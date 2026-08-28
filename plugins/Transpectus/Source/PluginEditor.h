@@ -6,6 +6,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/SpectrumAnalyser.hpp>
+#include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/Goniometer.hpp>
 #include <tezla/ui/HeaderBar.hpp>
 #include <tezla/ui/LevelMeter.hpp>
@@ -173,7 +174,7 @@ public:
 
 private:
     std::function<void()> onClose_;
-    juce::TooltipWindow tooltips_ { this, 500 };
+    ui::TooltipHost tooltips_ { *this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PanelWindow)
 };
@@ -229,7 +230,7 @@ private:
 
     TranspectusProcessor& transpectus_;
 
-    juce::TooltipWindow tooltips_ { this, 500 };
+    ui::TooltipHost tooltips_ { *this };
 
     ui::Palette palette_;
     std::unique_ptr<ui::HeaderBar> header_;

@@ -76,6 +76,16 @@ public:
     [[nodiscard]] Engine& getEngine() noexcept { return engine_; }
     [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
 
+    /// Whether the panel shows its hover tooltips.
+    ///
+    /// Not a parameter -- it changes nothing about the sound, so it has no
+    /// business in an automation lane or in a preset. It lives here rather than
+    /// in the editor because the editor is destroyed every time the window is
+    /// closed, and a setting that forgot itself on every close would be worse
+    /// than not having the switch.
+    [[nodiscard]] bool getTooltipsEnabled() const noexcept { return tooltipsEnabled_; }
+    void setTooltipsEnabled (bool enabled) noexcept { tooltipsEnabled_ = enabled; }
+
     /// The captured reference, shared with the editor. Lives here rather than in
     /// the editor so it survives the window being closed and is saved with the
     /// project.
@@ -126,6 +136,13 @@ private:
     std::vector<float> spectrumPeakHold_;
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
+
+
+    /// See getTooltipsEnabled. Defaults on: the tooltips are how this
+
+    /// workshop documents itself, so a new user gets them.
+
+    bool tooltipsEnabled_ { true };
 
     bool prepared_ { false };
     double sampleRate_ { 48000.0 };

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include <tezla/ui/StateIds.hpp>
 #include <tezla/dsp/Decibels.hpp>
 
 namespace tezla::capstone
@@ -530,6 +531,10 @@ void CapstoneProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
     state.appendChild (abCompare_.toValueTree(), nullptr);
 
+    // A panel preference rather than a parameter, so it rides in the state tree
+    // rather than in the parameter layout -- see getTooltipsEnabled.
+    state.setProperty (ui::stateIds::tooltipsEnabled, tooltipsEnabled_, nullptr);
+
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -552,6 +557,7 @@ void CapstoneProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     state_.replaceState (tree);
     abCompare_.restoreFromValueTree (tree.getChildWithName ("abCompare"));
+    tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
 }
 
 namespace

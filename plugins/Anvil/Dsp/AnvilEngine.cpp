@@ -58,14 +58,19 @@ Engine::VoicingSpec Engine::specFor (Voicing voicing) noexcept
             spec.inputScale = 0.30;      // a clean first stage runs well inside its knee
             spec.stageGain = 1.0;
             spec.powerDrive = 2.2;
-            spec.makeupDb = -7.0;
+            spec.makeupDb = -5.9;
 
             spec.power.knee = 0.85;           // softer valves, later corner
             spec.power.crossoverDepth = 0.08; // close to class A
             spec.power.crossoverWidth = 0.03;
             spec.power.sagDepth = 0.10;       // solid-state rectifier
             spec.power.sagMs = 25.0;
-            spec.power.feedback = 0.60;       // a lot, so it stays linear
+            // Just under the loop's stability bound, which is what the
+            // presence and resonance controls are worth: 20*log10(1.85) =
+            // 5.3 dB of negative feedback for them to shunt away. See
+            // PowerAmp::kMaximumLoopGain -- 0.60 gave 4.1 dB and a control
+            // nobody could hear.
+            spec.power.feedback = 0.85;
             spec.power.presenceHz = 900.0;
             spec.power.resonanceHz = 150.0;
             spec.power.transformerLowHz = 26.0;
@@ -90,14 +95,19 @@ Engine::VoicingSpec Engine::specFor (Voicing voicing) noexcept
             spec.inputScale = 0.75;
             spec.stageGain = 3.2;
             spec.powerDrive = 4.0;
-            spec.makeupDb = -6.0;
+            spec.makeupDb = -3.3;
 
             spec.power.knee = 0.7;
             spec.power.crossoverDepth = 0.20;
             spec.power.crossoverWidth = 0.04;
             spec.power.sagDepth = 0.32;       // a valve rectifier, and it shows
             spec.power.sagMs = 55.0;
-            spec.power.feedback = 0.15;       // barely a loop at all
+            // The shallowest loop of the three, because this lane is meant to
+            // move under the player -- but 0.15 was too shallow to have a
+            // presence control at all: 1.2 dB of negative feedback is 1.2 dB
+            // of presence. 0.70 is 4.6 dB, still visibly the loosest lane, and
+            // enough for the shunts to have something to shunt.
+            spec.power.feedback = 0.70;
             spec.power.presenceHz = 700.0;
             spec.power.resonanceHz = 180.0;
             spec.power.transformerLowHz = 34.0;
@@ -124,14 +134,16 @@ Engine::VoicingSpec Engine::specFor (Voicing voicing) noexcept
             spec.inputScale = 1.10;
             spec.stageGain = 4.6;
             spec.powerDrive = 5.0;
-            spec.makeupDb = -8.0;
+            spec.makeupDb = -5.5;
 
             spec.power.knee = 0.62;
             spec.power.crossoverDepth = 0.22;
             spec.power.crossoverWidth = 0.035;
             spec.power.sagDepth = 0.16;
             spec.power.sagMs = 20.0;
-            spec.power.feedback = 0.32;
+            // 0.32 was 2.4 dB of negative feedback. 0.88 is 5.5 dB, and this
+            // lane wants the tightest loop of the three anyway.
+            spec.power.feedback = 0.88;
             spec.power.presenceHz = 1100.0;
             spec.power.resonanceHz = 110.0;
             spec.power.transformerLowHz = 30.0;
@@ -307,6 +319,10 @@ void Engine::applyControls()
 
     auto power = spec.power;
     power.drive = spec.powerDrive;
+
+    // The loop gain, which is the whole of what presence and resonance have to
+    // work with -- and which PowerAmp clamps to kMaximumLoopGain.
+    loopGain_ = std::min (power.feedback, dsp::PowerAmp::kMaximumLoopGain);
     power.presence = std::clamp (presence_.getCurrent(), 0.0, 1.0);
     power.resonance = std::clamp (resonance_.getCurrent(), 0.0, 1.0);
     power.sagDepth = std::clamp (spec.power.sagDepth * sag_.getCurrent(), 0.0, 1.0);

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 
+#include <tezla/ui/StateIds.hpp>
 #include <tezla/dsp/ScalaFile.hpp>
 #include <tezla/dsp/Scales.hpp>
 
@@ -29,7 +30,6 @@ constexpr auto kStateTypeName = "SonitusState";
 constexpr auto kScaleTextProperty = "scalaText";
 constexpr auto kScaleNameProperty = "scaleName";
 constexpr auto kKeyboardMapProperty = "keyboardMapText";
-constexpr auto kTooltipsProperty = "tooltipsEnabled";
 
 /// How fast an LFO can be set to run.
 ///
@@ -66,6 +66,15 @@ constexpr float kMaximumLfoRateHz = 160.0f;
 /// all at the top of the travel. The envelope graphs on the ENV page follow the
 /// parameter's own normalised position, so they re-scale with no change.
 constexpr float kMaximumEnvelopeSeconds = 20.0f;
+
+/// How many voices a fresh instance uses, against a ceiling of 32.
+///
+/// Not the ceiling itself, which would hand every new project a worst case
+/// nobody asked for. Sixteen is roughly 79% of one core with all sixteen
+/// sounding at once, and it is enough for overlapping pads with long releases,
+/// which is the case that runs out first: a four-note chord under a six-second
+/// release re-triggered every bar is twelve to sixteen voices in flight.
+constexpr int kDefaultPolyphony = 16;
 
 juce::NormalisableRange<float> skewedRange (float minimum, float maximum, float centre)
 {
@@ -462,7 +471,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Integer> (
         juce::ParameterID { ids::polyphony, kSchemaV1 }, "Voices", 1,
-        VoiceManager::kMaxVoices, VoiceManager::kMaxVoices));
+        VoiceManager::kMaxVoices, kDefaultPolyphony));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::glide, kSchemaV1 }, "Glide",
@@ -1904,7 +1913,7 @@ void SonitusProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty (kScaleNameProperty, scaleName_, nullptr);
     state.setProperty (kScaleTextProperty, scalaText_, nullptr);
     state.setProperty (kKeyboardMapProperty, keyboardMapText_, nullptr);
-    state.setProperty (kTooltipsProperty, tooltipsEnabled_, nullptr);
+    state.setProperty (ui::stateIds::tooltipsEnabled, tooltipsEnabled_, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -1925,7 +1934,7 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     const juce::String name = tree.getProperty (kScaleNameProperty, "").toString();
     const juce::String text = tree.getProperty (kScaleTextProperty, "").toString();
-    tooltipsEnabled_ = tree.getProperty (kTooltipsProperty, true);
+    tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
 
     const juce::String map = tree.getProperty (kKeyboardMapProperty, "").toString();
 
