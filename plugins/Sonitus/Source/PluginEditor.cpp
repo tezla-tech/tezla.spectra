@@ -1102,6 +1102,33 @@ void SonitusEditor::buildPages()
     mangle->addKnob (ids::formantMix, "Vowel mix",
         "Dry against vowelled. At 0 the formant filter is bit-exactly out of the path.");
 
+    mangle->addHeading ("OVERTONE -- the same key tracking, on the vowel");
+
+    mangle->addKnob (ids::formantLock, "Harmonic lock",
+        "Pulls the three resonances off the vowel and onto **harmonics of the played note**. "
+        "This is what overtone singing is: not a second voice, but one source with a resonance "
+        "sharp enough to pick a single partial out of the drone and make it a melody. Because it "
+        "can only land on a harmonic, it is always in tune with the bass under it.\n\n"
+        "The lock sharpens as it engages -- selecting one partial takes a bandwidth of about "
+        "1.6 Hz where a spoken vowel has eighty. At 0 the vowel is bit-exactly untouched.");
+
+    mangle->addKnob (ids::formantHarmonic, "Harmonic",
+        "Which partial the lock selects, counting the fundamental as 1. Continuous, because it is "
+        "a modulation destination -- point the sequencer at Harmonic in the global matrix and the "
+        "overtone line walks the series in time with the track. Partials 6 to 12 are where sygyt "
+        "actually sings.");
+
+    mangle->addKnob (ids::formantNotch, "Notch",
+        "The anti-formant. A nasal is not a vowel with different peaks -- it is a vowel with a "
+        "**zero**: the nasal cavity is a side branch, and a side branch cancels rather than "
+        "resonates. That is what a vowel filter with only peaks cannot make, and why none of them "
+        "can say \"m\" or the ending of a chanted \"AUM\".\n\n"
+        "Set aside from the vocal reading, it is simply a hole you can put anywhere in the growl.");
+
+    mangle->addKnob (ids::formantNotchDepth, "Notch depth",
+        "How deep the hole goes -- 26.6 dB at the centre when full, and localised: two octaves "
+        "away it is within 3 dB of untouched. At 0 it is bit-exactly out of the path.");
+
     mangle->addKnob (ids::output, "Output",
         "Trim, after everything. Defaults to -6 dB because an instrument with unison and a tube "
         "can comfortably exceed full scale, and clipping the host's bus is not a feature.");

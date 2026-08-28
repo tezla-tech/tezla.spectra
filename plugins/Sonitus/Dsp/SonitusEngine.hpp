@@ -147,6 +147,16 @@ enum class GlobalDestination
     tubeDrive,
     output,
 
+    /// Which partial the harmonic lock selects. **Appended**, because the list
+    /// is indexed by a choice parameter -- CLAUDE.md section 8.
+    ///
+    /// This is the one the overtone line is drawn with: point the sequencer at
+    /// it and the melody walks the harmonic series of whatever is being played.
+    formantHarmonic,
+
+    /// Where the anti-formant sits, in octaves.
+    formantNotch,
+
     count
 };
 
@@ -227,6 +237,13 @@ struct EngineParameters
     double formantMorph { 0.0 };
     double formantSharpness { 0.5 };
     double formantMix { 0.0 };
+
+    /// The overtone-singing controls. All neutral by default, so a patch saved
+    /// before they existed reopens sounding the same.
+    double formantHarmonic { 1.0 };
+    double formantLock { 0.0 };
+    double formantNotchHz { 1000.0 };
+    double formantNotchDepth { 0.0 };
 
     /// One knob of tone: negative tips the balance towards the bass, positive
     /// towards the top. Both ends pivot at 700 Hz.
@@ -359,6 +376,13 @@ public:
     };
 
     [[nodiscard]] const Readouts& readouts() const noexcept { return readouts_; }
+
+    /// Where formant `index` is actually sitting, harmonic lock included.
+    /// Same-thread only, like `getGlobalSources`.
+    [[nodiscard]] double getFormantHz (int index) const noexcept
+    {
+        return formant_.formantHz (index);
+    }
 
     /// The phaser's centre as it is actually running. Same-thread only, like
     /// `getGlobalSources`.

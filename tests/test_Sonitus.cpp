@@ -1289,3 +1289,103 @@ TEZLA_TEST (the_lfos_keep_running_while_the_instrument_is_idle)
 
     CHECK (highest - lowest > 1.9);
 }
+
+TEZLA_TEST (the_harmonic_lock_follows_the_note_through_the_engine)
+{
+    // End to end: the lock has to track the note the *voice manager* is
+    // playing, not a number the engine was told separately. That is the same
+    // tracked frequency the comb uses -- which is what makes the two agree
+    // rather than beat, since one locks to the note's period and the other to
+    // its harmonics.
+    constexpr double rate = 48000.0;
+
+    auto parameters = brutal();
+
+    parameters.combMode = CombMode::off;
+    parameters.formantMix = 1.0;
+    parameters.formantLock = 1.0;
+    parameters.formantHarmonic = 6.0;
+    parameters.keyboard = KeyboardMode::mono;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (rate, 256);
+
+    Buffers buffers (256);
+
+    for (const int note : { 28, 40, 52 })
+    {
+        engine.noteOn (note, 1.0);
+        engine.process (buffers.pointers, 256);
+
+        const double played = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+
+        // The engine renders at the oversampled rate, so the formant's own
+        // frequency is in those terms -- but a harmonic of the note is a
+        // harmonic of the note at any rate.
+        CHECK_NEAR (engine.getFormantHz (0) / played, 6.0, 1.0e-6);
+        CHECK_NEAR (engine.getFormantHz (1) / played, 7.0, 1.0e-6);
+        CHECK_NEAR (engine.getFormantHz (2) / played, 8.0, 1.0e-6);
+
+        engine.noteOff (note);
+        engine.allNotesOff();
+    }
+}
+
+TEZLA_TEST (the_overtone_controls_are_neutral_by_default)
+{
+    // Every one of them was appended to a shipping plugin, so a patch saved
+    // before they existed has to reopen sounding the same -- CLAUDE.md
+    // section 8. Their defaults are the neutral settings, and this renders a
+    // patch with them explicitly at those defaults against one that never
+    // mentions them, bit for bit.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 8000;
+
+    auto parameters = brutal();
+    parameters.formantMix = 1.0;
+
+    const auto render = [&] (const EngineParameters& set)
+    {
+        Engine engine;
+        engine.prepare (rate, 256);
+
+        return play (engine, set, 40, samples);
+    };
+
+    const auto plain = render (parameters);
+
+    auto explicitly = parameters;
+    explicitly.formantLock = 0.0;
+    explicitly.formantHarmonic = 1.0;
+    explicitly.formantNotchHz = 1000.0;
+    explicitly.formantNotchDepth = 0.0;
+
+    const auto other = render (explicitly);
+
+    CHECK (other.size() == plain.size());
+
+    for (std::size_t i = 0; i < plain.size(); ++i)
+        CHECK (other[i] == plain[i]);
+
+    // And with the lock up but no note sounding there is nothing to lock to,
+    // so it is still the vowel -- which is what a released key leaves behind.
+    auto released = parameters;
+    released.formantLock = 1.0;
+    released.formantHarmonic = 9.0;
+
+    Engine engine;
+    engine.prepare (rate, 256);
+    engine.setParameters (released);
+
+    Buffers buffers (256);
+    engine.process (buffers.pointers, 256);
+
+    Engine reference;
+    reference.prepare (rate, 256);
+    reference.setParameters (parameters);
+    reference.process (buffers.pointers, 256);
+
+    for (int index = 0; index < Formant::kFormants; ++index)
+        CHECK (engine.getFormantHz (index) == reference.getFormantHz (index));
+}

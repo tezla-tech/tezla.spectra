@@ -563,6 +563,42 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         juce::ParameterID { ids::formantMix, kSchemaV1 }, "Vowel mix",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
+    // The overtone-singing controls. Appended and neutral by default, so a
+    // project saved before they existed reopens sounding the same.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::formantLock, kSchemaV1 }, "Harmonic lock",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::formantHarmonic, kSchemaV1 }, "Harmonic",
+        juce::NormalisableRange<float> { 1.0f,
+                                         static_cast<float> (dsp::Formant::kMaximumHarmonic) },
+        1.0f,
+        juce::AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float value, int)
+            {
+                // The interval above the fundamental, because that is what a
+                // player hears: partial 3 is a twelfth, partial 5 a major third
+                // two octaves up. Shown alongside the number, since the number
+                // is what the sequencer is stepping.
+                static const char* const names[] = {
+                    "unison", "octave", "12th", "2 oct", "+M3", "+5th", "+m7", "3 oct",
+                    "+M2", "+M3", "+4th", "+5th", "+m6", "+m7", "+M7", "4 oct" };
+
+                const int partial = juce::roundToInt (value);
+                const int index = juce::jlimit (1, 16, partial) - 1;
+
+                return juce::String (value, 2) + "  (" + names[index] + ")";
+            })));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::formantNotch, kSchemaV1 }, "Notch",
+        skewedRange (100.0f, 8000.0f, 1000.0f), 1000.0f, hertzAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::formantNotchDepth, kSchemaV1 }, "Notch depth",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::tilt, kSchemaV1 }, "Tilt",
         juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f,
@@ -815,6 +851,10 @@ void SonitusProcessor::pullParameters()
     p.formantMorph = valueOf (state_, ids::formantMorph);
     p.formantSharpness = valueOf (state_, ids::formantSharp);
     p.formantMix = valueOf (state_, ids::formantMix);
+    p.formantHarmonic = valueOf (state_, ids::formantHarmonic);
+    p.formantLock = valueOf (state_, ids::formantLock);
+    p.formantNotchHz = valueOf (state_, ids::formantNotch);
+    p.formantNotchDepth = valueOf (state_, ids::formantNotchDepth);
     p.tilt = valueOf (state_, ids::tilt);
 
     p.outputDb = valueOf (state_, ids::output);

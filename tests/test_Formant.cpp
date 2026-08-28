@@ -521,3 +521,200 @@ TEZLA_TEST (the_vowel_list_runs_front_to_back_so_a_sweep_is_one_mouth_movement)
     CHECK (atAh > atEe);
     CHECK (atAh > atOo);
 }
+
+// ---------------------------------------------------------------------------
+// The overtone-singing machine
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_harmonic_lock_puts_the_resonances_on_the_notes_own_partials)
+{
+    // Sygyt is one source and a very sharp tract resonance selecting a single
+    // *harmonic of the drone*. The melody is therefore always in tune with the
+    // note underneath it, because there is nowhere else for it to land.
+    //
+    // This is the comb's key tracking applied to the formant: the comb locks
+    // its notches to the note's period, this locks the resonances to the note's
+    // harmonics. Same thesis, third time constant.
+    constexpr double rate = 48000.0;
+    constexpr double note = 55.0;               // A1, a bass note
+
+    auto formant = made (rate, 0.0, 0.8, 1.0);
+
+    formant.setNoteHz (note);
+    formant.setHarmonicLock (1.0);
+
+    for (const double harmonic : { 1.0, 4.0, 8.0, 12.0, 20.0 })
+    {
+        formant.setHarmonic (harmonic);
+
+        // Three consecutive partials, so the neighbours reinforce the one in
+        // the middle rather than pulling against it.
+        for (int index = 0; index < Formant::kFormants; ++index)
+            CHECK_NEAR (formant.formantHz (index), note * (harmonic + index), 1.0e-9);
+    }
+
+    // Every one of those is a whole multiple of the fundamental, which is the
+    // property that makes the overtone line in tune.
+    formant.setHarmonic (7.0);
+
+    const double ratio = formant.formantHz (0) / note;
+
+    CHECK_NEAR (ratio, std::round (ratio), 1.0e-12);
+}
+
+TEZLA_TEST (the_lock_blends_geometrically_and_is_bit_exactly_off_at_zero)
+{
+    // At zero the vowel is untouched -- **bit-exactly**, not nearly. A filter
+    // that is permanently in the path needs a real bypass at its neutral
+    // setting, and a new control that shifted the vowel by a hertz would change
+    // every existing patch. CLAUDE.md section 7.
+    constexpr double rate = 48000.0;
+    constexpr double note = 110.0;
+
+    auto plain = made (rate, 0.35, 0.6, 1.0);
+
+    auto locked = made (rate, 0.35, 0.6, 1.0);
+    locked.setNoteHz (note);
+    locked.setHarmonic (9.0);
+    locked.setHarmonicLock (0.0);
+
+    for (int index = 0; index < Formant::kFormants; ++index)
+        CHECK (locked.formantHz (index) == plain.formantHz (index));
+
+    // And with no note there is nothing to lock to, so full lock is still the
+    // vowel -- which is what a released key leaves behind.
+    auto noNote = made (rate, 0.35, 0.6, 1.0);
+    noNote.setHarmonicLock (1.0);
+    noNote.setHarmonic (9.0);
+
+    for (int index = 0; index < Formant::kFormants; ++index)
+        CHECK (noNote.formantHz (index) == plain.formantHz (index));
+
+    // Halfway is the geometric mean of the vowel and the partial, not the
+    // arithmetic one -- a formant is a frequency and the ear hears the ratio.
+    locked.setHarmonicLock (0.5);
+
+    const double vowel = plain.formantHz (0);
+    const double partial = note * 9.0;
+
+    CHECK_NEAR (locked.formantHz (0), std::sqrt (vowel * partial), 1.0e-9);
+}
+
+TEZLA_TEST (the_lock_sharpens_the_resonances_far_past_a_spoken_vowel)
+{
+    // Selecting one partial out of a drone is a different job from shaping a
+    // vowel's broad region, and it takes a bandwidth of a few hertz where a
+    // spoken formant has eighty. The extra sharpness belongs to the lock rather
+    // than to the sharpness control -- widening the sharpness range instead
+    // would have silently re-mapped every stored sharpness value.
+    constexpr double rate = 48000.0;
+
+    auto formant = made (rate, 0.0, 1.0, 1.0);
+    formant.setNoteHz (55.0);
+    formant.setHarmonic (8.0);
+
+    formant.setHarmonicLock (0.0);
+    const double spoken = formant.formantQ (0);
+
+    formant.setHarmonicLock (1.0);
+    const double sung = formant.formantQ (0);
+
+    // Measured at sharpness 1.0: **Q 13.5 unlocked and 275 locked** onto the
+    // eighth partial of A1. Two things compound -- the bandwidth falls from
+    // 20 Hz to 1.6, and the resonance moves up from "ee" F1 at 270 Hz to the
+    // partial at 440 -- and Q is their ratio, so the factor is 20 rather than
+    // the 12.5 the narrowing alone would give.
+    CHECK (sung > 200.0);
+    CHECK (sung > spoken * 15.0);
+
+    // The bandwidth itself, which is the part that is about the tract rather
+    // than about where the resonance happens to sit: 80 Hz nominal, times the
+    // sharpness factor of 0.25, times the locked narrowing of 0.08 -- 1.6 Hz,
+    // against the eighty a spoken vowel has.
+    const double bandwidth = formant.formantHz (0) / formant.formantQ (0);
+
+    CHECK_NEAR (bandwidth, 1.6, 0.01);
+
+    // And it is still stable: a resonance this sharp is where a filter rings
+    // rather than resolves, so it gets a settle-and-decay check.
+    double worst = 0.0;
+
+    for (int i = 0; i < 400000; ++i)
+    {
+        double left = i < 48000 ? std::sin (i * 0.05) : 0.0;
+        double right = left;
+
+        formant.process (left, right);
+
+        worst = std::max (worst, std::abs (left));
+
+        CHECK (std::isfinite (left));
+    }
+
+    CHECK (worst < 100.0);
+}
+
+TEZLA_TEST (the_anti_formant_cuts_a_hole_and_is_bit_exactly_out_at_zero)
+{
+    // A nasal is not a vowel with different peaks; it is a vowel with a zero.
+    // The nasal cavity is a side branch, and a side branch cancels rather than
+    // resonates -- which is why a filter with only poles cannot say "m", or the
+    // ending of a chanted "AUM".
+    constexpr double rate = 48000.0;
+    constexpr double hole = 1500.0;
+
+    // Bit-exact at zero depth, sample for sample, not merely flat: this sits
+    // permanently in the wet path.
+    //
+    // The branch that skips it is a *fast path* rather than the mechanism --
+    // subtracting exactly zero is already exact -- so removing the branch does
+    // not fail this, and that is right. What the test guards is the arithmetic:
+    // a notch scaled by depth rather than one whose depth sets a coefficient,
+    // which would not return to unity.
+    {
+        auto without = made (rate, 0.5, 0.5, 1.0);
+
+        auto with = made (rate, 0.5, 0.5, 1.0);
+        with.setNotchHz (hole);
+        with.setNotchDepth (0.0);
+
+        for (int i = 0; i < 4000; ++i)
+        {
+            const double input = std::sin (i * 0.31) * 0.7 + std::sin (i * 0.017) * 0.3;
+
+            double a = input, b = input;
+            double c = input, d = input;
+
+            without.process (a, b);
+            with.process (c, d);
+
+            CHECK (c == a);
+            CHECK (d == b);
+        }
+    }
+
+    // And a real hole when it is turned up.
+    auto formant = made (rate, 0.5, 0.5, 1.0);
+    formant.setNotchHz (hole);
+
+    formant.setNotchDepth (0.0);
+    const double open = dbOf (magnitudeAt (formant, hole, rate));
+
+    formant.setNotchDepth (1.0);
+    const double cut = dbOf (magnitudeAt (formant, hole, rate));
+
+    // Measured: 26.6 dB of cut at the notch centre.
+    CHECK (cut < open - 12.0);
+
+    // Localised -- two octaves away it is barely touched, which is what makes
+    // it a zero rather than a tone control.
+    const double far = 6000.0;
+
+    formant.setNotchDepth (0.0);
+    const double farOpen = dbOf (magnitudeAt (formant, far, rate));
+
+    formant.setNotchDepth (1.0);
+    const double farCut = dbOf (magnitudeAt (formant, far, rate));
+
+    CHECK (std::abs (farCut - farOpen) < 3.0);
+}

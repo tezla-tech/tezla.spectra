@@ -131,6 +131,10 @@ inline constexpr auto phaseStages = "phaseStages";
 inline constexpr auto formantMorph = "formantMorph";
 inline constexpr auto formantSharp = "formantSharp";
 inline constexpr auto formantMix  = "formantMix";
+inline constexpr auto formantHarmonic = "formantHarmonic";
+inline constexpr auto formantLock = "formantLock";
+inline constexpr auto formantNotch = "formantNotch";
+inline constexpr auto formantNotchDepth = "formantNotchDepth";
 inline constexpr auto tilt        = "tilt";
 
 // ---- global ----------------------------------------------------------------
@@ -183,7 +187,8 @@ inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequence
 /// time is the one this instrument exists for** -- the brief's flanger-at-rate-
 /// zero trick with something better than an automation lane behind it.
 inline const juce::StringArray globalDest { "Off", "Comb time", "Comb feedback", "Comb mix",
-                                            "Phase centre", "Vowel", "Tube", "Output" };
+                                            "Phase centre", "Vowel", "Tube", "Output",
+                                            "Harmonic", "Notch" };
 
 static_assert (static_cast<int> (dsp::OscShape::saw)      == 0
             && static_cast<int> (dsp::OscShape::pulse)    == 1
@@ -246,9 +251,11 @@ static_assert (static_cast<int> (GlobalSource::none)      == 0
             && static_cast<int> (GlobalSource::count)     == 4,
                "the global source list is indexed straight into GlobalSource");
 
-static_assert (static_cast<int> (GlobalDestination::none)   == 0
-            && static_cast<int> (GlobalDestination::output) == 7
-            && static_cast<int> (GlobalDestination::count)  == 8,
+static_assert (static_cast<int> (GlobalDestination::none)            == 0
+            && static_cast<int> (GlobalDestination::output)          == 7
+            && static_cast<int> (GlobalDestination::formantHarmonic) == 8
+            && static_cast<int> (GlobalDestination::formantNotch)    == 9
+            && static_cast<int> (GlobalDestination::count)           == 10,
                "the global destination list is indexed straight into GlobalDestination");
 } // namespace choices
 
