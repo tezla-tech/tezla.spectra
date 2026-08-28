@@ -1,19 +1,20 @@
-# Svara — the SoundFont player with the tuning engine
+# Svara-yantra — the SoundFont player with the tuning engine
 
 A build plan written so any session can pick it up cold. Read `CLAUDE.md`
 first; every rule there applies. **Queued after Sonitus phase 4** (tasks
 P4-1..P4-6) — do not start this while those are open unless the user says
 otherwise.
 
-**Name.** `Svara` — Sanskrit स्वर, *musical note*: the term of Indian music
-theory (sa, ri, ga, ma... are svaras), and the thing the twenty-two shruti are
-divisions of. A note-player built on a microtuning engine could not be better
-named. The tagline is the user's own compound: **svara-yantra**, "the
-note-machine" — *yantra* (यन्त्र) being the Sanskrit for machine, instrument,
-device, as in the Jantar Mantar observatories, which are yantras the size of
-buildings. Code `Tzsv`, bundle `tech.tezla.Svara`, vendor `Tzla` — registered
-in `plugins/README.md`. The user has approved the name; a trademark search is
-theirs to do before anything ships.
+**Name.** `Svara-yantra` — the user's own Sanskrit compound: *svara* (स्वर),
+musical note, the term of Indian music theory that the twenty-two shruti are
+divisions of; *yantra* (यन्त्र), machine, instrument, device — as in the
+Jantar Mantar observatories, which are yantras the size of buildings. **The
+note-machine.** Product name "Tezla Svara-yantra"; folder, CMake target and
+code identifiers use the unhyphenated `Svarayantra` (C++ names cannot carry a
+hyphen), with class prefixes kept short as `Svara*`. Code `Tzsv`, bundle
+`tech.tezla.Svarayantra`, vendor `Tzla` — registered in `plugins/README.md`.
+The user has approved the name; a trademark search is theirs to do before
+anything ships.
 
 ---
 
@@ -23,7 +24,7 @@ theirs to do before anything ships.
 
 SoundFont players are everywhere and microtonal ones barely exist: the format
 itself hard-wires 100 cents per key (the `scaleTuning` generator bends it
-crudely, per-zone, and almost nothing uses it). Svara replaces the key-to-pitch
+crudely, per-zone, and almost nothing uses it). Svara-yantra replaces the key-to-pitch
 map wholesale with the suite's `Tuning` — the same 44 built-in scales with
 their stories, `.scl`/`.kbm` loading, the concert-pitch control and the tuning
 panel that Sonitus has — so a sampled piano can play Rast with Zalzal's third,
@@ -96,7 +97,7 @@ MuseScore's) for users, with their licences named, and bundles none of them.
   would mis-render existing soundfonts subtly and forever. `Sf2Envelope` is
   written to the spec instead, and tested against the spec's arithmetic.
 
-**New, in `plugins/Svara/Dsp/` (framework-free, tests in the same commit):**
+**New, in `plugins/Svarayantra/Dsp/` (framework-free, tests in the same commit):**
 
 | file | what |
 |---|---|
@@ -170,9 +171,9 @@ mechanism break-checked, x86-64 Windows-first per §2.3 throughout.
   day one.
 - **S6 — Editor + the shared tuning panel.** Extract `TuningPage` to
   `shared/tezla-ui`; Sonitus switches to it in the same commit, screenshots
-  proving parity. Svara's page: load button, bank/preset browser (from
+  proving parity. Svara-yantra's page: load button, bank/preset browser (from
   `phdr`), polyphony, output trim, the panel.
-- **S7 — Close-out.** `tezla-measure svara` (aliasing, CPU per voice at N
+- **S7 — Close-out.** `tezla-measure svarayantra` (aliasing, CPU per voice at N
   voices), README with the memory ceiling and soundfont pointers, validator
   47/47, registry status flip, docs current.
 
@@ -188,7 +189,7 @@ streaming. Each is additive; none blocks the above.
   generators nobody sets. Mitigation: implement the defined core faithfully,
   default the exotic *to the spec's stated defaults* (not to guesses), and
   when a user file renders wrongly, that is a bug report with a file attached
-  — the parser's refusal messages and a `svara dump` mode in the render tool
+  — the parser's refusal messages and a `svarayantra dump` mode in the render tool
   make it diagnosable.
 - **Memory, not CPU.** Playback is cheap next to Sonitus; a 500 MB orchestral
   soundfont is not. Measure, document the ceiling, and refuse gracefully.
