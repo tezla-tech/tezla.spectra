@@ -68,6 +68,26 @@ option(TEZLA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"           OF
 option(TEZLA_ENABLE_AVX2      "Build with AVX2 (needs a 2013-or-newer CPU)"   OFF)
 option(TEZLA_BUILD_AU         "Also build Audio Unit versions (macOS only)"   ON)
 
+# **Off, deliberately, and it is not a performance decision made lightly.**
+#
+# JUCE's recommended LTO flag is a plain `-flto`, which on GCC means serial
+# LTRANS -- observed here as "lto-wrapper: using serial compilation of 101
+# LTRANS jobs" -- and on Apple clang means *monolithic* LTO, the whole program
+# merged into one module and optimised on one core at link time. The macOS
+# plugin job does that for six plugins, two formats each, twice over for a
+# universal binary: twenty-four serial whole-program optimisations. CI run 38
+# spent **six hours and four minutes** in that step before being cancelled,
+# against seven minutes for the same build on Windows with MSVC's LTCG.
+#
+# What it buys is cross-translation-unit inlining, which matters for a shipping
+# binary and matters not at all while the numbers are still being measured --
+# and the numbers are measured by `tezla-tests` and `tezla-measure`, neither of
+# which is built with it.
+#
+# Turn it on for a release build when there is one to make, and prefer
+# `-flto=auto` (GCC) or `-flto=thin` (clang) over the plain flag when you do.
+option(TEZLA_LTO              "Link-time optimisation (slow; for release builds)" OFF)
+
 include(TezlaCompilerOptions)
 
 # ------------------------------------------------------ framework-free core --

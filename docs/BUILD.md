@@ -158,8 +158,29 @@ Useful extra options, all optional:
 | `-DTEZLA_BUILD_TOOLS=OFF` | Skip the measurement tools |
 | `-DTEZLA_BUILD_STANDALONE=ON` | Also build a standalone `.exe` per plugin |
 | `-DTEZLA_WARNINGS_AS_ERRORS=ON` | Treat warnings as errors |
+| `-DTEZLA_LTO=ON` | Link-time optimisation. **Off by default and slow** — see below |
 | `-DTEZLA_JUCE_PATH=C:/dev/JUCE` | Use a JUCE you already have — see [section 4](#4-juce-getting-it-or-using-one-you-already-have) |
 | `-DTEZLA_JUCE_SOURCE=System` | Use a JUCE installed with `cmake --install` — see [section 4.4](#44-route-c--a-juce-you-installed-with-cmake---install) |
+
+### A note on `TEZLA_LTO`
+
+It is off, and the reason is a measurement rather than a preference. JUCE's
+recommended flag is a plain `-flto`, which means **serial** link-time
+optimisation on GCC and **monolithic** LTO on Apple clang — the whole program
+merged into one module and optimised on a single core at link time. The macOS
+plugin job does that for six plugins in two formats, twice over for a universal
+binary, and CI run 38 spent **six hours and four minutes** in that one step
+before it was cancelled. The same build on Windows with MSVC's LTCG took seven
+minutes.
+
+What it buys is cross-translation-unit inlining, which matters for a binary
+somebody is going to run and matters not at all while the numbers are still
+being measured — and the numbers come from `tezla-tests` and `tezla-measure`,
+neither of which is built with it.
+
+Turn it on for a release build when there is one to make. If you do, prefer
+`-flto=auto` (GCC) or `-flto=thin` (clang) to the plain flag: both parallelise
+the link across cores, and the plain one does not.
 
 ### 3.3 Using Ninja instead (faster)
 
