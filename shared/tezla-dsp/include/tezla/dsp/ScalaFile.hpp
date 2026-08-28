@@ -424,25 +424,21 @@ inline constexpr long kMaximumScaleSize = 1024;
     built.referenceHz = referenceHz;
     built.formalOctaveDegree = static_cast<int> (formalOctave);
 
-    if (static_cast<long> (lines.size()) < size + 7)
-        return ScalaResult::failure ("the map claims " + std::to_string (size)
-                                       + " entries but only " + std::to_string (lines.size() - 7)
-                                       + " are present",
-                                     lines.back().number);
+    // **A short mapping is legal.** "At the end, unmapped keys may be left
+    // out" -- so a file may stop early and the rest of the pattern is silent.
+    // Refusing those was refusing valid files.
+    const long present = std::min (size, static_cast<long> (lines.size()) - 7);
 
-    built.degrees.reserve (static_cast<std::size_t> (size));
+    built.degrees.assign (static_cast<std::size_t> (size), KeyboardMap::kUnmapped);
 
-    for (long index = 0; index < size; ++index)
+    for (long index = 0; index < present; ++index)
     {
         const auto& line = lines[static_cast<std::size_t> (index + 7)];
         const std::string_view body = scala::trim (line.text);
 
         // 'x' is the format's marker for a key that plays nothing.
         if (body == "x" || body == "X")
-        {
-            built.degrees.push_back (-1);
             continue;
-        }
 
         long degree = 0;
 
@@ -451,13 +447,29 @@ inline constexpr long kMaximumScaleSize = 1024;
                                            + " (use 'x' for an unmapped key)",
                                          line.number);
 
-        if (degree < 0)
-            return ScalaResult::failure ("entry " + std::to_string (index + 1)
-                                           + ": a degree cannot be negative -- use 'x' for an "
-                                             "unmapped key",
-                                         line.number);
+        // **Negative degrees are legal**, and rejecting them was wrong: "There
+        // is no restriction to the degree numbers in the mapping ... they can
+        // be any number, also negative, also lie outside the scale range." A
+        // degree below zero is a step below the scale's root, resolved by
+        // octave extension like any other out-of-range degree.
+        built.degrees[static_cast<std::size_t> (index)] = static_cast<int> (degree);
+    }
 
-        built.degrees.push_back (static_cast<int> (degree));
+    // "If this is done with the frequency reference note it will be considered
+    // an error." The reference note is what pins the whole tuning to a
+    // frequency; unmapping it leaves the scale with nothing to hang on.
+    if (built.size > 0 && built.referenceNote >= built.firstNote
+        && built.referenceNote <= built.lastNote)
+    {
+        const int pattern = static_cast<int> (built.degrees.size());
+        const int offset = built.referenceNote - built.middleNote;
+        const int position = offset - floorDivide (offset, pattern) * pattern;
+
+        if (built.degrees[static_cast<std::size_t> (position)] == KeyboardMap::kUnmapped)
+            return ScalaResult::failure ("the reference note (" + std::to_string (built.referenceNote)
+                                           + ") is unmapped, so there is nothing to tune the scale "
+                                             "to -- the format calls this an error",
+                                         lines[4].number);
     }
 
     map = std::move (built);

@@ -146,11 +146,45 @@ peak measuring 5.946 dB at the first harmonic and 5.333 dB at the third.
 
 ---
 
+### What the Scala specification corrected
+
+Every one of these was **written from memory of the format and was wrong**, and
+not one could have been found by measurement — a format's defined behaviour is
+the case CLAUDE.md §9 says to take from the source rather than derive. The
+quotations are from the saved pages.
+
+| what | the specification | what the code did |
+|---|---|---|
+| **Negative mapping degrees** | *"There is no restriction to the degree numbers in the mapping … they can be any number, also negative, also lie outside the scale range."* | Refused them — and used `-1` as the marker for an unmapped key, so the two collided. `KeyboardMap::kUnmapped` is now `INT_MIN`, and `x` is the only marker. |
+| **Short mappings** | *"At the end, unmapped keys may be left out."* | Refused a map with fewer entries than its size. Now the tail is padded silent, so the pattern stays its full width. |
+| **An unmapped reference note** | *"If this is done with the frequency reference note it will be considered an error."* | Did not check. It has to be an error: the reference note is what pins the scale to a frequency. |
+| **The formal octave past the scale** | *"If you want a mapping for a double octave range … make the scale degree to consider as formal octave parameter twice the size of the scale."* | Returned the scale's repeat for any degree past its size, so a formal octave of 24 on a 12-note scale sat **an octave flat every pattern** — the exact case the page calls out. Now octave-extended. |
+
+Two things it confirmed rather than corrected, both worth recording because the
+opposite reading is tempting:
+
+- **Trailing text after a pitch value is normal, not an error.** The page lists
+  `100.0 cents`, `100.0 C#` and `5/4 E\` among its valid pitch lines. A parser
+  demanding the line hold nothing else — which is what the `.tzref` lesson would
+  suggest — would refuse real archive files. Text *attached* to the value with no
+  space is still refused here, which is stricter than the page's "anything after
+  a valid pitch value should be ignored"; that is a deliberate divergence, since
+  it catches a typo like `408.0.5` and no archive file relies on it.
+- **Negative cents are legal; negative ratios are not.** *"Negative ratios are
+  meaningless and should give a read error"*, while `-5.0` appears in the list of
+  valid lines. Two different rules that are easy to conflate into one.
+
+One divergence stands, deliberately: a note count of **0** is refused, where the
+page allows it (*"The lower limit is 0, which is possible since degree 0 of 1/1
+is implicit"*). A scale with no pitch lines has no repeat interval and cannot
+tune a keyboard, so it is refused with that as the reason rather than silently
+loaded as something unplayable.
+
 ## Tuning
 
 | Source | Licence | Relevance |
 |---|---|---|
-| [The Scala scale file format](https://www.huygens-fokker.org/scala/scl_format.html) and [keyboard map format](https://www.huygens-fokker.org/scala/help.htm#mappings) | public specification | `ScalaFile.hpp` parses both. **Not fetched** — the proxy refuses `huygens-fokker.org` — so the format rules implemented here (a decimal point makes a value cents, a bare integer means *n*/1, the last entry is the repeat interval, `x` marks an unmapped key) are from general reference. Worth checking against the specification, particularly the `.kbm` field order. |
+| [The Scala scale file format](https://www.huygens-fokker.org/scala/scl_format.html) and [keyboard map format](https://www.huygens-fokker.org/scala/help.htm#mappings) | public specification | `ScalaFile.hpp` parses both. **Read** — saved to [`technical references/sonitus/`](../technical%20references/sonitus/) after the proxy refused `huygens-fokker.org`. It settled four things the implementation had guessed wrong; see below. |
 | Peterson & Barney, JASA 24(2), 1952 | paper | See the Formant row above. |
 
 **The scales are generated, not tabulated**, which is both a licence question and

@@ -1193,7 +1193,9 @@ TEZLA_TEST (an_unmapped_key_plays_nothing)
     map.middleNote = 60;
     map.referenceNote = 60;
     map.referenceHz = 261.0;
-    map.degrees = { 0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6 };
+    map.degrees = { 0, KeyboardMap::kUnmapped, 1, KeyboardMap::kUnmapped, 2, 3,
+                    KeyboardMap::kUnmapped, 4, KeyboardMap::kUnmapped, 5,
+                    KeyboardMap::kUnmapped, 6 };
 
     Scale seven;
     seven.name = "seven";
