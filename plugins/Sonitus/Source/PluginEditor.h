@@ -96,6 +96,48 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
 };
 
+/// A one-cycle picture of the oscillator's waveform, live.
+///
+/// Drawn from `Oscillator::naiveShapeSample` -- the same function the DSP's
+/// uncorrected path uses -- so the picture and the sound cannot drift apart.
+/// Listens to the shape, width and morph parameters and repaints on change;
+/// no timer, no attachment.
+class WaveCell final : public ParameterCell,
+                       private juce::AudioProcessorValueTreeState::Listener
+{
+public:
+    WaveCell (juce::AudioProcessorValueTreeState& state, const juce::String& shapeId,
+              const juce::String& widthId, const juce::String& morphId,
+              ui::Palette palette);
+    ~WaveCell() override;
+
+    void setControlEnabled (bool) override {}
+    void paint (juce::Graphics&) override;
+
+private:
+    void parameterChanged (const juce::String&, float) override;
+
+    juce::AudioProcessorValueTreeState& state_;
+    juce::String shapeId_, widthId_, morphId_;
+};
+
+/// A small horizontal slider, for the shape's Morph -- the "small sliders by
+/// the control" of the brief. No text box; the value lives in the drag popup
+/// and the tooltip.
+class MorphCell final : public ParameterCell
+{
+public:
+    MorphCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+               const juce::String& name, const juce::String& tooltip, ui::Palette palette);
+
+    void setControlEnabled (bool enabled) override;
+    void resized() override;
+
+private:
+    juce::Slider slider_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
+};
+
 class ChoiceCell final : public ParameterCell
 {
 public:
@@ -170,6 +212,10 @@ public:
                     const juce::String& tooltip);
     void addToggle (const juce::String& parameterId, const juce::String& name,
                     const juce::String& tooltip);
+    void addWave (const juce::String& shapeId, const juce::String& widthId,
+                  const juce::String& morphId);
+    void addMorph (const juce::String& parameterId, const juce::String& name,
+                   const juce::String& tooltip);
 
     /// Leaves a hole, so the cell after it starts where it should.
     void addGap();

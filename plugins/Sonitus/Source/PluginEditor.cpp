@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/Scales.hpp>
 
 namespace tezla::sonitus
@@ -438,6 +439,121 @@ void KnobCell::resized()
     slider_.setBounds (controlBounds().reduced (2, 0));
 }
 
+WaveCell::WaveCell (juce::AudioProcessorValueTreeState& state, const juce::String& shapeId,
+                    const juce::String& widthId, const juce::String& morphId,
+                    ui::Palette palette)
+    : ParameterCell (shapeId, "", palette),
+      state_ (state), shapeId_ (shapeId), widthId_ (widthId), morphId_ (morphId)
+{
+    setComponentID ("wave-" + shapeId);
+    setInterceptsMouseClicks (false, false);
+
+    state_.addParameterListener (shapeId_, this);
+    state_.addParameterListener (widthId_, this);
+    state_.addParameterListener (morphId_, this);
+}
+
+WaveCell::~WaveCell()
+{
+    state_.removeParameterListener (shapeId_, this);
+    state_.removeParameterListener (widthId_, this);
+    state_.removeParameterListener (morphId_, this);
+}
+
+void WaveCell::parameterChanged (const juce::String&, float)
+{
+    // Parameter callbacks may arrive off the message thread; painting may not.
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer (this)]
+    {
+        if (safe != nullptr)
+            safe->repaint();
+    });
+}
+
+void WaveCell::paint (juce::Graphics& g)
+{
+    const auto value = [this] (const juce::String& id)
+    {
+        const auto* raw = state_.getRawParameterValue (id);
+        return raw != nullptr ? raw->load() : 0.0f;
+    };
+
+    const auto shape = static_cast<dsp::OscShape> (std::lround (value (shapeId_)));
+    const auto width = static_cast<double> (value (widthId_));
+    const auto morph = static_cast<double> (value (morphId_));
+
+    auto box = getLocalBounds().reduced (2).toFloat();
+
+    g.setColour (palette_.background.darker (0.25f));
+    g.fillRoundedRectangle (box, 4.0f);
+
+    g.setColour (palette_.dimText.withAlpha (0.25f));
+    g.drawHorizontalLine (static_cast<int> (box.getCentreY()), box.getX() + 3.0f,
+                          box.getRight() - 3.0f);
+
+    // One cycle of the same function the DSP reads, so this cannot lie.
+    juce::Path path;
+    const auto inner = box.reduced (4.0f, 5.0f);
+    constexpr int kPoints = 96;
+
+    for (int i = 0; i <= kPoints; ++i)
+    {
+        const double phase = static_cast<double> (i) / kPoints;
+        const double sample = dsp::Oscillator::naiveShapeSample (shape, phase, width, morph);
+
+        const float x = inner.getX() + inner.getWidth() * static_cast<float> (phase);
+        const float y = inner.getCentreY()
+                      - 0.5f * inner.getHeight() * static_cast<float> (sample);
+
+        if (i == 0)
+            path.startNewSubPath (x, y);
+        else
+            path.lineTo (x, y);
+    }
+
+    g.setColour (palette_.accent);
+    g.strokePath (path, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved));
+}
+
+MorphCell::MorphCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                      const juce::String& name, const juce::String& tooltip, ui::Palette palette)
+    : ParameterCell (parameterId, name, palette)
+{
+    slider_.setSliderStyle (juce::Slider::LinearHorizontal);
+    slider_.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    slider_.setPopupDisplayEnabled (true, true, nullptr);
+    slider_.setTooltip (tooltip);
+    label_.setTooltip (tooltip);
+
+    if (auto* parameter = state.getParameter (parameterId))
+        slider_.setDoubleClickReturnValue (
+            true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
+
+    addAndMakeVisible (slider_);
+
+    attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        state, parameterId, slider_);
+}
+
+void MorphCell::setControlEnabled (bool enabled)
+{
+    slider_.setEnabled (enabled);
+    slider_.setAlpha (enabled ? 1.0f : 0.35f);
+    label_.setColour (juce::Label::textColourId,
+                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.4f));
+}
+
+void MorphCell::resized()
+{
+    ParameterCell::resized();
+
+    // A slim strip centred in the control area, so the small slider reads as
+    // deliberate rather than as a knob that failed to draw.
+    auto area = controlBounds();
+    slider_.setBounds (area.withSizeKeepingCentre (area.getWidth() - 6,
+                                                   juce::jmin (18, area.getHeight())));
+}
+
 ChoiceCell::ChoiceCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
                         const juce::String& name, const juce::String& tooltip, ui::Palette palette)
     : ParameterCell (parameterId, name, palette)
@@ -551,6 +667,18 @@ void ControlPage::addToggle (const juce::String& parameterId, const juce::String
                              const juce::String& tooltip)
 {
     add (std::make_unique<ToggleCell> (state_, parameterId, name, tooltip, palette_));
+}
+
+void ControlPage::addWave (const juce::String& shapeId, const juce::String& widthId,
+                           const juce::String& morphId)
+{
+    add (std::make_unique<WaveCell> (state_, shapeId, widthId, morphId, palette_));
+}
+
+void ControlPage::addMorph (const juce::String& parameterId, const juce::String& name,
+                            const juce::String& tooltip)
+{
+    add (std::make_unique<MorphCell> (state_, parameterId, name, tooltip, palette_));
 }
 
 void ControlPage::addGap()
@@ -1864,6 +1992,7 @@ void SonitusEditor::buildPages()
 
     const auto addOscillator = [] (ControlPage& page, const char* shapeId, const char* octaveId,
                                    const char* semitoneId, const char* centsId, const char* widthId,
+                                   const char* morphId,
                                    const char* levelId, const char* unisonId, const char* detuneId,
                                    const char* spreadId, const char* driftId, const juce::String& which)
     {
@@ -1882,6 +2011,10 @@ void SonitusEditor::buildPages()
             "noise: pitch, sync and PM do nothing to it, unison spread makes it wide, and Morph "
             "darkens it.");
 
+        // The picture, live: one cycle of exactly what the DSP reads, so
+        // shape, Width and Morph changes redraw it as they land.
+        page.addWave (shapeId, widthId, morphId);
+
         page.addKnob (octaveId, "Octave", "Whole octaves, -3 to +3.");
         page.addKnob (semitoneId, "Semis", "Semitones, -24 to +24. Snapped, so an interval stays an interval.");
         page.addKnob (centsId, "Fine",
@@ -1893,6 +2026,14 @@ void SonitusEditor::buildPages()
             "Pulse width, and the triangle's skew. At 50% a pulse is a square and has only odd "
             "harmonics; away from it the even ones come in. Modulate it for the classic PWM "
             "shimmer -- it is in the voice matrix as Width " + which + ".");
+
+        page.addMorph (morphId, "Morph",
+            "The shape's own tweak -- what it does depends on the shape, and 0 is always the "
+            "classic form. Vintage: how hard the ramp sags. Dome: how hard the sine is pressed "
+            "(more harmonics, still zero aliasing). Double saw: the second ramp's offset -- "
+            "sweep it for a one-oscillator flanger. Harmonic: the roll-off, bright to dark. "
+            "Noise: the colour, white to dark. The four classic shapes ignore it, and it greys "
+            "out to say so. In the matrix as Morph " + which + ".");
 
         page.addKnob (levelId, "Level", "How much of this oscillator reaches the mix.");
 
@@ -1915,13 +2056,15 @@ void SonitusEditor::buildPages()
             "broken machine, which is occasionally what you want.");
     };
 
-    osc->addHeading ("OSCILLATOR A -- the sync master", 5);
+    osc->addHeading ("OSCILLATOR A -- the sync master", 6);
     addOscillator (*osc, ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
-                   ids::levelA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, "A");
+                   ids::morphA, ids::levelA, ids::unisonA, ids::detuneA, ids::spreadA,
+                   ids::driftA, "A");
 
-    osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target", 5);
+    osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target", 6);
     addOscillator (*osc, ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
-                   ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, "B");
+                   ids::morphB, ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB,
+                   ids::driftB, "B");
 
     osc->addHeading ("SUB, RING AND FOLD", 5);
 
@@ -2456,6 +2599,16 @@ void SonitusEditor::updateForSwitches()
 
         osc->setControlEnabled (ids::widthA, hasWidth (shapeA));
         osc->setControlEnabled (ids::widthB, hasWidth (shapeB));
+
+        // Morph belongs to the phase-3 shapes; the classic four ignore it and
+        // the slider says so by greying.
+        const auto hasMorph = [] (int shape)
+        {
+            return shape >= static_cast<int> (dsp::OscShape::vintage);
+        };
+
+        osc->setControlEnabled (ids::morphA, hasMorph (shapeA));
+        osc->setControlEnabled (ids::morphB, hasMorph (shapeB));
     }
 
     if (scaleChanged)
