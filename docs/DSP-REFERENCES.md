@@ -84,13 +84,13 @@ be band-limited (ADAA, or a smooth shaper) as well. These numbers are pinned in
 
 | Source | Licence | Relevance |
 |---|---|---|
-| Zavalishin, *The Art of VA Filter Design* ([free PDF](https://www.native-instruments.com/fileadmin/ni_media/downloads/pdf/VAFilterDesign_2.1.0.pdf)) | book | The standard text on topology-preserving transform / zero-delay-feedback filters. Read this before writing any filter whose cutoff is modulated. **Not fetched** — the egress proxy refuses `native-instruments.com` with a 403 at the CONNECT stage, so `curl` is no help either. `SvfFilter.hpp` was derived from the TPT equations rather than read off the page, and then measured against the analogue prototype; the measurements are in `tests/test_SvfFilter.cpp` and below. What a reading would settle is the nonlinear part: the book discusses solving the zero-delay feedback *through* a saturator by iteration, and this implementation keeps the linear solve and shapes the integrator states afterwards. That is a standard simplification, but "standard" here is second-hand. |
+| Zavalishin, *The Art of VA Filter Design* (v2.1.2) | book | The standard text on TPT / zero-delay-feedback filters. **Read** — saved under [`technical references/sonitus/`](../technical%20references/sonitus/). It settled the open question about `SvfFilter`'s nonlinearity, and the answer was that the question had been framed wrongly; see below. |
 | Robert Bristow-Johnson, *Audio EQ Cookbook* | public | The biquad coefficient formulas implemented in `shared/tezla-dsp/include/tezla/dsp/Biquad.hpp`. |
 | [Surge XT](https://github.com/surge-synthesizer/surge) | GPLv3 | Filters, waveshapers, oversampling, and a well-organised large plugin codebase. Read for architecture; do not copy. |
 | [Calf Studio Gear](https://github.com/calf-studio-gear/calf) | LGPL/GPL | Classic effect topologies, clearly written. |
 | [Faust libraries](https://faustlibraries.grame.fr/) | permissive | Reference implementations worth comparing our measurements against. |
-| Laakso, Valimaki, Karjalainen & Laine, *"Splitting the Unit Delay"*, IEEE Signal Processing Magazine 13(1), 1996 | paper | Fractional-delay filter design. `Comb.hpp` uses the 4-point Lagrange kernel from it, derived rather than copied — the closed form for four points is short enough that a reimplementation is checkable, and `tests/test_Comb.cpp` checks it. **Not fetched**; the kernel and its properties are from general reference. |
-| Peterson & Barney, *"Control Methods Used in a Study of the Vowels"*, JASA 24(2), 1952 | paper | The vowel formant frequencies in `Formant.hpp`. **Not fetched** — the proxy refuses the journal — so the table is the widely reproduced adult-male averages quoted from general reference and rounded to 10 Hz. This is exactly the case CLAUDE.md §9 says to *copy* rather than derive: no measurement of ours could tell us the numbers were wrong. Worth verifying against the paper. |
+| Laakso, Välimäki, Karjalainen & Laine, *"Splitting the Unit Delay"*, IEEE Signal Processing Magazine 13(1), 1996 | paper | Fractional-delay filter design. `Comb.hpp` uses the 4-point Lagrange kernel. **Read** — saved under [`technical references/sonitus/`](../technical%20references/sonitus/), as page images with no text layer. The derived kernel matches its Design Guide 1 term for term, and the paper supplies two justifications the implementation had only assumed; see below. |
+| Peterson & Barney, *"Control Methods Used in a Study of the Vowels"*, JASA 24(2), 1952 | paper | The vowel data in `Formant.hpp`, from **Table II**. **Read** — saved to [`technical references/sonitus/`](../technical%20references/sonitus/). The fifteen *frequencies* quoted from general reference were exactly right. The *amplitudes* were not: they had been one constant set of three for every vowel, where the paper gives them per vowel over a thirty-decibel span. See below. |
 
 **Measured caveat on biquads.** Computing coefficients from the actual sample
 rate is necessary but not sufficient for rate-independence. Bilinear-transform
@@ -146,12 +146,175 @@ peak measuring 5.946 dB at the first harmonic and 5.333 dB at the third.
 
 ---
 
+### What the Scala specification corrected
+
+Every one of these was **written from memory of the format and was wrong**, and
+not one could have been found by measurement — a format's defined behaviour is
+the case CLAUDE.md §9 says to take from the source rather than derive. The
+quotations are from the saved pages.
+
+| what | the specification | what the code did |
+|---|---|---|
+| **Negative mapping degrees** | *"There is no restriction to the degree numbers in the mapping … they can be any number, also negative, also lie outside the scale range."* | Refused them — and used `-1` as the marker for an unmapped key, so the two collided. `KeyboardMap::kUnmapped` is now `INT_MIN`, and `x` is the only marker. |
+| **Short mappings** | *"At the end, unmapped keys may be left out."* | Refused a map with fewer entries than its size. Now the tail is padded silent, so the pattern stays its full width. |
+| **An unmapped reference note** | *"If this is done with the frequency reference note it will be considered an error."* | Did not check. It has to be an error: the reference note is what pins the scale to a frequency. |
+| **The formal octave past the scale** | *"If you want a mapping for a double octave range … make the scale degree to consider as formal octave parameter twice the size of the scale."* | Returned the scale's repeat for any degree past its size, so a formal octave of 24 on a 12-note scale sat **an octave flat every pattern** — the exact case the page calls out. Now octave-extended. |
+
+Two things it confirmed rather than corrected, both worth recording because the
+opposite reading is tempting:
+
+- **Trailing text after a pitch value is normal, not an error.** The page lists
+  `100.0 cents`, `100.0 C#` and `5/4 E\` among its valid pitch lines. A parser
+  demanding the line hold nothing else — which is what the `.tzref` lesson would
+  suggest — would refuse real archive files. Text *attached* to the value with no
+  space is still refused here, which is stricter than the page's "anything after
+  a valid pitch value should be ignored"; that is a deliberate divergence, since
+  it catches a typo like `408.0.5` and no archive file relies on it.
+- **Negative cents are legal; negative ratios are not.** *"Negative ratios are
+  meaningless and should give a read error"*, while `-5.0` appears in the list of
+  valid lines. Two different rules that are easy to conflate into one.
+
+One divergence stands, deliberately: a note count of **0** is refused, where the
+page allows it (*"The lower limit is 0, which is possible since degree 0 of 1/1
+is implicit"*). A scale with no pitch lines has no repeat interval and cannot
+tune a keyboard, so it is refused with that as the reason rather than silently
+loaded as something unplayable.
+
+### What Zavalishin settled about the filter's nonlinearity
+
+The open question was recorded as *"the book discusses solving the zero-delay
+feedback through a saturator by iteration, and this implementation keeps the
+linear solve and shapes the integrator states afterwards; that is a standard
+simplification, but standard here is second-hand."*
+
+**The question was framed wrongly, and the book says so directly.** §6.3, on
+feedback-loop saturation: *"…the resonance amount is increased by increasing the
+amount of the feedback (thus e.g. the SVF filter doesn't fall into this
+category)."* And §6.11, explicitly:
+
+> As with 1-pole filters, the feedback in SVF is also not one creating the
+> resonance, respectively the discussion from Section 6.3 does not apply either,
+> and thus we can't simply put a saturator into the feedback loop. Actually, the
+> purpose of the feedback in SVF is kind of an opposite of creating the
+> resonance. The function of the feedback path containing the bandpass signal is
+> to **dampen** the otherwise self-oscillating structure.
+
+So the iterative machinery of §6.4–6.6 is about ladders and Sallen–Key filters,
+not this one. `SvfFilter.hpp`'s comment already said the same thing in its own
+words — *"in a ladder the resonance is positive feedback and saturating it
+reduces the resonance; in a state-variable the resonance is reduced damping"* —
+which is the derivation arriving where the book is.
+
+The book's own route for an SVF is an **antisaturator** (`sinh`, faster than
+linear) in parallel with the damping gain, so damping grows as level rises. Of
+that structure he writes: *"The antisaturator in Fig. 6.52 effectively makes the
+state of the first integrator saturate."* **That is what railing the integrator
+states does, reached directly instead of through the damping path.** The
+difference that remains: his nonlinearity sits inside the ZDF solve, so it
+changes the solve; ours is applied to the state after an exact linear solve, so
+the instantaneous response stays exactly linear and only the stored state is
+bounded.
+
+The book also supplies a test the implementation did not have. Of the SVF's
+three outputs: *"Note that yHP + yBP1 + yLP = x, as for the linear SVF."* That is
+an exact algebraic identity of the solve rather than a property of the response,
+so it catches a wrong denominator or a wrong state update with no spectral
+measurement that could itself be at fault. Measured worst error across
+resonance and cutoff sweeps: **6.7e-16**. Breaking the denominator fails it
+twelve times over.
+
+Two things worth taking from it later, recorded rather than done:
+
+- **§6.7, second-order saturation curves.** Replacing `tanh x` with `x/(1+|x|)`
+  turns the nonlinear ZDF equation into a quadratic with an analytic solution —
+  the route if we ever want the nonlinearity genuinely inside the loop without
+  iterating.
+- **Self-oscillation below R = 0.** The antisaturator route is what lets an SVF
+  be driven past self-oscillation deliberately, which our fixed rail does not
+  offer. Noted in the Sonitus roadmap.
+
+### What Laakso settled about the comb's interpolator
+
+The 4-point kernel in `Comb.hpp` was derived rather than copied. It matches the
+paper's Design Guide 1 table term for term, with **D = 1 + fraction** — and a
+test now checks the closed form against the paper's *general* product formula
+(Eq. 42) rather than against a transcription of the same table, worst error
+**4.4e-16** across a thousand fractions.
+
+Two things the paper supplies that had only been assumed:
+
+- **Why the delay is centred**, which was found here the hard way as an
+  off-by-one that made the comb's loop a sample too long. Eq. 21: the smallest
+  error for a given order is obtained when the delay sits at the *"center of
+  gravity"* of the ideal impulse response — for odd order N, `M_opt = Int(D) −
+  (N−1)/2`, which for four taps puts the interpolation point between the middle
+  two. That is exactly where the fix landed.
+- **Why Lagrange is the right family for a comb specifically:** *"The maximum of
+  the magnitude response never exceeds unity when the delay is near to the half
+  filter length. This is important in applications including feedback."* A comb
+  *is* a feedback application, and an interpolator with gain anywhere above unity
+  would compound every pass round the loop — the feedback cap bounds the
+  coefficient, not the loop gain. Measured across 101 fractions and the whole
+  band, the peak magnitude is 1.0 exactly, at DC, and never above.
+
+The paper's own caveat is also worth recording: *"if a 4-tap Lagrange FD filter
+is not good enough for a given purpose, it may be better to use an LS-based FIR
+filter design method instead."* Ours is good enough — 0.225 dB of gain spread
+across a swept fraction at 8 kHz, against linear interpolation's 1.248 — and the
+alternative is named if it ever is not.
+
 ## Tuning
 
 | Source | Licence | Relevance |
 |---|---|---|
-| [The Scala scale file format](https://www.huygens-fokker.org/scala/scl_format.html) and [keyboard map format](https://www.huygens-fokker.org/scala/help.htm#mappings) | public specification | `ScalaFile.hpp` parses both. **Not fetched** — the proxy refuses `huygens-fokker.org` — so the format rules implemented here (a decimal point makes a value cents, a bare integer means *n*/1, the last entry is the repeat interval, `x` marks an unmapped key) are from general reference. Worth checking against the specification, particularly the `.kbm` field order. |
+| [The Scala scale file format](https://www.huygens-fokker.org/scala/scl_format.html) and [keyboard map format](https://www.huygens-fokker.org/scala/help.htm#mappings) | public specification | `ScalaFile.hpp` parses both. **Read** — saved to [`technical references/sonitus/`](../technical%20references/sonitus/) after the proxy refused `huygens-fokker.org`. It settled four things the implementation had guessed wrong; see below. |
 | Peterson & Barney, JASA 24(2), 1952 | paper | See the Formant row above. |
+
+### What Peterson & Barney corrected
+
+The frequencies survived contact with the paper unchanged — all fifteen match
+Table II's adult-male row for the five vowels used, which are its columns for
+/i ɛ ɑ ɔ u/ (heed, head, hod, hawed, who'd).
+
+The **amplitudes** did not. The paper gives a relative level per vowel per
+formant, referred to the first formant of [ɑ], and they span thirty decibels:
+
+| | F1 | F2 | F3 |
+|---|---|---|---|
+| ee /i/ | −4 | **−24** | −28 |
+| eh /ɛ/ | −2 | −17 | −24 |
+| ah /ɑ/ | −1 | −5 | −28 |
+| oh /ɔ/ | 0 | −7 | −34 |
+| oo /u/ | −3 | −19 | **−43** |
+
+`Formant.hpp` held one constant set — 0, −7, −12 — for every vowel, which gave
+every vowel the same spectral balance. **The balance is most of what tells one
+vowel from another.** An "ee" wants its second formant 24 dB below its first;
+a constant −7 leaves it seventeen decibels too loud, which is most of the way to
+not being an "ee".
+
+One thing the paper is careful about and this now records: the amplitudes were
+averaged across men, women and children, because the measurements "did not show
+decided differences between classes of speakers". So they are not the male row
+specifically, unlike the frequencies.
+
+Measuring the fix produced a reading worth keeping, because a careless test
+would have hidden it. The *summed* response at each formant's centre lands on
+the table for F1 and F2, and reads **high for F3 — by up to 6.7 dB**:
+
+|  | F1 | F2 | F3 |
+|---|---|---|---|
+| ee | −4.000 (−4) | −23.898 (−24) | −27.746 (−28) |
+| eh | −2.000 (−2) | −16.931 (−17) | −23.670 (−24) |
+| ah | −0.986 (−1) | −4.919 (−5) | −26.488 (−28) |
+| oh | 0.016 (0) | −6.766 (−7) | −30.183 (−34) |
+| oo | −3.000 (−3) | −18.557 (−19) | −36.322 (−43) |
+
+That is the filter being right. The table describes each resonator's own peak;
+the measurement is of three resonators summed, and a formant forty decibels
+below its neighbours is buried under their skirts. The exact claim is checked
+against the coefficients instead, and the summed response is held to a bound
+the data explains rather than a tolerance wide enough to hide it.
 
 **The scales are generated, not tabulated**, which is both a licence question and
 a testing one — CLAUDE.md §2.1 and §9. A Pythagorean scale is a chain of 3/2s, a

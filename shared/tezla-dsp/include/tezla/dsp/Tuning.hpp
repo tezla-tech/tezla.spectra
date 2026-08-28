@@ -54,12 +54,30 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <vector>
 
 #include "Exact.hpp"
 
 namespace tezla::dsp {
+
+/// Floor division, which `/` is not for negative numerators: -9 / 12 is 0 in
+/// C++ and -1 here.
+///
+/// Getting this wrong puts every note below the root on the wrong degree *and*
+/// in the wrong octave, and the two errors partly cancel -- so it sounds nearly
+/// right, which is the worst way to be wrong. A free function rather than a
+/// member because the `.kbm` parser needs the same arithmetic to work out which
+/// key the reference note lands on.
+[[nodiscard]] inline int floorDivide (int numerator, int denominator) noexcept
+{
+    const int quotient = numerator / denominator;
+
+    return (numerator % denominator != 0 && ((numerator < 0) != (denominator < 0)))
+             ? quotient - 1
+             : quotient;
+}
 
 /// A scale: the degrees within one repeat, and the interval it repeats at.
 ///
@@ -133,8 +151,20 @@ struct KeyboardMap
     /// repeat. 0 means "the scale's own repeat interval".
     int formalOctaveDegree { 0 };
 
-    /// One entry per key in the pattern. A negative entry is an unmapped key,
-    /// which plays nothing.
+    /// What marks a key that plays nothing -- the `x` in a `.kbm` file.
+    ///
+    /// **Not a negative number, and that was a bug.** The Scala specification
+    /// says of the mapping entries: "There is no restriction to the degree
+    /// numbers in the mapping ... they can be any number, also negative, also
+    /// lie outside the scale range." So `-1` is a legal degree, one step below
+    /// the scale's root, and using it as the unmapped marker silenced a key
+    /// that a valid file asked to be tuned.
+    static constexpr int kUnmapped = std::numeric_limits<int>::min();
+
+    /// One entry per key in the pattern; `kUnmapped` for a key that plays
+    /// nothing. Degrees outside 0..size-1 are legal and are resolved by octave
+    /// extension, which is what the specification means by "pitches are always
+    /// calculated based on octave extension".
     std::vector<int> degrees;
 };
 
@@ -309,7 +339,7 @@ private:
 
         const int degree = map_.degrees[static_cast<std::size_t> (position)];
 
-        if (degree < 0)
+        if (degree == KeyboardMap::kUnmapped)
             return 0.0;
 
         // The map's repeat is its own formal octave, which is a *scale degree*
@@ -326,31 +356,40 @@ private:
                  * scale_.ratios[static_cast<std::size_t> (within)];
     }
 
+    /// How far apart two adjacent repeats of the mapping pattern sit.
+    ///
+    /// The field is a **scale degree**, and the specification is explicit that
+    /// it may lie outside the scale: "If you want a mapping for a double octave
+    /// range ... make the scale degree to consider as formal octave parameter
+    /// twice the size of the scale." So degree 24 on a 12-note scale has to
+    /// give the repeat interval *squared*, and this used to return the repeat
+    /// itself -- the exact case the specification calls out, an octave flat
+    /// every pattern.
+    ///
+    /// Zero is the one value read as a convention rather than as a degree: it
+    /// means "not set", and the scale's own repeat is what a `.kbm` without an
+    /// opinion should get. Degree 0 taken literally is 1/1, which would stack
+    /// every pattern on top of the last.
     [[nodiscard]] double formalOctaveRatio() const noexcept
     {
         const int degree = map_.formalOctaveDegree;
+        const int size = scale_.size();
 
-        if (degree <= 0 || degree > scale_.size())
+        if (degree == 0 || size <= 0)
             return scale_.repeat;
 
-        if (degree == scale_.size())
-            return scale_.repeat;
+        const int wholeRepeats = floorDivide (degree, size);
+        const int within = degree - wholeRepeats * size;
 
-        return scale_.ratios[static_cast<std::size_t> (degree)];
+        return std::pow (scale_.repeat, wholeRepeats)
+                 * scale_.ratios[static_cast<std::size_t> (within)];
     }
 
     /// Floor division, which `/` is not for negative numerators: -9 / 12 is 0
     /// in C++ and -1 here. Getting this wrong puts every note below the root on
     /// the wrong degree *and* in the wrong octave, and the two errors partly
     /// cancel -- so it sounds nearly right, which is the worst way to be wrong.
-    [[nodiscard]] static int floorDivide (int numerator, int denominator) noexcept
-    {
-        const int quotient = numerator / denominator;
 
-        return (numerator % denominator != 0 && ((numerator < 0) != (denominator < 0)))
-                 ? quotient - 1
-                 : quotient;
-    }
 
     Scale scale_;
     KeyboardMap map_;

@@ -779,3 +779,127 @@ TEZLA_TEST (damping_takes_the_top_off_the_feedback_and_zero_is_bit_exact)
 
     CHECK (exact);
 }
+
+TEZLA_TEST (the_kernel_is_the_lagrange_formula_the_paper_defines)
+{
+    // Laakso, Valimaki, Karjalainen & Laine, "Splitting the Unit Delay",
+    // IEEE Signal Processing Magazine 13(1), 1996 -- saved under
+    // `technical references/sonitus/`.
+    //
+    // `Comb::lagrange` is a closed form, and a closed form is a transcription
+    // until something checks it against the definition. This evaluates the
+    // paper's general product formula (Eq. 42),
+    //
+    //     h(n) = prod over k != n of (D - k) / (n - k),   n = 0..N
+    //
+    // and compares. Checking the closed form against a table copied from the
+    // same page would only prove the copy was faithful; the product is the
+    // thing the table is derived *from*.
+    //
+    // **D = 1 + fraction**, and that is not a detail. Eq. 21 puts the optimal
+    // delay at the "center of gravity" of the ideal impulse response -- for an
+    // odd order N, `M_opt = Int(D) - (N-1)/2`, which for four taps means the
+    // interpolation point belongs between the middle two. Getting this wrong is
+    // the off-by-one that made the comb's loop one sample too long, and it read
+    // as slightly the wrong notch frequency rather than as anything obviously
+    // broken.
+    const auto reference = [] (int n, double bigD)
+    {
+        constexpr int order = 3;
+
+        double product = 1.0;
+
+        for (int k = 0; k <= order; ++k)
+            if (k != n)
+                product *= (bigD - k) / static_cast<double> (n - k);
+
+        return product;
+    };
+
+    double worst = 0.0;
+
+    for (int step = 0; step <= 1000; ++step)
+    {
+        const double fraction = step / 1000.0;
+        const double bigD = 1.0 + fraction;
+
+        // The kernel's four weights, recovered by feeding it unit impulses.
+        const double h0 = FractionalDelay::lagrange (1.0, 0.0, 0.0, 0.0, fraction);
+        const double h1 = FractionalDelay::lagrange (0.0, 1.0, 0.0, 0.0, fraction);
+        const double h2 = FractionalDelay::lagrange (0.0, 0.0, 1.0, 0.0, fraction);
+        const double h3 = FractionalDelay::lagrange (0.0, 0.0, 0.0, 1.0, fraction);
+
+        worst = std::max (worst, std::abs (h0 - reference (0, bigD)));
+        worst = std::max (worst, std::abs (h1 - reference (1, bigD)));
+        worst = std::max (worst, std::abs (h2 - reference (2, bigD)));
+        worst = std::max (worst, std::abs (h3 - reference (3, bigD)));
+
+        // The weights sum to one at every fraction, which is what makes the
+        // interpolator pass DC unchanged.
+        CHECK_NEAR (h0 + h1 + h2 + h3, 1.0, 1.0e-12);
+    }
+
+    // Measured worst across a thousand fractions: 4.4e-16.
+    CHECK (worst < 1.0e-12);
+
+    // The paper's own worked values, as a second anchor. At a half sample the
+    // kernel is symmetric -- which is why the even-length Lagrange filters are
+    // "exactly linear-phase" at d = 0.5.
+    CHECK_NEAR (FractionalDelay::lagrange (1.0, 0.0, 0.0, 0.0, 0.5), -0.0625, 1.0e-12);
+    CHECK_NEAR (FractionalDelay::lagrange (0.0, 1.0, 0.0, 0.0, 0.5),  0.5625, 1.0e-12);
+    CHECK_NEAR (FractionalDelay::lagrange (0.0, 0.0, 1.0, 0.0, 0.5),  0.5625, 1.0e-12);
+    CHECK_NEAR (FractionalDelay::lagrange (0.0, 0.0, 0.0, 1.0, 0.5), -0.0625, 1.0e-12);
+}
+
+TEZLA_TEST (the_interpolator_never_gains_which_is_why_the_comb_can_feed_back)
+{
+    // The property that makes Lagrange the right choice *here* specifically,
+    // and the paper states it: "The maximum of the magnitude response never
+    // exceeds unity when the delay is near to the half filter length. This is
+    // important in applications including feedback."
+    //
+    // A comb is a feedback application. An interpolator with gain above unity
+    // anywhere in the band would compound every pass round the loop, so a
+    // feedback setting that measured stable at one delay could run away at
+    // another -- and the feedback cap alone would not save it, because the cap
+    // bounds the coefficient rather than the loop gain.
+    //
+    // Checked across the whole fractional range and the whole band.
+    constexpr double rate = 48000.0;
+
+    double worst = 0.0;
+
+    for (int step = 0; step <= 100; ++step)
+    {
+        const double fraction = step / 100.0;
+
+        for (int bin = 1; bin < 240; ++bin)
+        {
+            const double frequency = bin * rate / 480.0;
+            const double omega = 2.0 * std::numbers::pi * frequency / rate;
+
+            // The kernel's frequency response, taps at 0, 1, 2, 3 samples.
+            double real = 0.0;
+            double imaginary = 0.0;
+
+            const double h[4] = {
+                FractionalDelay::lagrange (1.0, 0.0, 0.0, 0.0, fraction),
+                FractionalDelay::lagrange (0.0, 1.0, 0.0, 0.0, fraction),
+                FractionalDelay::lagrange (0.0, 0.0, 1.0, 0.0, fraction),
+                FractionalDelay::lagrange (0.0, 0.0, 0.0, 1.0, fraction),
+            };
+
+            for (int tap = 0; tap < 4; ++tap)
+            {
+                real += h[tap] * std::cos (-omega * tap);
+                imaginary += h[tap] * std::sin (-omega * tap);
+            }
+
+            worst = std::max (worst, std::hypot (real, imaginary));
+        }
+    }
+
+    // Measured across 101 fractions and the whole band: 1.0000000000, reached
+    // at DC where the weights sum to one, and never exceeded.
+    CHECK (worst < 1.0 + 1.0e-12);
+}

@@ -293,7 +293,7 @@ TEZLA_TEST (a_keyboard_map_file_loads)
     CHECK (map.degrees.size() == 12);
 
     CHECK (map.degrees[0] == 0);
-    CHECK (map.degrees[1] == -1);
+    CHECK (map.degrees[1] == KeyboardMap::kUnmapped);
     CHECK (map.degrees[2] == 1);
     CHECK (map.degrees[11] == 6);
 }
@@ -314,14 +314,16 @@ TEZLA_TEST (a_malformed_keyboard_map_is_refused_with_its_line_number)
     };
 
     const Case cases[] = {
-        { "12\n0\n127\n60\n69\n440.0\n12\n0\nx\n1\n", 10 },              // too few entries
+        // A short map is legal -- "at the end, unmapped keys may be left out"
+        // -- so this one is refused for the *reference note* being among the
+        // keys it left out, which the format calls an error in its own words.
+        { "12\n0\n127\n60\n69\n440.0\n12\n0\nx\n1\n", 5 },               // reference unmapped
         { "12\n0\n127\n60\n69\nnot a number\n12\n0\n", 6 },              // bad frequency
         { "12\n0\n127\n60\n69\n0.0\n12\n0\n", 6 },                       // zero frequency
         { "12\n0\n200\n60\n69\n440.0\n12\n0\n", 2 },                     // note range past 127
         { "12\n80\n20\n60\n69\n440.0\n12\n0\n", 2 },                     // range that descends
         { "99999\n0\n127\n60\n69\n440.0\n12\n0\n", 1 },                  // absurd size
         { "12\n0\n127\n60\n69\n440.0\n12\n0\ny\n1\nx\n2\n3\nx\n4\nx\n5\nx\n6\n", 9 },  // a stray letter
-        { "12\n0\n127\n60\n69\n440.0\n12\n-1\nx\n1\nx\n2\n3\nx\n4\nx\n5\nx\n6\n", 8 }, // a negative degree
         { "12\n0\n", 2 },                                                 // truncated header
     };
 
@@ -379,4 +381,222 @@ TEZLA_TEST (a_file_with_windows_line_endings_loads)
 
     CHECK (parseKbm ("2\r\n0\r\n127\r\n60\r\n69\r\n440.0\r\n2\r\n0\r\n1\r\n", map).ok);
     CHECK (map.degrees.size() == 2);
+}
+
+// ---------------------------------------------------------------------------
+// What the specification settled
+// ---------------------------------------------------------------------------
+//
+// Four of these were wrong before the Scala documentation was read, and none of
+// them could have been found by measurement: they are a format's defined
+// behaviour, which is exactly the case CLAUDE.md section 9 says to take from
+// the source rather than derive. The quotations are from
+// `technical references/sonitus/Scala help.htm`.
+
+TEZLA_TEST (a_negative_mapping_degree_is_legal)
+{
+    // "There is no restriction to the degree numbers in the mapping or to the
+    // scale degree to consider as formal octave, they can be any number, also
+    // negative, also lie outside the scale range."
+    //
+    // So -1 is a real degree -- one step below the scale's root -- and using it
+    // as the marker for an unmapped key silenced a key a valid file asked to be
+    // tuned. `x` is the marker, and nothing else is.
+    const char* const text =
+        "12\n0\n127\n60\n69\n440.0\n12\n"
+        "-1\n0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+
+    KeyboardMap map;
+
+    const auto result = parseKbm (text, map);
+
+    CHECK (result.ok);
+
+    // Bail rather than index a map that was refused: a broken parser leaves
+    // `map` untouched, and reading degrees[0] of an empty vector turns a test
+    // failure into a crash that says nothing about what went wrong.
+    if (! result.ok)
+        return;
+
+    CHECK (map.degrees[0] == -1);
+    CHECK (map.degrees[1] == 0);
+
+    // And it plays: degree -1 is a step below the root, which on a 12-tone
+    // equal scale is a semitone down and an octave's worth of extension.
+    Tuning tuning;
+
+    CHECK (tuning.setScale (Tuning::twelveToneEqual()));
+    tuning.setKeyboardMap (map);
+
+    // Key 60 carries degree -1, key 61 carries degree 0. A semitone apart, with
+    // 60 the *lower* of the two.
+    const double ratio = tuning.frequencyFor (61) / tuning.frequencyFor (60);
+
+    CHECK_NEAR (ratio, std::pow (2.0, 1.0 / 12.0), 1.0e-12);
+}
+
+TEZLA_TEST (a_mapping_may_stop_early_and_the_rest_is_silent)
+{
+    // "At the end, unmapped keys may be left out." Refusing a short map was
+    // refusing valid files. The reference note is kept inside the part that is
+    // present, or the next test's rule would refuse this one instead.
+    const char* const text =
+        "12\n0\n127\n60\n60\n261.0\n12\n"
+        "0\n2\n4\n";
+
+    KeyboardMap map;
+
+    const auto result = parseKbm (text, map);
+
+    CHECK (result.ok);
+
+    if (! result.ok)
+        return;
+
+    // The pattern is still twelve keys wide -- the missing entries are silent
+    // rather than absent, which is what makes the map repeat correctly.
+    CHECK (map.degrees.size() == 12);
+    CHECK (map.degrees[0] == 0);
+    CHECK (map.degrees[2] == 4);
+    CHECK (map.degrees[3] == KeyboardMap::kUnmapped);
+    CHECK (map.degrees[11] == KeyboardMap::kUnmapped);
+
+    Tuning tuning;
+
+    CHECK (tuning.setScale (Tuning::twelveToneEqual()));
+    tuning.setKeyboardMap (map);
+
+    CHECK_NEAR (tuning.frequencyFor (60), 261.0, 1.0e-12);
+    CHECK (tuning.frequencyFor (63) == 0.0);
+
+    // Key 72 is one whole pattern up, so it is mapped again.
+    CHECK_NEAR (tuning.frequencyFor (72) / 261.0, 2.0, 1.0e-12);
+}
+
+TEZLA_TEST (an_unmapped_reference_note_is_refused)
+{
+    // "If a certain key is not to be tuned, an 'x' must be placed instead of a
+    // number. If this is done with the frequency reference note it will be
+    // considered an error."
+    //
+    // And it has to be: the reference note is what pins the scale to a
+    // frequency. Unmapped, there is nothing for the tuning to hang on, and the
+    // specification says as much about what instruments then do -- "what
+    // happens ... is not defined".
+    const char* const text =
+        "12\n0\n127\n60\n69\n440.0\n12\n"
+        "0\n1\n2\n3\n4\n5\n6\n7\n8\nx\n10\n11\n";
+
+    KeyboardMap map;
+
+    const auto result = parseKbm (text, map);
+
+    CHECK (! result.ok);
+
+    // Key 69 is nine above the middle note, and entry nine is the `x`.
+    CHECK (result.line == 5);
+    CHECK (map.size == 0);
+}
+
+TEZLA_TEST (a_formal_octave_past_the_scale_stretches_the_pattern)
+{
+    // "If you want a mapping for a double octave range, which is the case if
+    // the mapping is different in the next octave for example, then make the
+    // scale degree to consider as formal octave parameter twice the size of the
+    // scale."
+    //
+    // The specification calls this case out by name, and it was the one that
+    // was wrong: a formal octave of 24 on a twelve-note scale returned the
+    // repeat interval rather than its square, so every pattern sat an octave
+    // flat of where the file asked.
+    Tuning tuning;
+
+    CHECK (tuning.setScale (Tuning::twelveToneEqual()));
+
+    const auto ratioAcrossOnePattern = [&] (int formalOctave)
+    {
+        KeyboardMap map;
+
+        map.size = 12;
+        map.middleNote = 60;
+        map.referenceNote = 60;
+        map.referenceHz = 261.0;
+        map.formalOctaveDegree = formalOctave;
+        map.degrees = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+
+        tuning.setKeyboardMap (map);
+
+        return tuning.frequencyFor (72) / tuning.frequencyFor (60);
+    };
+
+    // Twelve: one repeat per pattern, the ordinary case.
+    CHECK_NEAR (ratioAcrossOnePattern (12), 2.0, 1.0e-12);
+
+    // Twenty-four: two repeats per pattern, which is the double-octave range
+    // the specification describes.
+    CHECK_NEAR (ratioAcrossOnePattern (24), 4.0, 1.0e-12);
+
+    // Seven is a degree *inside* the scale, so the pattern advances by whatever
+    // interval degree seven happens to be -- a fifth, here.
+    CHECK_NEAR (ratioAcrossOnePattern (7), std::pow (2.0, 7.0 / 12.0), 1.0e-12);
+
+    // Zero is the one value read as a convention rather than as a degree: not
+    // set, so the scale's own repeat. Degree 0 taken literally is 1/1, which
+    // would stack every pattern on top of the last.
+    CHECK_NEAR (ratioAcrossOnePattern (0), 2.0, 1.0e-12);
+
+    // Negative is legal too, and descends.
+    CHECK_NEAR (ratioAcrossOnePattern (-12), 0.5, 1.0e-12);
+}
+
+TEZLA_TEST (the_pitch_lines_the_specification_calls_valid_all_parse)
+{
+    // Straight from the .scl page: "So these lines are all valid pitch lines".
+    // The last three are the ones worth having a test for -- a pitch value with
+    // a note name or a unit after it is *normal* in the archive, and a parser
+    // that required the line to hold nothing else would refuse real files.
+    struct Case { const char* line; double ratio; };
+
+    const Case cases[] = {
+        { "81/64",       81.0 / 64.0 },
+        { "408.0",       0.0 },              // cents, checked below
+        { "408.",        0.0 },
+        { "5",           5.0 },
+        { "10/20",       0.5 },
+        { "100.0 cents", 0.0 },
+        { " 100.0 C#",   0.0 },
+        { " 5/4 E\\",    5.0 / 4.0 },
+    };
+
+    for (const auto& item : cases)
+    {
+        double ratio = 0.0;
+        std::string why;
+
+        CHECK (scala::parsePitch (item.line, ratio, why));
+
+        if (item.ratio > 0.0)
+            CHECK_NEAR (ratio, item.ratio, 1.0e-12);
+    }
+
+    // The cents ones, against 2^(c/1200).
+    double ratio = 0.0;
+    std::string why;
+
+    CHECK (scala::parsePitch ("408.0", ratio, why));
+    CHECK_NEAR (ratio, std::pow (2.0, 408.0 / 1200.0), 1.0e-12);
+
+    CHECK (scala::parsePitch ("100.0 C#", ratio, why));
+    CHECK_NEAR (ratio, std::pow (2.0, 100.0 / 1200.0), 1.0e-12);
+
+    // "Negative ratios are meaningless and should give a read error" -- but
+    // negative *cents* are a legal line, and the page lists -5.0 among the
+    // valid ones. The two are not the same rule and it is easy to conflate.
+    CHECK (scala::parsePitch ("-5.0", ratio, why));
+    CHECK_NEAR (ratio, std::pow (2.0, -5.0 / 1200.0), 1.0e-12);
+
+    CHECK (! scala::parsePitch ("-5/4", ratio, why));
+
+    // "Ratios are written with a slash, and only one."
+    CHECK (! scala::parsePitch ("1/2/3", ratio, why));
 }

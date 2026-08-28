@@ -213,8 +213,38 @@ spread, mix, invert wet.
 on that note's own harmonics. The growl comes out *tuned*.
 
 **Vowel** morphs across ee–eh–ah–oh–oo: three resonant peaks at the frequencies
-a human tract puts them. The gain is divided by Q, so Sharpness sharpens the
-vowel rather than turning it up.
+a human tract puts them, with the per-vowel amplitudes from the same table —
+they span thirty decibels, and that balance is most of what tells one vowel from
+another. The gain is divided by Q, so Sharpness sharpens the vowel rather than
+turning it up.
+
+**Harmonic lock** pulls the three resonances off the vowel and onto **harmonics
+of the played note**. This is what overtone singing actually is: not a second
+voice, but one source with a resonance sharp enough to select a single partial
+out of the drone and make it a melody. Because it can only land on a harmonic,
+it is always in tune with the bass underneath.
+
+> **It is the comb's key tracking, applied to the formant.** The comb locks its
+> notches to the note's *period*; this locks the resonances to its *harmonics*.
+> Both read the same tracked note, so they agree by construction rather than
+> beating against each other. Same thesis, third time constant.
+
+The lock sharpens as it engages — selecting one partial takes a bandwidth of
+about **1.6 Hz** where a spoken vowel has eighty, and Q goes from 13.5 to 275.
+That extra sharpness belongs to the lock rather than to the Sharpness control on
+purpose: widening the sharpness range instead would have silently re-mapped
+every stored sharpness value.
+
+**Harmonic** is which partial, continuously, so it is a modulation destination.
+Point the sequencer at it and the overtone line walks the series in time. Sygyt
+sings around partials 6–12.
+
+**Notch** is an anti-formant. A nasal is not a vowel with different peaks — it is
+a vowel with a **zero**: the nasal cavity is a side branch, and a side branch
+cancels rather than resonates. That is what a filter with only poles cannot
+make, and why no synth vowel filter can say "m", or the ending of a chanted
+"AUM". 26.6 dB at the centre when full, and within 3 dB of untouched two octaves
+away. Set aside from the vocal reading, it is a hole you can put anywhere.
 
 **Tilt** is one knob of tone — two shelves in opposite directions about 700 Hz.
 
@@ -357,6 +387,71 @@ it loads is telling me which presets are wrong.
 
 ---
 
+## Roadmap
+
+Things considered and deliberately not built yet, with the reasoning, so the
+next pass does not start from scratch.
+
+### Kargyraa — phase-locked period doubling
+
+**The one worth doing next**, and the only one on this list that is a *source*
+change rather than a filter change.
+
+Kargyraa is the third throat-singing mechanism and it is not a resonance trick
+at all: the singer's **ventricular folds vibrate at exactly half the frequency
+of the true vocal folds**. Real period doubling, phase-locked — an octave down
+that cannot beat against the fundamental, because it is the same waveform with
+alternate cycles modified rather than a second oscillator.
+
+For a bass instrument that is exactly the interesting property. Sonitus's sub
+oscillator today is generated *independently*, so it is a clean sine or square
+that has to be tuned and can drift against the note. A kargyraa sub would be the
+oscillator's own output with every other cycle attenuated, locked to its own
+phase by construction.
+
+Lives in `Voice`, needs its own aliasing thought (period doubling makes the
+harmonics *denser*, not higher, so it is benign — but that should be measured
+rather than assumed). Held until the instrument has been heard, because it is a
+sound decision as much as a DSP one.
+
+### More vowels, including non-Western
+
+Peterson & Barney's Table II has ten columns and only five are used: /ɪ æ ʊ ʌ ɜ˞/
+are sitting in the paper already and cost nothing. Front rounded /y/ (French
+*tu*, German *ü*), /ø/ (French *peu*) and back unrounded /ɯ/ (Turkish *ı*) are
+the genuinely non-English colours — /y/ has F1 low like /i/ but F2 near 1800
+rather than 2290, which is a sound English has no word for.
+
+**Blocked on two things, not on effort.** A source: these would be invented
+otherwise, and this project has now twice proved how that goes. And a decision:
+
+> `Vowel` is **append-only and indexed by the morph position**. A saved
+> `formantMorph` of 0.5 means "ah" today; with ten vowels in the list it would
+> mean something else, and every project using the vowel filter would shift.
+> CLAUDE.md §8. Adding vowels needs either a separate "vowel set" choice
+> parameter, or the morph reinterpreted with the current layout preserved.
+
+### Self-oscillation, from the filter book
+
+Zavalishin's route to an SVF that can be driven past self-oscillation is an
+**antisaturator** — `sinh`, faster than linear — in parallel with the damping
+gain, so damping grows with level. Our fixed rail bounds the state instead,
+which reaches the same place he describes ("effectively makes the state of the
+first integrator saturate") but does not offer the *R* < 0 region where the
+filter sings on its own. §6.7's second-order saturation curves are the related
+note: replacing `tanh x` with `x/(1+|x|)` makes the nonlinear zero-delay
+equation analytically solvable, which is the route if the nonlinearity should
+ever sit genuinely inside the loop without iterating.
+
+### Not doing
+
+- **Full ventricular-fold biomechanics.** A research project whose audible
+  result is the period doubling above, which is cheap to get directly.
+- **A "throat singing" preset that is really a vowel sweep.** That is the
+  marketing version of the idea, not the idea.
+
+---
+
 ## Changelog
 
 ### v0.1.0
@@ -365,3 +460,9 @@ First version. Oscillators with hard sync and PM, unison, ZDF filter, three
 envelopes, two LFOs, a sixteen-step sequencer, two modulation matrices, the
 global mangle with its order switch, the sub split, Scala microtuning, nine
 presets, and a six-page editor.
+
+Plus the overtone-singing section on the vowel filter: harmonic lock, the
+harmonic selector, and an anti-formant. Both new global destinations —
+`Harmonic` and `Notch` — were **appended** to the destination list, and every
+new control defaults to neutral, so a project saved before they existed reopens
+sounding the same. There is a test for exactly that.

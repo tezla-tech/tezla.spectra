@@ -164,6 +164,7 @@ void Engine::applyPending() noexcept
 
     formant_.setSharpness (active_.formantSharpness);
     formant_.setMix (active_.formantMix);
+    formant_.setHarmonicLock (active_.formantLock);
 }
 
 double Engine::globalModulationFor (GlobalDestination destination) const noexcept
@@ -234,6 +235,23 @@ void Engine::applyGlobalModulation() noexcept
     formant_.setMorph (std::clamp (
         active_.formantMorph + globalModulationFor (GlobalDestination::formantMorph), 0.0, 1.0));
 
+    // Which partial the lock selects. Additive in *harmonic number* rather than
+    // in octaves, because the harmonic series is what it walks: a depth of 1
+    // reaches sixteen partials, which at full is two octaves of overtone line.
+    static constexpr double kHarmonicSwing = 16.0;
+
+    formant_.setHarmonic (active_.formantHarmonic
+                            + kHarmonicSwing * globalModulationFor (GlobalDestination::formantHarmonic));
+
+    // The anti-formant moves in octaves, like every other frequency here.
+    static constexpr double kNotchOctaves = 3.0;
+
+    formant_.setNotchHz (active_.formantNotchHz
+                           * std::pow (2.0, kNotchOctaves
+                                              * globalModulationFor (GlobalDestination::formantNotch)));
+
+    formant_.setNotchDepth (active_.formantNotchDepth);
+
     // The comb's own delay, which is what this whole section is for. Negative
     // modulation is *up* in frequency, because the delay and the notch are
     // reciprocal -- a positive sweep on a comb should raise the notch, which is
@@ -273,6 +291,11 @@ void Engine::aimComb() noexcept
     // go.
     comb_.setDelaySeconds (combDelaySeconds());
     comb_.setNoteHz (voices_.trackedFrequency());
+
+    // The same tracked note the comb uses. The two lock to the same thing by
+    // construction -- the comb onto the note's period, the formant onto its
+    // harmonics -- which is what makes them agree rather than beat.
+    formant_.setNoteHz (voices_.trackedFrequency());
 
     // Published where the panel can read it without racing the audio thread.
     // This is the boundary the comb is actually aimed on, so it is also the

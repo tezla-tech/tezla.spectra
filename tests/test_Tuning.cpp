@@ -196,7 +196,9 @@ TEZLA_TEST (a_keyboard_map_can_leave_keys_unmapped)
     map.referenceNote = 60;
     map.referenceHz = 261.0;
     map.formalOctaveDegree = 0;
-    map.degrees = { 0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6 };
+    map.degrees = { 0, KeyboardMap::kUnmapped, 1, KeyboardMap::kUnmapped, 2, 3,
+                    KeyboardMap::kUnmapped, 4, KeyboardMap::kUnmapped, 5,
+                    KeyboardMap::kUnmapped, 6 };
 
     tuning.setKeyboardMap (map);
 
