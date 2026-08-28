@@ -954,14 +954,28 @@ TEZLA_TEST (positive_global_modulation_raises_the_comb_rather_than_lowering_it)
     };
 
     const double rest = notchWith (0.0);
-    const double up = notchWith (1.0);
-    const double down = notchWith (-1.0);
 
     CHECK (std::abs (rest - 250.0) < 0.001);
 
-    // Three octaves each way, exactly.
-    CHECK (std::abs (up / rest - 8.0) < 0.001);
-    CHECK (std::abs (rest / down - 8.0) < 0.001);
+    // **Measured at half the maximum, not at the maximum**, and the reason is
+    // worth recording: full depth is six octaves each way, which is a range of
+    // twelve -- and the comb's own delay only spans 20 us to 20 ms, which is
+    // 9.97. So a full-depth sweep deliberately runs into the ends. That is the
+    // extremity being asked for rather than a fault, but it means the *ratio*
+    // has to be read somewhere it is not clipping.
+    //
+    // The depth law is squared, so a depth of 1/sqrt(2) is half the maximum:
+    // three octaves, a factor of eight.
+    const double half = 1.0 / std::sqrt (2.0);
+
+    CHECK (std::abs (notchWith (half) / rest - 8.0) < 0.01);
+    CHECK (std::abs (rest / notchWith (-half) - 8.0) < 0.01);
+
+    // And at full depth it reaches the clamps rather than running away: the
+    // delay bottoms out at 20 us and tops out at 20 ms whatever it is asked
+    // for, which is what keeps the interpolator inside its own buffer.
+    CHECK (notchWith (1.0) > rest * 20.0);
+    CHECK (notchWith (-1.0) < rest / 8.0);
 }
 
 TEZLA_TEST (every_global_destination_reaches_its_control)
@@ -1034,13 +1048,14 @@ TEZLA_TEST (every_global_destination_reaches_its_control)
 
     const auto rest = renderWith (GlobalDestination::none, 1.0);
 
-    // comb time -- three octaves up.
-    CHECK (std::abs (renderWith (GlobalDestination::combTime, 1.0).notch / rest.notch - 8.0) < 0.001);
+    // **Half the maximum**, because at full depth both of these run into a
+    // clamp and a ratio read against a clamp measures the clamp. The depth law
+    // is squared, so 1/sqrt(2) is half: three octaves, a factor of eight.
+    const double half = 1.0 / std::sqrt (2.0);
 
-    // phase centre -- four octaves up, clamped by the phaser's own ceiling well
-    // above where this lands.
-    CHECK (std::abs (renderWith (GlobalDestination::phaseFrequency, 1.0).phase / rest.phase - 16.0)
-             < 0.01);
+    CHECK (std::abs (renderWith (GlobalDestination::combTime, half).notch / rest.notch - 8.0) < 0.01);
+    CHECK (std::abs (renderWith (GlobalDestination::phaseFrequency, half).phase / rest.phase - 8.0)
+             < 0.05);
 
     // output -- +24 dB at full depth, which is a factor of 15.85 on the level.
     // Measured: 15.848, against the 15.849 the decibels predict.
@@ -1388,4 +1403,183 @@ TEZLA_TEST (the_overtone_controls_are_neutral_by_default)
 
     for (int index = 0; index < Formant::kFormants; ++index)
         CHECK (engine.getFormantHz (index) == reference.getFormantHz (index));
+}
+
+// ---------------------------------------------------------------------------
+// What playing the thing turned up
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (an_envelope_can_drive_a_global_destination)
+{
+    // The mangle used to take only LFOs and the sequencer, so the vowel, the
+    // phase centre and the comb could not be enveloped at all. The objection
+    // was that a per-voice source has one value per sounding note and the
+    // mangle is one chain -- true, and the answer is the one the comb and the
+    // formant already use: **follow the tracked note**, so all three stages
+    // agree about which note they are following.
+    constexpr double rate = 48000.0;
+
+    auto parameters = brutal();
+
+    parameters.combMode = CombMode::flange;
+    parameters.combTimeMs = 2.0;
+    parameters.combKeyTrack = 0.0;
+    parameters.combInverted = false;
+    parameters.keyboard = KeyboardMode::mono;
+
+    // A slow attack, so the envelope's rise is visible in the notch rather than
+    // being over before the first block ends.
+    parameters.voice.ampAttack = 0.4;
+    parameters.voice.ampSustain = 1.0;
+    parameters.voice.ampVelocity = 0.0;
+
+    parameters.globalSlots[0] = { GlobalSource::ampEnvelope, GlobalDestination::combTime, 1.0 };
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (rate, 256);
+
+    Buffers buffers (256);
+
+    // Before the note, nothing is sounding: an envelope with no note is closed,
+    // so the comb sits exactly where the knob put it.
+    engine.process (buffers.pointers, 256);
+
+    const double atRest = engine.getCombNotchHz();
+
+    CHECK_NEAR (atRest, 250.0, 0.001);
+
+    engine.noteOn (40, 1.0);
+
+    std::vector<double> notches;
+
+    for (int block = 0; block < 90; ++block)
+    {
+        engine.process (buffers.pointers, 256);
+        notches.push_back (engine.getCombNotchHz());
+    }
+
+    // The notch climbs with the envelope rather than jumping, and ends six
+    // octaves up -- a factor of sixty-four -- where full depth puts it.
+    CHECK (notches.front() < notches.back());
+    CHECK_NEAR (notches.back() / atRest, 64.0, 0.05);
+
+    // Monotonic, which is what makes it an envelope rather than a wobble.
+    int falls = 0;
+
+    for (std::size_t i = 1; i < notches.size(); ++i)
+        if (notches[i] < notches[i - 1] - 1.0e-9)
+            ++falls;
+
+    CHECK (falls == 0);
+}
+
+TEZLA_TEST (the_lfo_retriggers_on_a_note_and_free_runs_without_one)
+{
+    // Free-running is right for a pad, where the movement is ambient. It is
+    // exactly wrong for a bass line: every note lands on a different part of
+    // the cycle, so the same phrase played twice is two different sounds.
+    constexpr double rate = 48000.0;
+
+    const auto valueAfterNote = [&] (bool retrigger, int blocksBefore)
+    {
+        auto parameters = brutal();
+
+        parameters.lfo1Wave = Lfo::Wave::sine;
+        parameters.lfo1RateHz = 2.0;
+        parameters.lfo1Retrigger = retrigger;
+        parameters.keyboard = KeyboardMode::mono;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 256);
+
+        Buffers buffers (256);
+
+        // Let the LFO run to an arbitrary point first.
+        for (int block = 0; block < blocksBefore; ++block)
+            engine.process (buffers.pointers, 256);
+
+        engine.noteOn (40, 1.0);
+        engine.process (buffers.pointers, 256);
+
+        return engine.getGlobalSources().lfo1;
+    };
+
+    // Retriggered: the LFO is at the same place after the note however long it
+    // had been running beforehand.
+    const double a = valueAfterNote (true, 7);
+    const double b = valueAfterNote (true, 23);
+
+    CHECK_NEAR (a, b, 1.0e-9);
+
+    // Free-running: it is not.
+    const double c = valueAfterNote (false, 7);
+    const double d = valueAfterNote (false, 23);
+
+    CHECK (std::abs (c - d) > 0.05);
+}
+
+TEZLA_TEST (the_lfo_rate_can_follow_the_played_note)
+{
+    // The beating that gives a reese its character is a *fraction of the note*
+    // rather than a fixed number of hertz, so a wobble that does not track
+    // becomes a different sound as the line moves up the keyboard.
+    constexpr double rate = 48000.0;
+
+    const auto cyclesOverASecond = [&] (int note, double keyTrack)
+    {
+        auto parameters = brutal();
+
+        parameters.lfo1Wave = Lfo::Wave::sine;
+        parameters.lfo1RateHz = 4.0;
+        parameters.lfo1KeyTrack = keyTrack;
+        parameters.lfo1Retrigger = true;
+        parameters.keyboard = KeyboardMode::mono;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 64);
+
+        engine.noteOn (note, 1.0);
+
+        Buffers buffers (64);
+
+        // Zero crossings, which are twice the cycles and need no phase
+        // bookkeeping. **Counted over four seconds rather than one**, because
+        // the count is an integer: at 4 Hz an octave down is two cycles a
+        // second, so one stray crossing is a quarter of the reading. Four
+        // seconds puts that under a twentieth.
+        double previous = 0.0;
+        int crossings = 0;
+
+        for (int block = 0; block < 3000; ++block)
+        {
+            engine.process (buffers.pointers, 64);
+
+            const double value = engine.getGlobalSources().lfo1;
+
+            if ((previous < 0.0) != (value < 0.0))
+                ++crossings;
+
+            previous = value;
+        }
+
+        return crossings / 8.0;
+    };
+
+    // C4 is the reference, so tracking changes nothing there.
+    CHECK_NEAR (cyclesOverASecond (60, 1.0), cyclesOverASecond (60, 0.0), 0.2);
+
+    // An octave down halves the rate; an octave up doubles it.
+    const double low = cyclesOverASecond (48, 1.0);
+    const double middle = cyclesOverASecond (60, 1.0);
+    const double high = cyclesOverASecond (72, 1.0);
+
+    CHECK_NEAR (middle / low, 2.0, 0.06);
+    CHECK_NEAR (high / middle, 2.0, 0.06);
+
+    // And with tracking off it is the same rate at every note, which is the
+    // behaviour that has to survive.
+    CHECK_NEAR (cyclesOverASecond (48, 0.0), cyclesOverASecond (72, 0.0), 0.2);
 }

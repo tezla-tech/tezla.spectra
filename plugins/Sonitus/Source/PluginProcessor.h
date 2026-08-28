@@ -86,9 +86,13 @@ inline constexpr auto bendRange   = "bendRange";
 inline constexpr auto lfo1Wave    = "lfo1Wave";
 inline constexpr auto lfo1Rate    = "lfo1Rate";
 inline constexpr auto lfo1Smooth  = "lfo1Smooth";
+inline constexpr auto lfo1Retrig  = "lfo1Retrig";
+inline constexpr auto lfo1Key     = "lfo1Key";
 inline constexpr auto lfo2Wave    = "lfo2Wave";
 inline constexpr auto lfo2Rate    = "lfo2Rate";
 inline constexpr auto lfo2Smooth  = "lfo2Smooth";
+inline constexpr auto lfo2Retrig  = "lfo2Retrig";
+inline constexpr auto lfo2Key     = "lfo2Key";
 
 inline constexpr auto seqRate     = "seqRate";
 inline constexpr auto seqLength   = "seqLength";
@@ -181,7 +185,8 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
 /// The global matrix's sources: the three that exist once rather than once per
 /// note. Pointing an amp envelope at a global control has no answer when eight
 /// notes are down, which is why the voice's list is not reused here.
-inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer" };
+inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer",
+                                             "Amp env", "Mod env 1", "Mod env 2", "Velocity" };
 
 /// The global matrix's destinations: the mangle's continuous controls. **Comb
 /// time is the one this instrument exists for** -- the brief's flanger-at-rate-
@@ -246,9 +251,11 @@ static_assert (static_cast<int> (ModDestination::none)  == 0
             && static_cast<int> (ModDestination::count) == 16,
                "the modulation destination list is indexed straight into ModDestination");
 
-static_assert (static_cast<int> (GlobalSource::none)      == 0
-            && static_cast<int> (GlobalSource::sequencer) == 3
-            && static_cast<int> (GlobalSource::count)     == 4,
+static_assert (static_cast<int> (GlobalSource::none)         == 0
+            && static_cast<int> (GlobalSource::sequencer)    == 3
+            && static_cast<int> (GlobalSource::ampEnvelope)  == 4
+            && static_cast<int> (GlobalSource::velocity)     == 7
+            && static_cast<int> (GlobalSource::count)        == 8,
                "the global source list is indexed straight into GlobalSource");
 
 static_assert (static_cast<int> (GlobalDestination::none)            == 0
@@ -336,6 +343,16 @@ public:
     [[nodiscard]] double getCombNotchHz() const noexcept
     {
         return engine_.readouts().combNotchHz.load (std::memory_order_relaxed);
+    }
+
+    /// The tracked note's envelope level, 0 for the amplitude envelope and 1 or
+    /// 2 for the mod ones. The panel draws it as a playhead on the curve.
+    [[nodiscard]] double getEnvelopeLevel (int index) const noexcept
+    {
+        if (index < 0 || index > 2)
+            return 0.0;
+
+        return engine_.readouts().envelopeLevels[index].load (std::memory_order_relaxed);
     }
 
     // ---- tuning ------------------------------------------------------------

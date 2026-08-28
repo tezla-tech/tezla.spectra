@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/Palette.hpp>
 
@@ -18,18 +19,115 @@ public:
     void paint (juce::Graphics& g) override;
 };
 
-/// One page of the control surface. Holds its own controls and lays them out on
-/// a grid; the editor decides which page is visible.
+// ---------------------------------------------------------------------------
+// Cells
+// ---------------------------------------------------------------------------
+
+/// One control and its name, as a component rather than as two components a
+/// layout has to keep in step.
 ///
-/// The same class as Anvil's, with two additions this instrument needs: a
-/// toggle cell (there are five on/off controls here against Anvil's none), and
-/// a heading cell, because a synth's pages carry three or four groups each and
-/// an undivided grid of forty knobs is unreadable.
-class ControlPage final : public juce::Component
+/// The earlier version laid every label and every widget out by hand inside the
+/// page's grid loop, which is why the page could only ever be a grid: anything
+/// that wanted a knob somewhere else had to reimplement the whole cell. Making
+/// the cell own its own layout is what lets the envelope page put six of them
+/// beside a graph without a line of duplicated code.
+class ParameterCell : public juce::Component
 {
 public:
-    ControlPage (juce::AudioProcessorValueTreeState& state, ui::Palette palette, int columns)
-        : state_ (state), palette_ (palette), columns_ (columns) {}
+    ParameterCell (juce::String parameterId, const juce::String& name, ui::Palette palette);
+
+    [[nodiscard]] const juce::String& parameterId() const noexcept { return id_; }
+
+    virtual void setControlEnabled (bool enabled) = 0;
+
+    void resized() override;
+
+protected:
+    /// Where the control goes: everything under the name.
+    [[nodiscard]] juce::Rectangle<int> controlBounds() const;
+
+    juce::String id_;
+    ui::Palette  palette_;
+    juce::Label  label_;
+};
+
+class KnobCell final : public ParameterCell
+{
+public:
+    KnobCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+              const juce::String& name, const juce::String& tooltip, ui::Palette palette);
+
+    void setControlEnabled (bool enabled) override;
+    void resized() override;
+
+private:
+    juce::Slider slider_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
+};
+
+class ChoiceCell final : public ParameterCell
+{
+public:
+    ChoiceCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                const juce::String& name, const juce::String& tooltip, ui::Palette palette);
+
+    void setControlEnabled (bool enabled) override;
+    void resized() override;
+
+private:
+    juce::ComboBox box_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment_;
+};
+
+class ToggleCell final : public ParameterCell
+{
+public:
+    ToggleCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                const juce::String& name, const juce::String& tooltip, ui::Palette palette);
+
+    void setControlEnabled (bool enabled) override;
+    void resized() override;
+
+private:
+    juce::ToggleButton button_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment_;
+};
+
+// ---------------------------------------------------------------------------
+// Pages
+// ---------------------------------------------------------------------------
+
+/// Anything a tab can show. The viewport hosts all of them, including the
+/// tuning panel -- which it did not before, and the special case that carved
+/// out was where the blank black page came from.
+class Page : public juce::Component
+{
+public:
+    /// How tall the page wants to be, so one taller than its window scrolls
+    /// rather than squashing its controls into unreadable stubs.
+    [[nodiscard]] virtual int getPreferredHeight() const = 0;
+};
+
+/// A page of controls, arranged in **groups**. Each group has its own heading,
+/// its own column count and its own panel behind it.
+///
+/// Per-group columns rather than one count for the page, because the groups
+/// genuinely differ: an oscillator is ten controls that want five across, and a
+/// modulation slot is three that want six so two slots share a row. Forcing
+/// both onto one grid leaves a ragged edge on every page.
+class ControlPage final : public Page
+{
+public:
+    ControlPage (juce::AudioProcessorValueTreeState& state, ui::Palette palette)
+        : state_ (state), palette_ (palette) {}
+
+    /// Starts a group. Everything added after this lands in it.
+    ///
+    /// A `--` in the text splits the name from its explanation, and the two are
+    /// drawn differently: the name is the thing being looked for, and setting
+    /// the whole line in one weight makes a page of six headings read as six
+    /// sentences rather than as six labels.
+    void addHeading (const juce::String& text, int columns);
 
     void addKnob (const juce::String& parameterId, const juce::String& name,
                   const juce::String& tooltip);
@@ -38,80 +136,170 @@ public:
     void addToggle (const juce::String& parameterId, const juce::String& name,
                     const juce::String& tooltip);
 
-    /// A row-spanning heading. Takes the rest of the current row with it, so a
-    /// group always starts at the left edge.
-    void addHeading (const juce::String& text);
-
+    /// Leaves a hole, so the cell after it starts where it should.
     void addGap();
 
-    /// A line of guidance under the grid, for the things too important to leave
-    /// in a tooltip nobody hovers over.
-    void setNote (const juce::String& note);
-
-    /// Greys a control out. Used for the controls a switch makes inert: a knob
-    /// that moves and does nothing reads as a broken plugin rather than a mode.
+    /// Greys a control out. Used for the ones a switch makes inert: a knob that
+    /// moves and does nothing reads as a broken plugin rather than as a mode.
     void setControlEnabled (const juce::String& parameterId, bool enabled);
 
-    /// How tall the grid wants to be, so a page taller than its window scrolls
-    /// rather than squashing its knobs into unreadable stubs.
-    [[nodiscard]] int getPreferredHeight() const;
+    [[nodiscard]] int getPreferredHeight() const override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
-    struct Knob
+    struct Group
     {
-        juce::String id;
-        juce::Slider slider;
-        juce::Label  label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+        juce::String heading;
+        juce::String detail;
+        int columns { 5 };
+
+        /// Null for a gap, so the grid can leave a hole without a placeholder
+        /// component to own.
+        std::vector<ParameterCell*> cells;
+
+        juce::Rectangle<int> bounds;   ///< filled in by `resized`
     };
 
-    struct Choice
-    {
-        juce::String   id;
-        juce::ComboBox box;
-        juce::Label    label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
-    };
+    [[nodiscard]] Group& currentGroup();
+    [[nodiscard]] int rowsIn (const Group& group) const;
+    [[nodiscard]] int totalRows() const;
 
-    struct Toggle
-    {
-        juce::String       id;
-        juce::ToggleButton button;
-        juce::Label        label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
-    };
-
-    struct Heading
-    {
-        juce::Label label;
-    };
-
-    struct Cell
-    {
-        enum class Kind { knob, choice, toggle, heading, gap } kind {};
-        int index {};
-    };
-
-    /// Where each cell lands, in grid coordinates. Headings take a whole row,
-    /// so a cell's position is not its index divided by the column count and
-    /// has to be worked out by walking the list.
-    [[nodiscard]] int rowCount() const;
+    void add (std::unique_ptr<ParameterCell> cell);
 
     juce::AudioProcessorValueTreeState& state_;
     ui::Palette palette_;
-    int columns_;
 
-    std::vector<std::unique_ptr<Knob>>    knobs_;
-    std::vector<std::unique_ptr<Choice>>  choices_;
-    std::vector<std::unique_ptr<Toggle>>  toggles_;
-    std::vector<std::unique_ptr<Heading>> headings_;
-    std::vector<Cell> cells_;
+    std::vector<std::unique_ptr<ParameterCell>> owned_;
+    std::vector<Group> groups_;
 
-    juce::String note_;
-    juce::Rectangle<int> noteArea_;
+    /// How far down the last group reaches, so the panel behind the groups is
+    /// painted over the content rather than over the whole page.
+    int contentHeight_ { 0 };
+};
+
+/// An ADSR drawn as the shape it is, and dragged by its corners.
+///
+/// Five knobs describe an envelope completely and show it not at all. The curve
+/// is the thing being edited -- how fast it opens, how far it falls, how long it
+/// hangs on -- and none of that is legible as five numbers. So: a graph with
+/// three handles, and the knobs kept underneath for the precision the graph
+/// cannot give.
+///
+/// **The curve drawn is the curve that plays.** The segments are the same
+/// exponentials `dsp::Adsr` runs, with the same overshoot mapping read from the
+/// same constants, so the shape control bends the picture exactly as far as it
+/// bends the sound. A graph drawn from straight lines would be a decoration.
+///
+/// **The horizontal axis is the knobs' own travel**, not seconds. Each segment
+/// gets a fixed slice of the width and fills the fraction of it that its
+/// parameter is along its range -- so a handle is exactly where the knob is,
+/// dragging is the knob's own skew rather than a second scale to learn, and a
+/// 5 ms attack beside a 5 s release is still visible. A linear time axis would
+/// put every useful attack in the first three pixels.
+class EnvelopeEditor final : public juce::Component,
+                             public juce::SettableTooltipClient
+{
+public:
+    EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
+                    juce::String attackId, juce::String decayId, juce::String sustainId,
+                    juce::String releaseId, juce::String shapeId);
+
+    /// Re-reads the parameters and repaints if any of them moved. Driven by the
+    /// editor's timer rather than one of its own -- the panel already ticks at
+    /// 30 Hz, and a second timer per envelope is three more wakeups a frame for
+    /// nothing.
+    void refresh (double level);
+
+    void paint (juce::Graphics&) override;
+
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+private:
+    /// Which corner is being dragged. The middle handle carries two parameters
+    /// at once -- across is the decay time, up and down is the sustain level --
+    /// which is what makes the graph quicker than the knobs rather than merely
+    /// prettier.
+    enum class Handle { none, attack, decaySustain, release };
+
+    struct Geometry
+    {
+        juce::Rectangle<float> plot;
+        float attackX {}, decayX {}, holdEndX {}, releaseX {};
+        float sustainY {};
+    };
+
+    [[nodiscard]] Geometry geometry() const;
+    [[nodiscard]] Handle handleAt (juce::Point<float> position) const;
+    [[nodiscard]] juce::Point<float> handlePosition (Handle handle, const Geometry& g) const;
+
+    [[nodiscard]] float normalised (const juce::String& id) const;
+    void setNormalised (const juce::String& id, float value, bool gesture);
+
+    /// The level an `Adsr` segment is at, a fraction `u` of the way through it,
+    /// travelling from `from` to `to`. The library's arithmetic, not an
+    /// approximation of it.
+    [[nodiscard]] static double segment (double u, double from, double to, double overshoot);
+
+    void appendSegment (juce::Path& path, float x0, float y0, float x1, float y1,
+                        double from, double to, double overshoot) const;
+
+    juce::AudioProcessorValueTreeState& state_;
+    ui::Palette palette_;
+
+    juce::String attackId_, decayId_, sustainId_, releaseId_, shapeId_;
+
+    Handle dragging_ { Handle::none };
+    Handle hovered_ { Handle::none };
+
+    /// What the graph was last drawn from, so a repaint only happens when
+    /// something moved. Deliberately impossible starting values.
+    float shown_[5] { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+    float shownLevel_ { -1.0f };
+
+    float level_ { 0.0f };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EnvelopeEditor)
+};
+
+/// The three envelopes: a graph each, with its knobs beside it.
+class EnvelopePage final : public Page
+{
+public:
+    EnvelopePage (juce::AudioProcessorValueTreeState& state, ui::Palette palette);
+
+    /// Pushes the live levels onto the three graphs.
+    void refresh (const SonitusProcessor& processor);
+
+    [[nodiscard]] int getPreferredHeight() const override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    struct Block
+    {
+        juce::String heading;
+        juce::String detail;
+        std::unique_ptr<EnvelopeEditor> graph;
+        std::vector<std::unique_ptr<ParameterCell>> knobs;
+        juce::Rectangle<int> bounds;
+    };
+
+    void addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
+                   const juce::String& detail, const char* attackId, const char* decayId,
+                   const char* sustainId, const char* releaseId, const char* shapeId,
+                   const char* extraId, const juce::String& extraName,
+                   const juce::String& extraTooltip);
+
+    ui::Palette palette_;
+    std::vector<Block> blocks_;
 };
 
 /// The sixteen steps, as sixteen vertical faders with the playing one lit.
@@ -149,7 +337,7 @@ private:
 /// Its own component rather than a `ControlPage` because none of it is a
 /// parameter -- a scale is text, and the two file buttons are the only things
 /// in this plugin that touch a filesystem.
-class TuningPage final : public juce::Component
+class TuningPage final : public Page
 {
 public:
     TuningPage (SonitusProcessor& processorToUse, ui::Palette palette);
@@ -157,6 +345,8 @@ public:
     /// Refreshes the description from the processor. Called when something has
     /// changed the tuning, including a state load from the host.
     void refresh();
+
+    [[nodiscard]] int getPreferredHeight() const override { return 300; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -198,7 +388,7 @@ class SonitusEditor final : public juce::AudioProcessorEditor,
 {
 public:
     explicit SonitusEditor (SonitusProcessor& processorToUse);
-    ~SonitusEditor() override = default;
+    ~SonitusEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -215,36 +405,57 @@ private:
 
     SonitusProcessor& sonitus_;
 
+    ui::Palette palette_;
+
+    /// Set on this editor before any child exists and cleared in the
+    /// destructor, so nothing outlives it. A look and feel destroyed while a
+    /// component still points at it is a use-after-free with no symptom until
+    /// the host repaints.
+    ui::KnobLookAndFeel lookAndFeel_;
+
     juce::TooltipWindow tooltips_ { this, 500 };
 
-    ui::Palette palette_;
     std::unique_ptr<ui::HeaderBar> header_;
 
     static constexpr int kNumPages = 6;
 
-    /// The MOD page is the one with the step strip under its grid, so it is
-    /// named rather than numbered where the layout needs it.
-    static constexpr int kModPage = 3;
+    /// The MOD page is the one with the step strip under its grid, and the ENV
+    /// page is the bespoke one, so both are named rather than numbered where
+    /// the layout needs them.
+    static constexpr int kOscPage    = 0;
+    static constexpr int kFilterPage = 1;
+    static constexpr int kEnvPage    = 2;
+    static constexpr int kModPage    = 3;
+    static constexpr int kManglePage = 4;
     static constexpr int kTuningPage = 5;
 
-    std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;
+    std::array<std::unique_ptr<Page>, kNumPages> pages_;
     std::array<juce::TextButton, kNumPages> tabs_;
     int currentPage_ { 0 };
 
-    /// Pages scroll rather than squash. The MOD page carries three groups, six
-    /// voice slots and three global ones -- ten rows -- and at the minimum
-    /// window size that is taller than the space available. A knob compressed
-    /// to nothing is unusable in a way a scroll bar is not, so the grid keeps
-    /// its row height and the viewport takes the difference.
+    /// Pages scroll rather than squash. A knob compressed to nothing is
+    /// unusable in a way a scroll bar is not, so the grid keeps its row height
+    /// and the viewport takes the difference.
     juce::Viewport viewport_;
 
-    std::unique_ptr<StepStrip>  steps_;
-    std::unique_ptr<TuningPage> tuning_;
+    std::unique_ptr<StepStrip> steps_;
+
+    /// The guidance line for each page, shown in a fixed strip under the
+    /// viewport. On the page it lived below the fold exactly where it was
+    /// wanted -- the two pages long enough to scroll are the two whose notes
+    /// carry the live readings.
+    std::array<juce::String, kNumPages> notes_;
+    WrappingLabel noteLabel_;
 
     std::unique_ptr<ui::LevelMeter> outputMeter_;
     juce::Label outputMeterLabel_ { {}, "OUT" };
 
     WrappingLabel statusLabel_;
+
+    /// The `ControlPage`s, by index, for the greying. Null for the pages that
+    /// are not one, which is how a lookup that would have been a bad cast
+    /// becomes a null check.
+    [[nodiscard]] ControlPage* controlPage (int index) const;
 
     /// What the panel is currently dressed for, so the greying and the notes
     /// are not recomputed every tick. Deliberately impossible starting values,

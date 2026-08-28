@@ -122,8 +122,11 @@ it is worth nothing standing still: put a mod envelope on **Pitch B**.
 **PM** — phase modulation of B by A. The same sidebands as FM with no DC drift,
 which is why every "FM" synth since the DX7 has actually been a PM synth.
 
-**Sub** — sine or square, one or two octaves down. Generated in the voice and
-then taken *out* of the mangle by the split.
+**Sub** — sine or square, anywhere from **two octaves below the note to two
+above**. Zero doubles the note rather than underpinning it, which is a thickener;
+above the note it stops being a sub at all and becomes a fixed-interval second
+voice. Generated in the voice and then taken *out* of the mangle by the split,
+whichever octave it is in.
 
 **Ring** — A × B. The sum and difference of every pair of their harmonics and
 almost nothing at either original pitch.
@@ -154,10 +157,28 @@ through one envelope and glides between its notes.
 
 ### ENV
 
-Three ADSRs — amp, and two spare — each with a **Shape** control. At zero the
-segments are nearly straight, which sounds mechanical because nothing physical
-decays linearly; turned up they are the sharp exponential of a capacitor
-discharging.
+Three ADSRs — amp, and two spare — each drawn as **the shape it is**, with three
+draggable corners: attack across, decay across and sustain up and down on the
+middle one, release across. The five knobs beside each graph do the same job to
+the sample; the graph is for finding a shape, the knobs are for pinning it down.
+Double-click a corner to put it back to its default.
+
+The curve drawn is the curve that plays. The segments are the same exponentials
+`dsp::Adsr` runs, reading the same overshoot constants, so **Shape** bends the
+picture exactly as far as it bends the sound. At zero the segments are nearly
+straight, which sounds mechanical because nothing physical decays linearly;
+turned up they are the sharp exponential of a capacitor discharging — and
+crucially, **not** slower, because the time constant is corrected for the shape.
+
+The horizontal axis is the knobs' own travel rather than seconds: each segment
+gets a fixed slice of the width and fills the fraction of it that its parameter
+is along its range. So a handle sits exactly where its knob does, and a 5 ms
+attack beside a 5 s release is still visible. A linear time axis would put every
+useful attack in the first three pixels.
+
+The bar down the right of each graph is that envelope's live output on the most
+recently played note — the same tracked note the comb and the vowel filter
+follow.
 
 ### MOD
 
@@ -167,21 +188,56 @@ Two LFOs, a sixteen-step sequencer, and two matrices.
 rate pinned at nothing so the depth comes from somewhere else. The panel shows
 it as "held" rather than "0.00 Hz".
 
+**Retrig** restarts an LFO from the top of its cycle on every note. Free-running
+is right for a wobble that should keep its place across a phrase; retriggered is
+right for anything that has to line up with the note. On a reese the difference
+is the whole sound — with it on, every note gets the same phase relationship and
+the growl is repeatable.
+
+**Key track** makes an LFO's rate follow the played note, referenced to middle C.
+At 100% an octave up doubles the rate, so the modulation keeps its relationship
+to the pitch all the way up the keyboard and reads as part of the tone rather
+than as an effect laid over it.
+
 **Seq to rate** points the sequencer at LFO 1's *rate*, in octaves — a wobble
 that changes tempo on the step.
 
 | matrix | slots | sources | destinations |
 |---|---|---|---|
 | **Voice** | 6 | amp env, mod env 1–2, velocity, key track, note random, LFO 1–2, sequencer | cutoff, resonance, filter drive, PM index, width A/B, detune A/B, osc mix, sub level, ring, fold, pitch, pitch B, level |
-| **Global** | 3 | LFO 1–2, sequencer | **comb time**, comb feedback, comb mix, phase centre, vowel, tube, output |
+| **Global** | 3 | LFO 1–2, sequencer, **amp env, mod env 1–2, velocity** | **comb time**, comb feedback, comb mix, phase centre, vowel, tube, output, harmonic, notch |
 
-They are separate because the per-note sources have one value *per sounding
-note* and the mangle is one chain: "amp envelope drives the comb" has no answer
-with eight notes down.
+They are separate because the per-note sources have one value *per sounding note*
+and the mangle is one chain. The global matrix takes them anyway, by the same
+route the comb and the vowel filter already use: it **follows the tracked note**,
+the most recently started voice still sounding. That makes the whole mangle
+follow one note rather than three stages disagreeing about which. With nothing
+sounding those sources read zero, which is the right answer for an envelope.
 
-Depths are stored as percentages and scaled into each destination's own units —
-cutoff is 6 octaves at full, pitch is 2, comb time is 3, phase centre is 4,
-tube and output are 24 dB.
+#### Depth is square, and the ends are extreme
+
+The depth law is `sign(d)·d²`, bipolar, in both matrices. That resolves precision
+against reach in one knob rather than adding a range switch: a tenth of the
+travel is a hundredth of the depth, so fine control survives at the bottom while
+the end of the knob is enormous.
+
+| destination | full depth | a tenth of the knob |
+|---|---|---|
+| Pitch, Pitch B | ±7200 cents — **six octaves** | 72 cents |
+| Cutoff | ±10 octaves | 0.1 octave |
+| Detune A/B | ±1200 cents | 12 cents |
+| PM index | ×16 | ×0.16 |
+| Comb time, Phase centre | ±6 octaves | 0.06 octave |
+| Tube | ±36 dB | 0.36 dB |
+| Harmonic | ±23 partials | 0.23 |
+| Notch | ±6 octaves | 0.06 octave |
+| Output | ±24 dB | 0.24 dB |
+
+Comb time and Phase centre deliberately overshoot their own controls' ranges, so
+a full-depth envelope drives into the ends and stays there for part of the sweep
+— which is the point for a sync-style effect. **Output is the one held back**: it
+is a level rather than a character, and thirty-six decibels of it swinging under
+an envelope is a hazard, not a sound.
 
 The sequencer is drawn as sixteen faders rather than sixteen knobs, because the
 *shape* of the pattern is the thing being edited. The playing step is lit.
@@ -453,6 +509,43 @@ ever sit genuinely inside the loop without iterating.
 ---
 
 ## Changelog
+
+### Unreleased
+
+**The panel, reworked.** Smaller controls, denser layout, and the envelopes
+drawn rather than tabulated.
+
+- A shared **arc-and-pointer look and feel** (`shared/tezla-ui/KnobLookAndFeel`).
+  A stroke of constant thickness reads at any diameter where a filled wedge
+  turns into a blob, which is what makes a 40-pixel knob legible — and 40 pixels
+  is what sixty controls on six pages need. The arc grows from the parameter's
+  **anchor**, found from the range itself, so a bipolar control draws as a
+  departure from centre rather than as a bar growing from the far left.
+- Pages are built from **groups**, each with its own heading, its own column
+  count and its own panel. A short group centres on what it has rather than on
+  what it was allowed.
+- The **ENV page is bespoke**: three draggable graphs with their knobs beside
+  them. See the ENV section above.
+- The guidance note moved from the bottom of the page to a **fixed strip under
+  the viewport**. On the page it was below the fold on exactly the two pages long
+  enough to scroll — and the MANGLE note is the one that says what oversampling
+  is doing right now.
+- **LFO Retrig and Key track reached the panel.** Both parameters existed and
+  were wired to the engine; neither had a control, so neither could be used.
+- Grouping fixes that were invisible while headings were only row separators:
+  Sync and PM are their own group, and Output and Oversampling are no longer
+  filed under Overtone.
+
+**Modulation depth is square, and the ceilings are raised.** See the table in
+the MOD section. **The sub oscillator moved to −2..+2 octaves.**
+
+**The editor is now checkable from here.** `tezla-render editor` drives it with
+no display: `hit:<id>` asks whether a control is the thing a click at its own
+centre would reach, and `shot:` photographs a page. Every tab, every page, the
+step strip, the three envelope graphs and every parameter cell carry a component
+id, so the check covers them. Seen red by replacing the step strip's
+`addAndMakeVisible` with a bare `setVisible` — which is the bug that shipped in
+v0.1.0 — and the run exits 1 with "no component with id steps".
 
 ### v0.1.0
 

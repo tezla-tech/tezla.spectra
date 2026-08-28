@@ -106,6 +106,7 @@ void Engine::reset() noexcept
     tubeGain_.setCurrentAndTarget (1.0);
 
     sinceControl_ = 0;
+    seenNoteOns_ = voices_.getNoteOnCount();
     beatsIntoBlock_ = 0.0;
     sources_ = {};
     combModulation_ = 1.0;
@@ -127,7 +128,6 @@ void Engine::applyPending() noexcept
     lfo1_.setWave (active_.lfo1Wave);
     lfo1_.setSmooth (active_.lfo1Smooth);
     lfo2_.setWave (active_.lfo2Wave);
-    lfo2_.setRateHz (active_.lfo2RateHz);
     lfo2_.setSmooth (active_.lfo2Smooth);
 
     sequencer_.setLength (active_.sequencerLength);
@@ -184,12 +184,49 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::lfo2:      value = sources_.lfo2; break;
             case GlobalSource::sequencer: value = sources_.sequencer; break;
 
+            // The tracked note -- the same one the comb and the formant
+            // follow, so the whole mangle moves with one note rather than three
+            // stages each picking their own. Nothing sounding reads zero, which
+            // is what a closed envelope is.
+            case GlobalSource::ampEnvelope:
+            case GlobalSource::modEnvelope1:
+            case GlobalSource::modEnvelope2:
+            case GlobalSource::velocity:
+            {
+                const Voice* voice = voices_.trackedVoice();
+
+                if (voice == nullptr)
+                    break;
+
+                switch (slot.source)
+                {
+                    case GlobalSource::ampEnvelope:  value = voice->getAmpLevel(); break;
+                    case GlobalSource::modEnvelope1: value = voice->getModEnvelopeLevel (0); break;
+                    case GlobalSource::modEnvelope2: value = voice->getModEnvelopeLevel (1); break;
+                    case GlobalSource::velocity:     value = voice->getVelocity(); break;
+
+                    // Unreachable -- the outer switch has already sorted these
+                    // out -- but listed rather than defaulted, so a source
+                    // added to the enum and forgotten here stops the build.
+                    case GlobalSource::none:
+                    case GlobalSource::lfo1:
+                    case GlobalSource::lfo2:
+                    case GlobalSource::sequencer:
+                    case GlobalSource::count:
+                    default: break;
+                }
+
+                break;
+            }
+
             case GlobalSource::none:
             case GlobalSource::count:
             default: break;
         }
 
-        total += slot.depth * value;
+        // Squared, like the voice matrix's -- one law for both, so a depth
+        // knob reads the same wherever it is.
+        total += shapedDepth (slot.depth) * value;
     }
 
     return total;
@@ -201,9 +238,16 @@ void Engine::applyGlobalModulation() noexcept
     // move in **octaves**, because a comb delay and a filter centre are pitches
     // in disguise: an additive sweep would crawl at the bottom of the range and
     // leap at the top, which is the wrong shape for the thing being swept.
-    static constexpr double kCombOctaves = 3.0;
-    static constexpr double kPhaseOctaves = 4.0;
-    static constexpr double kTubeDecibels = 24.0;
+    // Deliberately extreme, and usable because the depth law is squared: the
+    // comb's own range is about ten octaves, so six of them is most of it.
+    static constexpr double kCombOctaves = 6.0;
+    static constexpr double kPhaseOctaves = 6.0;
+    static constexpr double kTubeDecibels = 36.0;   // the control's own maximum
+
+    // The one that stays where it was. Output is a *level*, and thirty-six
+    // decibels of it swinging under an envelope is a hazard rather than a
+    // sound -- everything else here changes timbre, this changes how loud the
+    // instrument is in somebody's mix.
     static constexpr double kOutputDecibels = 24.0;
 
     // Drive in front and a matching trim behind, so the control adds harmonics
@@ -238,13 +282,14 @@ void Engine::applyGlobalModulation() noexcept
     // Which partial the lock selects. Additive in *harmonic number* rather than
     // in octaves, because the harmonic series is what it walks: a depth of 1
     // reaches sixteen partials, which at full is two octaves of overtone line.
-    static constexpr double kHarmonicSwing = 16.0;
+    // The whole 1..24 range, reachable from anywhere in it.
+    static constexpr double kHarmonicSwing = 23.0;
 
     formant_.setHarmonic (active_.formantHarmonic
                             + kHarmonicSwing * globalModulationFor (GlobalDestination::formantHarmonic));
 
     // The anti-formant moves in octaves, like every other frequency here.
-    static constexpr double kNotchOctaves = 3.0;
+    static constexpr double kNotchOctaves = 6.0;
 
     formant_.setNotchHz (active_.formantNotchHz
                            * std::pow (2.0, kNotchOctaves
@@ -305,6 +350,21 @@ void Engine::aimComb() noexcept
     readouts_.lfo1.store (sources_.lfo1, std::memory_order_relaxed);
     readouts_.lfo2.store (sources_.lfo2, std::memory_order_relaxed);
     readouts_.sequencer.store (sources_.sequencer, std::memory_order_relaxed);
+
+    // The same tracked voice again. When nothing is sounding the envelopes read
+    // zero rather than holding their last value, which is the honest answer: an
+    // idle instrument's envelope is not paused part-way up, it is over.
+    if (const Voice* voice = voices_.trackedVoice())
+    {
+        readouts_.envelopeLevels[0].store (voice->getAmpLevel(), std::memory_order_relaxed);
+        readouts_.envelopeLevels[1].store (voice->getModEnvelopeLevel (0), std::memory_order_relaxed);
+        readouts_.envelopeLevels[2].store (voice->getModEnvelopeLevel (1), std::memory_order_relaxed);
+    }
+    else
+    {
+        for (auto& level : readouts_.envelopeLevels)
+            level.store (0.0, std::memory_order_relaxed);
+    }
 }
 
 void Engine::advanceGlobalSources (int samples) noexcept
@@ -326,11 +386,50 @@ void Engine::advanceGlobalSources (int samples) noexcept
 
     beatsIntoBlock_ += samples / internalRate_ * bpm_ / 60.0;
 
+    // **Retrigger.** A note-on the LFOs have not seen yet restarts whichever of
+    // them asked for it. Free-running is right for a pad, where the movement is
+    // ambient; it is exactly wrong for a bass line, where every note would
+    // otherwise land on a different part of the cycle.
+    const auto noteOns = voices_.getNoteOnCount();
+
+    if (noteOns != seenNoteOns_)
+    {
+        seenNoteOns_ = noteOns;
+
+        if (active_.lfo1Retrigger) lfo1_.reset();
+        if (active_.lfo2Retrigger) lfo2_.reset();
+    }
+
+    // **Key tracking.** At full, the rate is proportional to the played note,
+    // so an octave up is twice the speed. The beating that gives a reese its
+    // character is a fraction of the note rather than a fixed number of hertz,
+    // so a wobble that does not track becomes a different sound as the line
+    // moves up the keyboard.
+    //
+    // Referred to middle C, so the control is neutral around where a bass line
+    // actually sits rather than at some arbitrary corner of the range.
+    const double tracked = voices_.trackedFrequency();
+
+    const auto keyTracked = [tracked] (double rate, double amount)
+    {
+        if (amount <= 0.0 || tracked <= 0.0)
+            return rate;
+
+        static constexpr double kReferenceHz = 261.6255653005986;   // C4
+
+        return rate * std::pow (tracked / kReferenceHz, amount);
+    };
+
     // The destination that the brief was reaching for through an automation
     // lane: the sequencer steps the LFO through a pattern of speeds.
     const double octaves = active_.sequencerToLfo1Rate * sources_.sequencer;
 
-    lfo1_.setRateHz (std::clamp (active_.lfo1RateHz * std::pow (2.0, octaves), 0.0, 100.0));
+    lfo1_.setRateHz (std::clamp (
+        keyTracked (active_.lfo1RateHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
+        0.0, 100.0));
+
+    lfo2_.setRateHz (std::clamp (
+        keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, 100.0));
 
     sources_.lfo1 = lfo1_.advance (samples);
     sources_.lfo2 = lfo2_.advance (samples);

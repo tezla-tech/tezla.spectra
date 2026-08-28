@@ -123,6 +123,24 @@ enum class GlobalSource
     lfo2,
     sequencer,
 
+    /// **The tracked note's envelopes and velocity.** Appended, because the
+    /// mangle needs to be envelopable and an LFO is not an envelope.
+    ///
+    /// The objection to per-voice sources here was that they have one value per
+    /// sounding note and the mangle is one chain -- which is true, and the
+    /// answer is the same one the comb and the formant already use: **follow
+    /// the tracked note.** The most recently started voice that is still
+    /// sounding is what the comb tracks the period of and the formant tracks
+    /// the harmonics of, so taking its envelopes too makes the whole mangle
+    /// follow one note rather than three stages disagreeing about which.
+    ///
+    /// With nothing sounding these read zero, which is the right answer for an
+    /// envelope: a released keyboard is a closed envelope.
+    ampEnvelope,
+    modEnvelope1,
+    modEnvelope2,
+    velocity,
+
     count
 };
 
@@ -189,9 +207,28 @@ struct EngineParameters
     double lfo1RateHz { 2.0 };
     double lfo1Smooth { 0.0 };
 
+    /// Restart the LFO from the top of its cycle on every note-on.
+    ///
+    /// Free-running is the right default for a pad -- the movement is ambient
+    /// and should not restart -- and exactly wrong for a bass line, where the
+    /// wobble has to begin where the note does or every note lands on a
+    /// different part of the cycle.
+    bool lfo1Retrigger { false };
+
+    /// How far the LFO's rate follows the played note, 0 to 1.
+    ///
+    /// At 1 the rate is proportional to the note's frequency, so an octave up
+    /// is twice the speed. **This is how a reese phase stays in proportion**:
+    /// the beating that gives a reese its character is a fraction of the note,
+    /// not a fixed number of hertz, so a wobble that does not track turns into
+    /// a different sound as you move up the keyboard.
+    double lfo1KeyTrack { 0.0 };
+
     dsp::Lfo::Wave lfo2Wave { dsp::Lfo::Wave::triangle };
     double lfo2RateHz { 0.25 };
     double lfo2Smooth { 0.0 };
+    bool lfo2Retrigger { false };
+    double lfo2KeyTrack { 0.0 };
 
     /// The step sequencer's rate, in steps per second when free-running.
     double sequencerRateHz { 8.0 };
@@ -373,6 +410,13 @@ public:
         std::atomic<double> lfo1 { 0.0 };
         std::atomic<double> lfo2 { 0.0 };
         std::atomic<double> sequencer { 0.0 };
+
+        /// The tracked note's three envelopes, so the panel can draw a playhead
+        /// on the curve it is editing. The **tracked** note rather than a sum,
+        /// for the same reason the comb and the formant follow it: an envelope
+        /// has one value per voice, and averaging eight of them describes none
+        /// of them. Index 0 is the amplitude envelope, 1 and 2 the mod ones.
+        std::atomic<double> envelopeLevels[3] { { 0.0 }, { 0.0 }, { 0.0 } };
     };
 
     [[nodiscard]] const Readouts& readouts() const noexcept { return readouts_; }
@@ -447,6 +491,10 @@ private:
     /// How many consecutive internal samples the whole chain has produced
     /// **exactly** zero for, with no voice sounding. See `kIdleSamplesSeconds`.
     int idleSamples_ { 0 };
+
+    /// What the LFOs last saw the note-on counter at, so a retrigger fires once
+    /// per note rather than for as long as a note is down.
+    unsigned long long seenNoteOns_ { 0 };
 
     double ppq_ { -1.0 };
     double bpm_ { 120.0 };

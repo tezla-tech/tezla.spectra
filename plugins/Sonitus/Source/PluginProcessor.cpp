@@ -244,12 +244,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::subShape, kSchemaV1 }, "Sub shape", choices::subShape, 0));
 
+    // **Not only downward.** It is called a sub because that is what it is
+    // usually for, but there is no reason the third oscillator should be barred
+    // from the octave the note is in or the one above it -- at 0 it doubles the
+    // note with a clean sine or square, which is a different and useful thing
+    // from detuning oscillator B.
     layout.add (std::make_unique<Integer> (
-        juce::ParameterID { ids::subOctave, kSchemaV1 }, "Sub octave", 1, 2, 1,
+        juce::ParameterID { ids::subOctave, kSchemaV1 }, "Sub octave", -2, 2, -1,
         juce::AudioParameterIntAttributes()
             .withStringFromValueFunction ([] (int value, int)
             {
-                return juce::String ("-") + juce::String (value) + " oct";
+                if (value == 0)
+                    return juce::String ("unison");
+
+                return (value > 0 ? juce::String ("+") : juce::String())
+                         + juce::String (value) + " oct";
             })));
 
     layout.add (std::make_unique<Parameter> (
@@ -300,13 +309,23 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                                         const char* shapeId, const juce::String& prefix,
                                         float defaultSustain)
     {
+        // **The skew is the control**, and the first version of it made the
+        // attack knob unusable. A range of 0 to 10 seconds centred at 50 ms
+        // puts the *bottom forty percent of the travel under ten milliseconds*
+        // and the first quarter under a quarter of one -- so a knob that looks
+        // like it has an attack on it has none, which reads as the envelope
+        // jumping straight to its sustain.
+        //
+        // Centred at 120 ms over five seconds instead: 2.9 ms at a quarter
+        // turn, 36 at 40%, 120 at half, 1.06 s at three quarters. Every part of
+        // the travel does something.
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { attackId, kSchemaV1 }, prefix + " attack",
-            skewedRange (0.0f, 10.0f, 0.05f), 0.005f, timeAttributes()));
+            skewedRange (0.0f, 5.0f, 0.12f), 0.005f, timeAttributes()));
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { decayId, kSchemaV1 }, prefix + " decay",
-            skewedRange (0.0f, 10.0f, 0.2f), 0.2f, timeAttributes()));
+            skewedRange (0.0f, 10.0f, 0.35f), 0.25f, timeAttributes()));
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { sustainId, kSchemaV1 }, prefix + " sustain",
@@ -314,7 +333,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { releaseId, kSchemaV1 }, prefix + " release",
-            skewedRange (0.0f, 10.0f, 0.2f), 0.15f, timeAttributes()));
+            skewedRange (0.0f, 10.0f, 0.35f), 0.15f, timeAttributes()));
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { shapeId, kSchemaV1 }, prefix + " shape",
@@ -380,6 +399,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         juce::ParameterID { ids::lfo1Smooth, kSchemaV1 }, "LFO 1 smooth",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::lfo1Retrig, kSchemaV1 }, "LFO 1 retrigger", false));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::lfo1Key, kSchemaV1 }, "LFO 1 key track",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::lfo2Wave, kSchemaV1 }, "LFO 2 wave", choices::lfoWave, 1));
 
@@ -397,6 +423,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo2Smooth, kSchemaV1 }, "LFO 2 smooth",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::lfo2Retrig, kSchemaV1 }, "LFO 2 retrigger", false));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::lfo2Key, kSchemaV1 }, "LFO 2 key track",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
     layout.add (std::make_unique<Parameter> (
@@ -770,16 +803,34 @@ void SonitusProcessor::pullParameters()
         // The depth is stored as -1..+1 and scaled here into each
         // destination's own units, so the control reads the same wherever it
         // is pointed and the DSP never has to know what a percentage means.
-        const double depth = valueOf (state_, ids::modDepth (slot));
+        //
+        // **Squared on the way through** -- see `shapedDepth`. The ranges below
+        // are deliberately extreme, and a linear knob at these ranges would
+        // have no usable middle: five octaves of pitch means a tenth of the
+        // travel is already six semitones.
+        const double depth = shapedDepth (valueOf (state_, ids::modDepth (slot)));
 
         switch (v.slots[slot].destination)
         {
-            case ModDestination::cutoff:      v.slots[slot].depth = depth * 6.0; break;    // octaves
+            // Ten octaves is the whole audible band, so one control move can
+            // cross it and come back.
+            case ModDestination::cutoff:      v.slots[slot].depth = depth * 10.0; break;   // octaves
+
+            // Six octaves -- seventy-two semitones. This is the sync scream:
+            // from a bass C the slave reaches 8.4 kHz, which is the slave
+            // leaving the note behind entirely and its own pitch ceasing to be
+            // a pitch at all.
             case ModDestination::pitch:
-            case ModDestination::pitchB:      v.slots[slot].depth = depth * 2400.0; break; // cents
+            case ModDestination::pitchB:      v.slots[slot].depth = depth * 7200.0; break; // cents
+
+            // An octave of detune is not a unison any more, it is a cluster --
+            // which is a sound rather than a mistake.
             case ModDestination::detuneA:
-            case ModDestination::detuneB:     v.slots[slot].depth = depth * 60.0; break;   // cents
-            case ModDestination::pmIndex:     v.slots[slot].depth = depth * 8.0; break;
+            case ModDestination::detuneB:     v.slots[slot].depth = depth * 1200.0; break; // cents
+
+            // The voice clamps phase modulation at 16 and the depth reached 8,
+            // so half the range was unreachable from the matrix.
+            case ModDestination::pmIndex:     v.slots[slot].depth = depth * 16.0; break;
 
             // The rest are already normalised, so the -1..+1 depth is the
             // depth. Listed rather than defaulted: a destination added to the
@@ -807,9 +858,13 @@ void SonitusProcessor::pullParameters()
     p.lfo1Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo1Wave));
     p.lfo1RateHz = valueOf (state_, ids::lfo1Rate);
     p.lfo1Smooth = valueOf (state_, ids::lfo1Smooth);
+    p.lfo1Retrigger = valueOf (state_, ids::lfo1Retrig) > 0.5f;
+    p.lfo1KeyTrack = valueOf (state_, ids::lfo1Key);
     p.lfo2Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo2Wave));
     p.lfo2RateHz = valueOf (state_, ids::lfo2Rate);
     p.lfo2Smooth = valueOf (state_, ids::lfo2Smooth);
+    p.lfo2Retrigger = valueOf (state_, ids::lfo2Retrig) > 0.5f;
+    p.lfo2KeyTrack = valueOf (state_, ids::lfo2Key);
 
     p.sequencerRateHz = valueOf (state_, ids::seqRate);
     p.sequencerLength = indexOf (state_, ids::seqLength);
@@ -1286,7 +1341,7 @@ const std::vector<Preset>& presets()
                 { ids::unisonB, 3.0f }, { ids::detuneB, 18.0f }, { ids::spreadB, 0.75f },
                 { ids::driftA, 3.0f },  { ids::driftB, 3.0f },
 
-                { ids::subLevel, 0.45f }, { ids::subOctave, 1.0f },
+                { ids::subLevel, 0.45f }, { ids::subOctave, -1.0f },
 
                 { ids::cutoff, 900.0f }, { ids::resonance, 0.28f }, { ids::filterTrack, 0.35f },
 
@@ -1394,7 +1449,7 @@ const std::vector<Preset>& presets()
             {
                 { ids::shapeA, 3.0f },          // sine
                 { ids::octaveA, -1.0f },
-                { ids::subLevel, 0.5f }, { ids::subOctave, 1.0f },
+                { ids::subLevel, 0.5f }, { ids::subOctave, -1.0f },
 
                 { ids::cutoff, 400.0f }, { ids::filterTrack, 1.0f },
 
