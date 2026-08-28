@@ -213,6 +213,17 @@ struct EngineParameters
     /// and should not restart -- and exactly wrong for a bass line, where the
     /// wobble has to begin where the note does or every note lands on a
     /// different part of the cycle.
+    /// How long the LFO's depth takes to come up from nothing after a note.
+    ///
+    /// **Restarted on every note-on, whether or not the LFO itself
+    /// retriggers.** The two are separate ideas -- one is about the waveform's
+    /// phase and the other about its depth -- and tying the fade to the
+    /// retrigger switch would make a control that silently does nothing half
+    /// the time. At 0 the fade is over before it starts and the depth is
+    /// exactly 1, which is what the LFO did before this existed.
+    double lfo1AttackSeconds { 0.0 };
+    double lfo2AttackSeconds { 0.0 };
+
     bool lfo1Retrigger { false };
 
     /// How far the LFO's rate follows the played note, 0 to 1.
@@ -495,6 +506,10 @@ private:
     /// What the LFOs last saw the note-on counter at, so a retrigger fires once
     /// per note rather than for as long as a note is down.
     unsigned long long seenNoteOns_ { 0 };
+
+    /// How far each LFO's fade-in has got, 0 to 1.
+    double lfo1Fade_ { 1.0 };
+    double lfo2Fade_ { 1.0 };
 
     double ppq_ { -1.0 };
     double bpm_ { 120.0 };

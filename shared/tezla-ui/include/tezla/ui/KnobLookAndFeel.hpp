@@ -111,17 +111,34 @@ public:
             const auto body = juce::Rectangle<float> { bodyRadius * 2.0f, bodyRadius * 2.0f }
                                 .withCentre (centre);
 
-            g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.16f), body.getCentreX(),
+            g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.22f), body.getCentreX(),
                                                      body.getY(),
-                                                     palette_.panel.darker (0.30f), body.getCentreX(),
+                                                     palette_.background, body.getCentreX(),
                                                      body.getBottom(), false));
             g.fillEllipse (body);
+
+            // A hairline round the body, brighter at the top. The same trick as
+            // the panel highlight: it is what gives a dark circle an edge.
+            g.setColour (juce::Colours::white.withAlpha (on ? 0.07f : 0.03f));
+            g.drawEllipse (body.reduced (0.5f), 1.0f);
         }
 
-        // The value, from the anchor. A hair of extra width so it sits proud of
-        // the track rather than exactly inside it.
+        // The value, from the anchor -- with a wide, very transparent stroke
+        // behind it.
+        //
+        // That halo is the whole difference between a panel that looks drawn and
+        // one that looks lit. A real LED ring scatters in the diffuser around
+        // it, and two strokes of the same colour at different widths and alphas
+        // is the cheapest honest imitation: no blur, no image, one extra path.
+        // Skipped when the control is disabled, so a greyed knob stays flat and
+        // reads as inert at a glance.
         if (std::abs (angle - anchor) > 1.0e-4f)
+        {
+            if (on)
+                arc (anchor, angle, palette_.accent.withAlpha (0.18f), thickness * 2.4f);
+
             arc (anchor, angle, fill, thickness);
+        }
 
         // The pointer.
         {
@@ -131,6 +148,12 @@ public:
                                             centre.y - inner * std::cos (angle) };
             const juce::Point<float> to { centre.x + outer * std::sin (angle),
                                           centre.y - outer * std::cos (angle) };
+
+            if (on)
+            {
+                g.setColour (palette_.accentBright.withAlpha (0.22f));
+                g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f) * 2.6f);
+            }
 
             g.setColour (on ? palette_.accentBright : palette_.dimText.withAlpha (0.35f));
             g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f));

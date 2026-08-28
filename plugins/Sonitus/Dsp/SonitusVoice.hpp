@@ -280,26 +280,35 @@ struct VoiceParameters
 
     // ---- envelopes -----------------------------------------------------------
 
-    double ampAttack { 0.005 };
-    double ampDecay { 0.200 };
-    double ampSustain { 0.8 };
-    double ampRelease { 0.150 };
-    double ampShape { 0.35 };
+    /// One envelope's five times and three tensions.
+    ///
+    /// A struct rather than fifteen loose fields, because there are three of
+    /// these and every one of them grew a hold and two more tensions at once --
+    /// which is forty-five fields written out longhand, and forty-five chances
+    /// to wire envelope 2's release to envelope 1's.
+    struct Envelope
+    {
+        double attack { 0.005 };
+        double hold { 0.0 };
+        double decay { 0.200 };
+        double sustain { 0.8 };
+        double release { 0.150 };
+
+        /// Bipolar, -1 to +1. Positive is the analogue shape -- fast at first
+        /// and decelerating; negative is the same curve reflected; zero is
+        /// straight. See `dsp::Adsr`.
+        double attackTension { 0.35 };
+        double decayTension { 0.35 };
+        double releaseTension { 0.35 };
+    };
+
+    Envelope amp { 0.005, 0.0, 0.200, 0.8, 0.150, 0.35, 0.35, 0.35 };
 
     /// How much velocity affects loudness. 0 is an organ, 1 is a piano.
     double ampVelocity { 0.5 };        ///< 0 .. 1
 
-    double modAttack1 { 0.005 };
-    double modDecay1 { 0.300 };
-    double modSustain1 { 0.0 };
-    double modRelease1 { 0.200 };
-    double modShape1 { 0.35 };
-
-    double modAttack2 { 0.005 };
-    double modDecay2 { 0.300 };
-    double modSustain2 { 0.0 };
-    double modRelease2 { 0.200 };
-    double modShape2 { 0.35 };
+    Envelope mod1 { 0.005, 0.0, 0.300, 0.0, 0.200, 0.35, 0.35, 0.35 };
+    Envelope mod2 { 0.005, 0.0, 0.300, 0.0, 0.200, 0.35, 0.35, 0.35 };
 
     double level { 0.5 };
 
@@ -522,17 +531,8 @@ public:
         // They are modulation, not audio: 32 samples is 0.67 ms at 48 kHz, well
         // inside the smoothing that follows, and running them per sample would
         // cost more than the oscillators do.
-        modEnvelope1_.setAttackSeconds (parameters.modAttack1);
-        modEnvelope1_.setDecaySeconds (parameters.modDecay1);
-        modEnvelope1_.setSustain (parameters.modSustain1);
-        modEnvelope1_.setReleaseSeconds (parameters.modRelease1);
-        modEnvelope1_.setShape (parameters.modShape1);
-
-        modEnvelope2_.setAttackSeconds (parameters.modAttack2);
-        modEnvelope2_.setDecaySeconds (parameters.modDecay2);
-        modEnvelope2_.setSustain (parameters.modSustain2);
-        modEnvelope2_.setReleaseSeconds (parameters.modRelease2);
-        modEnvelope2_.setShape (parameters.modShape2);
+        applyEnvelope (modEnvelope1_, parameters.mod1);
+        applyEnvelope (modEnvelope2_, parameters.mod2);
 
         modLevel1_ = modEnvelope1_.skip (kControlIntervalSamples);
         modLevel2_ = modEnvelope2_.skip (kControlIntervalSamples);
@@ -578,11 +578,7 @@ public:
         sub_.setShape (parameters.subShape == SubShape::sine ? OscShape::sine : OscShape::pulse);
         sub_.setIncrement (subIncrement (pitchRatio));
 
-        amp_.setAttackSeconds (parameters.ampAttack);
-        amp_.setDecaySeconds (parameters.ampDecay);
-        amp_.setSustain (parameters.ampSustain);
-        amp_.setReleaseSeconds (parameters.ampRelease);
-        amp_.setShape (parameters.ampShape);
+        applyEnvelope (amp_, parameters.amp);
 
         for (auto& filter : filters_)
         {
@@ -827,6 +823,21 @@ private:
     /// to it would make the sounding pitch drop as the detune is turned up. An
     /// even stack has no centre voice to use instead. A separate accumulator
     /// costs one add and one compare per sample and is right at every setting.
+    /// Pushes one `VoiceParameters::Envelope` at one generator. Written once,
+    /// because it is called three times and the difference between the three
+    /// calls should be one argument rather than fifteen lines.
+    static void applyEnvelope (dsp::Adsr& envelope, const VoiceParameters::Envelope& p) noexcept
+    {
+        envelope.setAttackSeconds (p.attack);
+        envelope.setHoldSeconds (p.hold);
+        envelope.setDecaySeconds (p.decay);
+        envelope.setSustain (p.sustain);
+        envelope.setReleaseSeconds (p.release);
+        envelope.setAttackTension (p.attackTension);
+        envelope.setDecayTension (p.decayTension);
+        envelope.setReleaseTension (p.releaseTension);
+    }
+
     /// The smallest and largest subdivision the control offers.
     static constexpr int kMinimumDivisor = 2;
     static constexpr int kMaximumDivisor = 4;

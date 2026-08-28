@@ -354,11 +354,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     // ---- envelopes ----------------------------------------------------------
 
-    const auto addEnvelope = [&layout] (const char* attackId, const char* decayId,
-                                        const char* sustainId, const char* releaseId,
-                                        const char* shapeId, const juce::String& prefix,
+    /// One envelope's eight parameters. A struct rather than eight positional
+    /// arguments, because eight `const char*` in a row is a wiring error
+    /// waiting to happen and the compiler cannot tell decay from release.
+    struct EnvelopeIds
+    {
+        const char* attack;
+        const char* hold;
+        const char* decay;
+        const char* sustain;
+        const char* release;
+        const char* attackTension;
+        const char* decayTension;
+        const char* releaseTension;
+    };
+
+    const auto addEnvelope = [&layout] (const EnvelopeIds& ids_, const juce::String& prefix,
                                         float defaultSustain)
     {
+        const char* attackId = ids_.attack;
+        const char* decayId = ids_.decay;
+        const char* sustainId = ids_.sustain;
+        const char* releaseId = ids_.release;
+
         // **The skew is the control**, and the first version of it made the
         // attack knob unusable. A range of 0 to 10 seconds centred at 50 ms
         // puts the *bottom forty percent of the travel under ten milliseconds*
@@ -385,23 +403,56 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
             juce::ParameterID { releaseId, kSchemaV1 }, prefix + " release",
             skewedRange (0.0f, kMaximumEnvelopeSeconds, 0.35f), 0.15f, timeAttributes()));
 
+        // **Hold**, between the attack and the decay. Zero by default, so an
+        // envelope that has never been told about it behaves exactly as an
+        // ADSR does. Skewed like the other times, centred lower because a hold
+        // is usually a moment rather than a passage.
         layout.add (std::make_unique<Parameter> (
-            juce::ParameterID { shapeId, kSchemaV1 }, prefix + " shape",
-            juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.35f, percentAttributes()));
+            juce::ParameterID { ids_.hold, kSchemaV1 }, prefix + " hold",
+            skewedRange (0.0f, kMaximumEnvelopeSeconds, 0.20f), 0.0f, timeAttributes()));
+
+        // **Tension, per segment and bipolar.** The old single Shape control
+        // ran from "sharp analogue" to "nearly straight" and no further,
+        // because aiming past a destination only bends a curve one way. These
+        // go both ways from a straight middle, and the three segments get their
+        // own, because a percussive envelope is usually a sharp decay under a
+        // straight attack and a swell is the reverse.
+        const auto addTension = [&layout, &prefix] (const char* id, const juce::String& name)
+        {
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { id, kSchemaV1 }, prefix + " " + name + " tension",
+                juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.35f,
+                juce::AudioParameterFloatAttributes()
+                    .withStringFromValueFunction ([] (float value, int)
+                    {
+                        if (std::abs (value) < 0.005f)
+                            return juce::String ("linear");
+
+                        return juce::String (value > 0.0f ? "+" : "")
+                                 + juce::String (value * 100.0f, 0) + " %";
+                    })));
+        };
+
+        addTension (ids_.attackTension, "attack");
+        addTension (ids_.decayTension, "decay");
+        addTension (ids_.releaseTension, "release");
     };
 
-    addEnvelope (ids::ampAttack, ids::ampDecay, ids::ampSustain, ids::ampRelease,
-                 ids::ampShape, "Amp", 0.8f);
+    addEnvelope ({ ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain,
+                   ids::ampRelease, ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT },
+                 "Amp", 0.8f);
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::ampVelocity, kSchemaV1 }, "Velocity to level",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.5f, percentAttributes()));
 
-    addEnvelope (ids::env1Attack, ids::env1Decay, ids::env1Sustain, ids::env1Release,
-                 ids::env1Shape, "Env 1", 0.0f);
+    addEnvelope ({ ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain,
+                   ids::env1Release, ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT },
+                 "Env 1", 0.0f);
 
-    addEnvelope (ids::env2Attack, ids::env2Decay, ids::env2Sustain, ids::env2Release,
-                 ids::env2Shape, "Env 2", 0.0f);
+    addEnvelope ({ ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
+                   ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
+                 "Env 2", 0.0f);
 
     // ---- keyboard -----------------------------------------------------------
 
@@ -456,6 +507,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         juce::ParameterID { ids::lfo1Key, kSchemaV1 }, "LFO 1 key track",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::lfo1Att, kSchemaV1 }, "LFO 1 attack",
+        skewedRange (0.0f, 10.0f, 0.5f), 0.0f, timeAttributes()));
+
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::lfo2Wave, kSchemaV1 }, "LFO 2 wave", choices::lfoWave, 1));
 
@@ -481,6 +536,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo2Key, kSchemaV1 }, "LFO 2 key track",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::lfo2Att, kSchemaV1 }, "LFO 2 attack",
+        skewedRange (0.0f, 10.0f, 0.5f), 0.0f, timeAttributes()));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::seqRate, kSchemaV1 }, "Seq rate",
@@ -830,24 +889,33 @@ void SonitusProcessor::pullParameters()
     v.filterFm = valueOf (state_, ids::filterFm);
     v.filterVelocity = valueOf (state_, ids::filterVel);
 
-    v.ampAttack = valueOf (state_, ids::ampAttack);
-    v.ampDecay = valueOf (state_, ids::ampDecay);
-    v.ampSustain = valueOf (state_, ids::ampSustain);
-    v.ampRelease = valueOf (state_, ids::ampRelease);
-    v.ampShape = valueOf (state_, ids::ampShape);
+    // One envelope's eight, read the same way three times over.
+    const auto pullEnvelope = [this] (VoiceParameters::Envelope& envelope,
+                                      const char* attack, const char* hold, const char* decay,
+                                      const char* sustain, const char* release,
+                                      const char* attackT, const char* decayT,
+                                      const char* releaseT)
+    {
+        envelope.attack = valueOf (state_, attack);
+        envelope.hold = valueOf (state_, hold);
+        envelope.decay = valueOf (state_, decay);
+        envelope.sustain = valueOf (state_, sustain);
+        envelope.release = valueOf (state_, release);
+        envelope.attackTension = valueOf (state_, attackT);
+        envelope.decayTension = valueOf (state_, decayT);
+        envelope.releaseTension = valueOf (state_, releaseT);
+    };
+
+    pullEnvelope (v.amp, ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain,
+                  ids::ampRelease, ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT);
+
     v.ampVelocity = valueOf (state_, ids::ampVelocity);
 
-    v.modAttack1 = valueOf (state_, ids::env1Attack);
-    v.modDecay1 = valueOf (state_, ids::env1Decay);
-    v.modSustain1 = valueOf (state_, ids::env1Sustain);
-    v.modRelease1 = valueOf (state_, ids::env1Release);
-    v.modShape1 = valueOf (state_, ids::env1Shape);
+    pullEnvelope (v.mod1, ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain,
+                  ids::env1Release, ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT);
 
-    v.modAttack2 = valueOf (state_, ids::env2Attack);
-    v.modDecay2 = valueOf (state_, ids::env2Decay);
-    v.modSustain2 = valueOf (state_, ids::env2Sustain);
-    v.modRelease2 = valueOf (state_, ids::env2Release);
-    v.modShape2 = valueOf (state_, ids::env2Shape);
+    pullEnvelope (v.mod2, ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
+                  ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT);
 
     v.level = 1.0;
 
@@ -921,11 +989,13 @@ void SonitusProcessor::pullParameters()
     p.lfo1Smooth = valueOf (state_, ids::lfo1Smooth);
     p.lfo1Retrigger = valueOf (state_, ids::lfo1Retrig) > 0.5f;
     p.lfo1KeyTrack = valueOf (state_, ids::lfo1Key);
+    p.lfo1AttackSeconds = valueOf (state_, ids::lfo1Att);
     p.lfo2Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo2Wave));
     p.lfo2RateHz = valueOf (state_, ids::lfo2Rate);
     p.lfo2Smooth = valueOf (state_, ids::lfo2Smooth);
     p.lfo2Retrigger = valueOf (state_, ids::lfo2Retrig) > 0.5f;
     p.lfo2KeyTrack = valueOf (state_, ids::lfo2Key);
+    p.lfo2AttackSeconds = valueOf (state_, ids::lfo2Att);
 
     p.sequencerRateHz = valueOf (state_, ids::seqRate);
     p.sequencerLength = indexOf (state_, ids::seqLength);

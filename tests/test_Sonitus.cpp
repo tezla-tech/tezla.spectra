@@ -57,9 +57,9 @@ EngineParameters brutal()
     parameters.voice.resonance = 0.7;
     parameters.voice.filterDrive = 0.7;
     parameters.voice.filterFm = 0.3;
-    parameters.voice.ampAttack = 0.001;
-    parameters.voice.ampSustain = 1.0;
-    parameters.voice.ampRelease = 0.05;
+    parameters.voice.amp.attack = 0.001;
+    parameters.voice.amp.sustain = 1.0;
+    parameters.voice.amp.release = 0.05;
     parameters.voice.ampVelocity = 0.0;
     parameters.voice.level = 0.5;
 
@@ -354,8 +354,8 @@ TEZLA_TEST (aliasing_stays_below_sixty_decibels_across_the_bass_range)
     parameters.voice.cutoffHz = 16000.0;
     parameters.voice.resonance = 0.7;
     parameters.voice.filterDrive = 0.7;
-    parameters.voice.ampAttack = 0.001;
-    parameters.voice.ampSustain = 1.0;
+    parameters.voice.amp.attack = 0.001;
+    parameters.voice.amp.sustain = 1.0;
     parameters.voice.ampVelocity = 0.0;
     parameters.voice.level = 0.5;
     parameters.keyboard = KeyboardMode::mono;
@@ -457,8 +457,8 @@ TEZLA_TEST (the_wave_folder_is_antialiased_rather_than_merely_oversampled)
         parameters.voice.unisonA = 1;
         parameters.voice.foldAmount = fold;
         parameters.voice.cutoffHz = 16000.0;
-        parameters.voice.ampAttack = 0.001;
-        parameters.voice.ampSustain = 1.0;
+        parameters.voice.amp.attack = 0.001;
+        parameters.voice.amp.sustain = 1.0;
         parameters.voice.ampVelocity = 0.0;
         parameters.voice.level = 0.5;
         parameters.keyboard = KeyboardMode::mono;
@@ -1147,7 +1147,7 @@ TEZLA_TEST (an_idle_instrument_stops_doing_arithmetic)
 
     parameters.voice.shapeA = OscShape::saw;
     parameters.voice.levelA = 1.0;
-    parameters.voice.ampSustain = 1.0;
+    parameters.voice.amp.sustain = 1.0;
     parameters.oversampling = OversamplingMode::X4;
 
     Engine engine;
@@ -1210,7 +1210,7 @@ TEZLA_TEST (the_idle_skip_never_cuts_a_tail)
         parameters.combFeedback = feedback;
         parameters.combMix = 1.0;
         parameters.combDamping = 0.0;
-        parameters.voice.ampRelease = 0.02;
+        parameters.voice.amp.release = 0.02;
 
         Engine engine;
         engine.setParameters (parameters);
@@ -1430,8 +1430,8 @@ TEZLA_TEST (an_envelope_can_drive_a_global_destination)
 
     // A slow attack, so the envelope's rise is visible in the notch rather than
     // being over before the first block ends.
-    parameters.voice.ampAttack = 0.4;
-    parameters.voice.ampSustain = 1.0;
+    parameters.voice.amp.attack = 0.4;
+    parameters.voice.amp.sustain = 1.0;
     parameters.voice.ampVelocity = 0.0;
 
     parameters.globalSlots[0] = { GlobalSource::ampEnvelope, GlobalDestination::combTime, 1.0 };
@@ -1685,8 +1685,8 @@ EngineParameters bareSine()
     parameters.voice.unisonA = 1;
     parameters.voice.unisonB = 1;
     parameters.voice.cutoffHz = 18000.0;
-    parameters.voice.ampAttack = 0.001;
-    parameters.voice.ampSustain = 1.0;
+    parameters.voice.amp.attack = 0.001;
+    parameters.voice.amp.sustain = 1.0;
     parameters.voice.level = 0.5;
 
     parameters.keyboard = KeyboardMode::mono;
@@ -2141,4 +2141,74 @@ TEZLA_TEST (kargyraa_does_not_alias)
     // grossly audible. That is the difference between a modulator with a finite
     // Fourier series and one without, and it is why the shape is what it is.
     CHECK (relativeDb < -60.0);
+}
+
+TEZLA_TEST (an_lfo_attack_fades_its_depth_in_from_the_note)
+{
+    // A delayed vibrato: the note arrives steady and the movement creeps in
+    // after it. Measured as the peak swing of the source itself over the first
+    // and last thirds of a render, because a fade is a claim about *depth* over
+    // time and a single peak reading cannot see it.
+    constexpr double rate = 48000.0;
+    constexpr double seconds = 1.2;
+
+    const auto swings = [] (double attackSeconds)
+    {
+        auto parameters = brutal();
+
+        parameters.lfo1Wave = Lfo::Wave::sine;
+        parameters.lfo1RateHz = 20.0;
+        parameters.lfo1Smooth = 0.0;
+        parameters.lfo1AttackSeconds = attackSeconds;
+        parameters.globalSlots[0] = { GlobalSource::none, GlobalDestination::none, 0.0 };
+
+        Engine engine;
+        engine.prepare (rate, 64);
+        engine.setParameters (parameters);
+        engine.noteOn (60, 1.0);
+
+        Buffers buffers (64);
+
+        const int blocks = static_cast<int> (rate * seconds) / 64;
+
+        double early = 0.0;
+        double late = 0.0;
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            std::fill (buffers.left.begin(), buffers.left.end(), 0.0);
+            std::fill (buffers.right.begin(), buffers.right.end(), 0.0);
+
+            engine.process (buffers.pointers, 64);
+
+            const double value = std::abs (engine.readouts().lfo1.load());
+
+            if (block < blocks / 6)
+                early = std::max (early, value);
+            else if (block > blocks * 5 / 6)
+                late = std::max (late, value);
+        }
+
+        struct Result { double early, late; };
+
+        return Result { early, late };
+    };
+
+    // With no attack the depth is there from the first cycle, and the two
+    // thirds read the same.
+    const auto none = swings (0.0);
+
+    CHECK (none.early > 0.9);
+    CHECK (none.late > 0.9);
+
+    // With a one-second attack the first sixth is a long way down and the last
+    // sixth is at full depth.
+    const auto slow = swings (1.0);
+
+    CHECK (slow.early < 0.2);
+    CHECK (slow.late > 0.9);
+
+    // And it is a fade rather than a gate -- the early reading is small but not
+    // zero, because the LFO is running the whole time.
+    CHECK (slow.early > 0.0);
 }

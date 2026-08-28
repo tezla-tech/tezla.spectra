@@ -11,23 +11,109 @@ namespace tezla::sonitus
 
 namespace
 {
-// Sonitus's own accent: an acid green-yellow, against Emberdrive's ember,
-// Halo's gold, Capstone's steel, Anvil's hot iron and Transpectus's green. The
-// secondary carries the modulation -- the LFO bars, the playing step, an
-// envelope's live level -- which is the one reading here that is not a level,
-// and the two must not be confusable at a glance.
+// ---------------------------------------------------------------------------
+// The palette: hot pink, and five siblings a golden angle apart
+// ---------------------------------------------------------------------------
+//
+// **There is no colour that makes anyone more creative**, and it is worth
+// saying plainly because the claim is everywhere. The one study people cite --
+// Mehta & Zhu, *Science* 2009, blue for creative tasks and red for detail ones
+// -- is a single line of work with small effects and a contested replication
+// record. So this palette is not chasing that. It is chasing *fun*, which is a
+// perfectly good reason, and it is built with real arithmetic underneath so the
+// fun is coherent rather than random.
+//
+// **Hot pink is the anchor.** #FF69B4 in OKLCH is L 0.728, C 0.197, H 352 --
+// and everything else is derived from that hue by the **golden angle**,
+// 137.50776 degrees. That is not decoration: rotating by the golden angle is
+// the one step that never repeats and never clusters, which is why sunflowers
+// use it to pack seeds and why it is the right way to spread N hues round a
+// wheel when you do not know N in advance. Six turns of it give six hues that
+// are all as far from each other as six hues can be.
+//
+//     OSC   352 pink      FILTER 182 cyan     ENV    267 blue
+//     MOD    45 orange    MANGLE 320 magenta  TUNING 130 lime
+//
+// **Every accent shares one lightness** (L 0.74) and takes its own hue's
+// maximum available chroma in sRGB. Equal lightness in OKLab means equal
+// *perceived* brightness, so the six read as one family rather than as some
+// loud colours and some quiet ones -- and taking each one to its own gamut
+// limit is what keeps them candy rather than pastel. A single shared chroma
+// would have been more "correct" and would have dragged the pink down to a
+// dusty rose, because cyan cannot be as chromatic as magenta at any lightness.
+// Vividness wins here; it is a synthesiser, not a spreadsheet.
+//
+// The dark half is not grey. Background, panel and group are a deep plum -- the
+// pink's own hue at C 0.03-0.04 -- so the whole panel sits in one colour world
+// instead of colour floating on neutral. Text is warm off-white for the same
+// reason.
+//
+// What is *not* negotiable and is still measured: every accent clears 6.4:1
+// against its group panel, text sits at 13:1, and the dim labels at 4.6:1 --
+// all past WCAG AA. Chroma is spent on the six accents and almost nowhere else,
+// because long stretches of high chroma are tiring to look at.
+//
+// The identity is unchanged where it has to be: bypass orange is the same in
+// every plugin, and "over" is the same red.
 const ui::Palette kPalette {
-    juce::Colour { 0xff101312 },   // background
-    juce::Colour { 0xff191d1c },   // panel
-    juce::Colour { 0xffd7ddd6 },   // text
-    juce::Colour { 0xff7f8a83 },   // dim text
-    juce::Colour { 0xffa8c93a },   // accent: acid
-    juce::Colour { 0xffcbe960 },   // accent bright
-    juce::Colour { 0xff9a6bd8 },   // secondary: modulation
+    juce::Colour { 0xff110610 },   // background   L 0.145  C 0.030  H 330
+    juce::Colour { 0xff20111f },   // panel        L 0.205  C 0.036  H 330
+    juce::Colour { 0xfff5e8f3 },   // text         L 0.945  C 0.020  H 330
+    juce::Colour { 0xffa591a3 },   // dim text     L 0.680  C 0.035  H 330
+    juce::Colour { 0xfffc75b7 },   // accent: HOT PINK      L 0.74  H 352
+    juce::Colour { 0xfffec5dc },   // accent bright         L 0.88  H 352
+    juce::Colour { 0xffe277fc },   // secondary: modulation L 0.74  H 320
     juce::Colour { 0xffff7a18 },   // bypass glow, the same in every plugin
-    juce::Colour { 0xffe2483d },   // over
-    juce::Colour { 0xffab9bf5 }    // hold
+    juce::Colour { 0xfffc5950 },   // over         L 0.680  C 0.200  H 27
+    juce::Colour { 0xff2cf7df }    // hold         L 0.88   H 182
 };
+
+/// The group panels, one perceptual step above the page panel.
+///
+/// A literal value rather than `panel.brighter()`, because `brighter` works in
+/// HSB and its steps are not perceptually even -- the same argument gives a
+/// different apparent jump on a dark colour than on a light one.
+const juce::Colour kGroupPanel { 0xff2e1c2c };
+
+/// Each page's own accent, and its bright partner. Golden-angle hues, one
+/// lightness, each at its own chroma limit -- see the comment above.
+///
+/// Ordered so the pink stays on OSC, which is the plugin's identity, and the
+/// lime lands on TUNING, which is the page nobody stares at.
+struct PageAccent
+{
+    juce::Colour accent;
+    juce::Colour bright;
+};
+
+const PageAccent kPageAccents[] {
+    { juce::Colour { 0xfffc75b7 }, juce::Colour { 0xfffec5dc } },   // OSC     pink    H 352
+    { juce::Colour { 0xff20c5b1 }, juce::Colour { 0xff2cf7df } },   // FILTER  cyan    H 182
+    { juce::Colour { 0xff86a7fc }, juce::Colour { 0xffc7d7fe } },   // ENV     blue    H 267
+    { juce::Colour { 0xfffc854d }, juce::Colour { 0xfffecbb5 } },   // MOD     orange  H  45
+    { juce::Colour { 0xffe277fc }, juce::Colour { 0xfff2c5fe } },   // MANGLE  magenta H 320
+    { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } }    // TUNING  lime    H 130
+};
+
+/// The base palette with one page's accent swapped in.
+[[nodiscard]] ui::Palette paletteForPage (int index)
+{
+    auto palette = kPalette;
+
+    const auto& accent = kPageAccents[static_cast<std::size_t> (
+        juce::jlimit (0, static_cast<int> (std::size (kPageAccents)) - 1, index))];
+
+    palette.accent = accent.accent;
+    palette.accentBright = accent.bright;
+
+    // The modulation colour has to stay told-apart-able from whatever the page
+    // is wearing, so on the two pages whose accent is already in the magenta
+    // family it steps aside to the cyan.
+    if (index == 4 || index == 0)
+        palette.secondary = juce::Colour { 0xff2cf7df };
+
+    return palette;
+}
 
 // The cell. Deliberately small: sixty controls on six pages only fit at a size
 // the stock JUCE rotary cannot be read at, which is what the arc-and-pointer
@@ -56,7 +142,7 @@ constexpr int kPagePad = 5;
 constexpr int kNoteHeight = 38;
 
 // The envelope page's block: a heading, then a graph beside two rows of knobs.
-constexpr int kEnvKnobRows = 2;
+constexpr int kEnvKnobRows = 3;
 constexpr int kEnvKnobColumns = 3;
 constexpr int kEnvBodyHeight = kEnvKnobRows * kMinCellHeight + 4;
 constexpr int kEnvBlockHeight = kHeadingHeight + kEnvBodyHeight + 4;
@@ -82,6 +168,27 @@ constexpr int kStepStripHeight = 108;
         return { text, {} };
 
     return { text.substring (0, separator).trim(), text.substring (separator + 4).trim() };
+}
+
+/// The panel behind a group of controls.
+///
+/// Two things beyond a filled rectangle, and both are what makes a dark panel
+/// look lit rather than flat: a shallow vertical gradient, brighter at the top,
+/// and a **one-pixel highlight along the top edge**. That highlight is how every
+/// piece of real hardware catches the light in a photograph, and it costs a
+/// single line.
+void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds)
+{
+    const auto area = bounds.toFloat();
+
+    g.setGradientFill (juce::ColourGradient (kGroupPanel.brighter (0.05f), area.getX(), area.getY(),
+                                             kGroupPanel.darker (0.10f), area.getX(), area.getBottom(),
+                                             false));
+    g.fillRoundedRectangle (area, 5.0f);
+
+    g.setColour (juce::Colours::white.withAlpha (0.045f));
+    g.drawLine (area.getX() + 5.0f, area.getY() + 0.5f,
+                area.getRight() - 5.0f, area.getY() + 0.5f, 1.0f);
 }
 
 /// Draws a group's heading: its name, its explanation, and a rule running out
@@ -365,17 +472,19 @@ void ControlPage::paint (juce::Graphics& g)
     // window used to paint a panel over the whole of it and leave two thirds of
     // that panel empty, which reads as a layout that has gone wrong rather than
     // as a page that is simply short.
-    g.setColour (palette_.panel);
-    g.fillRoundedRectangle (getLocalBounds().withHeight (
-        contentHeight_ > 0 ? contentHeight_ : getHeight()).toFloat(), 6.0f);
+    const auto page = getLocalBounds().withHeight (
+        contentHeight_ > 0 ? contentHeight_ : getHeight()).toFloat();
+
+    g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.06f), page.getX(), page.getY(),
+                                             palette_.panel, page.getX(), page.getBottom(), false));
+    g.fillRoundedRectangle (page, 6.0f);
 
     for (const auto& group : groups_)
     {
         if (group.bounds.isEmpty())
             continue;
 
-        g.setColour (palette_.panel.brighter (0.055f));
-        g.fillRoundedRectangle (group.bounds.toFloat(), 5.0f);
+        paintGroupPanel (g, group.bounds);
 
         if (group.heading.isNotEmpty())
             paintHeading (g, palette_, group.bounds.withHeight (kHeadingHeight),
@@ -444,12 +553,13 @@ void ControlPage::resized()
 namespace
 {
 // How much of the graph's width each segment is allotted. The sustain's slice
-// is fixed and the other three are filled in proportion to their parameters, so
-// the four together are exactly the full width when all three are at maximum.
-constexpr float kAttackShare  = 0.26f;
-constexpr float kDecayShare   = 0.26f;
+// is fixed and the other four are filled in proportion to their parameters, so
+// the five together are exactly the full width when all four are at maximum.
+constexpr float kAttackShare  = 0.22f;
 constexpr float kHoldShare    = 0.16f;
-constexpr float kReleaseShare = 0.32f;
+constexpr float kDecayShare   = 0.22f;
+constexpr float kSustainShare = 0.12f;
+constexpr float kReleaseShare = 0.28f;
 
 constexpr float kHandleRadius = 4.5f;
 constexpr float kGrabRadius = 11.0f;
@@ -457,47 +567,57 @@ constexpr float kGrabRadius = 11.0f;
 /// The width the live-level column takes on the right.
 constexpr float kLevelColumn = 7.0f;
 
-/// The strip along the bottom that carries the A / D / S / R marks.
+/// The strip along the bottom that carries the A / H / D / S / R marks.
 constexpr float kAxisHeight = 11.0f;
 } // namespace
 
 EnvelopeEditor::EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
-                                juce::String attackId, juce::String decayId, juce::String sustainId,
-                                juce::String releaseId, juce::String shapeId)
-    : state_ (state), palette_ (palette),
-      attackId_ (std::move (attackId)), decayId_ (std::move (decayId)),
-      sustainId_ (std::move (sustainId)), releaseId_ (std::move (releaseId)),
-      shapeId_ (std::move (shapeId))
+                                Ids ids)
+    : state_ (state), palette_ (palette), ids_ (std::move (ids))
 {
-    setTooltip ("Drag the three corners: the first sets the attack, the middle one sets the decay "
-                "across and the sustain up and down, and the last sets the release. Double-click a "
-                "corner to put it back to its default. The knobs do the same job to the sample -- "
-                "this is for finding the shape, they are for pinning it down.\n\n"
-                "The curve drawn is the curve that plays, Shape included. The bar on the right is "
-                "this envelope's live output on the most recent note.");
+    setTooltip ("Drag the four corners: the first sets the attack, the second the hold, the third "
+                "sets the decay across and the sustain up and down, and the last sets the release. "
+                "Double-click a corner to put it back to its default. The knobs do the same job to "
+                "the sample -- this is for finding the shape, they are for pinning it down.\n\n"
+                "The curve drawn is the curve that plays, tension included -- each segment bends "
+                "the way its own tension knob says. The bar on the right is this envelope's live "
+                "output on the most recent note.");
 }
 
-double EnvelopeEditor::segment (double u, double from, double to, double overshoot)
+double EnvelopeEditor::segment (double u, double from, double to, double tension)
 {
-    // The library's arithmetic, not an approximation of it: a segment aims past
-    // its destination by `overshoot` and stops when it arrives, so it traverses
-    // the first 1/T of an exponential -- the curved part -- rather than crawling
-    // asymptotically into its own target. See shared/tezla-dsp Adsr.hpp.
+    // The library's arithmetic, not an approximation of it. A segment aims past
+    // its destination and approaches it (positive tension), or aims past its
+    // *origin* and recedes from it (negative), and the second case is exactly
+    // the first with the coefficient inverted. See shared/tezla-dsp Adsr.hpp.
     const double distance = to - from;
 
     if (std::abs (distance) < 1.0e-12)
         return to;
 
-    const double target = to + distance * (overshoot - 1.0);
-    const double decay = std::pow ((overshoot - 1.0) / overshoot, u);
+    const double overshoot = dsp::Adsr::overshootFor (tension);
+    const double ratio = (overshoot - 1.0) / overshoot;
 
-    return target + (from - target) * decay;
+    const double target = tension < 0.0 ? from - distance * (overshoot - 1.0)
+                                        : to + distance * (overshoot - 1.0);
+
+    const double travelled = std::pow (ratio, tension < 0.0 ? -u : u);
+
+    return target + (from - target) * travelled;
 }
 
 float EnvelopeEditor::normalised (const juce::String& id) const
 {
     if (auto* parameter = state_.getParameter (id))
         return parameter->getValue();
+
+    return 0.0f;
+}
+
+float EnvelopeEditor::plain (const juce::String& id) const
+{
+    if (auto* parameter = state_.getParameter (id))
+        return parameter->convertFrom0to1 (parameter->getValue());
 
     return 0.0f;
 }
@@ -531,12 +651,13 @@ EnvelopeEditor::Geometry EnvelopeEditor::geometry() const
     const float width = g.plot.getWidth();
     const float x0 = g.plot.getX();
 
-    g.attackX = x0 + width * kAttackShare * normalised (attackId_);
-    g.decayX = x0 + width * kAttackShare + width * kDecayShare * normalised (decayId_);
-    g.holdEndX = g.decayX + width * kHoldShare;
-    g.releaseX = g.holdEndX + width * kReleaseShare * normalised (releaseId_);
+    g.attackX = x0 + width * kAttackShare * normalised (ids_.attack);
+    g.holdX = g.attackX + width * kHoldShare * normalised (ids_.hold);
+    g.decayX = g.holdX + width * kDecayShare * normalised (ids_.decay);
+    g.sustainEndX = g.decayX + width * kSustainShare;
+    g.releaseX = g.sustainEndX + width * kReleaseShare * normalised (ids_.release);
 
-    g.sustainY = g.plot.getBottom() - normalised (sustainId_) * g.plot.getHeight();
+    g.sustainY = g.plot.getBottom() - normalised (ids_.sustain) * g.plot.getHeight();
 
     return g;
 }
@@ -546,6 +667,7 @@ juce::Point<float> EnvelopeEditor::handlePosition (Handle handle, const Geometry
     switch (handle)
     {
         case Handle::attack:       return { g.attackX, g.plot.getY() };
+        case Handle::hold:         return { g.holdX, g.plot.getY() };
         case Handle::decaySustain: return { g.decayX, g.sustainY };
         case Handle::release:      return { g.releaseX, g.plot.getBottom() };
         case Handle::none:         break;
@@ -561,7 +683,9 @@ EnvelopeEditor::Handle EnvelopeEditor::handleAt (juce::Point<float> position) co
     Handle best = Handle::none;
     float bestDistance = kGrabRadius;
 
-    for (auto handle : { Handle::attack, Handle::decaySustain, Handle::release })
+    // Hold before attack, so that with the hold at zero -- where the two sit on
+    // top of each other -- the one that grows is the one you get.
+    for (auto handle : { Handle::hold, Handle::attack, Handle::decaySustain, Handle::release })
     {
         const float distance = position.getDistanceFrom (handlePosition (handle, g));
 
@@ -577,19 +701,21 @@ EnvelopeEditor::Handle EnvelopeEditor::handleAt (juce::Point<float> position) co
 
 void EnvelopeEditor::refresh (double level)
 {
-    const float values[5] { normalised (attackId_), normalised (decayId_), normalised (sustainId_),
-                            normalised (releaseId_), normalised (shapeId_) };
+    const float values[8] { normalised (ids_.attack), normalised (ids_.hold),
+                            normalised (ids_.decay), normalised (ids_.sustain),
+                            normalised (ids_.release), normalised (ids_.attackTension),
+                            normalised (ids_.decayTension), normalised (ids_.releaseTension) };
 
     bool changed = std::abs (static_cast<float> (level) - shownLevel_) > 1.0e-3f;
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 8; ++i)
         if (std::abs (values[i] - shown_[i]) > 1.0e-6f)
             changed = true;
 
     if (! changed)
         return;
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 8; ++i)
         shown_[i] = values[i];
 
     shownLevel_ = static_cast<float> (level);
@@ -598,30 +724,32 @@ void EnvelopeEditor::refresh (double level)
     repaint();
 }
 
-void EnvelopeEditor::appendSegment (juce::Path& path, float x0, float y0, float x1, float y1,
-                                    double from, double to, double overshoot) const
+void EnvelopeEditor::appendSegment (juce::Path& path, float x0, float x1,
+                                    double from, double to, double tension) const
 {
-    juce::ignoreUnused (y0, y1);
-
     constexpr int kSteps = 28;
 
     const auto g = geometry();
+
+    const auto yFor = [&g] (double level)
+    {
+        return g.plot.getBottom() - static_cast<float> (level) * g.plot.getHeight();
+    };
 
     // A segment with no width is a vertical edge -- a zero attack is a click,
     // and drawing it as one is honest.
     if (x1 - x0 < 0.5f)
     {
-        path.lineTo (x1, g.plot.getBottom() - static_cast<float> (to) * g.plot.getHeight());
+        path.lineTo (x1, yFor (to));
         return;
     }
 
     for (int step = 1; step <= kSteps; ++step)
     {
         const double u = static_cast<double> (step) / kSteps;
-        const double level = segment (u, from, to, overshoot);
 
         path.lineTo (x0 + (x1 - x0) * static_cast<float> (u),
-                     g.plot.getBottom() - static_cast<float> (level) * g.plot.getHeight());
+                     yFor (segment (u, from, to, tension)));
     }
 }
 
@@ -630,7 +758,7 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
     const auto g = geometry();
     const auto full = getLocalBounds().toFloat();
 
-    graphics.setColour (palette_.panel.darker (0.45f));
+    graphics.setColour (palette_.background.brighter (0.06f));
     graphics.fillRoundedRectangle (full, 4.0f);
 
     // The grid: quarters, with the top and bottom rails brighter because those
@@ -643,17 +771,19 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
         graphics.drawHorizontalLine (juce::roundToInt (y), g.plot.getX(), g.plot.getRight());
     }
 
-    const double sustain = normalised (sustainId_);
-    const double overshoot = dsp::Adsr::kSharpestOvershoot
-                           * std::pow (dsp::Adsr::kStraightestOvershoot / dsp::Adsr::kSharpestOvershoot,
-                                       static_cast<double> (normalised (shapeId_)));
+    const double sustain = normalised (ids_.sustain);
+
+    const double attackTension = plain (ids_.attackTension);
+    const double decayTension = plain (ids_.decayTension);
+    const double releaseTension = plain (ids_.releaseTension);
 
     juce::Path curve;
     curve.startNewSubPath (g.plot.getX(), g.plot.getBottom());
-    appendSegment (curve, g.plot.getX(), 0.0f, g.attackX, 0.0f, 0.0, 1.0, overshoot);
-    appendSegment (curve, g.attackX, 0.0f, g.decayX, 0.0f, 1.0, sustain, overshoot);
-    curve.lineTo (g.holdEndX, g.sustainY);
-    appendSegment (curve, g.holdEndX, 0.0f, g.releaseX, 0.0f, sustain, 0.0, overshoot);
+    appendSegment (curve, g.plot.getX(), g.attackX, 0.0, 1.0, attackTension);
+    curve.lineTo (g.holdX, g.plot.getY());
+    appendSegment (curve, g.holdX, g.decayX, 1.0, sustain, decayTension);
+    curve.lineTo (g.sustainEndX, g.sustainY);
+    appendSegment (curve, g.sustainEndX, g.releaseX, sustain, 0.0, releaseTension);
 
     // Under the curve, so the shape reads as an amount rather than as a line.
     {
@@ -661,7 +791,7 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
         filled.lineTo (g.releaseX, g.plot.getBottom());
         filled.closeSubPath();
 
-        graphics.setColour (palette_.accent.withAlpha (0.13f));
+        graphics.setColour (palette_.accent.withAlpha (0.16f));
         graphics.fillPath (filled);
     }
 
@@ -669,27 +799,32 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
     graphics.strokePath (curve, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved,
                                                       juce::PathStrokeType::rounded));
 
-    // The hold, overdrawn dashed: it lasts as long as the key is down, which is
-    // the one part of the picture that is not a duration.
+    // The sustain, overdrawn dashed: it lasts as long as the key is down, which
+    // is the one part of the picture that is not a duration. The **hold** is
+    // solid, because it is one.
     {
         const float dashes[] { 3.0f, 3.0f };
 
-        graphics.setColour (palette_.panel.darker (0.45f));
-        graphics.drawLine (g.decayX, g.sustainY, g.holdEndX, g.sustainY, 2.6f);
+        graphics.setColour (palette_.background.brighter (0.06f));
+        graphics.drawLine (g.decayX, g.sustainY, g.sustainEndX, g.sustainY, 2.6f);
 
         graphics.setColour (palette_.accent.withAlpha (0.8f));
-        graphics.drawDashedLine ({ { g.decayX, g.sustainY }, { g.holdEndX, g.sustainY } },
+        graphics.drawDashedLine ({ { g.decayX, g.sustainY }, { g.sustainEndX, g.sustainY } },
                                  dashes, 2, 1.8f);
     }
 
-    // The handles.
-    for (auto handle : { Handle::attack, Handle::decaySustain, Handle::release })
+    // The handles, with the same halo the knobs get.
+    for (auto handle : { Handle::attack, Handle::hold, Handle::decaySustain, Handle::release })
     {
         const auto centre = handlePosition (handle, g);
         const bool lit = handle == dragging_ || handle == hovered_;
         const float radius = lit ? kHandleRadius + 1.0f : kHandleRadius;
 
-        graphics.setColour (palette_.panel.darker (0.6f));
+        graphics.setColour (palette_.accent.withAlpha (0.22f));
+        graphics.fillEllipse (juce::Rectangle<float> { radius * 3.4f, radius * 3.4f }
+                                .withCentre (centre));
+
+        graphics.setColour (palette_.background.darker (0.4f));
         graphics.fillEllipse (juce::Rectangle<float> { radius * 2.0f + 2.0f, radius * 2.0f + 2.0f }
                                 .withCentre (centre));
 
@@ -709,15 +844,16 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
 
         graphics.setFont (juce::FontOptions (9.0f, juce::Font::bold));
 
-        const float edges[5] { g.plot.getX(), g.attackX, g.decayX, g.holdEndX, g.releaseX };
-        static const char* names[4] { "A", "D", "S", "R" };
+        const float edges[6] { g.plot.getX(), g.attackX, g.holdX, g.decayX,
+                               g.sustainEndX, g.releaseX };
+        static const char* names[5] { "A", "H", "D", "S", "R" };
 
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 5; ++i)
         {
             const float width = edges[i + 1] - edges[i];
 
             // A segment too narrow to hold its own letter is left unlabelled --
-            // a zero attack has nothing to point at, and a letter squeezed
+            // a zero hold has nothing to point at, and a letter squeezed
             // between two others reads as belonging to neither.
             if (width < 11.0f)
                 continue;
@@ -740,9 +876,13 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
 
         if (level_ > 1.0e-4f)
         {
+            const auto filled = column.withTop (column.getBottom() - level_ * column.getHeight());
+
+            graphics.setColour (palette_.secondary.withAlpha (0.30f));
+            graphics.fillRoundedRectangle (filled.expanded (2.0f, 0.0f), 3.0f);
+
             graphics.setColour (palette_.secondary);
-            graphics.fillRoundedRectangle (
-                column.withTop (column.getBottom() - level_ * column.getHeight()), 2.0f);
+            graphics.fillRoundedRectangle (filled, 2.0f);
         }
     }
 }
@@ -762,9 +902,10 @@ void EnvelopeEditor::mouseDown (const juce::MouseEvent& event)
 
     switch (dragging_)
     {
-        case Handle::attack:       begin (attackId_); break;
-        case Handle::decaySustain: begin (decayId_); begin (sustainId_); break;
-        case Handle::release:      begin (releaseId_); break;
+        case Handle::attack:       begin (ids_.attack); break;
+        case Handle::hold:         begin (ids_.hold); break;
+        case Handle::decaySustain: begin (ids_.decay); begin (ids_.sustain); break;
+        case Handle::release:      begin (ids_.release); break;
         case Handle::none:         break;
     }
 }
@@ -780,24 +921,31 @@ void EnvelopeEditor::mouseDrag (const juce::MouseEvent& event)
     if (width <= 0.0f)
         return;
 
+    // Each handle measures from the start of its own segment, which moves as the
+    // ones before it do -- so dragging the release does not shift when the decay
+    // is lengthened, and the number under the cursor is the one being set.
     switch (dragging_)
     {
         case Handle::attack:
-            setNormalised (attackId_,
+            setNormalised (ids_.attack,
                            (event.position.x - g.plot.getX()) / (width * kAttackShare), false);
             break;
 
+        case Handle::hold:
+            setNormalised (ids_.hold,
+                           (event.position.x - g.attackX) / (width * kHoldShare), false);
+            break;
+
         case Handle::decaySustain:
-            setNormalised (decayId_,
-                           (event.position.x - g.plot.getX() - width * kAttackShare)
-                             / (width * kDecayShare), false);
-            setNormalised (sustainId_,
+            setNormalised (ids_.decay,
+                           (event.position.x - g.holdX) / (width * kDecayShare), false);
+            setNormalised (ids_.sustain,
                            (g.plot.getBottom() - event.position.y) / g.plot.getHeight(), false);
             break;
 
         case Handle::release:
-            setNormalised (releaseId_,
-                           (event.position.x - g.holdEndX) / (width * kReleaseShare), false);
+            setNormalised (ids_.release,
+                           (event.position.x - g.sustainEndX) / (width * kReleaseShare), false);
             break;
 
         case Handle::none:
@@ -815,9 +963,10 @@ void EnvelopeEditor::mouseUp (const juce::MouseEvent&)
 
     switch (dragging_)
     {
-        case Handle::attack:       end (attackId_); break;
-        case Handle::decaySustain: end (decayId_); end (sustainId_); break;
-        case Handle::release:      end (releaseId_); break;
+        case Handle::attack:       end (ids_.attack); break;
+        case Handle::hold:         end (ids_.hold); break;
+        case Handle::decaySustain: end (ids_.decay); end (ids_.sustain); break;
+        case Handle::release:      end (ids_.release); break;
         case Handle::none:         break;
     }
 
@@ -858,9 +1007,10 @@ void EnvelopeEditor::mouseDoubleClick (const juce::MouseEvent& event)
 
     switch (handle)
     {
-        case Handle::attack:       reset (attackId_); break;
-        case Handle::decaySustain: reset (decayId_); reset (sustainId_); break;
-        case Handle::release:      reset (releaseId_); break;
+        case Handle::attack:       reset (ids_.attack); break;
+        case Handle::hold:         reset (ids_.hold); break;
+        case Handle::decaySustain: reset (ids_.decay); reset (ids_.sustain); break;
+        case Handle::release:      reset (ids_.release); break;
         case Handle::none:         break;
     }
 }
@@ -873,22 +1023,24 @@ EnvelopePage::EnvelopePage (juce::AudioProcessorValueTreeState& state, ui::Palet
     : palette_ (palette)
 {
     addBlock (state, "AMPLITUDE", "the voice's own level",
-              ids::ampAttack, ids::ampDecay, ids::ampSustain, ids::ampRelease, ids::ampShape,
+              { ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain, ids::ampRelease,
+                ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT },
               ids::ampVelocity, "Velocity",
               "How much of the level comes from how hard the note was played.");
 
     addBlock (state, "MOD ENVELOPE 1", "point it at something in MOD",
-              ids::env1Attack, ids::env1Decay, ids::env1Sustain, ids::env1Release, ids::env1Shape,
+              { ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain, ids::env1Release,
+                ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT },
               nullptr, {}, {});
 
     addBlock (state, "MOD ENVELOPE 2", "and the mangle takes these too",
-              ids::env2Attack, ids::env2Decay, ids::env2Sustain, ids::env2Release, ids::env2Shape,
+              { ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain, ids::env2Release,
+                ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
               nullptr, {}, {});
 }
 
 void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
-                             const juce::String& detail, const char* attackId, const char* decayId,
-                             const char* sustainId, const char* releaseId, const char* shapeId,
+                             const juce::String& detail, const EnvelopeEditor::Ids& ids_,
                              const char* extraId, const juce::String& extraName,
                              const juce::String& extraTooltip)
 {
@@ -897,33 +1049,47 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
     block.heading = heading;
     block.detail = detail;
 
-    block.graph = std::make_unique<EnvelopeEditor> (state, palette_, attackId, decayId, sustainId,
-                                                    releaseId, shapeId);
+    block.graph = std::make_unique<EnvelopeEditor> (state, palette_, ids_);
 
     // Named after its attack parameter, which is unique per envelope and needs
     // no second list to keep in step.
-    block.graph->setComponentID (juce::String ("graph-") + attackId);
+    block.graph->setComponentID ("graph-" + ids_.attack);
     addAndMakeVisible (*block.graph);
 
-    const auto knob = [&] (const char* id, const juce::String& name, const juce::String& tooltip)
+    const auto knob = [&] (const juce::String& id, const juce::String& name,
+                           const juce::String& tooltip)
     {
         auto cell = std::make_unique<KnobCell> (state, id, name, tooltip, palette_);
         addAndMakeVisible (*cell);
         block.knobs.push_back (std::move (cell));
     };
 
-    knob (attackId, "Attack",
+    static const juce::String kTension =
+        "How the segment bends. **Bipolar**: zero is a straight line, positive is the analogue "
+        "shape -- fast at first and decelerating, which is what a capacitor does and what the ear "
+        "expects -- and negative is that curve reflected, slow at first and accelerating.\n\n"
+        "The old single Shape control could only do the positive half, because aiming a segment "
+        "past its destination bends it one way and no value bends it the other. The mirror is a "
+        "separate branch of the same arithmetic.\n\n"
+        "It changes the shape and **not** the duration: the time constant is corrected for the "
+        "tension, so this is a tone control rather than a second time control.";
+
+    knob (ids_.attack, "Attack",
           "How long from nothing to full. Skewed so the short end has room: a tenth of the travel "
-          "is 5 ms and half of it is a second and a quarter.");
-    knob (decayId, "Decay", "How long from full down to the sustain level.");
-    knob (sustainId, "Sustain", "Where it holds while the key is down.");
-    knob (releaseId, "Release", "How long it takes to fall away after the key is up.");
-    knob (shapeId, "Shape",
-          "How curved each segment is, and **not** how long any of them lasts -- the time "
-          "constant is corrected for the shape, so this is a tone control rather than a second "
-          "time control. At zero it is nearly a straight line, which sounds mechanical because "
-          "nothing physical decays linearly. Turned up it is the sharp exponential of a capacitor "
-          "discharging. The graph bends with it.");
+          "is 5 ms and half of it is 120 ms.");
+    knob (ids_.attackTension, "A tension", kTension);
+    knob (ids_.hold, "Hold",
+          "How long the envelope sits at **full level** before the decay begins -- the H in "
+          "AHDSR.\n\n"
+          "It is what makes a plucked or gated sound possible without setting the sustain to 1 and "
+          "shortening the note, which is not the same thing: the release would then start from "
+          "wherever the key was let go rather than from the top. At 0 the stage is skipped "
+          "entirely.");
+    knob (ids_.decay, "Decay", "How long from full down to the sustain level.");
+    knob (ids_.decayTension, "D tension", kTension);
+    knob (ids_.sustain, "Sustain", "Where it holds while the key is down.");
+    knob (ids_.release, "Release", "How long it takes to fall away after the key is up.");
+    knob (ids_.releaseTension, "R tension", kTension);
 
     if (extraId != nullptr)
         knob (extraId, extraName, extraTooltip);
@@ -945,16 +1111,18 @@ int EnvelopePage::getPreferredHeight() const
 
 void EnvelopePage::paint (juce::Graphics& g)
 {
-    g.setColour (palette_.panel);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+    const auto page = getLocalBounds().toFloat();
+
+    g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.06f), page.getX(), page.getY(),
+                                             palette_.panel, page.getX(), page.getBottom(), false));
+    g.fillRoundedRectangle (page, 6.0f);
 
     for (const auto& block : blocks_)
     {
         if (block.bounds.isEmpty())
             continue;
 
-        g.setColour (palette_.panel.brighter (0.055f));
-        g.fillRoundedRectangle (block.bounds.toFloat(), 5.0f);
+        paintGroupPanel (g, block.bounds);
 
         paintHeading (g, palette_, block.bounds.withHeight (kHeadingHeight),
                       block.heading, block.detail);
@@ -966,7 +1134,7 @@ void EnvelopePage::resized()
     auto bounds = getLocalBounds().reduced (6, kPagePad);
 
     // The blocks share whatever is going spare equally, so the page fills a
-    // tall window rather than stacking against the top of it.
+    // tall window rather than stacking against the top.
     const int blocks = juce::jmax (1, static_cast<int> (blocks_.size()));
     const int height = juce::jmax (kEnvBlockHeight,
                                    (bounds.getHeight() - blocks * kGroupGap) / blocks);
@@ -981,7 +1149,7 @@ void EnvelopePage::resized()
         const int columns = kEnvKnobColumns;
         const int rows = kEnvKnobRows;
 
-        const int cellWidth = juce::jlimit (86, kMaxCellWidth, inner.getWidth() / (2 * columns));
+        const int cellWidth = juce::jlimit (76, kMaxCellWidth, inner.getWidth() / (2 * columns));
         const int cellHeight = juce::jlimit (kMinCellHeight, kMaxCellHeight, inner.getHeight() / rows);
 
         auto knobArea = inner.removeFromRight (cellWidth * columns);
@@ -1389,7 +1557,10 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     viewport_.setScrollBarThickness (9);
     addAndMakeVisible (viewport_);
 
-    steps_ = std::make_unique<StepStrip> (sonitus_.getState(), palette_);
+    // The MOD page's palette, because that is the only page it appears on --
+    // it is a child of the editor rather than of the page, so it does not
+    // inherit the accent the way the controls above it do.
+    steps_ = std::make_unique<StepStrip> (sonitus_.getState(), paletteForPage (kModPage));
 
     // **Added as a child, which it was not.** `setVisible` on a component with
     // no parent does nothing at all -- it does not throw, it does not warn, and
@@ -1400,6 +1571,10 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     // this position to be forgotten -- it is a `Page` and the viewport owns its
     // visibility now.
     steps_->setComponentID ("steps");
+
+    // After buildPages, which is what creates them.
+    steps_->setLookAndFeel (pageLookAndFeels_[kModPage].get());
+
     addAndMakeVisible (*steps_);
 
     static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE", "TUNING" };
@@ -1461,7 +1636,16 @@ SonitusEditor::~SonitusEditor()
 {
     // Before any child is destroyed, and before the look and feel is. A
     // component holding a dangling pointer to one is a use-after-free with no
-    // symptom until the host next repaints.
+    // symptom until the host next repaints -- and the pages are held by this
+    // class rather than by the viewport, so they outlive it unless told
+    // otherwise here.
+    for (auto& page : pages_)
+        if (page != nullptr)
+            page->setLookAndFeel (nullptr);
+
+    if (steps_ != nullptr)
+        steps_->setLookAndFeel (nullptr);
+
     setLookAndFeel (nullptr);
 }
 
@@ -1478,7 +1662,7 @@ void SonitusEditor::buildPages()
 
     // ---- OSC -----------------------------------------------------------------
 
-    auto osc = std::make_unique<ControlPage> (state, palette_);
+    auto osc = std::make_unique<ControlPage> (state, paletteForPage (kOscPage));
 
     const auto addOscillator = [] (ControlPage& page, const char* shapeId, const char* octaveId,
                                    const char* semitoneId, const char* centsId, const char* widthId,
@@ -1605,7 +1789,7 @@ void SonitusEditor::buildPages()
 
     // ---- FILTER --------------------------------------------------------------
 
-    auto filter = std::make_unique<ControlPage> (state, palette_);
+    auto filter = std::make_unique<ControlPage> (state, paletteForPage (kFilterPage));
 
     filter->addHeading ("FILTER -- zero-delay state variable, drive inside the loop", 4);
 
@@ -1670,13 +1854,13 @@ void SonitusEditor::buildPages()
 
     // Its own page rather than a grid of fifteen knobs: an envelope's shape is
     // the thing being edited and five numbers do not show it. See EnvelopePage.
-    pages_[kEnvPage] = std::make_unique<EnvelopePage> (state, palette_);
+    pages_[kEnvPage] = std::make_unique<EnvelopePage> (state, paletteForPage (kEnvPage));
 
     // ---- MOD -----------------------------------------------------------------
 
-    auto mod = std::make_unique<ControlPage> (state, palette_);
+    auto mod = std::make_unique<ControlPage> (state, paletteForPage (kModPage));
 
-    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 5);
+    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 6);
 
     mod->addChoice (ids::lfo1Wave, "Wave", "Its shape. Sample & hold steps; smooth random glides.");
     mod->addKnob (ids::lfo1Rate, "Rate",
@@ -1687,16 +1871,20 @@ void SonitusEditor::buildPages()
         "Rounds the corners off a square or a sample-and-hold, so a step becomes a slide.");
     mod->addToggle (ids::lfo1Retrig, "Retrig",
         "Restarts the LFO from the top of its cycle every time a note is pressed. Free-running is right for a wobble that should keep its place across a phrase; retriggered is right for anything that has to line up with the note -- a sweep, a stab, a phase that has to start in the same place every time. On a reese the difference is the whole sound: with this on, every note gets the same phase relationship and the growl is repeatable.");
+    mod->addKnob (ids::lfo1Att, "Attack",
+        "Fades the LFO's **depth** in from nothing over this long, restarting on every note. Delayed vibrato is the classic use -- the note arrives steady and the movement creeps in after it -- and on a filter it is a sweep that opens up rather than one that is already going.\n\nIt restarts whether or not Retrig is on: the two are separate ideas, one about the waveform's phase and the other about its depth. Eased rather than ramped, so it arrives without the corner a straight fade leaves at the top. At 0 there is no fade.");
     mod->addKnob (ids::lfo1Key, "Key track",
         "How far the LFO's rate follows the played note, referenced to middle C. At 100% an octave up doubles the rate, so the modulation stays in the same relationship to the pitch all the way up the keyboard -- which is how you get a phase or a wobble that reads as part of the tone rather than as an effect laid over it. At 0 the rate is the same at every pitch.");
 
-    mod->addHeading ("LFO 2", 5);
+    mod->addHeading ("LFO 2", 6);
 
     mod->addChoice (ids::lfo2Wave, "Wave", "Its shape.");
     mod->addKnob (ids::lfo2Rate, "Rate", "How fast, in hertz.");
     mod->addKnob (ids::lfo2Smooth, "Smooth", "Rounds its corners off.");
     mod->addToggle (ids::lfo2Retrig, "Retrig",
         "Restarts the LFO from the top of its cycle every time a note is pressed. Free-running is right for a wobble that should keep its place across a phrase; retriggered is right for anything that has to line up with the note -- a sweep, a stab, a phase that has to start in the same place every time. On a reese the difference is the whole sound: with this on, every note gets the same phase relationship and the growl is repeatable.");
+    mod->addKnob (ids::lfo2Att, "Attack",
+        "Fades the LFO's **depth** in from nothing over this long, restarting on every note. Delayed vibrato is the classic use -- the note arrives steady and the movement creeps in after it -- and on a filter it is a sweep that opens up rather than one that is already going.\n\nIt restarts whether or not Retrig is on: the two are separate ideas, one about the waveform's phase and the other about its depth. Eased rather than ramped, so it arrives without the corner a straight fade leaves at the top. At 0 there is no fade.");
     mod->addKnob (ids::lfo2Key, "Key track",
         "How far the LFO's rate follows the played note, referenced to middle C. At 100% an octave up doubles the rate, so the modulation stays in the same relationship to the pitch all the way up the keyboard -- which is how you get a phase or a wobble that reads as part of the tone rather than as an effect laid over it. At 0 the rate is the same at every pitch.");
 
@@ -1769,7 +1957,7 @@ void SonitusEditor::buildPages()
 
     // ---- MANGLE --------------------------------------------------------------
 
-    auto mangle = std::make_unique<ControlPage> (state, palette_);
+    auto mangle = std::make_unique<ControlPage> (state, paletteForPage (kManglePage));
 
     mangle->addHeading ("THE SPLIT -- the sub bypasses everything below", 5);
 
@@ -1903,7 +2091,20 @@ void SonitusEditor::buildPages()
     // A page like any other, and hosted by the viewport like any other. It was
     // neither before: it was a component the editor parented by hand, and the
     // hand-parenting is what got forgotten.
-    pages_[kTuningPage] = std::make_unique<TuningPage> (sonitus_, palette_);
+    pages_[kTuningPage] = std::make_unique<TuningPage> (sonitus_, paletteForPage (kTuningPage));
+
+    // Each page wears its own accent, and the look and feel is how that reaches
+    // the knobs: JUCE resolves one by walking up the tree, so a page holding
+    // its own colours every control inside it with nothing passed down by hand.
+    for (int page = 0; page < kNumPages; ++page)
+    {
+        auto& lookAndFeel = pageLookAndFeels_[static_cast<std::size_t> (page)];
+
+        lookAndFeel = std::make_unique<ui::KnobLookAndFeel> (paletteForPage (page));
+
+        if (auto* component = pages_[static_cast<std::size_t> (page)].get())
+            component->setLookAndFeel (lookAndFeel.get());
+    }
 }
 
 void SonitusEditor::showPage (int index)
@@ -1915,10 +2116,14 @@ void SonitusEditor::showPage (int index)
         auto& tab = tabs_[static_cast<std::size_t> (i)];
 
         const bool active = i == currentPage_;
+        const auto accent = kPageAccents[static_cast<std::size_t> (i)].accent;
 
+        // The inactive tabs keep a trace of their own page's colour, so the row
+        // is a key to where everything is rather than six identical buttons.
         tab.setColour (juce::TextButton::buttonColourId,
-                       active ? palette_.accent.withAlpha (0.55f) : palette_.panel.brighter (0.06f));
-        tab.setColour (juce::TextButton::textColourOffId, active ? palette_.background : palette_.dimText);
+                       active ? accent : accent.withAlpha (0.14f));
+        tab.setColour (juce::TextButton::textColourOffId,
+                       active ? palette_.background : accent.withAlpha (0.85f));
     }
 
     // `false`: the viewport must not take ownership -- the pages outlive the
@@ -2103,7 +2308,16 @@ void SonitusEditor::timerCallback()
 
 void SonitusEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (palette_.background);
+    // A shallow gradient rather than a flat fill. The panel edges then read as
+    // edges against something, which a single flat colour behind them does not
+    // give -- and it costs one gradient per repaint.
+    const auto area = getLocalBounds().toFloat();
+
+    g.setGradientFill (juce::ColourGradient (palette_.background.brighter (0.045f),
+                                             area.getCentreX(), area.getY(),
+                                             palette_.background, area.getCentreX(), area.getBottom(),
+                                             false));
+    g.fillRect (area);
 }
 
 void SonitusEditor::resized()

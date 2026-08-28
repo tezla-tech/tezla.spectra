@@ -26,7 +26,7 @@ int samplesInStage (Adsr& envelope, AdsrStage stage, int limit)
 }
 
 Adsr made (double rate = 48000.0, double attack = 0.1, double decay = 0.1,
-           double sustain = 0.5, double release = 0.1, double shape = 0.35)
+           double sustain = 0.5, double release = 0.1, double tension = 0.35)
 {
     Adsr envelope;
     envelope.prepare (rate);
@@ -34,8 +34,18 @@ Adsr made (double rate = 48000.0, double attack = 0.1, double decay = 0.1,
     envelope.setDecaySeconds (decay);
     envelope.setSustain (sustain);
     envelope.setReleaseSeconds (release);
-    envelope.setShape (shape);
+    envelope.setAttackTension (tension);
+    envelope.setDecayTension (tension);
+    envelope.setReleaseTension (tension);
     return envelope;
+}
+
+/// Sets all three tensions at once, which is what most of these tests want.
+void setTension (Adsr& envelope, double tension)
+{
+    envelope.setAttackTension (tension);
+    envelope.setDecayTension (tension);
+    envelope.setReleaseTension (tension);
 }
 } // namespace
 
@@ -75,58 +85,193 @@ TEZLA_TEST (a_segment_lasts_the_time_it_was_asked_for_at_every_shape)
             }
 }
 
-TEZLA_TEST (the_shape_control_changes_the_curve_and_only_the_curve)
+TEZLA_TEST (the_tension_control_bends_the_curve_both_ways)
 {
-    // The other half of the same claim: if the timing is held constant, the
-    // shape has to actually be doing something. Measured at the half-way point
-    // of a 100 ms attack, which is where an exponential and a straight line are
+    // The other half of the timing claim: if the duration is held constant, the
+    // tension has to actually be doing something. Measured at the half-way
+    // point of a 100 ms attack, which is where a curve and a straight line are
     // furthest apart.
     //
-    //     shape   overshoot   level at 50 ms
-    //      0.00        1.05        0.8276
-    //      0.25        1.44        0.7136
-    //      0.50        1.98        0.6438
-    //      0.75        2.73        0.5974
-    //      1.00        3.76        0.5651     <- 0.5 would be a straight line
+    //     tension  overshoot   level at 50 ms
+    //      -1.00        1.05        0.179
+    //      -0.50        5.79        0.455
+    //       0.00       32.00        0.504    <- a straight line would be 0.500
+    //      +0.50        5.79        0.545
+    //      +1.00        1.05        0.821
+    //
+    // **The old control could only produce the bottom half of that table's
+    // right-hand column above 0.5.** No value of an overshoot bends a segment
+    // the other way; the mirror is a separate branch and this is what it buys.
     constexpr double rate = 48000.0;
 
-    double previous = 1.0;
-
-    for (const double shape : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    const auto halfwayAt = [] (double tension)
     {
-        auto envelope = made (rate, 0.1, 0.1, 0.5, 0.1, shape);
+        auto envelope = made (rate, 0.1, 0.1, 0.5, 0.1, tension);
         envelope.noteOn();
 
         for (int i = 0; i < static_cast<int> (rate * 0.05); ++i)
             (void) envelope.process();
 
-        const double halfway = envelope.getLevel();
+        return envelope.getLevel();
+    };
 
-        // Curved means above the straight line, always -- a saturating
-        // exponential is concave.
-        CHECK (halfway > 0.5);
+    double previous = -1.0;
 
-        // And straighter as the control rises.
-        CHECK (halfway < previous);
+    for (const double tension : { -1.0, -0.5, 0.0, 0.5, 1.0 })
+    {
+        const double halfway = halfwayAt (tension);
+
+        // Monotonic across the whole range, which a unipolar control cannot be
+        // because it has no other side to be monotonic into.
+        CHECK (halfway > previous);
 
         previous = halfway;
     }
 
-    // A hard exponential is a long way from a straight line; a soft one is
-    // close to it but never reaches it.
-    auto sharpest = made (rate, 0.1, 0.1, 0.5, 0.1, 0.0);
-    auto straightest = made (rate, 0.1, 0.1, 0.5, 0.1, 1.0);
+    // Zero is straight to four decimal places. Not exactly straight -- that is
+    // the limit of an infinite overshoot and degenerates the time expression --
+    // but far closer than anything is going to hear or see.
+    CHECK_NEAR (halfwayAt (0.0), 0.5, 0.01);
 
-    sharpest.noteOn();
-    straightest.noteOn();
+    // And the two ends are a long way either side of it.
+    CHECK (halfwayAt (1.0) > 0.8);
+    CHECK (halfwayAt (-1.0) < 0.2);
+}
 
-    for (int i = 0; i < static_cast<int> (rate * 0.05); ++i)
+TEZLA_TEST (a_negative_tension_is_exactly_the_mirror_of_a_positive_one)
+{
+    // The claim the implementation rests on: receding from a target behind the
+    // origin traces the same curve as approaching one past the destination,
+    // reflected through the segment's centre. Stated as
+    //
+    //     level(u, -t)  ==  1 - level(1 - u, +t)
+    //
+    // and checked point by point rather than by eye, because "looks mirrored"
+    // is exactly the kind of claim that survives being slightly wrong.
+    constexpr double rate = 48000.0;
+    constexpr double seconds = 0.1;
+
+    const auto trace = [] (double tension)
     {
-        (void) sharpest.process();
-        (void) straightest.process();
+        auto envelope = made (rate, seconds, 0.1, 0.5, 0.1, tension);
+        envelope.noteOn();
+
+        std::vector<double> levels;
+
+        for (int i = 0; i < static_cast<int> (rate * seconds); ++i)
+            levels.push_back (envelope.process());
+
+        return levels;
+    };
+
+    for (const double tension : { 0.25, 0.6, 1.0 })
+    {
+        const auto positive = trace (tension);
+        const auto negative = trace (-tension);
+
+        CHECK (positive.size() == negative.size());
+
+        double worst = 0.0;
+
+        for (std::size_t i = 0; i < positive.size(); ++i)
+        {
+            const std::size_t mirrored = positive.size() - 1 - i;
+
+            worst = std::max (worst, std::abs (negative[i] - (1.0 - positive[mirrored])));
+        }
+
+        // One sample of grid offset is all the difference there is.
+        CHECK (worst < 0.01);
+    }
+}
+
+TEZLA_TEST (the_hold_stage_sits_at_full_level_for_the_time_it_was_given)
+{
+    // AHDSR. Without a hold, the only way to keep an envelope at the top for a
+    // moment is to set the sustain to 1 and shorten the note, which is not the
+    // same thing at all -- the release then starts from wherever the key was
+    // let go rather than from the top.
+    constexpr double rate = 48000.0;
+
+    auto envelope = made (rate, 0.01, 0.2, 0.0, 0.1, 0.0);
+    envelope.setHoldSeconds (0.05);
+
+    envelope.noteOn();
+
+    int atFullLevel = 0;
+    int sawHold = 0;
+
+    for (int i = 0; i < static_cast<int> (rate * 0.5); ++i)
+    {
+        const double level = envelope.process();
+
+        if (envelope.getStage() == AdsrStage::hold)
+        {
+            ++sawHold;
+
+            // Exactly 1.0, not nearly: the hold is a hold, not a very slow
+            // decay.
+            CHECK (level == 1.0);
+        }
+
+        if (level >= 1.0)
+            ++atFullLevel;
     }
 
-    CHECK (sharpest.getLevel() - straightest.getLevel() > 0.2);
+    // 50 ms at 48 kHz, within a sample of the attack's own arrival.
+    CHECK_NEAR (sawHold, 2400, 2);
+    CHECK (atFullLevel >= sawHold);
+
+    // With no hold the stage is skipped entirely rather than entered for zero
+    // samples -- otherwise a zero hold would still cost a branch and a stage
+    // transition on every note.
+    auto none = made (rate, 0.01, 0.2, 0.0, 0.1, 0.0);
+    none.setHoldSeconds (0.0);
+    none.noteOn();
+
+    bool everHeld = false;
+
+    for (int i = 0; i < static_cast<int> (rate * 0.1); ++i)
+    {
+        (void) none.process();
+
+        if (none.getStage() == AdsrStage::hold)
+            everHeld = true;
+    }
+
+    CHECK (! everHeld);
+}
+
+TEZLA_TEST (a_hold_can_be_lengthened_or_cut_short_while_it_runs)
+{
+    // The rule every other setter here follows: change a running stage and it
+    // bends, it does not restart. The hold counts elapsed samples rather than
+    // counting down a remaining time, which is what makes that true for free --
+    // a hold shortened past where it already is ends at once, and one
+    // lengthened simply goes on.
+    constexpr double rate = 48000.0;
+
+    auto envelope = made (rate, 0.001, 0.2, 0.0, 0.1, 0.0);
+    envelope.setHoldSeconds (1.0);
+    envelope.noteOn();
+
+    // Well into the hold.
+    for (int i = 0; i < static_cast<int> (rate * 0.1); ++i)
+        (void) envelope.process();
+
+    CHECK (envelope.getStage() == AdsrStage::hold);
+
+    // Cut it to less than has already elapsed: it should end on the next
+    // sample rather than run for another 50 ms.
+    envelope.setHoldSeconds (0.05);
+
+    // The sample the hold ends on is still at full level -- the transition
+    // happens at its end, and the decay's first step is the sample after. What
+    // matters is that it happened now rather than 50 ms from now.
+    CHECK_NEAR (envelope.process(), 1.0, 1.0e-12);
+    CHECK (envelope.getStage() == AdsrStage::decay);
+
+    CHECK (envelope.process() < 1.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +532,7 @@ TEZLA_TEST (moving_a_control_bends_the_segment_rather_than_restarting_it)
 
         const double before = envelope.getLevel();
 
-        envelope.setShape (1.0);
+        setTension (envelope, 1.0);
         envelope.setAttackSeconds (0.02);
 
         CHECK (envelope.getLevel() == before);
@@ -458,22 +603,17 @@ TEZLA_TEST (a_full_sustain_skips_the_decay_entirely)
         CHECK_NEAR (envelope.process(), 1.0, 1.0e-12);
 }
 
-TEZLA_TEST (the_shape_maps_geometrically_so_the_control_is_even)
+TEZLA_TEST (the_tension_maps_geometrically_so_the_control_is_even)
 {
     // Linear in the overshoot factor would spend most of its travel between
     // "straight" and "slightly straighter", because everything interesting
     // happens below 2.
-    auto envelope = made();
-
     double previousRatio = 0.0;
-
     double previous = 0.0;
 
-    for (const double shape : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    for (const double tension : { 0.0, 0.25, 0.5, 0.75, 1.0 })
     {
-        envelope.setShape (shape);
-
-        const double overshoot = envelope.getOvershoot();
+        const double overshoot = Adsr::overshootFor (tension);
 
         if (previous > 0.0)
         {
@@ -488,9 +628,10 @@ TEZLA_TEST (the_shape_maps_geometrically_so_the_control_is_even)
         previous = overshoot;
     }
 
-    envelope.setShape (0.0);
-    CHECK_NEAR (envelope.getOvershoot(), Adsr::kSharpestOvershoot, 1.0e-12);
-
-    envelope.setShape (1.0);
-    CHECK_NEAR (envelope.getOvershoot(), Adsr::kStraightestOvershoot, 1.0e-12);
+    // Zero is the straight end and either extreme is the sharpest -- the
+    // control is bipolar, so its *magnitude* sets the curvature and its sign
+    // sets which way the curve bends.
+    CHECK_NEAR (Adsr::overshootFor (0.0), Adsr::kStraightestOvershoot, 1.0e-12);
+    CHECK_NEAR (Adsr::overshootFor (1.0), Adsr::kSharpestOvershoot, 1.0e-12);
+    CHECK_NEAR (Adsr::overshootFor (-1.0), Adsr::kSharpestOvershoot, 1.0e-12);
 }
