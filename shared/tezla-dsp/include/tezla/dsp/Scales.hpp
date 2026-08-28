@@ -93,14 +93,27 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
     return ratio;
 }
 
-/// Attaches the construction line and the story to a scale on its way out.
+/// Attaches the construction line and the story to a scale on its way out,
+/// and -- where the tradition had one -- what it actually tuned to.
 ///
 /// A helper rather than constructor arguments everywhere, so the arithmetic
-/// stays readable and the prose sits beside it instead of inside it.
-[[nodiscard]] inline Scale described (Scale scale, std::string construction, std::string story)
+/// stays readable and the prose sits beside it instead of inside it. The
+/// pitch standard stays empty for scales that fix intervals only; the panel
+/// then says so in so many words rather than inventing a frequency.
+[[nodiscard]] inline Scale described (Scale scale, std::string construction, std::string story,
+                                      std::string pitchStandard = {})
 {
     scale.construction = std::move (construction);
     scale.story = std::move (story);
+    scale.pitchStandard = std::move (pitchStandard);
+    return scale;
+}
+
+/// Attaches the pitch standard as a number the panel's Apply button can set,
+/// for the scales whose tradition names one -- see Scale::suggestedConcertHz.
+[[nodiscard]] inline Scale withSuggestedPitch (Scale scale, double concertHz)
+{
+    scale.suggestedConcertHz = concertHz;
     return scale;
 }
 
@@ -168,13 +181,18 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
 
 [[nodiscard]] inline Scale twelveToneEqual()
 {
-    return described (equalDivisions ("12-TET", 12),
+    return withSuggestedPitch (described (equalDivisions ("12-TET", 12),
         "Twelve equal parts of the octave: every step is exactly 2^(1/12), every key identical.",
         "The modern default. Nothing in it is pure except the octave -- the fifth is two cents "
         "flat, the major third fourteen cents sharp of 5/4, which is why a sustained 12-TET "
         "third churns against a key-tracked comb while a just one locks. First computed to full "
         "precision by Zhu Zaiyu in China in 1584, decades before any European; standard on "
-        "keyboards only since the 19th century.");
+        "keyboards only since the 19th century.",
+        "A440 is younger than it feels: agreed in 1939 and made ISO 16 only in 1955. The "
+        "19th-century French diapason normal was A435, and 'scientific pitch' C-256 gives "
+        "A430.5. A432 has no historical orchestra behind it -- it is a modern preference, "
+        "valid as any, and the A4 control is exactly how you take it."),
+        440.0);
 }
 
 [[nodiscard]] inline Scale fiveToneEqual()
@@ -183,7 +201,10 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "Five equal steps of 240 cents.",
         "The skeleton that Javanese slendro hovers around -- each real gamelan differently, "
         "which is why the genuine article is a .scl file of one instrument's measurements. "
-        "No interval commits to major or minor; everything floats.");
+        "No interval commits to major or minor; everything floats.",
+        "A gamelan's absolute pitch -- its tumbuk -- is its own, chosen at the forge; two "
+        "ensembles are deliberately not interchangeable. There is no standard to defer to, "
+        "which makes the A4 control the authentic move.");
 }
 
 [[nodiscard]] inline Scale sevenToneEqual()
@@ -612,13 +633,18 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
     const double narrowing[12] = { quarter, quarter, quarter, quarter, quarter, quarter,
                                    quarter, quarter, quarter, quarter, quarter, quarter };
 
-    return described (temperedChain ("Quarter-comma meantone", narrowing),
+    return withSuggestedPitch (described (temperedChain ("Quarter-comma meantone", narrowing),
         "Every fifth narrowed by a quarter of the syntonic comma, (81/80)^(1/4), so that four "
         "fifths land on an exactly pure 5/4.",
         "The tuning of the Renaissance and early Baroque for the better part of two "
         "centuries: thirds pure and radiant, fifths slightly soft, and one enormous wolf "
         "where the chain fails to close. The sound of Byrd and Frescobaldi -- and the reason "
-        "split-key keyboards existed, giving G# and Ab separate levers.");
+        "split-key keyboards existed, giving G# and Ab separate levers.",
+        "Renaissance pitch was fiercely local: Italian organs sat near A466, French chambers "
+        "near A392, and nothing agreed with anything a city away. Modern early-music practice "
+        "reaches for A415 -- an equal semitone under 440 -- and that is the number to try "
+        "here first."),
+        415.0);
 }
 
 /// Werckmeister III: four fifths narrowed by a quarter of a Pythagorean comma,
@@ -637,13 +663,17 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
                                    1.0,     quarter, 1.0,     1.0,
                                    1.0,     1.0,     1.0,     1.0 };
 
-    return described (temperedChain ("Werckmeister III", narrowing),
+    return withSuggestedPitch (described (temperedChain ("Werckmeister III", narrowing),
         "Four fifths -- C-G, G-D, D-A and B-F# -- each narrowed a quarter of the Pythagorean "
         "comma; the other eight left pure.",
         "Andreas Werckmeister, 1691: the famous 'well temperament'. Every key playable, each "
         "with its own colour, the remote ones stormier -- and the strongest candidate for "
         "what Bach meant by wohltemperirt. Its C-E sits at 390 cents: nearly just at home, "
-        "Pythagorean out in the sharps.");
+        "Pythagorean out in the sharps.",
+        "Baroque pitch varied by city and by organ -- Chorton a semitone or more above "
+        "chamber pitch in the same church. Modern early-music practice settles on A415, one "
+        "equal semitone below 440; Bach at 440 is an anachronism the ear forgives."),
+        415.0);
 }
 
 /// Vallotti: six consecutive fifths narrowed by a sixth of a Pythagorean comma,
@@ -661,12 +691,15 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
                                    sixth, 1.0,   1.0,   1.0,
                                    1.0,   1.0,   sixth, 1.0 };
 
-    return described (temperedChain ("Vallotti", narrowing),
+    return withSuggestedPitch (described (temperedChain ("Vallotti", narrowing),
         "The six fifths F-C-G-D-A-E-B narrowed a sixth of the Pythagorean comma each; the "
         "other six pure.",
         "Francesco Vallotti, 18th-century Padua: the smoothest of the well temperaments -- "
         "key colour without key danger. The default 'Baroque tuning' of modern historically "
-        "informed performance, which says something about how gracefully it ages.");
+        "informed performance, which says something about how gracefully it ages.",
+        "Usually heard today at the early-music A415 -- an equal semitone under 440 -- "
+        "though Vallotti's own Padua would have known its own number."),
+        415.0);
 }
 
 /// Kirnberger III: the four fifths C-G-D-A-E narrowed by a quarter of a
@@ -687,12 +720,15 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
                                    1.0,     1.0,     schisma, 1.0,
                                    1.0,     1.0,     1.0,     1.0 };
 
-    return described (temperedChain ("Kirnberger III", narrowing),
+    return withSuggestedPitch (described (temperedChain ("Kirnberger III", narrowing),
         "C-G-D-A-E narrowed a quarter of the *syntonic* comma each, so C-E is an exactly pure "
         "5/4; a two-cent schisma hides in F#-C#; everything else pure.",
         "Johann Kirnberger -- a student of Bach's -- published 1779. A meantone heart inside "
         "a Pythagorean shell: home keys sound like the Renaissance, far keys like the middle "
-        "ages, and the seam between the two worlds is one schisma wide.");
+        "ages, and the seam between the two worlds is one schisma wide.",
+        "As for the other wells: period pitch was local, and A415 is the modern early-music "
+        "convention worth trying under it."),
+        415.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +773,10 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "solved the doubling of the cube. His enharmonic genus crowds two microtonal steps "
         "of 63 and 49 cents at the bottom of each tetrachord, then leaps a pure major third "
         "-- the strangest scale to survive from antiquity, and the earliest documented use "
-        "of the numbers 5 and 7 in tuning.");
+        "of the numbers 5 and 7 in tuning.",
+        "No absolute pitch survives from Greek antiquity: the theorists wrote ratios, never "
+        "frequencies, and reconstructed auloi scatter across a wide neighbourhood. A440 here "
+        "is a modern convenience, not a claim.");
 }
 
 /// Archytas' diatonic genus: 28/27, 8/7, 9/8. The recognisable one.
@@ -748,7 +787,9 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "Tetrachords of 28/27 x 8/7 x 9/8, each spanning an exact 4/3.",
         "The everyday genus of Greek music in Archytas' arithmetic, with the wide septimal "
         "tone 8/7 where later theory put 10/9. Ptolemy reports -- half in complaint -- that "
-        "this is what lyre players actually tuned.");
+        "this is what lyre players actually tuned.",
+        "No absolute pitch survives from Greek antiquity -- ratios only. A440 is a modern "
+        "convenience.");
 }
 
 /// Archytas' chromatic genus: 28/27, 243/224, 32/27.
@@ -759,7 +800,9 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "Tetrachords of 28/27 x 243/224 x 32/27, each spanning an exact 4/3.",
         "The middle genus, between diatonic and enharmonic: two close steps and a minor "
         "third. The odd-looking 243/224 is no accident -- it is exactly what makes the "
-        "three steps close on a pure fourth.");
+        "three steps close on a pure fourth.",
+        "No absolute pitch survives from Greek antiquity -- ratios only. A440 is a modern "
+        "convenience.");
 }
 
 /// Ptolemy's "even" (homalon) diatonic: 12/11, 11/10, 10/9.
@@ -775,7 +818,9 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "From Ptolemy's Harmonics, 2nd century AD: the homalon or 'even' genus. Its 12/11 "
         "neutral second of 150.6 cents is the earliest documented ancestor of the neutral "
         "intervals that maqam and dastgah music are built on -- the quarter-tone's Greek "
-        "grandfather, eight centuries before Zalzal's fret.");
+        "grandfather, eight centuries before Zalzal's fret.",
+        "No absolute pitch survives from Greek antiquity -- Ptolemy wrote ratios, never "
+        "frequencies. A440 is a modern convenience.");
 }
 
 // ---------------------------------------------------------------------------
@@ -821,7 +866,10 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "koron on the second degree is the Persian quarter-tone: not half a semitone but "
         "its own interval, played anywhere from 125 to 145 cents and theorised at 135. "
         "After Hormoz Farhat's The Dastgah Concept in Persian Music (1990); his sizes "
-        "are means of a living, flexible practice, not a temperament.");
+        "are means of a living, flexible practice, not a temperament.",
+        "Persian practice fixes no absolute pitch: instruments tune to the singer, or to "
+        "the ney at hand, and the theory is about intervals only. A440 is a notational "
+        "convenience -- move the A4 control to where the voice sits.");
 }
 
 /// Chahargah, the bright ceremonial dastgah, in the same sizes.
@@ -839,7 +887,9 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "A koron sits a neutral second above the tonic and above the fifth, and from each "
         "the melody leaps more than a whole tone to a natural -- Farhat's plus tone, the "
         "specifically Persian interval. The same two-tetrachord architecture as the Greeks, "
-        "built from intervals the Greeks never had.");
+        "built from intervals the Greeks never had.",
+        "Persian practice fixes no absolute pitch -- the ensemble tunes to the singer or "
+        "the ney. A440 is a notational convenience.");
 }
 
 // ---------------------------------------------------------------------------
@@ -885,7 +935,11 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "Seven notes from a chain of six pure fifths -- the diatonic in its oldest "
         "documented form -- rotated to one of its seven modes. The tablets define each "
         "tuning by which string pair is left 'unclear': the tritone.",
-        std::move (story));
+        std::move (story),
+        "No absolute pitch survives from Mesopotamia: the tablets fix intervals and name "
+        "strings, never a frequency, and no playable instrument survives to ask. Whatever "
+        "the sammu lyres sounded at is lost -- A440 here is a modern convenience, not a "
+        "reconstruction.");
 }
 
 /// The seven, in the cycle order of the tuning text (UET VII 74): each tuning
@@ -989,7 +1043,10 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "fret that split the difference between the major and minor thirds; al-Farabi "
         "recorded its ratio a century later. The result beats against neither: played over "
         "a drone, the neutral third is a consonance in its own right, not a compromise "
-        "between two Western ones.");
+        "between two Western ones.",
+        "The medieval sources give ratios, never frequencies; historically the oud tuned "
+        "to itself and the ensemble to the oud. Modern Arab orchestras use A440 with Rast "
+        "conventionally written on C -- so A440 is as right as anything here.");
 }
 
 /// Rast in the Arel-Ezgi-Uzdilek system: degrees on the 53-comma grid.
@@ -1014,7 +1071,11 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "all of makam music written on the 53-comma grid, because 53 fifths genuinely "
         "close the circle. Its Rast differs audibly from the Arab one -- the third at 17 "
         "commas is 385 cents, two cents from a pure 5/4, where Zalzal's floats thirty "
-        "cents lower. Same name, different worlds, both in this menu on purpose.");
+        "cents lower. Same name, different worlds, both in this menu on purpose.",
+        "Turkish practice names its sounding pitch by ahenk -- which length of ney the "
+        "ensemble follows -- so the same written Rast sounds at different absolute pitches "
+        "in different ahenks. The grid fixes intervals; the notation borrows A440; the "
+        "sounding pitch is the ensemble's choice, which is what the A4 control is.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1047,7 +1108,13 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "its fourth is the sharp 521-cent kind rather than the pure 498. Each pitch held "
         "a cosmological office -- Huangzhong, the Yellow Bell, was a standard of state, "
         "recast when dynasties changed. Zhu Zaiyu's 1584 equal temperament was invented "
-        "precisely to heal this chain's failure to close.");
+        "precisely to heal this chain's failure to close.",
+        "The one ancient tuning with a real claim to absolute pitch: Huangzhong was a "
+        "state standard defined by a pipe of prescribed length, and bronze bell sets from "
+        "the 5th century BC survive playable -- so unlike Babylon or Greece the number is "
+        "partly recoverable. It moved with each dynasty, and reconstructions disagree; "
+        "A440 is the modern convenience until you take a dynasty's side with the A4 "
+        "control.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,7 +1162,10 @@ inline constexpr double kSyntonicComma = 81.0 / 80.0;
         "partial, and built an orchestra by hand -- Chromelodeon, Cloud-Chamber Bowls, the "
         "Quadrangularis Reversum -- to play exactly these forty-three tones. The list is "
         "his artistic selection, reproduced with attribution; its symmetry, ordering and "
-        "11-limit purity are verified by test.");
+        "11-limit purity are verified by test.",
+        "Partch fixed it himself: Genesis sets 1/1 at G-392 Hz -- the G a whole tone under "
+        "A440. Honouring him means putting the root's frequency at 392: a .kbm rooting "
+        "degree 0 on G does it exactly, and the Hz column will confirm it.");
 }
 
 // ---------------------------------------------------------------------------

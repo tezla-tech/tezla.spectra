@@ -36,6 +36,7 @@ constexpr auto kStateTypeName = "SonitusState";
 constexpr auto kScaleTextProperty = "scalaText";
 constexpr auto kScaleNameProperty = "scaleName";
 constexpr auto kKeyboardMapProperty = "keyboardMapText";
+constexpr auto kConcertPitchProperty = "concertPitch";
 
 /// How fast an LFO can be set to run.
 ///
@@ -1373,6 +1374,7 @@ void SonitusProcessor::publishTuning()
     // audio thread only ever swaps.
     pendingScale_ = scale_;
     pendingMap_ = hasKeyboardMap_ ? keyboardMap_ : dsp::KeyboardMap {};
+    pendingConcertHz_ = concertPitchHz_;
 
     tuningPending_.store (true, std::memory_order_release);
 }
@@ -1391,6 +1393,7 @@ void SonitusProcessor::collectTuning() noexcept
 
     engine_.tuning().swapScale (pendingScale_);
     engine_.tuning().swapKeyboardMap (pendingMap_);
+    engine_.tuning().setConcertPitch (pendingConcertHz_);
 
     tuningPending_.store (false, std::memory_order_release);
 }
@@ -1462,6 +1465,37 @@ void SonitusProcessor::resetTuning()
     publishTuning();
 }
 
+void SonitusProcessor::setConcertPitch (double hz)
+{
+    concertPitchHz_ = std::clamp (hz, dsp::Tuning::kMinimumConcertHz,
+                                  dsp::Tuning::kMaximumConcertHz);
+    publishTuning();
+}
+
+int SonitusProcessor::getRootNote() const
+{
+    // Without a map the tuning's degree 0 sits on middle C; a map moves it to
+    // its own middle note.
+    return hasKeyboardMap_ ? keyboardMap_.middleNote : 60;
+}
+
+double SonitusProcessor::getRootHz() const
+{
+    // A throwaway preview built the way collectTuning builds the live one,
+    // asked one question on the message thread. The panel multiplies the
+    // scale's ratios by this to fill its Hz column.
+    dsp::Tuning preview;
+
+    preview.setScale (scale_);
+
+    if (hasKeyboardMap_)
+        preview.setKeyboardMap (keyboardMap_);
+
+    preview.setConcertPitch (concertPitchHz_);
+
+    return preview.frequencyFor (getRootNote());
+}
+
 juce::String SonitusProcessor::getScaleName() const
 {
     return scaleName_;
@@ -1484,6 +1518,16 @@ juce::String SonitusProcessor::describeTuning() const
 
     if (hasKeyboardMap_)
         text += ", with a keyboard map";
+
+    // The concrete anchor: where degree 0 actually sounds, at the current
+    // pitch standard. This is the line that moves when the A4 control does.
+    const double rootHz = getRootHz();
+
+    if (rootHz > 0.0)
+        text += " -- root "
+                  + juce::MidiMessage::getMidiNoteName (getRootNote(), true, true, 4)
+                  + " = " + juce::String (rootHz, 2) + " Hz at A4 = "
+                  + juce::String (concertPitchHz_, 1) + " Hz";
 
     return text;
 }
@@ -2320,6 +2364,7 @@ void SonitusProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty (kScaleNameProperty, scaleName_, nullptr);
     state.setProperty (kScaleTextProperty, scalaText_, nullptr);
     state.setProperty (kKeyboardMapProperty, keyboardMapText_, nullptr);
+    state.setProperty (kConcertPitchProperty, concertPitchHz_, nullptr);
     state.setProperty (ui::stateIds::tooltipsEnabled, tooltipsEnabled_, nullptr);
 
     if (auto xml = state.createXml())
@@ -2344,6 +2389,11 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
     tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
 
     const juce::String map = tree.getProperty (kKeyboardMapProperty, "").toString();
+
+    // The concert pitch first, so every publish below already carries it.
+    concertPitchHz_ = std::clamp (double (tree.getProperty (kConcertPitchProperty, 440.0)),
+                                  dsp::Tuning::kMinimumConcertHz,
+                                  dsp::Tuning::kMaximumConcertHz);
 
     // Restore the tuning, and **fall back to 12-TET if it does not parse**
     // rather than leaving whatever was there. A project that reopens playing

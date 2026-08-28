@@ -100,6 +100,21 @@ struct Scale
     /// as `construction`; same emptiness for file-loaded scales.
     std::string story;
 
+    /// What the tradition actually tuned *to*, when that is known -- shown
+    /// bold on the panel. Mesopotamia left no absolute pitch, Partch fixed
+    /// his 1/1 at G-392, the baroque settles on A415 in modern practice.
+    /// Empty means the panel shows the honest generic line: intervals only,
+    /// no inherent frequency.
+    std::string pitchStandard;
+
+    /// The pitch standard as a number the panel can *apply*, expressed as an
+    /// A4 value -- 415 for the baroque temperaments, 440 for 12-TET's ISO
+    /// standard. Zero means there is no single number to apply, which is the
+    /// truthful state for Babylon, Greece, Persia and the lu: their stories
+    /// say why, and no button pretends otherwise. Partch's G-392 is a *root*
+    /// standard rather than an A-standard, so it stays prose too.
+    double suggestedConcertHz { 0.0 };
+
     [[nodiscard]] int size() const noexcept { return static_cast<int> (ratios.size()); }
 
     /// The degree's size in cents above the tonic. For display and for tests;
@@ -356,6 +371,22 @@ public:
     [[nodiscard]] int getReferenceNote() const noexcept { return referenceNote_; }
     [[nodiscard]] double getReferenceHz() const noexcept { return referenceHz_; }
 
+    /// The pitch standard, expressed as what A440 is moved to. Everything the
+    /// tuning produces is scaled by `hz / 440` -- the default reference and a
+    /// keyboard map's own reference alike -- so 432 sits the whole instrument
+    /// 31.8 cents low whatever note the tuning anchors on. Stated in terms of
+    /// A because that is the lingua franca, not because the tuning needs to
+    /// contain an A: it is one ratio applied to the lot.
+    static constexpr double kMinimumConcertHz = 380.0;
+    static constexpr double kMaximumConcertHz = 500.0;
+
+    void setConcertPitch (double hz) noexcept
+    {
+        concertHz_ = std::clamp (hz > 0.0 ? hz : 440.0, kMinimumConcertHz, kMaximumConcertHz);
+    }
+
+    [[nodiscard]] double getConcertPitch() const noexcept { return concertHz_; }
+
     /// The frequency of a MIDI note, in Hz. **0 means the key is not mapped**
     /// and should play nothing -- a keyboard map is allowed to leave holes, and
     /// a silent key is the correct answer rather than an error.
@@ -376,7 +407,7 @@ public:
 
         const double hz = usingMap() ? map_.referenceHz : referenceHz_;
 
-        return hz * here / reference;
+        return (concertHz_ / 440.0) * hz * here / reference;
     }
 
     /// The same thing in cents above the reference. For a display, and for
@@ -486,6 +517,7 @@ private:
     int rootNote_ { 60 };
     int referenceNote_ { 69 };
     double referenceHz_ { 440.0 };
+    double concertHz_ { 440.0 };
 };
 
 } // namespace tezla::dsp

@@ -476,9 +476,22 @@ carries its construction — the one sentence of arithmetic its degrees fall out
 of — and a few sentences of where it comes from and why it matters, beside a
 degree table: exact fraction where the degree is one (the detector accepts
 near-exact rationals only, so a tempered degree never wears a fraction it did
-not earn), cents, and the step to the next degree, with the repeat interval as
-the last row. A scale loaded from a file gets the same table computed from its
-own numbers.
+not earn), cents, the step to the next degree, and **the sounding frequency in
+Hz**, with the repeat interval as the last row. A scale loaded from a file gets
+the same table computed from its own numbers.
+
+**Concert pitch is a control, and the history is on the panel.** The **A4**
+slider scales the whole tuning — keyboard-map reference included — by one ratio
+against 440, so it means something even in a scale with no A in it; the Hz
+column and the root readout follow the drag live, and the setting is saved with
+the project and left alone by presets. Each scale also states, in bold, what
+its tradition actually tuned to: no absolute pitch survives from Babylon or
+Greece; Persian and gamelan practice tune to the singer or the forge; the
+baroque settles on **A415** in modern practice (one click applies it);
+Huangzhong was an absolute standard of state whose bells survive; Partch fixed
+his 1/1 at **G-392**; and A440 itself is only ISO 16 of 1955 — A432 has no
+historical orchestra behind it, which the panel says while making it one drag
+away.
 
 Every one is **generated from its definition** rather than shipped from an
 archive — a Pythagorean scale is a chain of 3/2s, Bohlen–Pierce is thirteen
@@ -656,7 +669,7 @@ multiply:
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **663 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **665 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.
