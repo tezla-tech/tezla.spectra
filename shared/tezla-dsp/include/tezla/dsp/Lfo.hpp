@@ -66,9 +66,22 @@ public:
     void setWave (Wave wave) noexcept { wave_ = wave; }
     [[nodiscard]] Wave getWave() const noexcept { return wave_; }
 
+    /// The absolute ceiling on the free-running rate.
+    ///
+    /// A sanity bound rather than a musical one -- it is here so a runaway
+    /// modulation of the rate cannot produce a phase increment that swamps the
+    /// accumulator, not to say what is useful. **The binding limit is the
+    /// caller's**, and it is lower: an LFO is read at whatever the consumer's
+    /// control rate is, and above half of that the output aliases to something
+    /// other than what the knob says. A caller reading this every 32 samples at
+    /// 48 kHz has 750 Hz to play with; one reading it per sample has the whole
+    /// range. Sonitus derives its own clamp from its control rate for exactly
+    /// this reason.
+    static constexpr double kMaximumRateHz = 1000.0;
+
     /// Free-running rate. Ignored while the phase is being driven from the
     /// transport.
-    void setRateHz (double hz) noexcept { rateHz_ = std::clamp (hz, 0.0, 100.0); }
+    void setRateHz (double hz) noexcept { rateHz_ = std::clamp (hz, 0.0, kMaximumRateHz); }
     [[nodiscard]] double getRateHz() const noexcept { return rateHz_; }
 
     /// Rotates the waveform without moving the clock, 0 to 1 of a cycle.

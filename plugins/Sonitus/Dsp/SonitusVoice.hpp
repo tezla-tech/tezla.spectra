@@ -40,6 +40,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 
 #include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Adsr.hpp>
@@ -127,6 +128,10 @@ enum class ModDestination
     pitch,             ///< cents, the whole voice
     pitchB,            ///< cents, oscillator B alone -- the sync sweep
     level,
+
+    /// How deep the period doubling goes. **Appended**, because a stored slot
+    /// is an index into this list -- CLAUDE.md section 8.
+    kargyraa,
 
     count
 };
@@ -236,6 +241,25 @@ struct VoiceParameters
     /// Sine folding. Past pi/2 the curve turns over and keeps folding, so the
     /// spectrum evolves instead of converging on a square.
     double foldAmount { 0.0 };         ///< 0 .. 1
+
+    // ---- kargyraa ------------------------------------------------------------
+
+    /// How much of the alternate cycle is taken away, 0 to 1. Zero is bit-exact
+    /// bypass -- see `Voice::process`.
+    double kargyraaDepth { 0.0 };
+
+    /// How sharp the dip is, 0 to 1. Low is a smooth subharmonic; high is a
+    /// narrow rasp with more of the series present.
+    double kargyraaRasp { 0.5 };
+
+    /// How many of the oscillator's cycles one modulator cycle spans.
+    ///
+    /// **2 is kargyraa.** The ventricular folds vibrate at exactly half the
+    /// true folds' rate, so every second glottal pulse is the damped one. 3 and
+    /// 4 are not anything a throat does; they are here because the machinery is
+    /// the same and a third-harmonic subdivision is a sound this instrument
+    /// should be able to make.
+    int kargyraaDivisor { 2 };
 
     // ---- filter --------------------------------------------------------------
 
@@ -351,6 +375,8 @@ public:
         bankB_.reset();
         sub_.reset (0.0);
         syncPhase_ = 0.0;
+        kargyraaPhase_ = 0.0;
+        kargyraaCycle_ = 0;
 
         for (auto& adaa : foldAdaa_)
             adaa.reset();
@@ -400,6 +426,13 @@ public:
             bankB_.reset();
             sub_.reset (0.0);
             syncPhase_ = 0.0;
+
+            // From the top of the group, so a cold note always begins on the
+            // undamped cycle. Legato deliberately does not: a phrase played
+            // without gaps keeps the growl running through it rather than
+            // restarting it on every note.
+            kargyraaPhase_ = 0.0;
+            kargyraaCycle_ = 0;
 
             for (auto& adaa : foldAdaa_)
                 adaa.reset();
@@ -563,6 +596,17 @@ public:
         // The folder's gain is a *geometric* control, so its first half is not
         // wasted: at 1.0 the curve has not folded at all and the whole
         // character is in the last third of the travel otherwise.
+        kargyraaDepth_ = std::clamp (parameters.kargyraaDepth
+                                       + amount (ModDestination::kargyraa), 0.0, 1.0);
+        kargyraaRasp_ = std::clamp (parameters.kargyraaRasp, 0.0, 1.0);
+
+        // Re-wrapped rather than assigned, so shortening the divisor while a
+        // note is sounding cannot leave the counter pointing past the end of
+        // its own cycle -- which would hold the modulator at one value until
+        // the next wrap.
+        kargyraaDivisor_ = std::clamp (parameters.kargyraaDivisor, kMinimumDivisor, kMaximumDivisor);
+        kargyraaCycle_ %= kargyraaDivisor_;
+
         fold_ = std::clamp (parameters.foldAmount + amount (ModDestination::foldAmount), 0.0, 1.0);
 
         folder_.setGain (dsp::isExactlyZero (fold_) ? 0.0 : std::pow (kMaximumFold, fold_));
@@ -613,6 +657,19 @@ public:
 
             mixLeft += ring_ * (ringLeft - mixLeft);
             mixRight += ring_ * (ringRight - mixRight);
+        }
+
+        // **Kargyraa -- period doubling, phase-locked to the oscillator.**
+        //
+        // The clock advances whatever the depth is, so engaging the control
+        // mid-note starts from the phase the note is already at rather than
+        // from wherever the counter happened to stop.
+        const double kargyraa = advanceKargyraa();
+
+        if (! dsp::isExactlyZero (kargyraaDepth_))
+        {
+            mixLeft *= kargyraa;
+            mixRight *= kargyraa;
         }
 
         if (! dsp::isExactlyZero (fold_))
@@ -770,6 +827,96 @@ private:
     /// to it would make the sounding pitch drop as the detune is turned up. An
     /// even stack has no centre voice to use instead. A separate accumulator
     /// costs one add and one compare per sample and is right at every setting.
+    /// The smallest and largest subdivision the control offers.
+    static constexpr int kMinimumDivisor = 2;
+    static constexpr int kMaximumDivisor = 4;
+
+    /// The sharpest the dip can be made, as the power the raised cosine is
+    /// taken to. See `advanceKargyraa` for why it is an integer bound.
+    static constexpr int kMaximumRaspPower = 8;
+
+    /// Advances the subharmonic clock and returns this sample's gain.
+    ///
+    /// ---------------------------------------------------------------------
+    /// What kargyraa actually is
+    /// ---------------------------------------------------------------------
+    ///
+    /// In the Tuvan and Tibetan style the **ventricular folds** -- the false
+    /// vocal folds sitting above the true ones -- are drawn into vibration by
+    /// the airflow and close at exactly *half* the true folds' rate. Every
+    /// second glottal pulse is damped by them. So the voice gains a real
+    /// subharmonic: the period doubles while the pitch being sung, and the
+    /// formants shaping it, stay where they were.
+    ///
+    /// **That is not an octave divider and not a sub oscillator.** A sub adds a
+    /// separate tone an octave down; this modifies alternate cycles of the
+    /// waveform that is already there, so what appears is the half-integer
+    /// series -- f/2, 3f/2, 5f/2 -- around every harmonic, at levels set by how
+    /// different the two cycles are. It is the same voice with a doubled
+    /// period, which is why it sounds like a growl rather than like two notes.
+    ///
+    /// The lock is by construction rather than by tuning: the modulator's phase
+    /// is *derived* from the oscillator's own cycle counter, so it cannot drift
+    /// against the note however long it is held, and a glide takes it along.
+    ///
+    /// ---------------------------------------------------------------------
+    /// Why the shape is a power of a raised cosine
+    /// ---------------------------------------------------------------------
+    ///
+    /// A gain that steps between cycles is a square wave at f/N multiplying the
+    /// signal, and a square has infinite bandwidth -- CLAUDE.md section 7 calls
+    /// that a defect everywhere except where it is the instrument, and here it
+    /// is not. Oversampling would not save it either, for the reason the
+    /// section gives about hard clipping.
+    ///
+    /// `(0.5 - 0.5 cos t)^k` is `sin^2k(t/2)`, and `sin^2k` expands into a
+    /// **finite** cosine series: exactly `k` harmonics of `t` and nothing above
+    /// them. So the modulator is band-limited by construction, at a bandwidth
+    /// the Rasp control names, and the product widens the carrier by exactly
+    /// `k * f/N` -- 220 Hz at the bottom of the keyboard with the default. No
+    /// antiderivative, no oversampling argument, no measurement needed to know
+    /// the bound; the measurement in tests/test_Sonitus.cpp confirms it anyway.
+    ///
+    /// Rasp interpolates between two adjacent integer powers rather than
+    /// varying `k` continuously, because a fractional power is an infinite
+    /// series and would throw the guarantee away. A linear blend of two
+    /// band-limited signals is band-limited to the wider of the two.
+    [[nodiscard]] double advanceKargyraa() noexcept
+    {
+        if (syncIncrement_ > 0.0)
+        {
+            kargyraaPhase_ += syncIncrement_;
+
+            while (kargyraaPhase_ >= 1.0)
+            {
+                kargyraaPhase_ -= 1.0;
+                kargyraaCycle_ = (kargyraaCycle_ + 1) % kargyraaDivisor_;
+            }
+        }
+
+        if (dsp::isExactlyZero (kargyraaDepth_))
+            return 1.0;
+
+        // Where we are across the whole N-cycle span, exactly.
+        const double span = (static_cast<double> (kargyraaCycle_) + kargyraaPhase_)
+                              / static_cast<double> (kargyraaDivisor_);
+
+        // sin^2, peaking once per span. The dip therefore lands on the *last*
+        // cycle of each group, which is the damped one.
+        const double raised = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * span);
+
+        const double power = 1.0 + kargyraaRasp_ * (kMaximumRaspPower - 1);
+        const double lower = std::floor (power);
+        const double fraction = power - lower;
+
+        const double soft = std::pow (raised, lower);
+        const double shape = dsp::isExactlyZero (fraction)
+                               ? soft
+                               : soft + fraction * (soft * raised - soft);
+
+        return 1.0 - kargyraaDepth_ * shape;
+    }
+
     void propagateSync() noexcept
     {
         if (syncIncrement_ <= 0.0)
@@ -862,6 +1009,21 @@ private:
     double pmIndex_ { 0.0 };
 
     double syncPhase_ { 0.0 };
+
+    /// The kargyraa clock: a second accumulator at oscillator A's nominal rate,
+    /// plus which cycle of the group we are in.
+    ///
+    /// Its own rather than shared with `syncPhase_`, which only runs while hard
+    /// sync is switched on -- the two features are independent and either can
+    /// be used without the other. A locks the period in both cases because it
+    /// is this instrument's master everywhere else, including when its level is
+    /// down and only B is sounding.
+    double kargyraaPhase_ { 0.0 };
+    int    kargyraaCycle_ { 0 };
+
+    double kargyraaDepth_ { 0.0 };
+    double kargyraaRasp_ { 0.5 };
+    int    kargyraaDivisor_ { 2 };
     double syncIncrement_ { 0.0 };
 
     dsp::SineFolder folder_;

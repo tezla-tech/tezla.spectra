@@ -424,12 +424,26 @@ void Engine::advanceGlobalSources (int samples) noexcept
     // lane: the sequencer steps the LFO through a pattern of speeds.
     const double octaves = active_.sequencerToLfo1Rate * sources_.sequencer;
 
+    // **The ceiling is the control rate's, not a round number.** These sources
+    // are read once every `kControlIntervalSamples`, so the fastest LFO that
+    // means what it says is half of that -- above it the output aliases to some
+    // other frequency and the knob becomes a lie. Deriving it rather than
+    // picking one matters because the control rate moves with the oversampling
+    // factor: 3000 Hz at 48 kHz x4, but 689 Hz at 44.1 kHz with oversampling
+    // off, and a fixed constant would be wrong at one end or the other.
+    //
+    // It replaces a flat 100 Hz that was quietly below the *parameter's* own
+    // maximum once key tracking or the sequencer multiplied the rate -- the
+    // knob went to 40 Hz, key tracking two octaves up made that 160, and the
+    // clamp threw the top third of it away with nothing to show for it.
+    const double controlNyquist = 0.5 * internalRate_ / Voice::kControlIntervalSamples;
+
     lfo1_.setRateHz (std::clamp (
         keyTracked (active_.lfo1RateHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
-        0.0, 100.0));
+        0.0, controlNyquist));
 
     lfo2_.setRateHz (std::clamp (
-        keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, 100.0));
+        keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, controlNyquist));
 
     sources_.lfo1 = lfo1_.advance (samples);
     sources_.lfo2 = lfo2_.advance (samples);

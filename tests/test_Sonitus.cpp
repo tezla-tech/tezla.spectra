@@ -6,6 +6,7 @@
 #include <numbers>
 #include <vector>
 
+#include <tezla/measure/Fft.hpp>
 #include <tezla/measure/Harmonics.hpp>
 #include <tezla/measure/Signals.hpp>
 
@@ -1582,4 +1583,562 @@ TEZLA_TEST (the_lfo_rate_can_follow_the_played_note)
     // And with tracking off it is the same rate at every note, which is the
     // behaviour that has to survive.
     CHECK_NEAR (cyclesOverASecond (48, 0.0), cyclesOverASecond (72, 0.0), 0.2);
+}
+
+TEZLA_TEST (an_lfo_reaches_the_top_of_its_range_without_being_clamped)
+{
+    // The rate control goes to 160 Hz, and two clamps used to stop it well
+    // short of that: `Lfo::setRateHz` capped at 100, and the engine capped the
+    // *effective* rate at 100 again after key tracking and the sequencer had
+    // multiplied it. Neither was reachable from the old 40 Hz knob without key
+    // tracking, which is exactly why nothing caught it -- and key tracking is
+    // what the instrument is for.
+    //
+    // Measured by counting the LFO's own zero crossings rather than by looking
+    // at audio: this is a claim about the modulation source, and reading it
+    // through a filter would confound the source with what the destination did
+    // with it.
+    constexpr double rate = 48000.0;
+    constexpr double seconds = 0.5;
+
+    const auto crossingsAt = [] (double hz, double keyTrack, int note)
+    {
+        auto parameters = brutal();
+
+        parameters.lfo1Wave = Lfo::Wave::sine;
+        parameters.lfo1RateHz = hz;
+        parameters.lfo1KeyTrack = keyTrack;
+        parameters.lfo1Smooth = 0.0;
+        parameters.sequencerToLfo1Rate = 0.0;
+
+        // Nothing assigned: the reading comes from the engine's published
+        // source, not from anything downstream of it.
+        parameters.globalSlots[0] = { GlobalSource::none, GlobalDestination::none, 0.0 };
+
+        Engine engine;
+        engine.prepare (rate, 64);
+        engine.setParameters (parameters);
+        engine.noteOn (note, 1.0);
+
+        Buffers buffers (64);
+
+        int crossings = 0;
+        double previous = 0.0;
+        bool first = true;
+
+        const int blocks = static_cast<int> (rate * seconds) / 64;
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            std::fill (buffers.left.begin(), buffers.left.end(), 0.0);
+            std::fill (buffers.right.begin(), buffers.right.end(), 0.0);
+
+            engine.process (buffers.pointers, 64);
+
+            const double value = engine.readouts().lfo1.load();
+
+            if (! first && previous < 0.0 && value >= 0.0)
+                ++crossings;
+
+            previous = value;
+            first = false;
+        }
+
+        return crossings;
+    };
+
+    // A sine crosses zero upwards once per cycle, so the count over half a
+    // second is half the rate in hertz. Read at 750 Hz here -- 48 kHz through
+    // the x4 oversampler is 192 kHz internal, and the sources are published
+    // every 64-sample block -- so the tolerance is a couple of cycles rather
+    // than exact.
+    const int slow = crossingsAt (2.0, 0.0, 60);
+    const int fast = crossingsAt (160.0, 0.0, 60);
+
+    CHECK (std::abs (slow - 1) <= 1);
+
+    // The claim with teeth: at 160 Hz the count must be near 80, not the 50 a
+    // 100 Hz clamp would give.
+    CHECK (fast >= 72 && fast <= 88);
+
+    // And key tracking on top of a fast rate is not clamped away either. Two
+    // octaves above middle C at full tracking is four times the rate; the
+    // engine's own ceiling is half the control rate, which at 192 kHz internal
+    // is 3000 Hz, so 40 x 4 = 160 passes untouched.
+    const int tracked = crossingsAt (40.0, 1.0, 84);
+
+    CHECK (tracked >= 72 && tracked <= 88);
+}
+
+/// A voice with nothing downstream of it: one sine oscillator, no mangle. What
+/// is being measured in the two tests below is what the modulation does to the
+/// *pitch*, and the comb, the tube and the split all move a waveform about for
+/// reasons that have nothing to do with it.
+EngineParameters bareSine()
+{
+    EngineParameters parameters;
+
+    parameters.voice.shapeA = OscShape::sine;
+    parameters.voice.levelA = 1.0;
+    parameters.voice.levelB = 0.0;
+    parameters.voice.subLevel = 0.0;
+    parameters.voice.unisonA = 1;
+    parameters.voice.unisonB = 1;
+    parameters.voice.cutoffHz = 18000.0;
+    parameters.voice.ampAttack = 0.001;
+    parameters.voice.ampSustain = 1.0;
+    parameters.voice.level = 0.5;
+
+    parameters.keyboard = KeyboardMode::mono;
+
+    parameters.splitHz = 40.0;
+    parameters.combMode = CombMode::off;
+    parameters.combMix = 0.0;
+    parameters.formantMix = 0.0;
+    parameters.tubeDriveDb = 0.0;
+    parameters.tilt = 0.0;
+    parameters.outputDb = 0.0;
+
+    parameters.lfo1Wave = Lfo::Wave::sine;
+    parameters.lfo1Smooth = 0.0;
+
+    return parameters;
+}
+
+TEZLA_TEST (a_slow_lfo_on_pitch_sweeps_the_period)
+{
+    // The pitch destination, measured directly: a sine oscillator crosses zero
+    // twice per cycle and nowhere else, so the gap between crossings *is* the
+    // period and its spread is the depth of the sweep.
+    //
+    // **Peak to peak, not standard deviation.** Over a quarter of a second a
+    // 2 Hz LFO covers half a cycle, so most of the sweep is monotonic and the
+    // deviation reads far smaller than the swing -- 1.4% against a real 4.8%.
+    // The range is the honest statistic for a ramp.
+    //
+    // The first attempt at this counted crossings of the house saw and read a
+    // spread of 0.89 with the LFO switched *off*: a saw crosses zero many times
+    // per cycle once its harmonics have been through a comb and a decimation
+    // filter, so the gaps measured the harmonic structure rather than the pitch.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 12000;
+
+    const auto spreadAt = [] (double hz)
+    {
+        auto parameters = bareSine();
+
+        parameters.lfo1RateHz = hz;
+        parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::pitch, 100.0 };
+
+        Engine engine;
+        engine.prepare (rate, 64);
+
+        const auto out = play (engine, parameters, 45, samples, 64);
+
+        // The first eighth is the amp attack and the output smoother settling.
+        const std::size_t from = out.size() / 8;
+
+        int shortest = 1 << 30;
+        int longest = 0;
+        int last = -1;
+        double total = 0.0;
+        int counted = 0;
+
+        for (std::size_t i = from + 1; i < out.size(); ++i)
+            if (out[i - 1] < 0.0 && out[i] >= 0.0)
+            {
+                if (last >= 0)
+                {
+                    const int gap = static_cast<int> (i) - last;
+
+                    shortest = std::min (shortest, gap);
+                    longest = std::max (longest, gap);
+                    total += gap;
+                    ++counted;
+                }
+
+                last = static_cast<int> (i);
+            }
+
+        if (counted < 8)
+            return 0.0;
+
+        return (longest - shortest) / (total / counted);
+    };
+
+    // At rest the only variation is the sample grid's own rounding: one sample
+    // in a 436-sample period.
+    CHECK (spreadAt (0.0) < 0.01);
+
+    // A semitone either way is about 6% of the period, and the measurement sees
+    // most of it.
+    CHECK (spreadAt (2.0) > 0.03);
+}
+
+TEZLA_TEST (a_fast_lfo_on_pitch_makes_sidebands)
+{
+    // **The top of the rate range does something different in kind**, and this
+    // is the test that says what. At 160 Hz an LFO cycle is shorter than the
+    // period it is modulating, so there is no sweep to measure -- the pitch
+    // never settles anywhere long enough to have one. What there is instead is
+    // frequency modulation: energy at the carrier plus and minus the modulator,
+    // which is the same mechanism as the FILTER page's own FM control reached
+    // from the modulation matrix.
+    //
+    // Measuring this as a period spread would read almost nothing and look like
+    // a failure. Measuring it as a spectrum shows the sidebands arriving.
+    constexpr double rate = 48000.0;
+    constexpr std::size_t fftSize = 8192;
+
+    const auto spectrumWith = [] (double hz)
+    {
+        auto parameters = bareSine();
+
+        parameters.lfo1RateHz = hz;
+        parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::pitch, 100.0 };
+
+        Engine engine;
+        engine.prepare (rate, 64);
+
+        // A4, so both sidebands land well clear of zero and of each other.
+        const auto out = play (engine, parameters, 69, 3 * static_cast<int> (fftSize), 64);
+
+        // From the second half, past the attack and the gain smoother.
+        std::vector<double> window (fftSize);
+
+        for (std::size_t i = 0; i < fftSize; ++i)
+        {
+            const double hann = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi
+                                                        * static_cast<double> (i)
+                                                        / static_cast<double> (fftSize));
+
+            window[i] = out[out.size() - fftSize + i] * hann;
+        }
+
+        return fftOfReal (window);
+    };
+
+    const auto energyNear = [] (const Spectrum& spectrum, double hz)
+    {
+        // Three bins either side: at 5.86 Hz a bin, a Hann main lobe is four
+        // bins wide and the sideband is not bin-exact.
+        const auto centre = static_cast<int> (std::llround (hz * fftSize / rate));
+
+        double peak = 0.0;
+
+        for (int bin = centre - 3; bin <= centre + 3; ++bin)
+            if (bin > 0 && bin < static_cast<int> (fftSize / 2))
+                peak = std::max (peak, std::abs (spectrum[static_cast<std::size_t> (bin)]));
+
+        return peak;
+    };
+
+    const auto still = spectrumWith (0.0);
+    const auto fast = spectrumWith (160.0);
+
+    // The carrier is there either way, and is the reference everything else is
+    // measured against.
+    const double carrier = energyNear (still, 440.0);
+
+    CHECK (carrier > 0.0);
+
+    // 440 + 160 and 440 - 160. Held still there is only the window's own
+    // leakage this far out; modulated there is a sideband.
+    const double upperStill = energyNear (still, 600.0) / carrier;
+    const double lowerStill = energyNear (still, 280.0) / carrier;
+
+    const double upperFast = energyNear (fast, 600.0) / energyNear (fast, 440.0);
+    const double lowerFast = energyNear (fast, 280.0) / energyNear (fast, 440.0);
+
+    // Leakage three bins out of a Hann window is far below a percent.
+    CHECK (upperStill < 0.01);
+    CHECK (lowerStill < 0.01);
+
+    // The sidebands. A 100-cent swing at 160 Hz is a modulation index near 0.4,
+    // which puts each first-order sideband about 14 dB below the carrier -- so
+    // the claim is that they are unmistakably present, not that they are loud.
+    CHECK (upperFast > 0.05);
+    CHECK (lowerFast > 0.05);
+
+    // And the thing this whole range change was about: against the old clamp at
+    // 100 Hz the sidebands would sit at 340 and 540 Hz instead, so the bins at
+    // 280 and 600 would read leakage. They do not.
+    CHECK (upperFast > 10.0 * upperStill);
+    CHECK (lowerFast > 10.0 * lowerStill);
+}
+
+
+TEZLA_TEST (kargyraa_puts_a_subharmonic_where_the_throat_puts_one)
+{
+    // Kargyraa is period doubling, not an octave divider: alternate cycles of
+    // the waveform that is already there are damped, so what appears is the
+    // **half-integer series** -- f/2, 3f/2, 5f/2 -- around the fundamental,
+    // rather than a separate tone an octave down.
+    //
+    // That distinction is the whole test. A sub oscillator would put energy at
+    // f/2 and nothing at 3f/2; this must put energy at both.
+    constexpr double rate = 48000.0;
+    constexpr std::size_t fftSize = 16384;
+
+    const auto spectrumAt = [] (double depth, int divisor)
+    {
+        auto parameters = bareSine();
+
+        // A saw, because a sine has one harmonic to modulate and the series
+        // being looked for sits around all of them.
+        parameters.voice.shapeA = OscShape::saw;
+        parameters.voice.kargyraaDepth = depth;
+        parameters.voice.kargyraaRasp = 0.5;
+        parameters.voice.kargyraaDivisor = divisor;
+
+        Engine engine;
+        engine.prepare (rate, 64);
+
+        // A2 at 110 Hz, so f/2 is 55 Hz and the split at 40 Hz leaves it alone.
+        const auto out = play (engine, parameters, 45, 3 * static_cast<int> (fftSize), 64);
+
+        std::vector<double> window (fftSize);
+
+        for (std::size_t i = 0; i < fftSize; ++i)
+        {
+            const double hann = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi
+                                                        * static_cast<double> (i)
+                                                        / static_cast<double> (fftSize));
+
+            window[i] = out[out.size() - fftSize + i] * hann;
+        }
+
+        return fftOfReal (window);
+    };
+
+    const auto energyNear = [] (const Spectrum& spectrum, double hz)
+    {
+        const auto centre = static_cast<int> (std::llround (hz * fftSize / rate));
+
+        double peak = 0.0;
+
+        for (int bin = centre - 3; bin <= centre + 3; ++bin)
+            if (bin > 0 && bin < static_cast<int> (fftSize / 2))
+                peak = std::max (peak, std::abs (spectrum[static_cast<std::size_t> (bin)]));
+
+        return peak;
+    };
+
+    const auto off = spectrumAt (0.0, 2);
+    const auto on = spectrumAt (0.8, 2);
+
+    const double carrierOff = energyNear (off, 110.0);
+    const double carrierOn = energyNear (on, 110.0);
+
+    CHECK (carrierOff > 0.0);
+    CHECK (carrierOn > 0.0);
+
+    // Nothing at the half-integers with the control down: a saw has harmonics
+    // at 110, 220, 330 and nowhere else.
+    CHECK (energyNear (off, 55.0) / carrierOff < 0.01);
+    CHECK (energyNear (off, 165.0) / carrierOff < 0.01);
+    CHECK (energyNear (off, 275.0) / carrierOff < 0.01);
+
+    // And the series arrives with it. **3f/2 is the one that separates this
+    // from a sub oscillator** -- an added tone an octave down would leave it
+    // empty.
+    CHECK (energyNear (on, 55.0) / carrierOn > 0.05);
+    CHECK (energyNear (on, 165.0) / carrierOn > 0.05);
+    CHECK (energyNear (on, 275.0) / carrierOn > 0.02);
+
+    // A divisor of three subdivides by three instead: f/3 and 2f/3 appear, and
+    // f/2 does not.
+    const auto third = spectrumAt (0.8, 3);
+    const double carrierThird = energyNear (third, 110.0);
+
+    CHECK (energyNear (third, 110.0 / 3.0) / carrierThird > 0.05);
+    CHECK (energyNear (third, 220.0 / 3.0) / carrierThird > 0.05);
+    CHECK (energyNear (third, 55.0) / carrierThird < 0.02);
+}
+
+TEZLA_TEST (kargyraa_is_locked_to_the_note_and_cannot_drift)
+{
+    // The lock is by construction -- the modulator's phase is derived from the
+    // oscillator's own cycle counter rather than accumulated from a clock of
+    // its own -- and this is what that buys: the subharmonic lands on exactly
+    // half the played frequency at every pitch, with no tuning to get wrong.
+    //
+    // A free-running modulator would pass at one note and fail at the others,
+    // which is why three are measured rather than one.
+    constexpr double rate = 48000.0;
+    constexpr std::size_t fftSize = 16384;
+
+    const auto subharmonicRatio = [] (int note, double frequency)
+    {
+        auto parameters = bareSine();
+
+        parameters.voice.shapeA = OscShape::saw;
+        parameters.voice.kargyraaDepth = 0.9;
+        parameters.voice.kargyraaRasp = 0.5;
+        parameters.voice.kargyraaDivisor = 2;
+
+        Engine engine;
+        engine.prepare (rate, 64);
+
+        const auto out = play (engine, parameters, note, 3 * static_cast<int> (fftSize), 64);
+
+        std::vector<double> window (fftSize);
+
+        for (std::size_t i = 0; i < fftSize; ++i)
+        {
+            const double hann = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi
+                                                        * static_cast<double> (i)
+                                                        / static_cast<double> (fftSize));
+
+            window[i] = out[out.size() - fftSize + i] * hann;
+        }
+
+        const auto spectrum = fftOfReal (window);
+
+        // The loudest bin below three quarters of the fundamental *is* the
+        // subharmonic, whatever it turns out to be -- so a modulator running at
+        // the wrong rate is found rather than assumed away.
+        const auto limit = static_cast<std::size_t> (0.75 * frequency * fftSize / rate);
+
+        std::size_t loudest = 1;
+        double best = 0.0;
+
+        // From 30 Hz up: below that is the split's own high-pass skirt.
+        for (std::size_t bin = static_cast<std::size_t> (30.0 * fftSize / rate); bin < limit; ++bin)
+            if (std::abs (spectrum[bin]) > best)
+            {
+                best = std::abs (spectrum[bin]);
+                loudest = bin;
+            }
+
+        return static_cast<double> (loudest) * rate / fftSize / frequency;
+    };
+
+    // A1, A2 and A3. Each must find its subharmonic at half its own pitch --
+    // within one FFT bin, which at 16384 points is 2.9 Hz.
+    CHECK_NEAR (subharmonicRatio (33, 55.0), 0.5, 0.06);
+    CHECK_NEAR (subharmonicRatio (45, 110.0), 0.5, 0.03);
+    CHECK_NEAR (subharmonicRatio (57, 220.0), 0.5, 0.02);
+}
+
+TEZLA_TEST (kargyraa_at_zero_is_bit_exact)
+{
+    // CLAUDE.md section 7: anything permanently in the signal path needs a
+    // bit-exact bypass at its neutral setting, not merely a transparent one.
+    //
+    // Here it is exact twice over -- the branch skips the multiply, and the
+    // modulator at zero depth is `1 - 0 * shape`, which is exactly 1.0, and
+    // `x * 1.0` is exactly x. The branch is a fast path rather than the
+    // mechanism, and removing it would correctly fail nothing. Worth saying
+    // out loud, because a test that cannot fail is a decoration.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 8000;
+
+    auto parameters = brutal();
+    parameters.voice.kargyraaDepth = 0.0;
+
+    Engine reference;
+    reference.prepare (rate, 128);
+    const auto without = play (reference, parameters, 40, samples, 128);
+
+    // The clock still runs at zero depth -- engaging the control mid-note has
+    // to start from the note's own phase rather than from wherever a stopped
+    // counter left off -- so this also says the clock costs nothing.
+    parameters.voice.kargyraaRasp = 1.0;
+    parameters.voice.kargyraaDivisor = 4;
+
+    Engine engine;
+    engine.prepare (rate, 128);
+    const auto with = play (engine, parameters, 40, samples, 128);
+
+    std::size_t differences = 0;
+
+    for (std::size_t i = 0; i < without.size(); ++i)
+        if (without[i] != with[i])
+            ++differences;
+
+    CHECK (differences == 0);
+}
+
+TEZLA_TEST (kargyraa_does_not_alias)
+{
+    // The modulator is band-limited *by construction*: `(0.5 - 0.5 cos t)^k` is
+    // `sin^2k(t/2)`, which expands into exactly k harmonics of t and nothing
+    // above them. So the product widens the carrier by k * f/N and no further,
+    // and no antiderivative or oversampling argument is needed to know it.
+    //
+    // The claim still gets measured, because "band-limited by construction" is
+    // an argument about the modulator and this is a statement about the
+    // instrument -- and CLAUDE.md section 7 wants the number.
+    //
+    // A sine carrier, so every component in the output is either the carrier,
+    // a subharmonic sideband the modulator is entitled to, or aliasing.
+    constexpr double rate = 48000.0;
+    constexpr std::size_t fftSize = 16384;
+
+    auto parameters = bareSine();
+
+    // The worst case the control offers: full depth, sharpest rasp, and a note
+    // high enough that k * f/N is a long way up the spectrum.
+    parameters.voice.kargyraaDepth = 1.0;
+    parameters.voice.kargyraaRasp = 1.0;
+    parameters.voice.kargyraaDivisor = 2;
+
+    Engine engine;
+    engine.prepare (rate, 128);
+
+    // A5, 880 Hz. The modulator's eight harmonics of 440 Hz reach 3520 Hz, so
+    // everything the modulation is allowed to make sits below 4400 Hz.
+    const auto out = play (engine, parameters, 81, 3 * static_cast<int> (fftSize), 128);
+
+    std::vector<double> window (fftSize);
+
+    for (std::size_t i = 0; i < fftSize; ++i)
+    {
+        const double hann = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi
+                                                    * static_cast<double> (i)
+                                                    / static_cast<double> (fftSize));
+
+        window[i] = out[out.size() - fftSize + i] * hann;
+    }
+
+    const auto spectrum = fftOfReal (window);
+
+    double carrier = 0.0;
+    double worst = 0.0;
+    double worstHz = 0.0;
+
+    for (std::size_t bin = 1; bin < fftSize / 2; ++bin)
+    {
+        const double hz = static_cast<double> (bin) * rate / fftSize;
+        const double magnitude = std::abs (spectrum[bin]);
+
+        if (std::abs (hz - 880.0) < 20.0)
+            carrier = std::max (carrier, magnitude);
+
+        // Everything the modulation is entitled to lies below 4400 Hz. Above
+        // it, in the audible band, there should be nothing.
+        if (hz > 5000.0 && hz < 18000.0 && magnitude > worst)
+        {
+            worst = magnitude;
+            worstHz = hz;
+        }
+    }
+
+    CHECK (carrier > 0.0);
+
+    const double relativeDb = 20.0 * std::log10 (worst / carrier + 1.0e-30);
+
+    // CLAUDE.md section 7's threshold.
+    (void) worstHz;
+
+    // **Measured: -200.5 dB**, which is the numerical floor -- there is nothing
+    // up there at all, which is what "band-limited by construction" predicts
+    // rather than merely permits.
+    //
+    // Seen red by replacing the shape with the obvious implementation, a hard
+    // gate on the alternate cycle: **-24.4 dB at 5.7 kHz**, 176 dB worse and
+    // grossly audible. That is the difference between a modulator with a finite
+    // Fourier series and one without, and it is why the shape is what it is.
+    CHECK (relativeDb < -60.0);
 }

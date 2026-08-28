@@ -30,6 +30,42 @@ constexpr auto kScaleTextProperty = "scalaText";
 constexpr auto kScaleNameProperty = "scaleName";
 constexpr auto kKeyboardMapProperty = "keyboardMapText";
 
+/// How fast an LFO can be set to run.
+///
+/// **160 Hz, which is well past a wobble and into audio rate.** Above roughly
+/// 20 Hz an LFO on the cutoff stops being movement and starts being
+/// modulation: it makes sidebands of its own, and the filter becomes part of
+/// the oscillator. That is the same mechanism as the FILTER page's own FM
+/// control, reached from the modulation matrix instead, and it is exactly the
+/// kind of extremity this instrument is for.
+///
+/// The centre of the travel stays at 2 Hz, so everything below it feels exactly
+/// as it did and only the top is new: the old 40 Hz maximum now sits at 80% of
+/// the knob, and the last fifth is the audio-rate region.
+///
+/// The engine clamps the *effective* rate to half its control rate on top of
+/// this, because key tracking and the sequencer both multiply it -- see
+/// `Engine::advanceGlobalSources`.
+constexpr float kMaximumLfoRateHz = 160.0f;
+
+/// How long an envelope segment can be.
+///
+/// **Twenty seconds on all three**, which is a pad rather than a bass: a slow
+/// swell that takes a whole phrase to arrive, and a release that is still
+/// sounding four bars after the key came up. The attack was five seconds and
+/// the other two were ten, which is fine for anything percussive and nowhere
+/// near enough for the long warm end of the instrument.
+///
+/// Well inside `dsp::Adsr::kMaximumSeconds`, which is thirty -- the generator
+/// clamps there, so a range above it would produce a control whose top could
+/// not be reached.
+///
+/// The centres are unchanged (0.12 s for the attack, 0.35 s for decay and
+/// release), so the short end feels exactly as it did and the added seconds are
+/// all at the top of the travel. The envelope graphs on the ENV page follow the
+/// parameter's own normalised position, so they re-scale with no change.
+constexpr float kMaximumEnvelopeSeconds = 20.0f;
+
 juce::NormalisableRange<float> skewedRange (float minimum, float maximum, float centre)
 {
     juce::NormalisableRange<float> range { minimum, maximum };
@@ -273,6 +309,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         juce::ParameterID { ids::foldAmount, kSchemaV1 }, "Fold",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
+    // ---- kargyraa ------------------------------------------------------------
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::kargyraa, kSchemaV1 }, "Kargyraa",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::kargyraaRasp, kSchemaV1 }, "Kargyraa rasp",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.5f, percentAttributes()));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::kargyraaDivisor, kSchemaV1 }, "Kargyraa divisor",
+        choices::kargyraaDivisor, 0));
+
     // ---- filter -------------------------------------------------------------
 
     layout.add (std::make_unique<Choice> (
@@ -321,11 +371,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         // the travel does something.
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { attackId, kSchemaV1 }, prefix + " attack",
-            skewedRange (0.0f, 5.0f, 0.12f), 0.005f, timeAttributes()));
+            skewedRange (0.0f, kMaximumEnvelopeSeconds, 0.12f), 0.005f, timeAttributes()));
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { decayId, kSchemaV1 }, prefix + " decay",
-            skewedRange (0.0f, 10.0f, 0.35f), 0.25f, timeAttributes()));
+            skewedRange (0.0f, kMaximumEnvelopeSeconds, 0.35f), 0.25f, timeAttributes()));
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { sustainId, kSchemaV1 }, prefix + " sustain",
@@ -333,7 +383,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { releaseId, kSchemaV1 }, prefix + " release",
-            skewedRange (0.0f, 10.0f, 0.35f), 0.15f, timeAttributes()));
+            skewedRange (0.0f, kMaximumEnvelopeSeconds, 0.35f), 0.15f, timeAttributes()));
 
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { shapeId, kSchemaV1 }, prefix + " shape",
@@ -382,7 +432,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo1Rate, kSchemaV1 }, "LFO 1 rate",
-        skewedRange (0.0f, 40.0f, 2.0f), 2.0f,
+        skewedRange (0.0f, kMaximumLfoRateHz, 2.0f), 2.0f,
         juce::AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float value, int)
             {
@@ -411,7 +461,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo2Rate, kSchemaV1 }, "LFO 2 rate",
-        skewedRange (0.0f, 40.0f, 2.0f), 0.25f,
+        skewedRange (0.0f, kMaximumLfoRateHz, 2.0f), 0.25f,
         juce::AudioParameterFloatAttributes()
             .withStringFromValueFunction ([] (float value, int)
             {
@@ -766,6 +816,12 @@ void SonitusProcessor::pullParameters()
     v.ringAmount = valueOf (state_, ids::ringAmount);
     v.foldAmount = valueOf (state_, ids::foldAmount);
 
+    v.kargyraaDepth = valueOf (state_, ids::kargyraa);
+    v.kargyraaRasp = valueOf (state_, ids::kargyraaRasp);
+
+    // The choice stores an index; the divisor it names starts at two.
+    v.kargyraaDivisor = 2 + static_cast<int> (std::lround (valueOf (state_, ids::kargyraaDivisor)));
+
     v.filterMode = static_cast<dsp::SvfMode> (indexOf (state_, ids::filterMode));
     v.cutoffHz = valueOf (state_, ids::cutoff);
     v.resonance = valueOf (state_, ids::resonance);
@@ -846,6 +902,11 @@ void SonitusProcessor::pullParameters()
             case ModDestination::ringAmount:
             case ModDestination::foldAmount:
             case ModDestination::level:
+
+            // Already a fraction, like the three above it: the voice clamps the
+            // sum to 0..1, so full depth reaches either end of the control from
+            // wherever the knob is set.
+            case ModDestination::kargyraa:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }
@@ -1576,6 +1637,49 @@ const std::vector<Preset>& presets()
 
                 { ids::tubeDrive, 8.0f },
                 { ids::output, -12.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // Kargyraa, close to what a singer does with it: a drone in the
+            // bass, the period doubled, and the vowel filter over the top --
+            // which is the whole trick, because the throat's subharmonic and
+            // its formants are two independent things happening at once.
+            //
+            // Mono and legato, because it is one voice: a phrase played without
+            // gaps runs through a single envelope and the growl carries across
+            // the notes rather than restarting on each.
+            "Kargyraa -- the doubled voice",
+            {
+                { ids::levelA, 1.0f }, { ids::levelB, 0.35f }, { ids::centsB, 6.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 5.0f }, { ids::spreadA, 0.3f },
+
+                { ids::kargyraa, 0.85f }, { ids::kargyraaRasp, 0.55f },
+
+                { ids::cutoff, 2400.0f }, { ids::resonance, 0.25f },
+                { ids::filterTrack, 0.5f },
+
+                { ids::ampAttack, 0.02f }, { ids::ampDecay, 0.4f },
+                { ids::ampSustain, 0.9f }, { ids::ampRelease, 0.3f },
+
+                { ids::keyMode, 2.0f },   // legato
+                { ids::glide, 0.06f },
+
+                // The vowel over the top, and an envelope walking it: what a
+                // singer's tongue does while the folds hold the drone.
+                { ids::formantMix, 0.75f }, { ids::formantMorph, 0.35f },
+                { ids::formantSharp, 0.6f },
+
+                { ids::env1Attack, 0.4f }, { ids::env1Decay, 1.2f },
+                { ids::env1Sustain, 0.6f }, { ids::env1Release, 0.5f },
+
+                { ids::globalSource (0), 5.0f },   // mod env 1
+                { ids::globalDest (0), 5.0f },     // vowel
+                { ids::globalDepth (0), 0.45f },
+
+                { ids::splitHz, 90.0f },
+                { ids::tubeDrive, 6.0f },
+                { ids::output, -9.0f },
             }
         },
     };

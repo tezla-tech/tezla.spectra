@@ -1545,7 +1545,7 @@ void SonitusEditor::buildPages()
         "sidebands with no DC drift, which is why every FM synth since the DX7 has actually been "
         "a PM synth. At small amounts it thickens; past about 2 it is a different instrument.");
 
-    osc->addHeading ("SUB AND DESTRUCTION", 5);
+    osc->addHeading ("SUB, RING AND FOLD", 5);
 
     osc->addChoice (ids::subShape, "Sub shape",
         "Sine is pure weight and disappears on a laptop; square has odd harmonics that carry it "
@@ -1570,6 +1570,36 @@ void SonitusEditor::buildPages()
         "the harder you push the more harmonics appear -- the opposite of a clipper, which runs "
         "out. Antialiased, and at full fold it is the widest-band thing in the instrument: this "
         "is the one control that genuinely wants x8 oversampling.");
+
+    osc->addHeading ("KARGYRAA -- period doubling, locked to the note", 3);
+
+    osc->addKnob (ids::kargyraa, "Kargyraa",
+        "**Period doubling, the way a Tuvan throat singer gets one.** The false vocal folds sit "
+        "above the true ones and vibrate at exactly half their rate, so every second glottal pulse "
+        "is the damped one and the voice gains a real subharmonic -- while the pitch being sung, "
+        "and the formants shaping it, stay where they were.\n\n"
+        "This is not an octave divider and not the Sub knob. A sub adds a separate tone an octave "
+        "down; this damps alternate cycles of the waveform that is already there, so what appears "
+        "is the half-integer series -- f/2, 3f/2, 5f/2 -- around every harmonic. The same voice "
+        "with a doubled period, which is why it growls rather than sounding like two notes.\n\n"
+        "Locked to oscillator A's own cycle counter, so it cannot drift against the note however "
+        "long you hold it, and a glide takes it along. It gets quieter as you turn it up, because "
+        "the effect is a periodic absence -- that is the sound, not a fault. At 0 it is bit-exactly "
+        "out of the path.");
+
+    osc->addKnob (ids::kargyraaRasp, "Rasp",
+        "How sharp the damped part of the cycle is. Low is a smooth subharmonic with little more "
+        "than f/2; high is a narrow rasp with much more of the series present and a harder edge.\n\n"
+        "The shape is a raised cosine taken to a power, which expands into a **finite** Fourier "
+        "series -- so the modulator is band-limited by construction and this knob names its "
+        "bandwidth rather than trading it for aliasing. Measured at the top of the range: nothing "
+        "at all above where the maths says it stops, against -24 dB of hash from the obvious "
+        "implementation, a hard gate on the alternate cycle.");
+
+    osc->addChoice (ids::kargyraaDivisor, "Divisor",
+        "How many cycles one modulator cycle spans. **/2 is kargyraa** -- it is what the throat "
+        "does. /3 and /4 are not anything anatomical; the machinery is the same and a third-order "
+        "subdivision is a sound this instrument should be able to make.");
 
     pages_[kOscPage] = std::move (osc);
 
