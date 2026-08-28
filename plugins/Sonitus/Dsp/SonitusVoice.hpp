@@ -144,6 +144,28 @@ struct ModSlot
 };
 
 /// The values of the sources the engine owns, handed to every voice.
+/// The modulation depth law, shared by both matrices.
+///
+/// **Square, not linear**, and bipolar. The reason is a tension that a linear
+/// knob cannot resolve: this instrument wants sweeps measured in octaves -- a
+/// sync scream is four or five of them -- and it also wants a dialable vibrato.
+/// At a linear five octaves, ten percent of the knob is already six semitones
+/// and the subtle half of the control has vanished.
+///
+/// Squaring keeps both. At the +-7200 cents the pitch destination uses -- six
+/// octaves -- a tenth of the knob is 72 cents, half is an octave and a half,
+/// and the end is six octaves. Fine at the bottom, enormous at the top, and
+/// monotonic all the way.
+///
+/// It is the same answer the resonance control gives (geometric Q, so the last
+/// quarter turn is not the only useful part) and the envelope times give
+/// (skewed, after a linear range put the whole attack in the top third). Three
+/// controls, one problem, one shape.
+[[nodiscard]] inline double shapedDepth (double depth) noexcept
+{
+    return std::copysign (depth * depth, depth);
+}
+
 struct GlobalSources
 {
     double lfo1 { 0.0 };

@@ -224,7 +224,9 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             default: break;
         }
 
-        total += slot.depth * value;
+        // Squared, like the voice matrix's -- one law for both, so a depth
+        // knob reads the same wherever it is.
+        total += shapedDepth (slot.depth) * value;
     }
 
     return total;
@@ -236,9 +238,16 @@ void Engine::applyGlobalModulation() noexcept
     // move in **octaves**, because a comb delay and a filter centre are pitches
     // in disguise: an additive sweep would crawl at the bottom of the range and
     // leap at the top, which is the wrong shape for the thing being swept.
-    static constexpr double kCombOctaves = 3.0;
-    static constexpr double kPhaseOctaves = 4.0;
-    static constexpr double kTubeDecibels = 24.0;
+    // Deliberately extreme, and usable because the depth law is squared: the
+    // comb's own range is about ten octaves, so six of them is most of it.
+    static constexpr double kCombOctaves = 6.0;
+    static constexpr double kPhaseOctaves = 6.0;
+    static constexpr double kTubeDecibels = 36.0;   // the control's own maximum
+
+    // The one that stays where it was. Output is a *level*, and thirty-six
+    // decibels of it swinging under an envelope is a hazard rather than a
+    // sound -- everything else here changes timbre, this changes how loud the
+    // instrument is in somebody's mix.
     static constexpr double kOutputDecibels = 24.0;
 
     // Drive in front and a matching trim behind, so the control adds harmonics
@@ -273,13 +282,14 @@ void Engine::applyGlobalModulation() noexcept
     // Which partial the lock selects. Additive in *harmonic number* rather than
     // in octaves, because the harmonic series is what it walks: a depth of 1
     // reaches sixteen partials, which at full is two octaves of overtone line.
-    static constexpr double kHarmonicSwing = 16.0;
+    // The whole 1..24 range, reachable from anywhere in it.
+    static constexpr double kHarmonicSwing = 23.0;
 
     formant_.setHarmonic (active_.formantHarmonic
                             + kHarmonicSwing * globalModulationFor (GlobalDestination::formantHarmonic));
 
     // The anti-formant moves in octaves, like every other frequency here.
-    static constexpr double kNotchOctaves = 3.0;
+    static constexpr double kNotchOctaves = 6.0;
 
     formant_.setNotchHz (active_.formantNotchHz
                            * std::pow (2.0, kNotchOctaves

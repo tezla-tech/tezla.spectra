@@ -803,16 +803,34 @@ void SonitusProcessor::pullParameters()
         // The depth is stored as -1..+1 and scaled here into each
         // destination's own units, so the control reads the same wherever it
         // is pointed and the DSP never has to know what a percentage means.
-        const double depth = valueOf (state_, ids::modDepth (slot));
+        //
+        // **Squared on the way through** -- see `shapedDepth`. The ranges below
+        // are deliberately extreme, and a linear knob at these ranges would
+        // have no usable middle: five octaves of pitch means a tenth of the
+        // travel is already six semitones.
+        const double depth = shapedDepth (valueOf (state_, ids::modDepth (slot)));
 
         switch (v.slots[slot].destination)
         {
-            case ModDestination::cutoff:      v.slots[slot].depth = depth * 6.0; break;    // octaves
+            // Ten octaves is the whole audible band, so one control move can
+            // cross it and come back.
+            case ModDestination::cutoff:      v.slots[slot].depth = depth * 10.0; break;   // octaves
+
+            // Six octaves -- seventy-two semitones. This is the sync scream:
+            // from a bass C the slave reaches 8.4 kHz, which is the slave
+            // leaving the note behind entirely and its own pitch ceasing to be
+            // a pitch at all.
             case ModDestination::pitch:
-            case ModDestination::pitchB:      v.slots[slot].depth = depth * 2400.0; break; // cents
+            case ModDestination::pitchB:      v.slots[slot].depth = depth * 7200.0; break; // cents
+
+            // An octave of detune is not a unison any more, it is a cluster --
+            // which is a sound rather than a mistake.
             case ModDestination::detuneA:
-            case ModDestination::detuneB:     v.slots[slot].depth = depth * 60.0; break;   // cents
-            case ModDestination::pmIndex:     v.slots[slot].depth = depth * 8.0; break;
+            case ModDestination::detuneB:     v.slots[slot].depth = depth * 1200.0; break; // cents
+
+            // The voice clamps phase modulation at 16 and the depth reached 8,
+            // so half the range was unreachable from the matrix.
+            case ModDestination::pmIndex:     v.slots[slot].depth = depth * 16.0; break;
 
             // The rest are already normalised, so the -1..+1 depth is the
             // depth. Listed rather than defaulted: a destination added to the

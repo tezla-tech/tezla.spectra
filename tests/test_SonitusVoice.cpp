@@ -1307,3 +1307,126 @@ TEZLA_TEST (the_sub_reaches_up_as_well_as_down)
         }
     }
 }
+
+TEZLA_TEST (the_depth_law_is_square_so_a_knob_can_be_fine_and_enormous)
+{
+    // The tension a linear depth cannot resolve: this instrument wants sweeps
+    // measured in octaves -- a sync scream is four or five -- *and* a dialable
+    // vibrato. At a linear five octaves, ten percent of the knob is already six
+    // semitones and the subtle half of the control has gone.
+    //
+    // Squaring keeps both ends. Monotonic, odd-symmetric, and exact at the
+    // three points that matter.
+    CHECK (shapedDepth (0.0) == 0.0);
+    CHECK (shapedDepth (1.0) == 1.0);
+    CHECK (shapedDepth (-1.0) == -1.0);
+
+    // Odd symmetry, so a negative depth is the same size in the other
+    // direction rather than a different curve.
+    for (const double d : { 0.1, 0.25, 0.5, 0.75, 0.9 })
+        CHECK (shapedDepth (-d) == -shapedDepth (d));
+
+    // What it buys, in the units the pitch destination uses -- 7200 cents at
+    // full, which is seventy-two semitones, which is **six octaves**:
+    //
+    //     knob     linear      squared
+    //      10%     720 ct       72 ct    (under a semitone)
+    //      25%    1800 ct      450 ct    (four and a half semitones)
+    //      50%    3600 ct     1800 ct    (an octave and a half)
+    //      75%    5400 ct     4050 ct    (three and a half octaves)
+    //     100%    7200 ct     7200 ct    (six octaves)
+    CHECK_NEAR (shapedDepth (0.10) * 7200.0, 72.0, 1.0e-9);
+    CHECK_NEAR (shapedDepth (0.25) * 7200.0, 450.0, 1.0e-9);
+    CHECK_NEAR (shapedDepth (0.50) * 7200.0, 1800.0, 1.0e-9);
+    CHECK_NEAR (shapedDepth (1.00) * 7200.0, 7200.0, 1.0e-9);
+
+    // Monotonic across the whole travel, which is what stops it being a trap:
+    // every part of the knob still moves the sound in the same direction.
+    double previous = -2.0;
+
+    for (int step = -100; step <= 100; ++step)
+    {
+        const double value = shapedDepth (step / 100.0);
+
+        CHECK (value > previous);
+
+        previous = value;
+    }
+}
+
+TEZLA_TEST (a_deep_pitch_modulation_actually_sweeps_five_octaves)
+{
+    // End to end, on the destination the extremity was asked for: a sync sweep
+    // wants the slave to leave the note behind entirely, and two octaves was
+    // not enough for that.
+    constexpr double rate = 96000.0;
+
+    auto parameters = basic();
+
+    parameters.shapeA = OscShape::saw;
+    parameters.levelA = 0.0;
+    parameters.shapeB = OscShape::saw;
+    parameters.levelB = 1.0;
+    parameters.cutoffHz = 20000.0;
+    parameters.resonance = 0.0;
+    parameters.ampAttack = 0.001;
+    parameters.ampSustain = 1.0;
+    parameters.ampVelocity = 0.0;
+
+    // Velocity into pitch B, so the depth can be swept without a moving source.
+    parameters.slots[0] = { ModSource::velocity, ModDestination::pitchB, 0.0 };
+
+    const auto pitchAt = [&] (double depth, double velocity)
+    {
+        auto local = parameters;
+
+        // The same scaling the JUCE layer applies: squared, times 7200 cents.
+        local.slots[0].depth = shapedDepth (depth) * 7200.0;
+
+        Voice voice;
+        voice.prepare (rate);
+        voice.noteOn (48, 130.8127826502993, velocity, false);
+
+        const auto rendered = render (voice, local, 24000);
+
+        // Find the loudest bin, which for a saw is its fundamental.
+        double best = 0.0;
+        double bestHz = 0.0;
+
+        for (int cents = -200; cents <= 7400; cents += 25)
+        {
+            const double hz = 130.8127826502993 * std::pow (2.0, cents / 1200.0);
+
+            if (hz > rate * 0.4)
+                break;
+
+            const double amplitude = amplitudeAt (rendered.left, hz, rate, 12000);
+
+            if (amplitude > best)
+            {
+                best = amplitude;
+                bestHz = hz;
+            }
+        }
+
+        return bestHz;
+    };
+
+    const double base = pitchAt (0.0, 1.0);
+
+    CHECK_NEAR (base / 130.8127826502993, 1.0, 0.02);
+
+    // Full depth at full velocity: **six octaves up, a factor of 64**, measured
+    // exactly. A note at 130.8 Hz ends at 8372 Hz, which is the slave leaving
+    // the note behind entirely -- what a sync scream is.
+    const double swept = pitchAt (1.0, 1.0);
+
+    CHECK_NEAR (swept / base, 64.0, 0.5);
+
+    // And a tenth of the knob is 72 cents -- under a semitone, so the bottom of
+    // the travel is still a tuning control rather than a leap.
+    const double gentle = pitchAt (0.1, 1.0);
+
+    CHECK (gentle / base < std::pow (2.0, 1.0 / 12.0));
+    CHECK (gentle > base);
+}

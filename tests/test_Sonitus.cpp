@@ -954,14 +954,28 @@ TEZLA_TEST (positive_global_modulation_raises_the_comb_rather_than_lowering_it)
     };
 
     const double rest = notchWith (0.0);
-    const double up = notchWith (1.0);
-    const double down = notchWith (-1.0);
 
     CHECK (std::abs (rest - 250.0) < 0.001);
 
-    // Three octaves each way, exactly.
-    CHECK (std::abs (up / rest - 8.0) < 0.001);
-    CHECK (std::abs (rest / down - 8.0) < 0.001);
+    // **Measured at half the maximum, not at the maximum**, and the reason is
+    // worth recording: full depth is six octaves each way, which is a range of
+    // twelve -- and the comb's own delay only spans 20 us to 20 ms, which is
+    // 9.97. So a full-depth sweep deliberately runs into the ends. That is the
+    // extremity being asked for rather than a fault, but it means the *ratio*
+    // has to be read somewhere it is not clipping.
+    //
+    // The depth law is squared, so a depth of 1/sqrt(2) is half the maximum:
+    // three octaves, a factor of eight.
+    const double half = 1.0 / std::sqrt (2.0);
+
+    CHECK (std::abs (notchWith (half) / rest - 8.0) < 0.01);
+    CHECK (std::abs (rest / notchWith (-half) - 8.0) < 0.01);
+
+    // And at full depth it reaches the clamps rather than running away: the
+    // delay bottoms out at 20 us and tops out at 20 ms whatever it is asked
+    // for, which is what keeps the interpolator inside its own buffer.
+    CHECK (notchWith (1.0) > rest * 20.0);
+    CHECK (notchWith (-1.0) < rest / 8.0);
 }
 
 TEZLA_TEST (every_global_destination_reaches_its_control)
@@ -1034,13 +1048,14 @@ TEZLA_TEST (every_global_destination_reaches_its_control)
 
     const auto rest = renderWith (GlobalDestination::none, 1.0);
 
-    // comb time -- three octaves up.
-    CHECK (std::abs (renderWith (GlobalDestination::combTime, 1.0).notch / rest.notch - 8.0) < 0.001);
+    // **Half the maximum**, because at full depth both of these run into a
+    // clamp and a ratio read against a clamp measures the clamp. The depth law
+    // is squared, so 1/sqrt(2) is half: three octaves, a factor of eight.
+    const double half = 1.0 / std::sqrt (2.0);
 
-    // phase centre -- four octaves up, clamped by the phaser's own ceiling well
-    // above where this lands.
-    CHECK (std::abs (renderWith (GlobalDestination::phaseFrequency, 1.0).phase / rest.phase - 16.0)
-             < 0.01);
+    CHECK (std::abs (renderWith (GlobalDestination::combTime, half).notch / rest.notch - 8.0) < 0.01);
+    CHECK (std::abs (renderWith (GlobalDestination::phaseFrequency, half).phase / rest.phase - 8.0)
+             < 0.05);
 
     // output -- +24 dB at full depth, which is a factor of 15.85 on the level.
     // Measured: 15.848, against the 15.849 the decibels predict.
@@ -1444,10 +1459,10 @@ TEZLA_TEST (an_envelope_can_drive_a_global_destination)
         notches.push_back (engine.getCombNotchHz());
     }
 
-    // The notch climbs with the envelope rather than jumping, and ends three
-    // octaves up where full depth puts it.
+    // The notch climbs with the envelope rather than jumping, and ends six
+    // octaves up -- a factor of sixty-four -- where full depth puts it.
     CHECK (notches.front() < notches.back());
-    CHECK_NEAR (notches.back() / atRest, 8.0, 0.01);
+    CHECK_NEAR (notches.back() / atRest, 64.0, 0.05);
 
     // Monotonic, which is what makes it an envelope rather than a wobble.
     int falls = 0;
