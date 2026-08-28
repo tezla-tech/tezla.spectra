@@ -474,15 +474,51 @@ void Engine::advanceGlobalSources (int samples) noexcept
     // clamp threw the top third of it away with nothing to show for it.
     const double controlNyquist = 0.5 * internalRate_ / Voice::kControlIntervalSamples;
 
+    // Tempo sync swaps the knob's rate for the division's; key tracking and
+    // the sequencer multiplier still apply on top, because a synced wobble
+    // that speeds up per octave or steps through the pattern is a synced
+    // wobble, not a broken one.
+    const double lfo1BaseHz = active_.lfo1Sync
+        ? dsp::divisionRateHz (active_.lfo1Division, bpm_)
+        : active_.lfo1RateHz;
+    const double lfo2BaseHz = active_.lfo2Sync
+        ? dsp::divisionRateHz (active_.lfo2Division, bpm_)
+        : active_.lfo2RateHz;
+
     lfo1_.setRateHz (std::clamp (
-        keyTracked (active_.lfo1RateHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
+        keyTracked (lfo1BaseHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
         0.0, controlNyquist));
 
     lfo2_.setRateHz (std::clamp (
-        keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, controlNyquist));
+        keyTracked (lfo2BaseHz, active_.lfo2KeyTrack), 0.0, controlNyquist));
 
-    sources_.lfo1 = lfo1_.advance (samples) * lfo1Depth;
-    sources_.lfo2 = lfo2_.advance (samples) * lfo2Depth;
+    // Synced, un-retriggered, transport running: the phase is *assigned* from
+    // the song position rather than accumulated, exactly as the sequencer's
+    // is above -- rewind the transport and the same bar is the same wobble.
+    // The assignment makes the rate multipliers moot for that LFO, which is
+    // the honest reading of "nailed to the bar"; retrigger hands the phase
+    // back to the note and the multipliers with it.
+    const bool lfo1Locked = active_.lfo1Sync && ! active_.lfo1Retrigger && transportRunning_;
+    const bool lfo2Locked = active_.lfo2Sync && ! active_.lfo2Retrigger && transportRunning_;
+
+    const double beatsNow = ppq_ + beatsIntoBlock_
+                          - static_cast<double> (samples) / internalRate_ * bpm_ / 60.0;
+
+    sources_.lfo1 = (lfo1Locked
+        ? lfo1_.setPhaseFromPpq (beatsNow,
+                                 dsp::divisions[static_cast<std::size_t> (
+                                     std::clamp (active_.lfo1Division, 0, dsp::numDivisions - 1))]
+                                     .cyclesPerBeat,
+                                 samples)
+        : lfo1_.advance (samples)) * lfo1Depth;
+
+    sources_.lfo2 = (lfo2Locked
+        ? lfo2_.setPhaseFromPpq (beatsNow,
+                                 dsp::divisions[static_cast<std::size_t> (
+                                     std::clamp (active_.lfo2Division, 0, dsp::numDivisions - 1))]
+                                     .cyclesPerBeat,
+                                 samples)
+        : lfo2_.advance (samples)) * lfo2Depth;
 }
 
 void Engine::mangle (double& left, double& right) noexcept

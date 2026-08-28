@@ -512,6 +512,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                 return juce::String (value, value < 10.0f ? 2 : 1) + " Hz";
             })));
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::lfo1Sync, kSchemaV2 }, "LFO 1 sync", false));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::lfo1Div, kSchemaV2 }, "LFO 1 division",
+        choices::lfoDivision, dsp::defaultDivision));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo1Smooth, kSchemaV1 }, "LFO 1 smooth",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
@@ -541,6 +548,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
                 return juce::String (value, value < 10.0f ? 2 : 1) + " Hz";
             })));
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::lfo2Sync, kSchemaV2 }, "LFO 2 sync", false));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::lfo2Div, kSchemaV2 }, "LFO 2 division",
+        choices::lfoDivision, dsp::defaultDivision));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo2Smooth, kSchemaV1 }, "LFO 2 smooth",
@@ -1007,12 +1021,16 @@ void SonitusProcessor::pullParameters()
 
     p.lfo1Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo1Wave));
     p.lfo1RateHz = valueOf (state_, ids::lfo1Rate);
+    p.lfo1Sync = valueOf (state_, ids::lfo1Sync) > 0.5f;
+    p.lfo1Division = indexOf (state_, ids::lfo1Div);
     p.lfo1Smooth = valueOf (state_, ids::lfo1Smooth);
     p.lfo1Retrigger = valueOf (state_, ids::lfo1Retrig) > 0.5f;
     p.lfo1KeyTrack = valueOf (state_, ids::lfo1Key);
     p.lfo1AttackSeconds = valueOf (state_, ids::lfo1Att);
     p.lfo2Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo2Wave));
     p.lfo2RateHz = valueOf (state_, ids::lfo2Rate);
+    p.lfo2Sync = valueOf (state_, ids::lfo2Sync) > 0.5f;
+    p.lfo2Division = indexOf (state_, ids::lfo2Div);
     p.lfo2Smooth = valueOf (state_, ids::lfo2Smooth);
     p.lfo2Retrigger = valueOf (state_, ids::lfo2Retrig) > 0.5f;
     p.lfo2KeyTrack = valueOf (state_, ids::lfo2Key);

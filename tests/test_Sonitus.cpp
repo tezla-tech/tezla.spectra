@@ -2456,3 +2456,153 @@ TEZLA_TEST (silence_in_silence_out_with_the_split_off)
             CHECK (sample == 0.0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// LFO tempo sync
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (a_synced_lfo_cycle_is_exactly_the_division_at_every_host_rate)
+{
+    // 120 bpm, "1/4": one cycle per beat is exactly 0.5 s, whatever the host
+    // rate and whatever oversampling multiplies it by internally. Measured on
+    // the engine's own modulation output by routing LFO 1 to pitch at full
+    // depth and counting the modulation's period through zero crossings of
+    // its effect -- too indirect. Simpler and just as strong: the readout the
+    // MOD strip uses.
+    //
+    // Rate is what sync sets, so the test reads the LFO's effect through a
+    // routed destination: LFO 1 to Level, square wave, full depth -- the
+    // output amplitude gates on and off at the LFO's rate, and the gate
+    // period is measurable in samples of output.
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+    {
+        EngineParameters parameters;
+        parameters.tubeDriveDb = 0.0;
+        parameters.combMode = CombMode::off;
+        parameters.formantMix = 0.0;
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.lfo1Sync = true;
+        parameters.lfo1Division = 5;            // "1/4" -- see dsp::divisions
+        parameters.lfo1Wave = Lfo::Wave::square;
+        parameters.voice.shapeA = OscShape::sine;
+
+        parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::level, 1.0 };
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 256);
+        engine.setTransport (-1.0, 120.0, false);   // tempo known, stopped
+        engine.noteOn (69, 1.0);
+
+        Buffers buffers (256);
+
+        std::vector<double> envelope;
+
+        for (int block = 0; block < static_cast<int> (rate) * 3 / 256; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+
+            for (const double sample : buffers.left)
+                envelope.push_back (std::abs (sample));
+        }
+
+        // Coarse RMS over 5 ms windows, then find the gate period.
+        const auto window = static_cast<std::size_t> (rate * 0.005);
+        std::vector<double> levels;
+
+        for (std::size_t start = 0; start + window < envelope.size(); start += window)
+        {
+            double sum = 0.0;
+            for (std::size_t i = start; i < start + window; ++i)
+                sum += envelope[i] * envelope[i];
+            levels.push_back (std::sqrt (sum / static_cast<double> (window)));
+        }
+
+        double peak = 0.0;
+        for (const double level : levels)
+            peak = std::max (peak, level);
+
+        std::vector<double> onsets;
+        bool high = false;
+
+        for (std::size_t i = 0; i < levels.size(); ++i)
+        {
+            const bool now = levels[i] > 0.5 * peak;
+            if (now && ! high && ! onsets.empty())
+                onsets.push_back (static_cast<double> (i));
+            else if (now && ! high)
+                onsets.push_back (static_cast<double> (i));
+            high = now;
+        }
+
+        CHECK (onsets.size() >= 4);
+
+        const double first = onsets[1];
+        const double last = onsets[onsets.size() - 1];
+        const double cycles = static_cast<double> (onsets.size() - 2);
+        const double secondsPerCycle = (last - first) / cycles * 0.005;
+
+        CHECK_NEAR (secondsPerCycle, 0.5, 0.02);
+    }
+}
+
+TEZLA_TEST (a_phase_locked_lfo_repeats_the_bar_after_a_rewind)
+{
+    // Sync on, retrigger off, transport running: the phase is assigned from
+    // ppq, so processing the same song span twice gives the same modulation
+    // both times -- the property that makes a synced wobble printable.
+    EngineParameters parameters;
+    parameters.tubeDriveDb = 0.0;
+    parameters.combMode = CombMode::off;
+    parameters.formantMix = 0.0;
+    parameters.oversampling = OversamplingMode::Off;
+    parameters.lfo1Sync = true;
+    parameters.lfo1Division = 5;
+    parameters.lfo1Retrigger = false;
+    parameters.voice.shapeA = OscShape::sine;
+    parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::level, 1.0 };
+
+    const auto renderSpan = [&] (double startPpq)
+    {
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (57, 1.0);
+
+        Buffers buffers (256);
+        std::vector<double> out;
+
+        double ppq = startPpq;
+
+        for (int block = 0; block < 100; ++block)
+        {
+            engine.setTransport (ppq, 120.0, true);
+            engine.process (buffers.pointers, 256);
+            ppq += 256.0 / 48000.0 * 2.0;   // 120 bpm = 2 beats per second
+
+            for (const double sample : buffers.left)
+                out.push_back (sample);
+        }
+
+        return out;
+    };
+
+    const auto pass1 = renderSpan (16.0);
+    const auto pass2 = renderSpan (16.0);
+
+    double worst = 0.0;
+    for (std::size_t i = 0; i < pass1.size(); ++i)
+        worst = std::max (worst, std::abs (pass1[i] - pass2[i]));
+
+    CHECK (worst < 1.0e-12);
+
+    // And a different bar is genuinely different modulation, or the lock is
+    // locking to nothing.
+    const auto other = renderSpan (16.25);
+
+    double difference = 0.0;
+    for (std::size_t i = 0; i < pass1.size(); ++i)
+        difference = std::max (difference, std::abs (pass1[i] - other[i]));
+
+    CHECK (difference > 1.0e-3);
+}

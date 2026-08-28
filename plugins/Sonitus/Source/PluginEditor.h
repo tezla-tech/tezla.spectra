@@ -534,6 +534,7 @@ private:
     int shownOversample_ { -1 };
     int shownLatency_    { -1 };
     int shownSyncB_      { -1 };
+    int shownLfoSync_    { -1 };
     int shownShapeA_     { -1 };
     int shownShapeB_     { -1 };
     int shownNotch_      { -1 };

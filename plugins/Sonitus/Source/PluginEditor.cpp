@@ -2048,13 +2048,17 @@ void SonitusEditor::buildPages()
 
     auto mod = std::make_unique<ControlPage> (state, paletteForPage (kModPage));
 
-    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 6);
+    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 8);
 
     mod->addChoice (ids::lfo1Wave, "Wave", "Its shape. Sample & hold steps; smooth random glides.");
     mod->addKnob (ids::lfo1Rate, "Rate",
         "How fast, in hertz. **Zero is a legitimate setting and is the brief's original trick** "
         "-- the rate pinned at nothing so the depth is drawn from somewhere else entirely. Here "
         "that somewhere else is the sequencer below, or the host's automation on the depth.");
+    mod->addToggle (ids::lfo1Sync, "Sync",
+        "Locks the rate to the host tempo: the Rate knob stands aside and the division beside this picks the speed. With Retrig off and the transport running, the *phase* locks to the song position too -- rewind and the same bar is the same wobble, which is the whole reason to sync. With Retrig on, the phase belongs to the note and only the rate is synced.");
+    mod->addChoice (ids::lfo1Div, "Division",
+        "The note length one LFO cycle spans when Sync is on. Key track and Seq-to-rate still multiply on top in retrigger mode; phase-locked (Sync on, Retrig off, transport running) the position comes straight from the bar and they stand aside.");
     mod->addKnob (ids::lfo1Smooth, "Smooth",
         "Rounds the corners off a square or a sample-and-hold, so a step becomes a slide.");
     mod->addToggle (ids::lfo1Retrig, "Retrig",
@@ -2064,10 +2068,14 @@ void SonitusEditor::buildPages()
     mod->addKnob (ids::lfo1Key, "Key track",
         "How far the LFO's rate follows the played note, referenced to middle C. At 100% an octave up doubles the rate, so the modulation stays in the same relationship to the pitch all the way up the keyboard -- which is how you get a phase or a wobble that reads as part of the tone rather than as an effect laid over it. At 0 the rate is the same at every pitch.");
 
-    mod->addHeading ("LFO 2", 6);
+    mod->addHeading ("LFO 2", 8);
 
     mod->addChoice (ids::lfo2Wave, "Wave", "Its shape.");
     mod->addKnob (ids::lfo2Rate, "Rate", "How fast, in hertz.");
+    mod->addToggle (ids::lfo2Sync, "Sync",
+        "Locks the rate to the host tempo: the Rate knob stands aside and the division beside this picks the speed. With Retrig off and the transport running, the *phase* locks to the song position too -- rewind and the same bar is the same wobble, which is the whole reason to sync. With Retrig on, the phase belongs to the note and only the rate is synced.");
+    mod->addChoice (ids::lfo2Div, "Division",
+        "The note length one LFO cycle spans when Sync is on. Key track and Seq-to-rate still multiply on top in retrigger mode; phase-locked (Sync on, Retrig off, transport running) the position comes straight from the bar and they stand aside.");
     mod->addKnob (ids::lfo2Smooth, "Smooth", "Rounds its corners off.");
     mod->addToggle (ids::lfo2Retrig, "Retrig",
         "Restarts the LFO from the top of its cycle every time a note is pressed. Free-running is right for a wobble that should keep its place across a phrase; retriggered is right for anything that has to line up with the note -- a sweep, a stab, a phase that has to start in the same place every time. On a reese the difference is the whole sound: with this on, every note gets the same phase relationship and the growl is repeatable.");
@@ -2348,6 +2356,7 @@ void SonitusEditor::updateForSwitches()
     const int syncB = index (ids::syncB);
     const int shapeA = index (ids::shapeA);
     const int shapeB = index (ids::shapeB);
+    const int lfoSync = index (ids::lfo1Sync) + 2 * index (ids::lfo2Sync);
     const int latency = sonitus_.isPrepared() ? sonitus_.getLatencySamples() : -1;
 
     // The notch moves continuously, so it is rounded before being compared --
@@ -2359,7 +2368,8 @@ void SonitusEditor::updateForSwitches()
 
     if (combMode == shownCombMode_ && keyMode == shownKeyMode_ && oversample == shownOversample_
         && latency == shownLatency_ && syncB == shownSyncB_ && shapeA == shownShapeA_
-        && shapeB == shownShapeB_ && notch == shownNotch_ && scale == shownScale_)
+        && shapeB == shownShapeB_ && notch == shownNotch_ && scale == shownScale_
+        && lfoSync == shownLfoSync_)
         return;
 
     const bool combChanged = combMode != shownCombMode_;
@@ -2376,6 +2386,19 @@ void SonitusEditor::updateForSwitches()
     shownShapeB_ = shapeB;
     shownNotch_ = notch;
     shownScale_ = scale;
+    shownLfoSync_ = lfoSync;
+
+    // A synced LFO's Rate knob is inert and its Division is live; free, the
+    // other way round. Greyed rather than hidden, because a control that
+    // vanishes reads as a bug and one that moves without doing anything reads
+    // as a worse one.
+    if (auto* mod = controlPage (kModPage))
+    {
+        mod->setControlEnabled (ids::lfo1Rate, (lfoSync & 1) == 0);
+        mod->setControlEnabled (ids::lfo1Div, (lfoSync & 1) != 0);
+        mod->setControlEnabled (ids::lfo2Rate, (lfoSync & 2) == 0);
+        mod->setControlEnabled (ids::lfo2Div, (lfoSync & 2) != 0);
+    }
 
     auto* osc = controlPage (kOscPage);
     auto* filter = controlPage (kFilterPage);

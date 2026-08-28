@@ -1,5 +1,6 @@
 #pragma once
 
+#include <tezla/dsp/Divisions.hpp>
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/VuMeter.hpp>
@@ -105,12 +106,16 @@ inline constexpr auto bendRange   = "bendRange";
 // ---- global modulation sources ---------------------------------------------
 inline constexpr auto lfo1Wave    = "lfo1Wave";
 inline constexpr auto lfo1Rate    = "lfo1Rate";
+inline constexpr auto lfo1Sync    = "lfo1Sync";
+inline constexpr auto lfo1Div     = "lfo1Div";
 inline constexpr auto lfo1Smooth  = "lfo1Smooth";
 inline constexpr auto lfo1Retrig  = "lfo1Retrig";
 inline constexpr auto lfo1Key     = "lfo1Key";
 inline constexpr auto lfo1Att     = "lfo1Att";
 inline constexpr auto lfo2Wave    = "lfo2Wave";
 inline constexpr auto lfo2Rate    = "lfo2Rate";
+inline constexpr auto lfo2Sync    = "lfo2Sync";
+inline constexpr auto lfo2Div     = "lfo2Div";
 inline constexpr auto lfo2Smooth  = "lfo2Smooth";
 inline constexpr auto lfo2Retrig  = "lfo2Retrig";
 inline constexpr auto lfo2Key     = "lfo2Key";
@@ -189,6 +194,18 @@ inline const juce::StringArray combMode { "Off", "Flange", "Phase" };
 inline const juce::StringArray order { "Tube then comb", "Comb then tube" };
 inline const juce::StringArray lfoWave { "Sine", "Triangle", "Saw up", "Saw down",
                                          "Square", "Sample & hold", "Smooth random" };
+
+/// Built from the dsp division table rather than typed beside it, so the two
+/// cannot drift: an entry appended there appears here, at the same index.
+inline const juce::StringArray lfoDivision = []
+{
+    juce::StringArray names;
+
+    for (const auto& division : dsp::divisions)
+        names.add (division.name);
+
+    return names;
+}();
 inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 
 /// The modulation sources, in the order the matrix indexes them.

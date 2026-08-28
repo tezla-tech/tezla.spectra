@@ -66,6 +66,7 @@
 #include <atomic>
 #include <cmath>
 
+#include <tezla/dsp/Divisions.hpp>
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Comb.hpp>
@@ -205,6 +206,16 @@ struct EngineParameters
 
     dsp::Lfo::Wave lfo1Wave { dsp::Lfo::Wave::sine };
     double lfo1RateHz { 2.0 };
+
+    /// Tempo sync. On, the rate knob stands aside and `lfo1Division` sets the
+    /// speed from the host tempo; with retrigger off and the transport
+    /// running, the *phase* is nailed to the bar as well -- the same bar is
+    /// the same wobble on every pass, which is the whole reason producers
+    /// sync LFOs. Retriggered, the phase belongs to the note and only the
+    /// rate is synced.
+    bool lfo1Sync { false };
+    int lfo1Division { dsp::defaultDivision };
+
     double lfo1Smooth { 0.0 };
 
     /// Restart the LFO from the top of its cycle on every note-on.
@@ -237,6 +248,8 @@ struct EngineParameters
 
     dsp::Lfo::Wave lfo2Wave { dsp::Lfo::Wave::triangle };
     double lfo2RateHz { 0.25 };
+    bool lfo2Sync { false };
+    int lfo2Division { dsp::defaultDivision };
     double lfo2Smooth { 0.0 };
     bool lfo2Retrigger { false };
     double lfo2KeyTrack { 0.0 };

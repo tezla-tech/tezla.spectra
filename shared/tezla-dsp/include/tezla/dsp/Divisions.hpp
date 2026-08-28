@@ -18,6 +18,7 @@
 // and a half times as long, hence 2/3.
 
 #include <cstddef>
+#include <iterator>
 
 namespace tezla::dsp
 {
