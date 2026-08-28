@@ -184,7 +184,7 @@ TEZLA_TEST (the_sub_bypasses_the_filter)
     parameters.shapeA = OscShape::sine;
     parameters.levelA = 1.0;
     parameters.subLevel = 1.0;
-    parameters.subOctave = 1;
+    parameters.subOctave = -1;
     parameters.cutoffHz = 20.0;      // shut, as far as it goes
 
     Voice voice;
@@ -1264,4 +1264,46 @@ TEZLA_TEST (the_tracked_frequency_follows_the_newest_note)
     manager.noteOn (60, 0.8);
 
     CHECK_NEAR (manager.trackedFrequency(), manager.tuning().frequencyFor (60), 1.0e-9);
+}
+
+TEZLA_TEST (the_sub_reaches_up_as_well_as_down)
+{
+    // "Sub" names what it is usually for, not a limit on the oscillator. At 0
+    // it doubles the note -- a clean sine or square on the fundamental, which
+    // is a different and useful thing from detuning oscillator B -- and above
+    // that it is a third voice an octave or two up.
+    constexpr double rate = 48000.0;
+    constexpr double note = 130.8127826502993;      // C3
+
+    for (const int octave : { -2, -1, 0, 1, 2 })
+    {
+        auto parameters = basic();
+
+        parameters.shapeA = OscShape::sine;
+        parameters.levelA = 0.0;        // the sub alone, so nothing else can be measured
+        parameters.subLevel = 1.0;
+        parameters.subOctave = octave;
+        parameters.subShape = SubShape::sine;
+        parameters.cutoffHz = 18000.0;
+
+        Voice voice;
+        voice.prepare (rate);
+        voice.noteOn (48, note, 1.0, false);
+
+        const auto rendered = render (voice, parameters, 48000);
+
+        const double expected = note * std::pow (2.0, octave);
+        const double atExpected = amplitudeAt (rendered.left, expected, rate, 9600);
+
+        // The sub is there, at the octave asked for...
+        CHECK (atExpected > 0.05);
+
+        // ...and not at the note itself, unless that is where it was sent.
+        if (octave != 0)
+        {
+            const double atNote = amplitudeAt (rendered.left, note, rate, 9600);
+
+            CHECK (atNote < atExpected * 0.1);
+        }
+    }
 }

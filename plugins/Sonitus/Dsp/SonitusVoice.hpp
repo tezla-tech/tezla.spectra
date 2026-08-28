@@ -199,7 +199,10 @@ struct VoiceParameters
     // ---- sub -----------------------------------------------------------------
 
     SubShape subShape { SubShape::sine };
-    int subOctave { 1 };               ///< 1 or 2 octaves down
+    /// Which octave the sub sits in, relative to the note: **-2 to +2**, where
+    /// 0 doubles the note. Not only downward -- it is called a sub because that
+    /// is what it is usually for, not because the oscillator cannot go up.
+    int subOctave { -1 };
     double subLevel { 0.0 };
 
     // ---- destruction ---------------------------------------------------------
@@ -726,8 +729,8 @@ private:
 
     [[nodiscard]] double subIncrement (double pitchRatio) const noexcept
     {
-        const int octaves = std::clamp (parameters_.subOctave, 1, 2);
-        const double hz = frequency_ * pitchRatio / std::pow (2.0, octaves);
+        const int octaves = std::clamp (parameters_.subOctave, -2, 2);
+        const double hz = frequency_ * pitchRatio * std::pow (2.0, octaves);
 
         return hz > 0.0 ? hz / sampleRate_ : 0.0;
     }

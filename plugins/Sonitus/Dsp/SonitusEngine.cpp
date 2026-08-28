@@ -106,6 +106,7 @@ void Engine::reset() noexcept
     tubeGain_.setCurrentAndTarget (1.0);
 
     sinceControl_ = 0;
+    seenNoteOns_ = voices_.getNoteOnCount();
     beatsIntoBlock_ = 0.0;
     sources_ = {};
     combModulation_ = 1.0;
@@ -127,7 +128,6 @@ void Engine::applyPending() noexcept
     lfo1_.setWave (active_.lfo1Wave);
     lfo1_.setSmooth (active_.lfo1Smooth);
     lfo2_.setWave (active_.lfo2Wave);
-    lfo2_.setRateHz (active_.lfo2RateHz);
     lfo2_.setSmooth (active_.lfo2Smooth);
 
     sequencer_.setLength (active_.sequencerLength);
@@ -183,6 +183,41 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::lfo1:      value = sources_.lfo1; break;
             case GlobalSource::lfo2:      value = sources_.lfo2; break;
             case GlobalSource::sequencer: value = sources_.sequencer; break;
+
+            // The tracked note -- the same one the comb and the formant
+            // follow, so the whole mangle moves with one note rather than three
+            // stages each picking their own. Nothing sounding reads zero, which
+            // is what a closed envelope is.
+            case GlobalSource::ampEnvelope:
+            case GlobalSource::modEnvelope1:
+            case GlobalSource::modEnvelope2:
+            case GlobalSource::velocity:
+            {
+                const Voice* voice = voices_.trackedVoice();
+
+                if (voice == nullptr)
+                    break;
+
+                switch (slot.source)
+                {
+                    case GlobalSource::ampEnvelope:  value = voice->getAmpLevel(); break;
+                    case GlobalSource::modEnvelope1: value = voice->getModEnvelopeLevel (0); break;
+                    case GlobalSource::modEnvelope2: value = voice->getModEnvelopeLevel (1); break;
+                    case GlobalSource::velocity:     value = voice->getVelocity(); break;
+
+                    // Unreachable -- the outer switch has already sorted these
+                    // out -- but listed rather than defaulted, so a source
+                    // added to the enum and forgotten here stops the build.
+                    case GlobalSource::none:
+                    case GlobalSource::lfo1:
+                    case GlobalSource::lfo2:
+                    case GlobalSource::sequencer:
+                    case GlobalSource::count:
+                    default: break;
+                }
+
+                break;
+            }
 
             case GlobalSource::none:
             case GlobalSource::count:
@@ -326,11 +361,50 @@ void Engine::advanceGlobalSources (int samples) noexcept
 
     beatsIntoBlock_ += samples / internalRate_ * bpm_ / 60.0;
 
+    // **Retrigger.** A note-on the LFOs have not seen yet restarts whichever of
+    // them asked for it. Free-running is right for a pad, where the movement is
+    // ambient; it is exactly wrong for a bass line, where every note would
+    // otherwise land on a different part of the cycle.
+    const auto noteOns = voices_.getNoteOnCount();
+
+    if (noteOns != seenNoteOns_)
+    {
+        seenNoteOns_ = noteOns;
+
+        if (active_.lfo1Retrigger) lfo1_.reset();
+        if (active_.lfo2Retrigger) lfo2_.reset();
+    }
+
+    // **Key tracking.** At full, the rate is proportional to the played note,
+    // so an octave up is twice the speed. The beating that gives a reese its
+    // character is a fraction of the note rather than a fixed number of hertz,
+    // so a wobble that does not track becomes a different sound as the line
+    // moves up the keyboard.
+    //
+    // Referred to middle C, so the control is neutral around where a bass line
+    // actually sits rather than at some arbitrary corner of the range.
+    const double tracked = voices_.trackedFrequency();
+
+    const auto keyTracked = [tracked] (double rate, double amount)
+    {
+        if (amount <= 0.0 || tracked <= 0.0)
+            return rate;
+
+        static constexpr double kReferenceHz = 261.6255653005986;   // C4
+
+        return rate * std::pow (tracked / kReferenceHz, amount);
+    };
+
     // The destination that the brief was reaching for through an automation
     // lane: the sequencer steps the LFO through a pattern of speeds.
     const double octaves = active_.sequencerToLfo1Rate * sources_.sequencer;
 
-    lfo1_.setRateHz (std::clamp (active_.lfo1RateHz * std::pow (2.0, octaves), 0.0, 100.0));
+    lfo1_.setRateHz (std::clamp (
+        keyTracked (active_.lfo1RateHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
+        0.0, 100.0));
+
+    lfo2_.setRateHz (std::clamp (
+        keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, 100.0));
 
     sources_.lfo1 = lfo1_.advance (samples);
     sources_.lfo2 = lfo2_.advance (samples);

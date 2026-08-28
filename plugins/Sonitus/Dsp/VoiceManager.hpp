@@ -158,6 +158,10 @@ public:
 
         pushHeld (note);
 
+        // Counted before the voice is claimed, so a retrigger and the note it
+        // belongs to land on the same control chunk.
+        ++noteOns_;
+
         if (mode_ == KeyboardMode::poly)
         {
             Voice& voice = claimVoice();
@@ -234,22 +238,43 @@ public:
         return count;
     }
 
-    /// The note the comb should track. The most recently started sounding
-    /// voice, because a comb is a global stage and has to pick one.
-    [[nodiscard]] double trackedFrequency() const noexcept
+    /// The voice the global stages follow: the most recently started one that
+    /// is still sounding.
+    ///
+    /// **A global stage has to pick a note, and this is the pick.** The comb
+    /// tracks its period, the formant its harmonics, and the global matrix its
+    /// envelopes -- all the same voice, so the whole mangle follows one note by
+    /// construction rather than three stages disagreeing about which.
+    ///
+    /// Null when nothing is sounding, which every caller has to handle: a
+    /// released keyboard leaves the mangle with no note to follow.
+    [[nodiscard]] const Voice* trackedVoice() const noexcept
     {
-        double frequency = 0.0;
+        const Voice* tracked = nullptr;
         long long youngest = -1;
 
         for (const auto& voice : voices_)
             if (voice.isActive() && (youngest < 0 || voice.getAge() < youngest))
             {
                 youngest = voice.getAge();
-                frequency = voice.getFrequency();
+                tracked = &voice;
             }
 
-        return frequency;
+        return tracked;
     }
+
+    [[nodiscard]] double trackedFrequency() const noexcept
+    {
+        const auto* voice = trackedVoice();
+
+        return voice != nullptr ? voice->getFrequency() : 0.0;
+    }
+
+    /// Counts note-ons, so a caller can tell that one happened without being
+    /// told. The LFOs use it to retrigger: comparing this against what they
+    /// last saw is how a global stage notices a note without the note having to
+    /// know the stage exists.
+    [[nodiscard]] unsigned long long getNoteOnCount() const noexcept { return noteOns_; }
 
     // -----------------------------------------------------------------------
     // Running
@@ -487,6 +512,8 @@ private:
     double glideCents_ { 0.0 };
     double glideStartCents_ { 0.0 };
     double glideTargetCents_ { 0.0 };
+    unsigned long long noteOns_ { 0 };
+
     int monoNote_ { -1 };
 
     double bendSemitones_ { 0.0 };

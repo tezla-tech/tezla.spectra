@@ -704,6 +704,15 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     steps_ = std::make_unique<StepStrip> (sonitus_.getState(), palette_);
     tuning_ = std::make_unique<TuningPage> (sonitus_, palette_);
 
+    // **Added as children, which they were not.** `setVisible` on a component
+    // with no parent does nothing at all -- it does not throw, it does not warn,
+    // and the component simply never paints. The MOD page showed a black gap
+    // where the sequencer should be and the TUNING tab was blank, and both were
+    // this one missing line. Nothing headless could have caught it: the editor
+    // is the one part of this plugin no test can run.
+    addAndMakeVisible (*steps_);
+    addAndMakeVisible (*tuning_);
+
     static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE", "TUNING" };
 
     for (int i = 0; i < kNumPages; ++i)
