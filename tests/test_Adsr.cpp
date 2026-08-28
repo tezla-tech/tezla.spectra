@@ -635,3 +635,133 @@ TEZLA_TEST (the_tension_maps_geometrically_so_the_control_is_even)
     CHECK_NEAR (Adsr::overshootFor (1.0), Adsr::kSharpestOvershoot, 1.0e-12);
     CHECK_NEAR (Adsr::overshootFor (-1.0), Adsr::kSharpestOvershoot, 1.0e-12);
 }
+
+// ---------------------------------------------------------------------------
+// A control-rate caller re-applies every setting every chunk
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// What a synth voice does every control chunk: push all eight settings at the
+/// envelope whether they changed or not. The setters must treat an unchanged
+/// value as the no-op it is -- CLAUDE.md section 7's general rule, in its
+/// fourth appearance -- because re-aiming a running release from the current
+/// level restarts the curve at its own steep end, and the finite-time exit
+/// becomes a geometric crawl that never gets there.
+void reapply (Adsr& envelope)
+{
+    envelope.setAttackSeconds (envelope.getAttackSeconds());
+    envelope.setHoldSeconds (envelope.getHoldSeconds());
+    envelope.setDecaySeconds (envelope.getDecaySeconds());
+    envelope.setSustain (envelope.getSustain());
+    envelope.setReleaseSeconds (envelope.getReleaseSeconds());
+    envelope.setAttackTension (envelope.getAttackTension());
+    envelope.setDecayTension (envelope.getDecayTension());
+    envelope.setReleaseTension (envelope.getReleaseTension());
+}
+} // namespace
+
+TEZLA_TEST (a_release_is_not_stretched_by_reapplied_settings)
+{
+    // The failure this pins down reached the user as a CPU meter, not as a
+    // sound: with the setters re-aiming from the current level every 32
+    // samples, the release's remaining level shrinks by a fixed ratio
+    // (1 - T*eps) per chunk instead of following one aimed-past-zero curve,
+    // and crossing the -100 dB floor takes ln(1e5) / (T * ln(T/(T-1))) times
+    // the stated release -- about 11x at every tension. Voices retired 11x
+    // slower than chords arrived, so a played passage pinned the meter at
+    // full price and stayed there long after every key was up.
+    const double rate = 48000.0;
+    const double release = 0.5;
+    const int chunk = 32;
+
+    auto envelope = made (rate, 0.0, 0.0, 1.0, release);
+
+    envelope.noteOn();
+    (void) envelope.skip (8);
+    CHECK (envelope.getStage() == AdsrStage::sustain);
+
+    envelope.noteOff();
+
+    int taken = 0;
+    const int limit = static_cast<int> (4.0 * release * rate);
+
+    while (envelope.isActive() && taken < limit)
+    {
+        reapply (envelope);
+        (void) envelope.skip (chunk);
+        taken += chunk;
+    }
+
+    CHECK (! envelope.isActive());
+    CHECK_NEAR (taken / rate, release, 0.01 + 2.0 * chunk / rate);
+}
+
+TEZLA_TEST (a_decay_is_not_stretched_by_reapplied_settings)
+{
+    // Same mechanism, other segment. A decay re-aimed from the current level
+    // never arrives at all: each re-aim targets past the sustain from where
+    // it now is, so the remaining distance shrinks geometrically and the
+    // crossing that ends the stage recedes forever -- it fires only when the
+    // arithmetic finally rounds the difference away, minutes later.
+    // Musically, this was every preset's decay running several times slower
+    // than its knob said, since the day the instrument first made a sound.
+    const double rate = 48000.0;
+    const double decay = 0.2;
+    const int chunk = 32;
+
+    auto envelope = made (rate, 0.0, decay, 0.4, 0.1);
+
+    envelope.noteOn();
+    (void) envelope.process();
+    CHECK (envelope.getStage() == AdsrStage::decay);
+
+    int taken = 0;
+    const int limit = static_cast<int> (4.0 * decay * rate);
+
+    while (envelope.getStage() == AdsrStage::decay && taken < limit)
+    {
+        reapply (envelope);
+        (void) envelope.skip (chunk);
+        taken += chunk;
+    }
+
+    CHECK (envelope.getStage() == AdsrStage::sustain);
+    CHECK_NEAR (taken / rate, decay, 0.01 + 2.0 * chunk / rate);
+}
+
+TEZLA_TEST (a_release_whose_settings_move_mid_flight_still_ends_on_time)
+{
+    // The no-op guard covers the unchanged case; this is the hard one. A
+    // caller that genuinely changes the release while it runs -- a knob
+    // dragged during a tail -- must still get a release that ends, which is
+    // why the release aims from the level it *started* at rather than from
+    // wherever it currently is: the target stays put however often the
+    // segment is re-aimed, so the exit stays finite under any rate of change.
+    const double rate = 48000.0;
+    const int chunk = 32;
+
+    auto envelope = made (rate, 0.0, 0.0, 1.0, 0.4);
+
+    envelope.noteOn();
+    (void) envelope.skip (8);
+    envelope.noteOff();
+
+    int taken = 0;
+    const int limit = static_cast<int> (4.0 * 0.5 * rate);
+    bool wobble = false;
+
+    while (envelope.isActive() && taken < limit)
+    {
+        envelope.setReleaseSeconds (wobble ? 0.4 : 0.5);
+        wobble = ! wobble;
+        (void) envelope.skip (chunk);
+        taken += chunk;
+    }
+
+    // Somewhere between the two stated times, and certainly not the limit:
+    // the two coefficients bracket the journey.
+    CHECK (! envelope.isActive());
+    CHECK (taken / rate <= 0.5 * 1.1);
+    CHECK (taken / rate >= 0.4 * 0.9);
+}
