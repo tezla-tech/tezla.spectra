@@ -605,6 +605,13 @@ it would have been when the next note arrives.
 | **Slow bloom** | A pad, twenty seconds up and six down, with a *negative* attack tension so it starts slowly and arrives — the half of the tension control the old Shape knob could not reach — and an LFO fading in behind it |
 | **Sideband growl** | The LFO at 140 Hz on the cutoff, where it stops being a wobble and becomes modulation, key-tracked so the relationship holds up the keyboard |
 | **Kargyraa** | The doubled voice: a legato drone, the period halved, and a mod envelope walking the vowel over the top — the folds and the tongue doing two independent things at once, which is what the style actually is |
+| **Clockwork wobble** | The ADV envelope as a wobble engine: a looping two-leg envelope, snapped to the grid, closing the filter in exact 1/8s with a snapping down and a swelling up that no symmetric LFO gives. Change the tempo and the wobble retunes live |
+| **Twin ramp** | The flanger inside the wave: a double saw whose second ramp a bar-locked LFO sweeps via Morph — no comb, no delay line, and the same bar gets the same sweep on every pass |
+| **Dome bloom** | Harmonics grown from a pure tone with zero aliasing at any drive; an ADV loop breathes the pressing, velocity adds bite |
+| **Steam pipe** | Noise into a key-tracked comb at 88% feedback: broadband in, pitch out — the playable metallic growl, five decorrelated noise streams wide |
+| **FM punch** | Two-operator FM the DX way: a silent 3:1 modulator, a sine carrier, the PM index riding a fast-decay envelope. The brightness *is* the envelope |
+| **Bell foundry** | The same two operators pushed inharmonic (4.76:1), with an ADV envelope giving the index a strike, a duck, a shimmer-back and a slow fade no ADSR draws. Chords ring like a gamelan |
+| **Vintage swell** | The analogue curve doing pad work: RC-softened saws, drift, both envelopes snapped so the swell lands on the grid, a two-bar LFO on the vowel |
 
 ---
 
