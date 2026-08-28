@@ -11,23 +11,65 @@ namespace tezla::sonitus
 
 namespace
 {
-// Sonitus's own accent: an acid green-yellow, against Emberdrive's ember,
-// Halo's gold, Capstone's steel, Anvil's hot iron and Transpectus's green. The
-// secondary carries the modulation -- the LFO bars, the playing step, an
-// envelope's live level -- which is the one reading here that is not a level,
-// and the two must not be confusable at a glance.
+// ---------------------------------------------------------------------------
+// The palette, derived in OKLCH
+// ---------------------------------------------------------------------------
+//
+// **There is no colour that makes anyone more creative**, and it is worth
+// saying plainly because the claim is everywhere. The one study people cite --
+// Mehta & Zhu, *Science* 2009, blue for creative tasks and red for detail ones
+// -- is a single line of work with small effects and a contested replication
+// record. Picking a hue to "stimulate creativity" would be decoration wearing a
+// lab coat.
+//
+// What *is* solid is perceptual colour science, and it makes a real difference
+// to a panel somebody stares at for six hours:
+//
+//  - **OKLCH, not hex by eye.** Lightness in OKLab is perceptually uniform, so
+//    two colours given the same L genuinely look equally bright -- which is what
+//    makes an accent and a secondary read as a *pair* rather than as one loud
+//    colour and one quiet one. Every value below is computed from a lightness,
+//    a chroma and a hue, not nudged until it looked right.
+//  - **Contrast is measured.** Text sits at 11.8:1 against its panel and the
+//    dim labels at 4.7:1, both past WCAG AA. The old palette's dim text was
+//    4.4:1, which is under it.
+//  - **The chroma is spent where the eye is not.** Long stretches of high
+//    chroma are tiring; the background, panels and text are nearly neutral (C
+//    around 0.015) and the whole chroma budget goes to the three colours that
+//    carry meaning.
+//  - **No saturated blue on dark for anything that must be read.** The eye
+//    cannot focus red and blue at once -- longitudinal chromatic aberration is
+//    real and is why blue text on black looks soft. Blue is used here only as a
+//    held-value graphic, never as type.
+//
+// The identity is unchanged: Sonitus is the acid one, against Emberdrive's
+// ember, Halo's gold, Capstone's steel, Anvil's hot iron and Transpectus's
+// green. It is simply a *luminous* acid now (L 0.85, C 0.20) rather than the
+// olive it had drifted into. The secondary carries the modulation -- the LFO
+// bars, the playing step, an envelope's live level -- and is given the same
+// chroma budget at a hue as far from the accent as the wheel allows, so the two
+// cannot be confused at a glance.
 const ui::Palette kPalette {
-    juce::Colour { 0xff101312 },   // background
-    juce::Colour { 0xff191d1c },   // panel
-    juce::Colour { 0xffd7ddd6 },   // text
-    juce::Colour { 0xff7f8a83 },   // dim text
-    juce::Colour { 0xffa8c93a },   // accent: acid
-    juce::Colour { 0xffcbe960 },   // accent bright
-    juce::Colour { 0xff9a6bd8 },   // secondary: modulation
+    juce::Colour { 0xff070b11 },   // background     L 0.150  C 0.014  H 255
+    juce::Colour { 0xff171c23 },   // panel          L 0.225  C 0.016  H 255
+    juce::Colour { 0xffe1e7ed },   // text           L 0.925  C 0.010  H 250
+    juce::Colour { 0xff8a929a },   // dim text       L 0.655  C 0.016  H 250
+    juce::Colour { 0xffb3e22b },   // accent: acid   L 0.850  C 0.200  H 124
+    juce::Colour { 0xffdefe6a },   // accent bright  L 0.945  C 0.175  H 120
+    juce::Colour { 0xffbe80fe },   // secondary      L 0.715  C 0.185  H 305
     juce::Colour { 0xffff7a18 },   // bypass glow, the same in every plugin
-    juce::Colour { 0xffe2483d },   // over
-    juce::Colour { 0xffab9bf5 }    // hold
+    juce::Colour { 0xfffc5950 },   // over           L 0.680  C 0.200  H 27
+    juce::Colour { 0xff69c1fc }    // hold           L 0.780  C 0.120  H 240
 };
+
+/// The group panels, one perceptual step above the page panel.
+///
+/// A literal value rather than `panel.brighter()`, because `brighter` works in
+/// HSB and its steps are not perceptually even -- the same argument gives a
+/// different apparent jump on a dark colour than on a light one. This is
+/// L 0.278 against the panel's 0.225, which is a step you can see and not one
+/// that stripes the page.
+const juce::Colour kGroupPanel { 0xff222931 };
 
 // The cell. Deliberately small: sixty controls on six pages only fit at a size
 // the stock JUCE rotary cannot be read at, which is what the arc-and-pointer
@@ -82,6 +124,27 @@ constexpr int kStepStripHeight = 108;
         return { text, {} };
 
     return { text.substring (0, separator).trim(), text.substring (separator + 4).trim() };
+}
+
+/// The panel behind a group of controls.
+///
+/// Two things beyond a filled rectangle, and both are what makes a dark panel
+/// look lit rather than flat: a shallow vertical gradient, brighter at the top,
+/// and a **one-pixel highlight along the top edge**. That highlight is how every
+/// piece of real hardware catches the light in a photograph, and it costs a
+/// single line.
+void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds)
+{
+    const auto area = bounds.toFloat();
+
+    g.setGradientFill (juce::ColourGradient (kGroupPanel.brighter (0.05f), area.getX(), area.getY(),
+                                             kGroupPanel.darker (0.10f), area.getX(), area.getBottom(),
+                                             false));
+    g.fillRoundedRectangle (area, 5.0f);
+
+    g.setColour (juce::Colours::white.withAlpha (0.045f));
+    g.drawLine (area.getX() + 5.0f, area.getY() + 0.5f,
+                area.getRight() - 5.0f, area.getY() + 0.5f, 1.0f);
 }
 
 /// Draws a group's heading: its name, its explanation, and a rule running out
@@ -365,17 +428,19 @@ void ControlPage::paint (juce::Graphics& g)
     // window used to paint a panel over the whole of it and leave two thirds of
     // that panel empty, which reads as a layout that has gone wrong rather than
     // as a page that is simply short.
-    g.setColour (palette_.panel);
-    g.fillRoundedRectangle (getLocalBounds().withHeight (
-        contentHeight_ > 0 ? contentHeight_ : getHeight()).toFloat(), 6.0f);
+    const auto page = getLocalBounds().withHeight (
+        contentHeight_ > 0 ? contentHeight_ : getHeight()).toFloat();
+
+    g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.06f), page.getX(), page.getY(),
+                                             palette_.panel, page.getX(), page.getBottom(), false));
+    g.fillRoundedRectangle (page, 6.0f);
 
     for (const auto& group : groups_)
     {
         if (group.bounds.isEmpty())
             continue;
 
-        g.setColour (palette_.panel.brighter (0.055f));
-        g.fillRoundedRectangle (group.bounds.toFloat(), 5.0f);
+        paintGroupPanel (g, group.bounds);
 
         if (group.heading.isNotEmpty())
             paintHeading (g, palette_, group.bounds.withHeight (kHeadingHeight),
@@ -945,16 +1010,18 @@ int EnvelopePage::getPreferredHeight() const
 
 void EnvelopePage::paint (juce::Graphics& g)
 {
-    g.setColour (palette_.panel);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+    const auto page = getLocalBounds().toFloat();
+
+    g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.06f), page.getX(), page.getY(),
+                                             palette_.panel, page.getX(), page.getBottom(), false));
+    g.fillRoundedRectangle (page, 6.0f);
 
     for (const auto& block : blocks_)
     {
         if (block.bounds.isEmpty())
             continue;
 
-        g.setColour (palette_.panel.brighter (0.055f));
-        g.fillRoundedRectangle (block.bounds.toFloat(), 5.0f);
+        paintGroupPanel (g, block.bounds);
 
         paintHeading (g, palette_, block.bounds.withHeight (kHeadingHeight),
                       block.heading, block.detail);
@@ -2103,7 +2170,16 @@ void SonitusEditor::timerCallback()
 
 void SonitusEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (palette_.background);
+    // A shallow gradient rather than a flat fill. The panel edges then read as
+    // edges against something, which a single flat colour behind them does not
+    // give -- and it costs one gradient per repaint.
+    const auto area = getLocalBounds().toFloat();
+
+    g.setGradientFill (juce::ColourGradient (palette_.background.brighter (0.045f),
+                                             area.getCentreX(), area.getY(),
+                                             palette_.background, area.getCentreX(), area.getBottom(),
+                                             false));
+    g.fillRect (area);
 }
 
 void SonitusEditor::resized()
