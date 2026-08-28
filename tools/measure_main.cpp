@@ -1658,8 +1658,8 @@ sonitus::EngineParameters harmonicPatch()
     parameters.voice.cutoffHz = 16000.0;
     parameters.voice.resonance = 0.7;
     parameters.voice.filterDrive = 0.7;
-    parameters.voice.ampAttack = 0.001;
-    parameters.voice.ampSustain = 1.0;
+    parameters.voice.amp.attack = 0.001;
+    parameters.voice.amp.sustain = 1.0;
     parameters.voice.ampVelocity = 0.0;
     parameters.voice.level = 0.5;
     parameters.keyboard = sonitus::KeyboardMode::mono;

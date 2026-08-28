@@ -668,6 +668,16 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   `docs/BUILD.md`, which catches wrapper mistakes long before they reach the
   user's machine. It does not replace building on Windows — MSVC finds things
   g++ does not — but it removes most of the round trips.
+- **Build every target before pushing, not the ones you were working on.**
+  `scripts\build.bat NONE -test` and `./scripts/build.sh NONE --test` pass no
+  `--target`, so they build the whole tree -- which is the point of them. Naming
+  targets by hand (`cmake --build build --target tezla-tests`) is faster and is
+  how a rename reaches the user broken: `VoiceParameters`'s envelope fields
+  became a nested struct, every call site in `plugins/` and `tests/` was
+  updated, and `tools/measure_main.cpp` was not, because that target was never
+  built here. It failed on MSVC on the user's machine. The tools and the
+  `ui-preview` app are the two easiest to forget, because nothing else depends
+  on them.
 - Report honestly. If a test fails or a step was skipped, say so with the
   output.
 - **A failing test is a claim about the code until proven otherwise.** Making it
