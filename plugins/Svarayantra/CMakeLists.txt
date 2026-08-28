@@ -16,5 +16,6 @@ tezla_add_plugin(
     VST3_CATEGORIES Instrument Sampler
     SOURCES
         Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
     INCLUDE_DIRS
         "${CMAKE_CURRENT_LIST_DIR}/Dsp")

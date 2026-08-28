@@ -14,6 +14,7 @@
 #include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/Palette.hpp>
+#include <tezla/ui/TuningPanel.hpp>
 
 #include "PluginProcessor.h"
 
@@ -510,109 +511,32 @@ private:
     int length_ { dsp::StepSequencer::kMaxSteps };
 };
 
-/// The degree table on the tuning page: one row per scale degree, showing the
-/// exact fraction where the degree *is* one, the cents, and the step up to
-/// the next degree, with the repeat interval as a final row.
-///
-/// Painted directly rather than through a ListBox -- the rows only change
-/// when the scale does, and there is nothing to select. Fractions come from
-/// `dsp::nearestFraction`, which accepts near-exact rationals only, so an
-/// equal-tempered degree shows its cents and never a lie of a fraction.
-class DegreeTable final : public juce::Component
-{
-public:
-    explicit DegreeTable (ui::Palette palette) : palette_ (palette) {}
-
-    /// `rootHz` is degree 0's sounding frequency; the Hz column is the ratios
-    /// multiplied by it, so it moves live as the A4 control is dragged.
-    void setScale (const dsp::Scale& scale, double rootHz);
-
-    void paint (juce::Graphics& g) override;
-
-    /// The height the full table wants; the viewport shows what fits.
-    [[nodiscard]] int preferredHeight() const noexcept
-    {
-        return kHeaderHeight + kRowHeight * static_cast<int> (rows_.size());
-    }
-
-    static constexpr int kRowHeight = 15;
-    static constexpr int kHeaderHeight = 17;
-
-private:
-    struct Row
-    {
-        juce::String degree, ratio, cents, step, hz;
-        bool isRepeat { false };
-    };
-
-    ui::Palette palette_;
-    std::vector<Row> rows_;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DegreeTable)
-};
-
-/// The tuning page: pick a built-in scale, or load a Scala file.
-///
-/// Its own component rather than a `ControlPage` because none of it is a
-/// parameter -- a scale is text, and the two file buttons are the only things
-/// in this plugin that touch a filesystem.
+/// The tuning page: the shared microtuning panel (scale menu, Scala
+/// loaders, degree table, pitch-standard lore, A4 control), which grew up
+/// here and now lives in tezla-ui so Svarayantra shows the identical page.
+/// This wrapper is what keeps it a Page.
 class TuningPage final : public Page
 {
 public:
-    TuningPage (SonitusProcessor& processorToUse, ui::Palette palette);
+    TuningPage (SonitusProcessor& processorToUse, ui::Palette palette)
+        : panel_ (processorToUse, palette,
+                  "Microtuning is built in because the comb key-tracks onto harmonics of the "
+                  "played note: a just interval locks against it where a tempered one churns. "
+                  "The scale travels with the project -- .scl text is saved into the plugin's "
+                  "state. Detune and glide stay in cents; they are a spread around a pitch, "
+                  "not a scale degree.")
+    {
+        addAndMakeVisible (panel_);
+    }
 
-    /// Refreshes the description from the processor. Called when something has
-    /// changed the tuning, including a state load from the host.
-    void refresh();
+    void refresh() { panel_.refresh(); }
 
     [[nodiscard]] int getPreferredHeight() const override { return 360; }
 
-    void paint (juce::Graphics&) override;
-    void resized() override;
+    void resized() override { panel_.setBounds (getLocalBounds()); }
 
 private:
-    void loadScaleFile();
-    void loadKeyboardMapFile();
-
-    /// Says what went wrong, with the line number the parser gave. A tuning
-    /// that half-loads is worse than one that will not load -- the `.tzref`
-    /// lesson, from Transpectus.
-    void reportFailure (const juce::String& what, const juce::String& reason);
-
-    SonitusProcessor& sonitus_;
-    ui::Palette palette_;
-
-    juce::ComboBox   scaleBox_;
-    juce::TextButton loadScaleButton_ { "Load .scl..." };
-    juce::TextButton loadMapButton_   { "Load .kbm..." };
-    juce::TextButton resetButton_     { "12-TET" };
-
-    juce::Label      headingLabel_;
-    WrappingLabel    descriptionLabel_;
-    WrappingLabel    explanationLabel_;
-    WrappingLabel    errorLabel_;
-
-    /// What the selected scale *is*: the construction it is generated from,
-    /// the story of where it comes from, and every degree in a table.
-    WrappingLabel    constructionLabel_;
-    WrappingLabel    storyLabel_;
-    DegreeTable      degreeTable_;
-    juce::Viewport   tableViewport_;
-
-    /// The pitch standard: what the tradition tuned to, in bold, with a
-    /// button to apply it when it names a number -- and the A4 control that
-    /// moves the whole tuning, .kbm reference included, by one ratio.
-    WrappingLabel    pitchLoreLabel_;
-    juce::TextButton applyPitchButton_;
-    juce::Slider     concertSlider_;
-    juce::Label      concertLabel_;
-
-    std::unique_ptr<juce::FileChooser> chooser_;
-
-    /// Guards the combo box's callback while the box is being repopulated or
-    /// set from the processor, so restoring a selection does not read as the
-    /// user choosing it.
-    bool updating_ { false };
+    ui::TuningPanel panel_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TuningPage)
 };

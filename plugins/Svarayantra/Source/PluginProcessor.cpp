@@ -6,6 +6,7 @@
 // GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
 
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 #include <cmath>
 
@@ -493,7 +494,7 @@ juce::String SvarayantraProcessor::loadKeyboardMapText (const juce::String& text
     return {};
 }
 
-bool SvarayantraProcessor::selectBuiltInScale (const juce::String& name)
+juce::String SvarayantraProcessor::selectBuiltInScale (const juce::String& name)
 {
     for (const auto& scale : dsp::scales::all())
     {
@@ -504,11 +505,11 @@ bool SvarayantraProcessor::selectBuiltInScale (const juce::String& name)
             scalaText_.clear();
 
             publishTuning();
-            return true;
+            return {};
         }
     }
 
-    return false;
+    return "No built-in scale is named \"" + name + "\".";
 }
 
 void SvarayantraProcessor::resetTuning()
@@ -533,6 +534,29 @@ void SvarayantraProcessor::setConcertPitch (double hz)
 double SvarayantraProcessor::previewFrequencyFor (int midiNote) const
 {
     return previewTuning_.frequencyFor (midiNote);
+}
+
+double SvarayantraProcessor::getRootHz() const noexcept
+{
+    return previewTuning_.frequencyFor (previewTuning_.getRootNote());
+}
+
+juce::String SvarayantraProcessor::describeTuning() const
+{
+    const auto rootNote = previewTuning_.getRootNote();
+    const auto rootHz = previewTuning_.frequencyFor (rootNote);
+
+    juce::String line = scaleName_.isNotEmpty() ? scaleName_
+                                                : juce::String (scale_.name);
+    line << "  --  " << scale_.size() << " degrees";
+
+    if (hasKeyboardMap_)
+        line << ", keyboard-mapped";
+
+    line << ", root note " << rootNote << " = " << juce::String (rootHz, 2)
+         << " Hz at A4 = " << juce::String (concertPitchHz_, 1) << " Hz";
+
+    return line;
 }
 
 // ---------------------------------------------------------------------------
@@ -616,9 +640,7 @@ void SvarayantraProcessor::setStateInformation (const void* data, int sizeInByte
 
 juce::AudioProcessorEditor* SvarayantraProcessor::createEditor()
 {
-    // The real editor lands in the next phase; the generic panel keeps the
-    // plugin usable (and the validator honest) until it does.
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new SvarayantraEditor (*this);
 }
 
 } // namespace tezla::svarayantra

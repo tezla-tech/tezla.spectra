@@ -45,6 +45,7 @@
 
 #include <tezla/dsp/Scales.hpp>
 #include <tezla/dsp/Tuning.hpp>
+#include <tezla/ui/TuningHost.hpp>
 
 #include <Sf2File.hpp>
 #include <Sf2Model.hpp>
@@ -60,7 +61,10 @@ inline constexpr auto outputTrim = "outputTrim";
 inline constexpr auto bendRange = "bendRange";
 } // namespace ids
 
-class SvarayantraProcessor final : public juce::AudioProcessor
+// ui::TuningHost is what lets the shared tuning panel drive this processor
+// exactly as it drives Sonitus.
+class SvarayantraProcessor final : public juce::AudioProcessor,
+                                   public tezla::ui::TuningHost
 {
 public:
     SvarayantraProcessor();
@@ -137,17 +141,19 @@ public:
 
     // ---- the tuning (message thread; same workflow as Sonitus) ------------
 
-    juce::String loadScalaText (const juce::String& text, const juce::String& name);
-    juce::String loadKeyboardMapText (const juce::String& text);
-    bool selectBuiltInScale (const juce::String& name);
-    void resetTuning();
+    juce::String loadScalaText (const juce::String& text, const juce::String& name) override;
+    juce::String loadKeyboardMapText (const juce::String& text) override;
+    juce::String selectBuiltInScale (const juce::String& name) override;
+    void resetTuning() override;
 
-    [[nodiscard]] const dsp::Scale& getScale() const noexcept { return scale_; }
-    [[nodiscard]] juce::String getScaleName() const noexcept { return scaleName_; }
+    [[nodiscard]] const dsp::Scale& getScale() const noexcept override { return scale_; }
+    [[nodiscard]] juce::String getScaleName() const noexcept override { return scaleName_; }
+    [[nodiscard]] juce::String describeTuning() const override;
+    [[nodiscard]] double getRootHz() const noexcept override;
     [[nodiscard]] bool hasScalaFileLoaded() const noexcept { return scalaText_.isNotEmpty(); }
 
-    void setConcertPitch (double hz);
-    [[nodiscard]] double getConcertPitch() const noexcept { return concertPitchHz_; }
+    void setConcertPitch (double hz) override;
+    [[nodiscard]] double getConcertPitch() const noexcept override { return concertPitchHz_; }
 
     /// Root frequency preview for the tuning table: what the current tuning
     /// plays for a key, computed on a message-thread copy.
