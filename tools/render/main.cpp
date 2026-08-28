@@ -408,7 +408,48 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
 
         if (auto* found = findById (*editor, id))
         {
-            if (auto* button = dynamic_cast<juce::Button*> (found))
+            // If the ID names a *parameter*, drive the parameter -- that is
+            // what a user's click amounts to end-to-end, and it is the only
+            // route that works for attachment-driven toggles. The tool's
+            // first fix flipped the button silently and called onClick, which
+            // satisfied buttons whose logic lives in onClick (the header's
+            // TIPS) while attachment toggles reported "clicked (now on)" and
+            // changed nothing: the ButtonAttachment listens for click
+            // notifications that a silent flip never sends. The ADV enable
+            // rows exposed it.
+            juce::AudioProcessorParameter* matched = nullptr;
+
+            for (auto* candidate : processor.getParameters())
+                if (auto* withId = dynamic_cast<juce::AudioProcessorParameterWithID*> (candidate))
+                    if (withId->paramID == id)
+                    {
+                        matched = candidate;
+                        break;
+                    }
+
+            if (matched != nullptr && matched->isBoolean())
+            {
+                const float flipped = matched->getValue() < 0.5f ? 1.0f : 0.0f;
+
+                matched->beginChangeGesture();
+                matched->setValueNotifyingHost (flipped);
+                matched->endChangeGesture();
+
+                std::printf ("  toggled parameter %s %s\n", id.toRawUTF8(),
+                             flipped > 0.5f ? "on" : "off");
+                continue;
+            }
+
+            // A parameter *cell* carries the ID; its button is a child. Click
+            // the button the cell wraps, or the toggle checks nothing.
+            auto* button = dynamic_cast<juce::Button*> (found);
+
+            if (button == nullptr)
+                for (auto* child : found->getChildren())
+                    if ((button = dynamic_cast<juce::Button*> (child)) != nullptr)
+                        break;
+
+            if (button != nullptr)
             {
                 // **A toggle has to be flipped before its handler runs**, and
                 // getting this wrong made every toggle in the suite untestable
@@ -436,7 +477,7 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             }
             else
             {
-                std::fprintf (stderr, "  %s is not a button\n", id.toRawUTF8());
+                std::fprintf (stderr, "  %s is not a button and wraps none\n", id.toRawUTF8());
                 ++failures;
             }
         }

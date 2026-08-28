@@ -267,6 +267,54 @@ private:
     int contentHeight_ { 0 };
 };
 
+/// A multi-stage envelope drawn as the polyline it is, dragged by its points.
+///
+/// The ADV envelopes' graph. Points drag in both axes -- x is that segment's
+/// time, y its level -- and a segment's *midpoint* drags vertically for its
+/// tension, which is the FL gesture and needs no third handle. Curves are
+/// drawn with EnvelopeEditor::segment, the shared tension arithmetic, so the
+/// picture is the DSP's own curve. The sustain point wears a ring; the loop
+/// region is shaded while Loop is on.
+class MultiEnvelopeEditor final : public juce::Component
+{
+public:
+    MultiEnvelopeEditor (juce::AudioProcessorValueTreeState& state, int envelopeIndex,
+                         ui::Palette palette);
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+
+private:
+    struct Layout
+    {
+        double total { 1.0 };
+        std::array<float, 9> x {};   ///< x[0] is the start, x[i] point i-1
+        std::array<float, 9> y {};
+        int points { 2 };
+        int sustain { 0 };
+        int loopStart { 0 };
+        bool loop { false };
+    };
+
+    [[nodiscard]] Layout layoutNow() const;
+    [[nodiscard]] juce::Rectangle<float> plotArea() const;
+
+    [[nodiscard]] float plain (const juce::String& field) const;
+    void setPlain (const juce::String& field, float value, bool gesture);
+
+    juce::AudioProcessorValueTreeState& state_;
+    int envelope_ { 0 };
+    ui::Palette palette_;
+
+    int dragPoint_ { -1 };
+    int dragSegment_ { -1 };
+    float dragStartTension_ { 0.0f };
+    float dragStartY_ { 0.0f };
+    juce::String gestureField_;
+};
+
 /// An ADSR drawn as the shape it is, and dragged by its corners.
 ///
 /// Five knobs describe an envelope completely and show it not at all. The curve
@@ -290,6 +338,10 @@ class EnvelopeEditor final : public juce::Component,
                              public juce::SettableTooltipClient
 {
 public:
+    /// One tension segment's level at progress u, the DSP's own arithmetic.
+    /// Public because MultiEnvelopeEditor draws with the same curve.
+    [[nodiscard]] static double segment (double u, double from, double to, double tension);
+
     /// The eight parameters one envelope is made of.
     struct Ids
     {
@@ -345,8 +397,6 @@ private:
     /// not an approximation of it -- including the mirror for a negative
     /// tension, which is the half of the control a curve drawn by eye would
     /// get wrong.
-    [[nodiscard]] static double segment (double u, double from, double to, double tension);
-
     void appendSegment (juce::Path& path, float x0, float x1,
                         double from, double to, double tension) const;
 
@@ -392,6 +442,20 @@ private:
         juce::Rectangle<int> bounds;
     };
 
+    /// One ADV envelope's row: a compact strip until enabled, a full graph
+    /// block after. The page re-lays itself out when an enable flips.
+    struct AdvRow
+    {
+        int index { 0 };
+        juce::String heading;
+        std::unique_ptr<MultiEnvelopeEditor> graph;
+        std::vector<std::unique_ptr<ParameterCell>> cells;   ///< enable first
+        juce::Rectangle<int> bounds;
+        bool shownEnabled { false };
+    };
+
+    void addAdvRow (juce::AudioProcessorValueTreeState& state, int index);
+
     void addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
                    const juce::String& detail, const EnvelopeEditor::Ids& ids,
                    const char* extraId, const juce::String& extraName,
@@ -399,6 +463,14 @@ private:
 
     ui::Palette palette_;
     std::vector<Block> blocks_;
+    std::array<AdvRow, 3> advRows_;
+
+public:
+    /// Fired when a row's enable flips and the page's preferred height with
+    /// it; the editor wires this to its own resized().
+    std::function<void()> onHeightChanged;
+
+private:
 };
 
 /// The sixteen steps, as sixteen vertical faders with the playing one lit.

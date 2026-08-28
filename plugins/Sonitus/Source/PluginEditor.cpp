@@ -179,6 +179,9 @@ constexpr int kEnvKnobColumns = 3;
 constexpr int kEnvBodyHeight = kEnvKnobRows * kMinCellHeight + 4;
 constexpr int kEnvBlockHeight = kHeadingHeight + kEnvBodyHeight + 4;
 
+/// A folded ADV row: the heading and its enable pill, nothing else.
+constexpr int kAdvStripHeight = kHeadingHeight + 44;
+
 constexpr int kMinWidth  = 880;
 constexpr int kMinHeight = 560;
 constexpr int kMaxWidth  = 1720;
@@ -1321,6 +1324,241 @@ void EnvelopeEditor::mouseDoubleClick (const juce::MouseEvent& event)
 }
 
 // ---------------------------------------------------------------------------
+// MultiEnvelopeEditor
+// ---------------------------------------------------------------------------
+
+MultiEnvelopeEditor::MultiEnvelopeEditor (juce::AudioProcessorValueTreeState& state,
+                                          int envelopeIndex, ui::Palette palette)
+    : state_ (state), envelope_ (envelopeIndex), palette_ (palette)
+{
+    setComponentID ("adv" + juce::String (envelopeIndex + 1) + "-graph");
+}
+
+float MultiEnvelopeEditor::plain (const juce::String& field) const
+{
+    if (auto* parameter = state_.getParameter (ids::adv (envelope_, field)))
+        return parameter->convertFrom0to1 (parameter->getValue());
+
+    return 0.0f;
+}
+
+void MultiEnvelopeEditor::setPlain (const juce::String& field, float value, bool gesture)
+{
+    auto* parameter = state_.getParameter (ids::adv (envelope_, field));
+
+    if (parameter == nullptr)
+        return;
+
+    const float normalised = parameter->convertTo0to1 (value);
+
+    if (gesture)
+        parameter->beginChangeGesture();
+
+    parameter->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, normalised));
+
+    if (gesture)
+        parameter->endChangeGesture();
+}
+
+juce::Rectangle<float> MultiEnvelopeEditor::plotArea() const
+{
+    return getLocalBounds().toFloat().reduced (8.0f, 7.0f);
+}
+
+MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
+{
+    Layout layout;
+
+    layout.points = juce::jlimit (2, dsp::MultiEnvelope::kMaxPoints,
+                                  static_cast<int> (std::lround (plain ("Points"))));
+    layout.sustain = juce::jlimit (0, layout.points - 1,
+                                   static_cast<int> (std::lround (plain ("Sustain"))) - 1);
+    layout.loopStart = juce::jlimit (0, layout.sustain,
+                                     static_cast<int> (std::lround (plain ("LoopStart"))) - 1);
+    layout.loop = state_.getRawParameterValue (ids::adv (envelope_, "Loop"))->load() > 0.5f;
+
+    layout.total = 0.0;
+    for (int i = 0; i < layout.points; ++i)
+        layout.total += plain ("T" + juce::String (i + 1));
+    layout.total = std::max (layout.total, 1.0e-3);
+
+    const auto area = plotArea();
+
+    layout.x[0] = area.getX();
+    layout.y[0] = area.getBottom();   // the gate opens from level 0
+
+    double elapsed = 0.0;
+    for (int i = 0; i < layout.points; ++i)
+    {
+        elapsed += plain ("T" + juce::String (i + 1));
+
+        layout.x[static_cast<std::size_t> (i + 1)] =
+            area.getX() + area.getWidth() * static_cast<float> (elapsed / layout.total);
+        layout.y[static_cast<std::size_t> (i + 1)] =
+            area.getBottom() - area.getHeight() * plain ("L" + juce::String (i + 1));
+    }
+
+    return layout;
+}
+
+void MultiEnvelopeEditor::paint (juce::Graphics& g)
+{
+    const auto area = plotArea();
+    const auto layout = layoutNow();
+
+    g.setColour (palette_.background.darker (0.2f));
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 5.0f);
+
+    // The loop region, shaded, while Loop is on.
+    if (layout.loop)
+    {
+        const float from = layout.x[static_cast<std::size_t> (layout.loopStart + 1)];
+        const float to = layout.x[static_cast<std::size_t> (layout.sustain + 1)];
+
+        g.setColour (palette_.secondary.withAlpha (0.10f));
+        g.fillRect (juce::Rectangle<float> (from, area.getY(),
+                                            std::max (2.0f, to - from), area.getHeight()));
+    }
+
+    // The curve, in the DSP's own arithmetic -- EnvelopeEditor::segment.
+    juce::Path path;
+    path.startNewSubPath (layout.x[0], layout.y[0]);
+
+    for (int i = 0; i < layout.points; ++i)
+    {
+        const float x0 = layout.x[static_cast<std::size_t> (i)];
+        const float x1 = layout.x[static_cast<std::size_t> (i + 1)];
+        const double from = (area.getBottom() - layout.y[static_cast<std::size_t> (i)]) / area.getHeight();
+        const double to = (area.getBottom() - layout.y[static_cast<std::size_t> (i + 1)]) / area.getHeight();
+        const double tension = plain ("C" + juce::String (i + 1));
+
+        constexpr int kSteps = 20;
+        for (int step = 1; step <= kSteps; ++step)
+        {
+            const double u = static_cast<double> (step) / kSteps;
+            const double level = EnvelopeEditor::segment (u, from, to, tension);
+
+            path.lineTo (x0 + (x1 - x0) * static_cast<float> (u),
+                         area.getBottom() - area.getHeight() * static_cast<float> (level));
+        }
+    }
+
+    g.setColour (palette_.accent);
+    g.strokePath (path, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved));
+
+    // Handles. The sustain point wears a ring; the release chain draws dim.
+    for (int i = 0; i < layout.points; ++i)
+    {
+        const auto centre = juce::Point<float> (layout.x[static_cast<std::size_t> (i + 1)],
+                                                layout.y[static_cast<std::size_t> (i + 1)]);
+
+        const bool isSustain = i == layout.sustain;
+        const bool isRelease = i > layout.sustain;
+
+        g.setColour (isRelease ? palette_.dimText : palette_.accentBright);
+        g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (centre));
+
+        if (isSustain)
+        {
+            g.setColour (palette_.text);
+            g.drawEllipse (juce::Rectangle<float> (12.0f, 12.0f).withCentre (centre), 1.4f);
+        }
+    }
+}
+
+void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
+{
+    const auto layout = layoutNow();
+    const auto position = event.position;
+
+    dragPoint_ = -1;
+    dragSegment_ = -1;
+
+    // A point first: the nearest within reach.
+    float best = 12.0f * 12.0f;
+    for (int i = 0; i < layout.points; ++i)
+    {
+        const auto centre = juce::Point<float> (layout.x[static_cast<std::size_t> (i + 1)],
+                                                layout.y[static_cast<std::size_t> (i + 1)]);
+        const float d2 = centre.getDistanceSquaredFrom (position);
+
+        if (d2 < best)
+        {
+            best = d2;
+            dragPoint_ = i;
+        }
+    }
+
+    if (dragPoint_ >= 0)
+        return;
+
+    // Otherwise a segment, for its tension: nearest midpoint, the FL gesture.
+    best = 18.0f * 18.0f;
+    for (int i = 0; i < layout.points; ++i)
+    {
+        const auto mid = juce::Point<float> (
+            0.5f * (layout.x[static_cast<std::size_t> (i)] + layout.x[static_cast<std::size_t> (i + 1)]),
+            0.5f * (layout.y[static_cast<std::size_t> (i)] + layout.y[static_cast<std::size_t> (i + 1)]));
+
+        const float d2 = mid.getDistanceSquaredFrom (position);
+
+        if (d2 < best)
+        {
+            best = d2;
+            dragSegment_ = i;
+        }
+    }
+
+    if (dragSegment_ >= 0)
+    {
+        dragStartTension_ = plain ("C" + juce::String (dragSegment_ + 1));
+        dragStartY_ = position.y;
+    }
+}
+
+void MultiEnvelopeEditor::mouseDrag (const juce::MouseEvent& event)
+{
+    const auto area = plotArea();
+
+    if (dragPoint_ >= 0)
+    {
+        const auto layout = layoutNow();
+        const auto n = juce::String (dragPoint_ + 1);
+
+        // y is the point's level, plainly.
+        const float level = juce::jlimit (0.0f, 1.0f,
+            (area.getBottom() - event.position.y) / area.getHeight());
+        setPlain ("L" + n, level, true);
+
+        // x is this segment's own time: the distance from the previous point,
+        // in the current total's scale. The total shifts as the time does,
+        // which reads as the graph breathing -- correct, if surprising once.
+        const float previousX = layout.x[static_cast<std::size_t> (dragPoint_)];
+        const double fraction = juce::jlimit (0.001f, 1.0f,
+            (event.position.x - previousX) / area.getWidth());
+        setPlain ("T" + n, static_cast<float> (fraction * layout.total), true);
+
+        repaint();
+        return;
+    }
+
+    if (dragSegment_ >= 0)
+    {
+        // Up bends towards the analogue curve, down towards its mirror.
+        const float delta = (dragStartY_ - event.position.y) / 60.0f;
+        setPlain ("C" + juce::String (dragSegment_ + 1),
+                  juce::jlimit (-1.0f, 1.0f, dragStartTension_ + delta), true);
+        repaint();
+    }
+}
+
+void MultiEnvelopeEditor::mouseUp (const juce::MouseEvent&)
+{
+    dragPoint_ = -1;
+    dragSegment_ = -1;
+}
+
+// ---------------------------------------------------------------------------
 // EnvelopePage
 // ---------------------------------------------------------------------------
 
@@ -1342,6 +1580,60 @@ EnvelopePage::EnvelopePage (juce::AudioProcessorValueTreeState& state, ui::Palet
               { ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain, ids::env2Release,
                 ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
               nullptr, {}, {}, ids::env2Snap);
+
+    for (int index = 0; index < 3; ++index)
+        addAdvRow (state, index);
+}
+
+void EnvelopePage::addAdvRow (juce::AudioProcessorValueTreeState& state, int index)
+{
+    auto& row = advRows_[static_cast<std::size_t> (index)];
+
+    row.index = index;
+    row.heading = "ADV ENVELOPE " + juce::String (index + 1);
+
+    row.graph = std::make_unique<MultiEnvelopeEditor> (state, index, palette_);
+    addChildComponent (*row.graph);   // hidden until enabled
+
+    const auto cell = [&] (std::unique_ptr<ParameterCell> made, bool visibleWhenEnabled)
+    {
+        if (visibleWhenEnabled)
+            addChildComponent (*made);
+        else
+            addAndMakeVisible (*made);
+
+        row.cells.push_back (std::move (made));
+    };
+
+    // The enable pill is the strip's whole content while disabled; everything
+    // else appears when it lights.
+    cell (std::make_unique<ToggleCell> (state, ids::adv (index, "Enable"), "Enable",
+        "Switches this envelope on. Off costs nothing -- a disabled slot is never even "
+        "ticked -- and the row stays folded. On, it appears as a source in both matrices "
+        "as ADV " + juce::String (index + 1) + ": drag the points, ring is the sustain "
+        "point, drag a segment's middle for its curve.",
+        palette_), false);
+
+    cell (std::make_unique<KnobCell> (state, ids::adv (index, "Points"), "Points",
+        "How many points the envelope has, 2 to 8. The rest keep their values for when "
+        "you lengthen it again.", palette_), true);
+
+    cell (std::make_unique<KnobCell> (state, ids::adv (index, "Sustain"), "Sustain pt",
+        "Which point the envelope parks at while the key is held -- the ringed one. The "
+        "points after it are the release.", palette_), true);
+
+    cell (std::make_unique<KnobCell> (state, ids::adv (index, "LoopStart"), "Loop from",
+        "Where the loop returns to. Arriving at the sustain point travels back here -- "
+        "the return leg uses this point's own time and curve -- then forward again.",
+        palette_), true);
+
+    cell (std::make_unique<ToggleCell> (state, ids::adv (index, "Loop"), "Loop",
+        "Cycles between the loop point and the sustain point while the key is held. With "
+        "Snap on, the loop is a tempo-locked rhythm.", palette_), true);
+
+    cell (std::make_unique<ToggleCell> (state, ids::adv (index, "Snap"), "Snap",
+        "Quantises every point's time to note lengths at the host tempo, exactly as the "
+        "AHDSR Snap does.", palette_), true);
 }
 
 void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
@@ -1419,12 +1711,48 @@ void EnvelopePage::refresh (const SonitusProcessor& processor)
 {
     for (std::size_t i = 0; i < blocks_.size(); ++i)
         blocks_[i].graph->refresh (processor.getEnvelopeLevel (static_cast<int> (i)));
+
+    bool heightChanged = false;
+
+    for (auto& row : advRows_)
+    {
+        auto& state = const_cast<SonitusProcessor&> (processor).getState();
+        const bool enabled = state
+            .getRawParameterValue (ids::adv (row.index, "Enable"))->load() > 0.5f;
+
+        if (enabled != row.shownEnabled)
+        {
+            row.shownEnabled = enabled;
+            heightChanged = true;
+
+            row.graph->setVisible (enabled);
+
+            for (std::size_t i = 1; i < row.cells.size(); ++i)
+                row.cells[i]->setVisible (enabled);
+        }
+
+        if (enabled)
+            row.graph->repaint();   // external parameter changes redraw
+    }
+
+    if (heightChanged)
+    {
+        resized();
+
+        if (onHeightChanged)
+            onHeightChanged();
+    }
 }
 
 int EnvelopePage::getPreferredHeight() const
 {
-    return 2 * kPagePad
-         + static_cast<int> (blocks_.size()) * (kEnvBlockHeight + kGroupGap);
+    int height = 2 * kPagePad
+               + static_cast<int> (blocks_.size()) * (kEnvBlockHeight + kGroupGap);
+
+    for (const auto& row : advRows_)
+        height += (row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight) + kGroupGap;
+
+    return height;
 }
 
 void EnvelopePage::paint (juce::Graphics& g)
@@ -1439,6 +1767,19 @@ void EnvelopePage::paint (juce::Graphics& g)
         paintHeading (g, palette_, block.bounds.withHeight (kHeadingHeight),
                       block.heading, block.detail);
     }
+
+    for (const auto& row : advRows_)
+    {
+        if (row.bounds.isEmpty())
+            continue;
+
+        paintGroupPanel (g, row.bounds);
+
+        paintHeading (g, palette_, row.bounds.withHeight (kHeadingHeight),
+                      row.heading,
+                      row.shownEnabled ? "a source in both matrices"
+                                       : "off -- costs nothing folded");
+    }
 }
 
 void EnvelopePage::resized()
@@ -1446,10 +1787,17 @@ void EnvelopePage::resized()
     auto bounds = getLocalBounds().reduced (6, kPagePad);
 
     // The blocks share whatever is going spare equally, so the page fills a
-    // tall window rather than stacking against the top.
+    // tall window rather than stacking against the top -- but only after the
+    // ADV rows' claim is reserved, or the three AHDSRs eat the whole window
+    // and push the rows off the bottom of it, which is exactly what the first
+    // tall-window screenshot showed.
+    int advTotal = 0;
+    for (const auto& row : advRows_)
+        advTotal += (row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight) + kGroupGap;
+
     const int blocks = juce::jmax (1, static_cast<int> (blocks_.size()));
     const int height = juce::jmax (kEnvBlockHeight,
-                                   (bounds.getHeight() - blocks * kGroupGap) / blocks);
+                                   (bounds.getHeight() - advTotal - blocks * kGroupGap) / blocks);
 
     for (auto& block : blocks_)
     {
@@ -1477,6 +1825,43 @@ void EnvelopePage::resized()
         }
 
         block.graph->setBounds (inner.withTrimmedRight (8).reduced (0, 1));
+    }
+
+    for (auto& row : advRows_)
+    {
+        const int height = row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight;
+
+        row.bounds = bounds.removeFromTop (height);
+        bounds.removeFromTop (kGroupGap);
+
+        auto inner = row.bounds.reduced (5, 3).withTrimmedTop (kHeadingHeight);
+
+        if (! row.shownEnabled)
+        {
+            // The strip: the enable pill alone, left, compact.
+            if (! row.cells.empty())
+                row.cells[0]->setBounds (inner.removeFromLeft (150));
+            continue;
+        }
+
+        // Enabled: enable + the five cells in two columns on the right, the
+        // graph taking the rest.
+        const int cellWidth = juce::jlimit (76, kMaxCellWidth, inner.getWidth() / 6);
+        const int cellHeight = juce::jlimit (kMinCellHeight, kMaxCellHeight, inner.getHeight() / 3);
+
+        auto cellArea = inner.removeFromRight (2 * cellWidth);
+
+        for (std::size_t i = 0; i < row.cells.size(); ++i)
+        {
+            const int column = static_cast<int> (i) % 2;
+            const int cellRow = static_cast<int> (i) / 2;
+
+            row.cells[i]->setBounds ({ cellArea.getX() + column * cellWidth,
+                                       cellArea.getY() + cellRow * cellHeight,
+                                       cellWidth, cellHeight });
+        }
+
+        row.graph->setBounds (inner.withTrimmedRight (8).reduced (0, 1));
     }
 }
 
@@ -2207,7 +2592,15 @@ void SonitusEditor::buildPages()
 
     // Its own page rather than a grid of fifteen knobs: an envelope's shape is
     // the thing being edited and five numbers do not show it. See EnvelopePage.
-    pages_[kEnvPage] = std::make_unique<EnvelopePage> (state, paletteForPage (kEnvPage));
+    {
+        auto envPage = std::make_unique<EnvelopePage> (state, paletteForPage (kEnvPage));
+
+        // An enable flip changes the page's preferred height; the editor's
+        // resized() is what re-sizes the viewport's content.
+        envPage->onHeightChanged = [this] { resized(); };
+
+        pages_[kEnvPage] = std::move (envPage);
+    }
 
     // ---- MOD -----------------------------------------------------------------
 
