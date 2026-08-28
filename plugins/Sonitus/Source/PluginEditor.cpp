@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/Scales.hpp>
@@ -43,28 +44,37 @@ namespace
 // dusty rose, because cyan cannot be as chromatic as magenta at any lightness.
 // Vividness wins here; it is a synthesiser, not a spreadsheet.
 //
-// The dark half is not grey. Background, panel and group are a deep plum -- the
-// pink's own hue at C 0.03-0.04 -- so the whole panel sits in one colour world
-// instead of colour floating on neutral. Text is warm off-white for the same
-// reason.
+// **The dark half is brushed metal, and deliberately neutral.** An earlier pass
+// tinted it with the pink's own hue, which put pink knobs on a pink panel and
+// left both fighting -- a saturated accent needs somewhere *uncoloured* to sit
+// against or it stops reading as an accent at all. So the background, panels and
+// text are chroma 0.005 or less: silver, with the whole chroma budget spent on
+// the six things that carry meaning.
 //
-// What is *not* negotiable and is still measured: every accent clears 6.4:1
-// against its group panel, text sits at 13:1, and the dim labels at 4.6:1 --
-// all past WCAG AA. Chroma is spent on the six accents and almost nowhere else,
-// because long stretches of high chroma are tiring to look at.
+// The metal itself is painted rather than coloured: a vertical gradient with a
+// specular band across the upper third and fine horizontal striations, cached in
+// an image so it costs one blit per repaint rather than a thousand lines. See
+// `MetalBackground`.
+//
+// **The lightness is set by the accents, not by taste.** Every accent has to
+// clear 4.5:1 against the panel it sits on, and they are bright colours -- so
+// the panel can only go so light before they stop being legible. Measured
+// across the six, the limit is L 0.34; the group panel sits at 0.335 and the
+// worst accent (magenta) reads 4.72:1. A lighter, prettier silver would have
+// been under it. Text is 10.8:1 and the dim labels 4.8:1.
 //
 // The identity is unchanged where it has to be: bypass orange is the same in
 // every plugin, and "over" is the same red.
 const ui::Palette kPalette {
-    juce::Colour { 0xff110610 },   // background   L 0.145  C 0.030  H 330
-    juce::Colour { 0xff20111f },   // panel        L 0.205  C 0.036  H 330
-    juce::Colour { 0xfff5e8f3 },   // text         L 0.945  C 0.020  H 330
-    juce::Colour { 0xffa591a3 },   // dim text     L 0.680  C 0.035  H 330
-    juce::Colour { 0xfffc75b7 },   // accent: HOT PINK      L 0.74  H 352
-    juce::Colour { 0xfffec5dc },   // accent bright         L 0.88  H 352
-    juce::Colour { 0xffe277fc },   // secondary: modulation L 0.74  H 320
+    juce::Colour { 0xff2c2e30 },   // background   L 0.300  C 0.004  H 250
+    juce::Colour { 0xff282a2c },   // panel        L 0.282  C 0.005  H 250
+    juce::Colour { 0xfff1f4f6 },   // text         L 0.965  C 0.004  H 250
+    juce::Colour { 0xffa2a5a8 },   // dim text     L 0.720  C 0.006  H 250
+    juce::Colour { 0xffe277fc },   // accent: HOT PINK      L 0.74  H 320
+    juce::Colour { 0xfff2c5fe },   // accent bright         L 0.88  H 320
+    juce::Colour { 0xff2cf7df },   // secondary: modulation L 0.88  H 182
     juce::Colour { 0xffff7a18 },   // bypass glow, the same in every plugin
-    juce::Colour { 0xfffc5950 },   // over         L 0.680  C 0.200  H 27
+    juce::Colour { 0xffe95048 },   // over         L 0.640  C 0.190  H 27
     juce::Colour { 0xff2cf7df }    // hold         L 0.88   H 182
 };
 
@@ -73,13 +83,21 @@ const ui::Palette kPalette {
 /// A literal value rather than `panel.brighter()`, because `brighter` works in
 /// HSB and its steps are not perceptually even -- the same argument gives a
 /// different apparent jump on a dark colour than on a light one.
-const juce::Colour kGroupPanel { 0xff2e1c2c };
+const juce::Colour kGroupPanel { 0xff34373a };
+
+/// The three stops the brushed metal is built from: the specular band, the
+/// shoulder below it, and the shadow at both ends.
+const juce::Colour kMetalHigh { 0xff9fa3a7 };   // L 0.690
+const juce::Colour kMetalMid  { 0xff7b7e82 };   // L 0.580
+const juce::Colour kMetalLow  { 0xff4c4f52 };   // L 0.425
 
 /// Each page's own accent, and its bright partner. Golden-angle hues, one
 /// lightness, each at its own chroma limit -- see the comment above.
 ///
-/// Ordered so the pink stays on OSC, which is the plugin's identity, and the
-/// lime lands on TUNING, which is the page nobody stares at.
+/// Ordered so the **brightest** of the family lands on OSC -- the page the
+/// plugin opens on, and therefore the colour it is remembered as -- and the lime
+/// on TUNING, which is the page nobody stares at. The header takes the same
+/// magenta, so the title and the first page agree the moment the window opens.
 struct PageAccent
 {
     juce::Colour accent;
@@ -87,11 +105,11 @@ struct PageAccent
 };
 
 const PageAccent kPageAccents[] {
-    { juce::Colour { 0xfffc75b7 }, juce::Colour { 0xfffec5dc } },   // OSC     pink    H 352
+    { juce::Colour { 0xffe277fc }, juce::Colour { 0xfff2c5fe } },   // OSC     magenta H 320
     { juce::Colour { 0xff20c5b1 }, juce::Colour { 0xff2cf7df } },   // FILTER  cyan    H 182
     { juce::Colour { 0xff86a7fc }, juce::Colour { 0xffc7d7fe } },   // ENV     blue    H 267
     { juce::Colour { 0xfffc854d }, juce::Colour { 0xfffecbb5 } },   // MOD     orange  H  45
-    { juce::Colour { 0xffe277fc }, juce::Colour { 0xfff2c5fe } },   // MANGLE  magenta H 320
+    { juce::Colour { 0xfffc75b7 }, juce::Colour { 0xfffec5dc } },   // MANGLE  pink    H 352
     { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } }    // TUNING  lime    H 130
 };
 
@@ -107,10 +125,10 @@ const PageAccent kPageAccents[] {
     palette.accentBright = accent.bright;
 
     // The modulation colour has to stay told-apart-able from whatever the page
-    // is wearing, so on the two pages whose accent is already in the magenta
-    // family it steps aside to the cyan.
-    if (index == 4 || index == 0)
-        palette.secondary = juce::Colour { 0xff2cf7df };
+    // is wearing. It is the cyan by default; on the page that *is* cyan it
+    // steps aside to the magenta.
+    palette.secondary = index == 1 ? juce::Colour { 0xffe277fc }
+                                   : juce::Colour { 0xff2cf7df };
 
     return palette;
 }
@@ -131,7 +149,7 @@ constexpr int kMaxCellHeight = 80;
 constexpr int kMaxCellWidth = 172;
 
 constexpr int kHeadingHeight = 19;
-constexpr int kGroupGap = 7;
+constexpr int kGroupGap = 10;
 constexpr int kPagePad = 5;
 
 /// The strip along the bottom of the *editor* that carries the current page's
@@ -181,14 +199,26 @@ void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds)
 {
     const auto area = bounds.toFloat();
 
-    g.setGradientFill (juce::ColourGradient (kGroupPanel.brighter (0.05f), area.getX(), area.getY(),
-                                             kGroupPanel.darker (0.10f), area.getX(), area.getBottom(),
+    // A drop shadow, because the plate now sits on something bright and a dark
+    // rectangle with no shadow reads as a hole rather than as a plate.
+    g.setColour (juce::Colours::black.withAlpha (0.30f));
+    g.fillRoundedRectangle (area.translated (0.0f, 1.5f).expanded (1.0f, 0.5f), 6.0f);
+
+    g.setGradientFill (juce::ColourGradient (kGroupPanel.brighter (0.09f), area.getX(), area.getY(),
+                                             kGroupPanel.darker (0.16f), area.getX(), area.getBottom(),
                                              false));
     g.fillRoundedRectangle (area, 5.0f);
 
-    g.setColour (juce::Colours::white.withAlpha (0.045f));
+    // A bright edge along the top and a dark one along the bottom: a raised
+    // plate catches the light on its upper lip and casts into its lower one,
+    // and two lines are the whole of it.
+    g.setColour (juce::Colours::white.withAlpha (0.10f));
     g.drawLine (area.getX() + 5.0f, area.getY() + 0.5f,
                 area.getRight() - 5.0f, area.getY() + 0.5f, 1.0f);
+
+    g.setColour (juce::Colours::black.withAlpha (0.28f));
+    g.drawLine (area.getX() + 5.0f, area.getBottom() - 0.5f,
+                area.getRight() - 5.0f, area.getBottom() - 0.5f, 1.0f);
 }
 
 /// Draws a group's heading: its name, its explanation, and a rule running out
@@ -227,6 +257,80 @@ void paintHeading (juce::Graphics& g, const ui::Palette& palette, juce::Rectangl
     }
 }
 } // namespace
+
+// ---------------------------------------------------------------------------
+// MetalBackground
+// ---------------------------------------------------------------------------
+
+void MetalBackground::paint (juce::Graphics& g, juce::Rectangle<int> bounds,
+                         float highlightAt)
+{
+    if (bounds.isEmpty())
+        return;
+
+    if (image_.getWidth() != bounds.getWidth() || image_.getHeight() != bounds.getHeight()
+        || std::abs (highlight_ - highlightAt) > 1.0e-6f)
+    {
+        render (bounds.getWidth(), bounds.getHeight(), highlightAt);
+    }
+
+    g.drawImageAt (image_, bounds.getX(), bounds.getY());
+}
+
+void MetalBackground::render (int width, int height, float highlightAt)
+{
+    image_ = juce::Image { juce::Image::RGB, width, height, false };
+    highlight_ = highlightAt;
+
+    juce::Graphics g { image_ };
+
+    // The base gradient: bright near the specular band, falling away above
+    // and below it. Three stops rather than two, because a linear ramp from
+    // top to bottom reads as a backdrop and metal reads as a *surface*.
+    juce::ColourGradient gradient { kMetalLow, 0.0f, 0.0f,
+                                    kMetalLow, 0.0f, static_cast<float> (height), false };
+
+    gradient.addColour (juce::jlimit (0.05, 0.95, static_cast<double> (highlightAt)),
+                        kMetalHigh);
+    gradient.addColour (juce::jlimit (0.06, 0.96, static_cast<double> (highlightAt) + 0.25),
+                        kMetalMid);
+
+    g.setGradientFill (gradient);
+    g.fillRect (0, 0, width, height);
+
+    // The brush marks. Two passes at different densities so the grain has
+    // more than one scale to it -- one alone reads as television static.
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        const float thickness = pass == 0 ? 1.0f : 2.0f;
+        const int step = pass == 0 ? 1 : 3;
+
+        for (int y = 0; y < height; y += step)
+        {
+            const double noise = hashed (static_cast<std::uint64_t> (y)
+                                           + static_cast<std::uint64_t> (pass) * 7919ull);
+
+            // Centred on zero, so the grain lightens as often as it darkens
+            // and the average brightness is the gradient's.
+            const float alpha = static_cast<float> (std::abs (noise)) * (pass == 0 ? 0.075f : 0.038f);
+
+            g.setColour ((noise > 0.0 ? juce::Colours::white : juce::Colours::black)
+                           .withAlpha (alpha));
+            g.fillRect (0.0f, static_cast<float> (y), static_cast<float> (width), thickness);
+        }
+    }
+}
+
+double MetalBackground::hashed (std::uint64_t index)
+{
+    std::uint64_t z = index + 0x9e3779b97f4a7c15ull;
+
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    z ^= z >> 31;
+
+    return 2.0 * (static_cast<double> (z >> 11) / 9007199254740992.0) - 1.0;
+}
 
 // ---------------------------------------------------------------------------
 // WrappingLabel
@@ -387,17 +491,20 @@ void ToggleCell::resized()
 // ControlPage
 // ---------------------------------------------------------------------------
 
-void ControlPage::addHeading (const juce::String& text, int columns)
+void ControlPage::addHeading (const juce::String& text, int columns, bool sameRow)
 {
     const auto parts = splitHeading (text);
 
-    groups_.push_back ({ parts.first, parts.second, juce::jmax (1, columns), {}, {} });
+    // The first group on a page has nothing to sit beside, whatever it asks
+    // for -- so the flag is cleared rather than trusted.
+    groups_.push_back ({ parts.first, parts.second, juce::jmax (1, columns),
+                         sameRow && ! groups_.empty(), {}, {} });
 }
 
 ControlPage::Group& ControlPage::currentGroup()
 {
     if (groups_.empty())
-        groups_.push_back ({ {}, {}, 5, {}, {} });
+        groups_.push_back ({ {}, {}, 5, false, {}, {} });
 
     return groups_.back();
 }
@@ -448,22 +555,42 @@ int ControlPage::rowsIn (const Group& group) const
 
 int ControlPage::totalRows() const
 {
+    // A band is one group, or several sharing a row -- and a band is as tall as
+    // its tallest member. Summing the groups instead would reserve height for
+    // rows that are drawn side by side and leave a page of air below them.
     int rows = 0;
+    int band = 0;
 
     for (const auto& group : groups_)
-        rows += rowsIn (group);
+    {
+        if (! group.sameRow)
+        {
+            rows += band;
+            band = 0;
+        }
 
-    return rows;
+        band = juce::jmax (band, rowsIn (group));
+    }
+
+    return rows + band;
+}
+
+int ControlPage::bandCount() const
+{
+    int bands = 0;
+
+    for (const auto& group : groups_)
+        if (! group.sameRow)
+            ++bands;
+
+    return juce::jmax (1, bands);
 }
 
 int ControlPage::getPreferredHeight() const
 {
-    int height = 2 * kPagePad;
-
-    for (const auto& group : groups_)
-        height += kHeadingHeight + rowsIn (group) * kMinCellHeight + 4 + kGroupGap;
-
-    return height;
+    return 2 * kPagePad
+         + bandCount() * (kHeadingHeight + 4 + kGroupGap)
+         + totalRows() * kMinCellHeight;
 }
 
 void ControlPage::paint (juce::Graphics& g)
@@ -472,12 +599,12 @@ void ControlPage::paint (juce::Graphics& g)
     // window used to paint a panel over the whole of it and leave two thirds of
     // that panel empty, which reads as a layout that has gone wrong rather than
     // as a page that is simply short.
-    const auto page = getLocalBounds().withHeight (
-        contentHeight_ > 0 ? contentHeight_ : getHeight()).toFloat();
-
-    g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.06f), page.getX(), page.getY(),
-                                             palette_.panel, page.getX(), page.getBottom(), false));
-    g.fillRoundedRectangle (page, 6.0f);
+    // **Nothing.** The brushed chassis showing between the plates is the whole
+    // look: a bright silver frame with dark control plates bolted to it, which
+    // is how the hardware this is imitating is actually built -- and it is what
+    // lets the panel be silver while the accents keep the dark ground they need
+    // to be legible against. A page-wide fill here would cover it up and put
+    // the plates on a rectangle instead of on metal.
 
     for (const auto& group : groups_)
     {
@@ -500,8 +627,8 @@ void ControlPage::resized()
     auto bounds = getLocalBounds().reduced (6, kPagePad);
 
     const int rows = totalRows();
-    const int groups = static_cast<int> (groups_.size());
-    const int available = bounds.getHeight() - groups * (kHeadingHeight + 4 + kGroupGap);
+    const int bands = bandCount();
+    const int available = bounds.getHeight() - bands * (kHeadingHeight + 4 + kGroupGap);
 
     const int cellHeight = rows > 0
         ? juce::jlimit (kMinCellHeight, kMaxCellHeight, available / rows)
@@ -509,38 +636,71 @@ void ControlPage::resized()
 
     int y = bounds.getY();
 
-    for (auto& group : groups_)
+    for (std::size_t first = 0; first < groups_.size(); )
     {
-        const int groupHeight = kHeadingHeight + rowsIn (group) * cellHeight + 4;
+        // Everything from here up to the next group that wants its own row.
+        std::size_t last = first + 1;
 
-        group.bounds = { bounds.getX(), y, bounds.getWidth(), groupHeight };
+        while (last < groups_.size() && groups_[last].sameRow)
+            ++last;
 
-        auto inner = group.bounds.reduced (4, 2).withTrimmedTop (kHeadingHeight);
+        // The band is as tall as its tallest member, and its width is shared in
+        // proportion to what each member asked for -- so a two-column group
+        // beside a five-column one gets two sevenths, and the cells across the
+        // whole band come out the same size.
+        int tallest = 1;
+        int totalColumns = 0;
 
-        // A group with fewer controls than columns centres on what it has
-        // rather than on what it was allowed. Three knobs laid out on a
-        // five-column grid used to sit against the left of a centred block,
-        // which looks like two missing controls rather than like three.
-        const int used = juce::jmax (1, juce::jmin (group.columns,
-                                                    static_cast<int> (group.cells.size())));
-
-        const int cellWidth = juce::jmin (kMaxCellWidth, inner.getWidth() / group.columns);
-        const int left = inner.getX() + (inner.getWidth() - cellWidth * used) / 2;
-
-        for (std::size_t i = 0; i < group.cells.size(); ++i)
+        for (std::size_t i = first; i < last; ++i)
         {
-            if (group.cells[i] == nullptr)
-                continue;
-
-            const int column = static_cast<int> (i) % group.columns;
-            const int row = static_cast<int> (i) / group.columns;
-
-            group.cells[i]->setBounds ({ left + column * cellWidth,
-                                         inner.getY() + row * cellHeight,
-                                         cellWidth, cellHeight });
+            tallest = juce::jmax (tallest, rowsIn (groups_[i]));
+            totalColumns += groups_[i].columns;
         }
 
-        y += groupHeight + kGroupGap;
+        const int bandHeight = kHeadingHeight + tallest * cellHeight + 4;
+
+        int x = bounds.getX();
+
+        for (std::size_t i = first; i < last; ++i)
+        {
+            auto& group = groups_[i];
+
+            const bool lastInBand = i + 1 == last;
+
+            const int width = lastInBand
+                ? bounds.getRight() - x
+                : bounds.getWidth() * group.columns / totalColumns;
+
+            group.bounds = { x, y, width, bandHeight };
+
+            auto inner = group.bounds.reduced (4, 2).withTrimmedTop (kHeadingHeight);
+
+            // A group with fewer controls than columns centres on what it has
+            // rather than on what it was allowed.
+            const int used = juce::jmax (1, juce::jmin (group.columns,
+                                                        static_cast<int> (group.cells.size())));
+
+            const int cellWidth = juce::jmin (kMaxCellWidth, inner.getWidth() / group.columns);
+            const int left = inner.getX() + (inner.getWidth() - cellWidth * used) / 2;
+
+            for (std::size_t cell = 0; cell < group.cells.size(); ++cell)
+            {
+                if (group.cells[cell] == nullptr)
+                    continue;
+
+                const int column = static_cast<int> (cell) % group.columns;
+                const int row = static_cast<int> (cell) / group.columns;
+
+                group.cells[cell]->setBounds ({ left + column * cellWidth,
+                                                inner.getY() + row * cellHeight,
+                                                cellWidth, cellHeight });
+            }
+
+            x += width;
+        }
+
+        y += bandHeight + kGroupGap;
+        first = last;
     }
 
     contentHeight_ = y - bounds.getY() - kGroupGap + 2 * kPagePad;
@@ -1111,12 +1271,6 @@ int EnvelopePage::getPreferredHeight() const
 
 void EnvelopePage::paint (juce::Graphics& g)
 {
-    const auto page = getLocalBounds().toFloat();
-
-    g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.06f), page.getX(), page.getY(),
-                                             palette_.panel, page.getX(), page.getBottom(), false));
-    g.fillRoundedRectangle (page, 6.0f);
-
     for (const auto& block : blocks_)
     {
         if (block.bounds.isEmpty())
@@ -1546,9 +1700,19 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
         header_->setOtherSlotFilled (sonitus_.getAbCompare().otherSlotFilled());
     };
 
+    header_->onTooltipsToggled = [this] (bool enabled)
+    {
+        sonitus_.setTooltipsEnabled (enabled);
+        setTooltipsEnabled (enabled);
+    };
+
     header_->setActiveSlot (sonitus_.getAbCompare().isSlotB());
     header_->setOtherSlotFilled (sonitus_.getAbCompare().otherSlotFilled());
+    header_->setTooltipsEnabled (sonitus_.getTooltipsEnabled());
+    header_->attachSuiteControls (sonitus_.getState(), nullptr, ids::output, ids::oversampling);
     addAndMakeVisible (*header_);
+
+    setTooltipsEnabled (sonitus_.getTooltipsEnabled());
 
     buildPages();
 
@@ -1609,17 +1773,19 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     addAndMakeVisible (*outputMeter_);
 
     outputMeterLabel_.setJustificationType (juce::Justification::centred);
-    outputMeterLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+    outputMeterLabel_.setColour (juce::Label::textColourId, palette_.panel.darker (0.3f));
     outputMeterLabel_.setFont (juce::FontOptions (9.0f, juce::Font::bold));
     addAndMakeVisible (outputMeterLabel_);
 
     noteLabel_.setJustificationType (juce::Justification::centred);
-    noteLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+    noteLabel_.setColour (juce::Label::textColourId, palette_.panel.darker (0.3f));
     noteLabel_.setFont (juce::FontOptions (11.5f));
     addAndMakeVisible (noteLabel_);
 
     statusLabel_.setJustificationType (juce::Justification::centred);
-    statusLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+    // Dark, because this line sits on the bright chassis rather than on a
+    // plate -- the dim grey that reads on a dark plate vanishes on silver.
+    statusLabel_.setColour (juce::Label::textColourId, palette_.panel.darker (0.3f));
     statusLabel_.setFont (juce::FontOptions (11.0f));
     addAndMakeVisible (statusLabel_);
 
@@ -1647,6 +1813,14 @@ SonitusEditor::~SonitusEditor()
         steps_->setLookAndFeel (nullptr);
 
     setLookAndFeel (nullptr);
+}
+
+void SonitusEditor::setTooltipsEnabled (bool enabled)
+{
+    // Created and destroyed rather than shown and hidden. A TooltipWindow is a
+    // top-level component that watches the mouse for as long as it exists, and
+    // there is no way to tell it to stop; not having one is the off switch.
+    tooltips_ = enabled ? std::make_unique<juce::TooltipWindow> (this, 500) : nullptr;
 }
 
 ControlPage* SonitusEditor::controlPage (int index) const
@@ -1716,19 +1890,6 @@ void SonitusEditor::buildPages()
     addOscillator (*osc, ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, "B");
 
-    osc->addHeading ("SYNC AND PHASE MODULATION -- B is the target of both", 2);
-
-    osc->addToggle (ids::syncB, "Sync B",
-        "Hard sync: B's phase is reset every time the played note's period comes round, so B's "
-        "own pitch stops being a pitch and becomes a formant -- a peak in the spectrum that "
-        "sweeps when you sweep B. This is the Pro-53 sound, and it is worth nothing standing "
-        "still: put an envelope on Pitch B in the matrix and sweep it.");
-
-    osc->addKnob (ids::pmIndex, "PM",
-        "Phase modulation of B by A. Frequency modulation's better-behaved sibling -- the same "
-        "sidebands with no DC drift, which is why every FM synth since the DX7 has actually been "
-        "a PM synth. At small amounts it thickens; past about 2 it is a different instrument.");
-
     osc->addHeading ("SUB, RING AND FOLD", 5);
 
     osc->addChoice (ids::subShape, "Sub shape",
@@ -1755,7 +1916,20 @@ void SonitusEditor::buildPages()
         "out. Antialiased, and at full fold it is the widest-band thing in the instrument: this "
         "is the one control that genuinely wants x8 oversampling.");
 
-    osc->addHeading ("KARGYRAA -- period doubling, locked to the note", 3);
+    osc->addHeading ("SYNC AND PM", 2, true);
+
+    osc->addToggle (ids::syncB, "Sync B",
+        "Hard sync: B's phase is reset every time the played note's period comes round, so B's "
+        "own pitch stops being a pitch and becomes a formant -- a peak in the spectrum that "
+        "sweeps when you sweep B. This is the Pro-53 sound, and it is worth nothing standing "
+        "still: put an envelope on Pitch B in the matrix and sweep it.");
+
+    osc->addKnob (ids::pmIndex, "PM",
+        "Phase modulation of B by A. Frequency modulation's better-behaved sibling -- the same "
+        "sidebands with no DC drift, which is why every FM synth since the DX7 has actually been "
+        "a PM synth. At small amounts it thickens; past about 2 it is a different instrument.");
+
+    osc->addHeading ("KARGYRAA -- period doubling", 3, true);
 
     osc->addKnob (ids::kargyraa, "Kargyraa",
         "**Period doubling, the way a Tuvan throat singer gets one.** The false vocal folds sit "
@@ -1829,7 +2003,7 @@ void SonitusEditor::buildPages()
         "How far velocity opens the filter. The standard expressive link, and the reason a "
         "programmed bassline can breathe.");
 
-    filter->addHeading ("KEYBOARD", 4);
+    filter->addHeading ("KEYBOARD", 4, true);
 
     filter->addChoice (ids::keyMode, "Mode",
         "Poly is many notes. Mono retriggers the envelopes on every note; Legato does not, so a "
@@ -2047,7 +2221,7 @@ void SonitusEditor::buildPages()
     mangle->addKnob (ids::formantMix, "Vowel mix",
         "Dry against vowelled. At 0 the formant filter is bit-exactly out of the path.");
 
-    mangle->addHeading ("OVERTONE -- the same key tracking, on the vowel", 4);
+    mangle->addHeading ("OVERTONE -- key tracking, on the vowel", 4, true);
 
     mangle->addKnob (ids::formantLock, "Harmonic lock",
         "Pulls the three resonances off the vowel and onto **harmonics of the played note**. "
@@ -2073,16 +2247,6 @@ void SonitusEditor::buildPages()
     mangle->addKnob (ids::formantNotchDepth, "Notch depth",
         "How deep the hole goes -- 26.6 dB at the centre when full, and localised: two octaves "
         "away it is within 3 dB of untouched. At 0 it is bit-exactly out of the path.");
-
-    mangle->addHeading ("OUTPUT", 2);
-
-    mangle->addKnob (ids::output, "Output",
-        "Trim, after everything. Defaults to -6 dB because an instrument with unison and a tube "
-        "can comfortably exceed full scale, and clipping the host's bus is not a feature.");
-
-    mangle->addChoice (ids::oversampling, "Oversampling",
-        "How much headroom the nonlinear stages get. Auto targets about 192 kHz internally and "
-        "reads your session's rate to decide. See the note below for what it is doing right now.");
 
     pages_[kManglePage] = std::move (mangle);
 
@@ -2118,12 +2282,15 @@ void SonitusEditor::showPage (int index)
         const bool active = i == currentPage_;
         const auto accent = kPageAccents[static_cast<std::size_t> (i)].accent;
 
-        // The inactive tabs keep a trace of their own page's colour, so the row
-        // is a key to where everything is rather than six identical buttons.
+        // The inactive tabs are dark plates with their own page's colour on
+        // them, so the row is a key to where everything is rather than six
+        // identical buttons. Plates rather than a wash of the accent, because a
+        // translucent tint over the bright chassis comes out pale and all six
+        // end up looking the same shade of nothing.
         tab.setColour (juce::TextButton::buttonColourId,
-                       active ? accent : accent.withAlpha (0.14f));
+                       active ? accent : kGroupPanel.darker (0.10f));
         tab.setColour (juce::TextButton::textColourOffId,
-                       active ? palette_.background : accent.withAlpha (0.85f));
+                       active ? kGroupPanel.darker (0.4f) : accent);
     }
 
     // `false`: the viewport must not take ownership -- the pages outlive the
@@ -2308,16 +2475,11 @@ void SonitusEditor::timerCallback()
 
 void SonitusEditor::paint (juce::Graphics& g)
 {
-    // A shallow gradient rather than a flat fill. The panel edges then read as
-    // edges against something, which a single flat colour behind them does not
-    // give -- and it costs one gradient per repaint.
-    const auto area = getLocalBounds().toFloat();
-
-    g.setGradientFill (juce::ColourGradient (palette_.background.brighter (0.045f),
-                                             area.getCentreX(), area.getY(),
-                                             palette_.background, area.getCentreX(), area.getBottom(),
-                                             false));
-    g.fillRect (area);
+    // Brushed metal, cached -- see MetalBackground. The specular band sits high
+    // so it catches the header rather than the middle of the controls, which is
+    // where a real panel's light would fall and where it is least in the way of
+    // reading a knob.
+    metal_.paint (g, getLocalBounds(), 0.16f);
 }
 
 void SonitusEditor::resized()

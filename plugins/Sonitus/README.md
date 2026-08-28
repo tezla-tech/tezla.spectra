@@ -574,13 +574,16 @@ it would have been when the next note arrives.
 | **Phase wash** | Allpass cascade, 8 stages, LFO on the centre, polyphonic |
 | **Metal fold** | Ring and folder, ×8 oversampling |
 | **Just growl** | For a pure scale — load one on the TUNING page |
+| **Gate stab** | The hold doing its job: full level for a moment, then gone — the release starts from the top every time, which sustain-at-1 and short notes cannot give |
+| **Slow bloom** | A pad, twenty seconds up and six down, with a *negative* attack tension so it starts slowly and arrives — the half of the tension control the old Shape knob could not reach — and an LFO fading in behind it |
+| **Sideband growl** | The LFO at 140 Hz on the cutoff, where it stops being a wobble and becomes modulation, key-tracked so the relationship holds up the keyboard |
 | **Kargyraa** | The doubled voice: a legato drone, the period halved, and a mod envelope walking the vowel over the top — the folds and the tongue doing two independent things at once, which is what the style actually is |
 
 ---
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **617 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **618 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.
@@ -642,6 +645,43 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+**A brushed silver chassis with dark control plates.** The pink-tinted panel had
+pink knobs sitting on it and both stopped reading; a saturated accent needs
+somewhere uncoloured to sit against. The chassis is now painted metal — a
+gradient, a specular band and hashed striations, cached in an image so it costs
+one blit — and it shows *between* the plates rather than being covered by a page
+fill. The plates stay dark because that is what the accents need: measured
+across the six, the lightest a plate can be and still clear 4.5:1 is L 0.34.
+
+**Groups can share a row.** SUB/RING/FOLD, SYNC/PM and KARGYRAA are one band
+now, and so are FILTER/KEYBOARD and VOWEL/OVERTONE. Widths are proportional to
+each group's column count, so the cells come out the same size across a band.
+
+**Output and Oversampling moved to the header**, beside A/B and COPY, on every
+plugin that has them — and **Mix** joins them on the ones that have a dry/wet
+(Emberdrive and Anvil). They are the same controls on every plugin in the suite
+and the last thing anybody touches; hunting for the output trim on a different
+tab in each plugin is the sort of thing that is only annoying twenty times a day.
+
+**Sonitus's output now defaults to 0 dB**, unity, like every other plugin in the
+suite already did. The -6 dB it had was a safety margin nobody asked for, paid
+for in dynamic range on the way into the mixer.
+
+**A TIPS switch in the header.** The tooltips here are whole paragraphs — they
+are how the plugins document themselves — which is worth a great deal on the
+first day and is in the way on the fiftieth. The setting is saved with the
+project.
+
+**Seven more built-in tunings**, each derived from its definition: the harmonic
+series an octave higher, the **undertone series** (the harmonic series
+reflected, and the scale-shaped twin of what kargyraa does in the time domain),
+just 7-limit, a seventeen-note Pythagorean chain, and 17-, 22- and 41-TET.
+Slendro and pelog are deliberately **not** here: they vary per gamelan and there
+is no definition to derive, so shipping one would be shipping somebody's
+measurements.
+
+**Three more presets** — see the table above.
 
 **AHDSR, and tension that goes both ways.** A hold stage at full level between
 the attack and the decay, and the single one-way Shape control replaced by three

@@ -357,6 +357,9 @@ CapstoneEditor::CapstoneEditor (CapstoneProcessor& processorToUse)
 
     header_->setActiveSlot (capstone_.getAbCompare().isSlotB());
     header_->setOtherSlotFilled (capstone_.getAbCompare().otherSlotFilled());
+
+    // The suite-wide pair, in the header rather than at the bottom of a page.
+    header_->attachSuiteControls (capstone_.getState(), nullptr, ids::output, nullptr);
     addAndMakeVisible (*header_);
 
     buildPages();

@@ -12,6 +12,36 @@
 namespace tezla::sonitus
 {
 
+/// Brushed metal, painted once and kept.
+///
+/// A vertical gradient, a specular band across the upper third, and fine
+/// horizontal striations -- which is what brushed aluminium actually looks
+/// like, and none of it is expensive *once*. Doing it live would be a few
+/// thousand `drawLine` calls per repaint at thirty frames a second, so the
+/// whole thing goes into an image and every paint is one blit. The image is
+/// rebuilt only when the size changes.
+///
+/// The striations are hashed from their own row index rather than drawn from a
+/// running generator, for the same reason `Lfo`'s sample-and-hold is: the
+/// texture is then a property of the panel rather than of how many times it has
+/// been resized, so it does not shimmer when the window is dragged.
+class MetalBackground
+{
+public:
+    /// `highlightAt` is where the specular band falls, as a fraction of the
+    /// height.
+    void paint (juce::Graphics& g, juce::Rectangle<int> bounds, float highlightAt = 0.30f);
+
+private:
+    void render (int width, int height, float highlightAt);
+
+    /// splitmix64's finaliser, to [-1, 1]. See the definition.
+    [[nodiscard]] static double hashed (std::uint64_t index);
+
+    juce::Image image_;
+    float highlight_ { -1.0f };
+};
+
 /// Wraps, so the "what this is doing right now" sentence is never truncated.
 class WrappingLabel final : public juce::Label
 {
@@ -127,7 +157,11 @@ public:
     /// drawn differently: the name is the thing being looked for, and setting
     /// the whole line in one weight makes a page of six headings read as six
     /// sentences rather than as six labels.
-    void addHeading (const juce::String& text, int columns);
+    /// `sameRow` puts this group **beside** the previous one rather than under
+    /// it, sharing the band in proportion to their column counts. Three groups
+    /// of two or three controls each stacked vertically is three headings and a
+    /// page of air; side by side they are one band.
+    void addHeading (const juce::String& text, int columns, bool sameRow = false);
 
     void addKnob (const juce::String& parameterId, const juce::String& name,
                   const juce::String& tooltip);
@@ -155,6 +189,9 @@ private:
         juce::String detail;
         int columns { 5 };
 
+        /// Shares its band with the group before it.
+        bool sameRow { false };
+
         /// Null for a gap, so the grid can leave a hole without a placeholder
         /// component to own.
         std::vector<ParameterCell*> cells;
@@ -165,6 +202,10 @@ private:
     [[nodiscard]] Group& currentGroup();
     [[nodiscard]] int rowsIn (const Group& group) const;
     [[nodiscard]] int totalRows() const;
+
+    /// How many bands the page has -- a band being one group, or several
+    /// sharing a row.
+    [[nodiscard]] int bandCount() const;
 
     void add (std::unique_ptr<ParameterCell> cell);
 
@@ -433,7 +474,15 @@ private:
     /// before it, and cleared from their pages in the destructor either way.
     std::array<std::unique_ptr<ui::KnobLookAndFeel>, 6> pageLookAndFeels_;
 
-    juce::TooltipWindow tooltips_ { this, 500 };
+    /// Held by pointer so it can be *destroyed*, which is the only reliable way
+    /// to turn tooltips off: JUCE has no "disabled" state for one, and setting
+    /// the delay enormous still shows a tip to anybody who rests on a control.
+    std::unique_ptr<juce::TooltipWindow> tooltips_;
+
+    void setTooltipsEnabled (bool enabled);
+
+    /// The brushed metal behind everything, cached at the window's size.
+    MetalBackground metal_;
 
     std::unique_ptr<ui::HeaderBar> header_;
 

@@ -338,6 +338,9 @@ AnvilEditor::AnvilEditor (AnvilProcessor& processorToUse)
 
     header_->setActiveSlot (anvil_.getAbCompare().isSlotB());
     header_->setOtherSlotFilled (anvil_.getAbCompare().otherSlotFilled());
+
+    // The suite-wide pair, in the header rather than at the bottom of a page.
+    header_->attachSuiteControls (anvil_.getState(), ids::mix, ids::output, ids::oversampling);
     addAndMakeVisible (*header_);
 
     buildPages();

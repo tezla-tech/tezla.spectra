@@ -607,3 +607,99 @@ TEZLA_TEST (swapping_a_keyboard_map_moves_it_rather_than_copying_it)
     // starts with.
     CHECK (map.size == 0);
 }
+
+TEZLA_TEST (the_new_scales_are_the_arithmetic_they_claim_to_be)
+{
+    const auto cents = [] (double ratio) { return 1200.0 * std::log2 (ratio); };
+
+    const auto named = [] (const char* name)
+    {
+        for (const auto& scale : scales::all())
+            if (scale.name == name)
+                return scale;
+
+        return Scale {};
+    };
+
+    // The undertone series is the harmonic series reflected: its steps *grow*
+    // as they climb where the overtone series' shrink. Checked as that property
+    // rather than against a table, because a table would pass even if the
+    // reflection were the wrong way round.
+    {
+        const auto under = named ("Undertone series 16-9");
+
+        CHECK (under.ratios.size() == 8);
+        CHECK_NEAR (cents (under.ratios[1]), 111.731, 1.0e-3);
+        CHECK_NEAR (cents (under.ratios[7]), 996.090, 1.0e-3);
+
+        double previousGap = 0.0;
+
+        for (std::size_t i = 1; i < under.ratios.size(); ++i)
+        {
+            const double gap = cents (under.ratios[i]) - cents (under.ratios[i - 1]);
+
+            CHECK (gap > previousGap);
+            previousGap = gap;
+        }
+    }
+
+    // And the overtone series does the opposite, which is what makes the pair a
+    // mirror rather than two arbitrary scales.
+    {
+        const auto over = named ("Harmonic series 8-16");
+
+        double previousGap = 1000.0;
+
+        for (std::size_t i = 1; i < over.ratios.size(); ++i)
+        {
+            const double gap = cents (over.ratios[i]) - cents (over.ratios[i - 1]);
+
+            CHECK (gap < previousGap);
+            previousGap = gap;
+        }
+    }
+
+    // The harmonic seventh, which is what 7-limit is for: 969 cents, a full 31
+    // cents flat of 12-TET's 1000.
+    {
+        const auto seven = named ("Just 7-limit");
+
+        CHECK (seven.ratios.size() == 12);
+        CHECK_NEAR (cents (seven.ratios[10]), 968.826, 1.0e-3);
+        CHECK_NEAR (cents (seven.ratios[3]), 266.871, 1.0e-3);   // septimal minor third
+        CHECK_NEAR (cents (seven.ratios[6]), 582.512, 1.0e-3);   // septimal tritone
+    }
+
+    // Seventeen notes from a chain of pure fifths, folded into the octave and
+    // sorted. The chain does not close -- which is the whole reason the scale
+    // has both a sharp and a flat for each black key -- so the degrees must all
+    // be distinct, which a fold that is off by an octave quietly breaks.
+    {
+        const auto chain = named ("Pythagorean 17");
+
+        CHECK (chain.ratios.size() == 17);
+        CHECK_NEAR (chain.ratios[0], 1.0, 1.0e-12);
+
+        bool foundPureFifth = false;
+
+        for (double ratio : chain.ratios)
+            if (std::abs (cents (ratio) - 701.955) < 1.0e-3)
+                foundPureFifth = true;
+
+        CHECK (foundPureFifth);
+
+        for (std::size_t i = 1; i < chain.ratios.size(); ++i)
+            CHECK (chain.ratios[i] > chain.ratios[i - 1] + 1.0e-9);
+    }
+
+    // The equal divisions are one line each and still worth checking: a step of
+    // 22-TET is 1200/22 cents and nothing else.
+    for (const auto& entry : std::vector<std::pair<const char*, int>> {
+             { "17-TET", 17 }, { "22-TET", 22 }, { "41-TET", 41 } })
+    {
+        const auto scale = named (entry.first);
+
+        CHECK (static_cast<int> (scale.ratios.size()) == entry.second);
+        CHECK_NEAR (cents (scale.ratios[1]), 1200.0 / entry.second, 1.0e-9);
+    }
+}

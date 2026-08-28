@@ -29,6 +29,7 @@ constexpr auto kStateTypeName = "SonitusState";
 constexpr auto kScaleTextProperty = "scalaText";
 constexpr auto kScaleNameProperty = "scaleName";
 constexpr auto kKeyboardMapProperty = "keyboardMapText";
+constexpr auto kTooltipsProperty = "tooltipsEnabled";
 
 /// How fast an LFO can be set to run.
 ///
@@ -760,7 +761,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::output, kSchemaV1 }, "Output",
-        juce::NormalisableRange<float> { -36.0f, 12.0f }, -6.0f, decibelAttributes()));
+        juce::NormalisableRange<float> { -36.0f, 12.0f }, 0.0f, decibelAttributes()));
 
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::oversampling, kSchemaV1 }, "Oversampling",
@@ -1711,6 +1712,93 @@ const std::vector<Preset>& presets()
         },
         // -------------------------------------------------------------------
         {
+            // The hold stage doing what it is for: full level for a moment,
+            // then gone. A gated stab rather than a plucked one -- the release
+            // starts from the top every time, which is what setting the sustain
+            // to 1 and playing short notes cannot give you.
+            "Gate stab -- the hold, doing its job",
+            {
+                { ids::levelA, 1.0f }, { ids::levelB, 0.8f }, { ids::semitonesB, -12.0f },
+                { ids::unisonA, 3.0f }, { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
+
+                { ids::cutoff, 3200.0f }, { ids::resonance, 0.4f },
+                { ids::filterDrive, 0.35f },
+
+                { ids::ampAttack, 0.001f }, { ids::ampHold, 0.09f },
+                { ids::ampDecay, 0.012f }, { ids::ampSustain, 0.0f },
+                { ids::ampRelease, 0.03f },
+                { ids::ampAttackT, 0.0f }, { ids::ampDecayT, 0.9f },
+
+                { ids::keyMode, 1.0f },
+                { ids::tubeDrive, 10.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // A pad, which this instrument was not built for and turns out to
+            // be good at: twenty-second attack and release, negative tension on
+            // the attack so it starts slowly and arrives rather than jumping,
+            // and an LFO fading in behind it.
+            "Slow bloom -- a pad, the long way up",
+            {
+                { ids::levelA, 0.9f }, { ids::levelB, 0.9f }, { ids::centsB, 7.0f },
+                { ids::unisonA, 4.0f }, { ids::detuneA, 14.0f }, { ids::spreadA, 0.7f },
+                { ids::unisonB, 4.0f }, { ids::detuneB, 11.0f }, { ids::spreadB, 0.7f },
+
+                { ids::cutoff, 1400.0f }, { ids::resonance, 0.15f },
+                { ids::filterTrack, 0.6f },
+
+                // Negative tension: slow at first, accelerating. The half of
+                // the control the old Shape knob could not reach.
+                { ids::ampAttack, 4.0f }, { ids::ampAttackT, -0.7f },
+                { ids::ampDecay, 3.0f }, { ids::ampSustain, 0.85f },
+                { ids::ampRelease, 6.0f }, { ids::ampReleaseT, 0.5f },
+
+                { ids::polyphony, 6.0f },
+
+                // The vibrato creeping in after the note has settled.
+                { ids::lfo2Rate, 4.2f }, { ids::lfo2Att, 2.5f }, { ids::lfo2Retrig, 1.0f },
+                { ids::modSource (0), 8.0f },   // LFO 2
+                { ids::modDest (0), 13.0f },    // pitch
+                { ids::modDepth (0), 0.06f },
+
+                { ids::formantMix, 0.35f }, { ids::formantMorph, 0.6f },
+                { ids::splitHz, 60.0f },
+                { ids::output, -3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The LFO at the top of its new range, where it stops being a
+            // wobble and becomes modulation: 140 Hz on the cutoff makes
+            // sidebands rather than movement, and key tracking keeps the
+            // relationship constant up the keyboard.
+            "Sideband growl -- the LFO as an oscillator",
+            {
+                { ids::levelA, 1.0f }, { ids::levelB, 0.6f }, { ids::semitonesB, 7.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 9.0f },
+
+                { ids::cutoff, 700.0f }, { ids::resonance, 0.55f },
+                { ids::filterDrive, 0.5f }, { ids::filterTrack, 0.4f },
+
+                { ids::lfo1Rate, 140.0f }, { ids::lfo1Key, 1.0f },
+                { ids::lfo1Retrig, 1.0f }, { ids::lfo1Att, 0.15f },
+
+                { ids::modSource (0), 7.0f },   // LFO 1
+                { ids::modDest (0), 1.0f },     // cutoff
+                { ids::modDepth (0), 0.35f },
+
+                { ids::ampAttack, 0.004f }, { ids::ampSustain, 0.9f },
+                { ids::ampRelease, 0.12f },
+
+                { ids::keyMode, 1.0f },
+                { ids::tubeDrive, 12.0f },
+                { ids::oversampling, 3.0f },    // x4
+                { ids::output, -4.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
             // Kargyraa, close to what a singer does with it: a drone in the
             // bass, the period doubled, and the vowel filter over the top --
             // which is the whole trick, because the throat's subharmonic and
@@ -1816,6 +1904,7 @@ void SonitusProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty (kScaleNameProperty, scaleName_, nullptr);
     state.setProperty (kScaleTextProperty, scalaText_, nullptr);
     state.setProperty (kKeyboardMapProperty, keyboardMapText_, nullptr);
+    state.setProperty (kTooltipsProperty, tooltipsEnabled_, nullptr);
 
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
@@ -1836,6 +1925,8 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     const juce::String name = tree.getProperty (kScaleNameProperty, "").toString();
     const juce::String text = tree.getProperty (kScaleTextProperty, "").toString();
+    tooltipsEnabled_ = tree.getProperty (kTooltipsProperty, true);
+
     const juce::String map = tree.getProperty (kKeyboardMapProperty, "").toString();
 
     // Restore the tuning, and **fall back to 12-TET if it does not parse**

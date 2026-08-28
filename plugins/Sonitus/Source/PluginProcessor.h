@@ -377,6 +377,13 @@ public:
 
     /// The tracked note's envelope level, 0 for the amplitude envelope and 1 or
     /// 2 for the mod ones. The panel draws it as a playhead on the curve.
+    /// Whether the panel shows its tooltips. Not a parameter -- it changes
+    /// nothing about the sound and a host has no business automating it -- but
+    /// it is saved with the state, because a preference that resets every time
+    /// the plugin is reopened is not a preference.
+    [[nodiscard]] bool getTooltipsEnabled() const noexcept { return tooltipsEnabled_; }
+    void setTooltipsEnabled (bool enabled) noexcept { tooltipsEnabled_ = enabled; }
+
     [[nodiscard]] double getEnvelopeLevel (int index) const noexcept
     {
         if (index < 0 || index > 2)
@@ -473,6 +480,8 @@ private:
     /// project that reopens on another machine has to reproduce the tuning
     /// without needing the file, which means storing the file.
     juce::String scalaText_;
+
+    bool tooltipsEnabled_ { true };
     juce::String keyboardMapText_;
     juce::String scaleName_;
 
