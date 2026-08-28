@@ -66,6 +66,7 @@
 #include <atomic>
 #include <cmath>
 
+#include <tezla/dsp/Divisions.hpp>
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Comb.hpp>
@@ -205,6 +206,16 @@ struct EngineParameters
 
     dsp::Lfo::Wave lfo1Wave { dsp::Lfo::Wave::sine };
     double lfo1RateHz { 2.0 };
+
+    /// Tempo sync. On, the rate knob stands aside and `lfo1Division` sets the
+    /// speed from the host tempo; with retrigger off and the transport
+    /// running, the *phase* is nailed to the bar as well -- the same bar is
+    /// the same wobble on every pass, which is the whole reason producers
+    /// sync LFOs. Retriggered, the phase belongs to the note and only the
+    /// rate is synced.
+    bool lfo1Sync { false };
+    int lfo1Division { dsp::defaultDivision };
+
     double lfo1Smooth { 0.0 };
 
     /// Restart the LFO from the top of its cycle on every note-on.
@@ -237,6 +248,8 @@ struct EngineParameters
 
     dsp::Lfo::Wave lfo2Wave { dsp::Lfo::Wave::triangle };
     double lfo2RateHz { 0.25 };
+    bool lfo2Sync { false };
+    int lfo2Division { dsp::defaultDivision };
     double lfo2Smooth { 0.0 };
     bool lfo2Retrigger { false };
     double lfo2KeyTrack { 0.0 };
@@ -261,6 +274,13 @@ struct EngineParameters
     /// Whether the sub band is summed to mono. On by default, because a wide
     /// sub is the single most common way to lose a bass on a club system.
     bool subMono { true };
+
+    /// Whether the split exists at all. Off routes the **whole** signal down
+    /// the body chain -- no crossover, no sub mono, nothing between the voices
+    /// and the mangle but one 5 Hz DC blocker on the way out. The "pure"
+    /// setting, for people who split on a DAW mixer bus instead and do not
+    /// want the LR4's phase rotation in the path twice.
+    bool subSplit { true };
 
     // ---- the mangle --------------------------------------------------------
 
@@ -454,6 +474,7 @@ private:
     void advanceGlobalSources (int samples) noexcept;
     void renderChunk (double* left, double* right, int numSamples) noexcept;
     void mangle (double& left, double& right) noexcept;
+    [[nodiscard]] const VoiceParameters& snappedVoice() noexcept;
     void updateTilt() noexcept;
 
     [[nodiscard]] double combDelaySeconds() const noexcept;
@@ -483,6 +504,16 @@ private:
     dsp::LinkwitzRiley4<double> split_[2];
     dsp::DcBlocker<double> subBlocker_[2];
 
+    /// The SPLIT switch, smoothed to a 30 ms crossfade: 1 is split on. See the
+    /// comment in `mangle` for why this is arithmetic rather than a branch.
+    dsp::SmoothedValue<double> splitMix_;
+
+    /// The pure path's only protection: with the split off, nothing separates
+    /// the tube's asymmetry from the output, and CLAUDE.md section 7 calls DC
+    /// a defect. First order at 5 Hz, same corner as the sub blocker, so it
+    /// cannot thin the sub it exists to protect.
+    dsp::DcBlocker<double> fullBlocker_[2];
+
     dsp::TriodeStage tube_[2];
     dsp::Comb comb_;
     dsp::Phaser phaser_;
@@ -490,6 +521,11 @@ private:
 
     dsp::Biquad<double> tiltLow_[2];
     dsp::Biquad<double> tiltHigh_[2];
+
+    /// The voice parameters with any snapped envelope times applied -- see
+    /// snappedVoice() in the cpp. A member rather than a local so the copy is
+    /// storage reuse, not an allocation.
+    VoiceParameters snappedVoice_;
 
     dsp::SmoothedValue<double> outputGain_;
     dsp::SmoothedValue<double> tubeGain_;

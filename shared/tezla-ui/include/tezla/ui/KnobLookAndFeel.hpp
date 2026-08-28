@@ -387,12 +387,23 @@ public:
         if (thumbSize <= 0)
             return;
 
-        const auto thumb = isVertical
-            ? juce::Rectangle<int> { x + width / 2 - 2, thumbStart, 4, thumbSize }
-            : juce::Rectangle<int> { thumbStart, y + height / 2 - 2, thumbSize, 4 };
+        // A visible rail, and a thumb wide enough to aim at. The first
+        // version was a 4 px sliver with no track, and the user's report was
+        // exact: the pages scroll and nothing on screen says so. The rail is
+        // what announces "there is more below"; the thumb fills most of the
+        // bar's width so the whole strip is one obvious handle.
+        const auto rail = juce::Rectangle<int> { x, y, width, height };
 
-        g.setColour (palette_.accent.withAlpha (isMouseDown ? 0.85f : (isMouseOver ? 0.6f : 0.35f)));
-        g.fillRoundedRectangle (thumb.toFloat(), 2.0f);
+        g.setColour (palette_.panel.brighter (0.10f));
+        g.fillRoundedRectangle (rail.toFloat(), 4.0f);
+
+        const int girth = (isVertical ? width : height) - 4;
+        const auto thumb = isVertical
+            ? juce::Rectangle<int> { x + 2, thumbStart, girth, std::max (thumbSize, 28) }
+            : juce::Rectangle<int> { thumbStart, y + 2, std::max (thumbSize, 28), girth };
+
+        g.setColour (palette_.accent.withAlpha (isMouseDown ? 0.90f : (isMouseOver ? 0.70f : 0.45f)));
+        g.fillRoundedRectangle (thumb.toFloat(), static_cast<float> (girth) * 0.5f);
     }
 
     /// Sized with the same font `drawTooltip` paints with, and wider than the

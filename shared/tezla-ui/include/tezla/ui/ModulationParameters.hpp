@@ -17,6 +17,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <tezla/dsp/Divisions.hpp>
 #include <tezla/dsp/Modulation.hpp>
 
 #include "ModulationIds.hpp"
@@ -24,33 +25,13 @@
 namespace tezla::ui::modulation
 {
 
-/// Note divisions for a tempo-synced LFO, as cycles per beat.
-///
-/// **Append-only, exactly like a parameter ID**: a choice parameter stores an
-/// index, so inserting a division silently retunes every synced LFO in every
-/// saved project that uses it.
-///
-/// A 4/4 bar is four beats, so one cycle a bar is 0.25 cycles per beat. A
-/// triplet fits three in the space of two, hence 1.5x; a dotted note lasts one
-/// and a half times as long, hence 2/3.
-struct Division
-{
-    const char* name;
-    double cyclesPerBeat;
-};
-
-inline constexpr Division divisions[] {
-    { "8 bars", 0.03125 }, { "4 bars", 0.0625 }, { "2 bars", 0.125 },
-    { "1 bar",  0.25 },    { "1/2",    0.5 },    { "1/4",    1.0 },
-    { "1/8",    2.0 },     { "1/16",   4.0 },    { "1/32",   8.0 },
-    { "1/2 T",  0.75 },    { "1/4 T",  1.5 },    { "1/8 T",  3.0 },
-    { "1/2 D",  1.0 / 3.0 }, { "1/4 D", 2.0 / 3.0 }, { "1/8 D", 4.0 / 3.0 }
-};
-
-inline constexpr int numDivisions = static_cast<int> (std::size (divisions));
-
-/// One cycle a bar, which is where a sweep usually wants to be.
-inline constexpr int defaultDivision = 3;
+/// The division table lives in tezla-dsp now -- the engines need it and are
+/// framework-free -- and these aliases keep every existing use of
+/// `modulation::divisions` spelling exactly what it always spelt.
+using dsp::Division;
+using dsp::divisions;
+using dsp::numDivisions;
+using dsp::defaultDivision;
 
 /// What a slot's source can be. Also append-only, and in the order
 /// `dsp::Modulation::Source` declares.

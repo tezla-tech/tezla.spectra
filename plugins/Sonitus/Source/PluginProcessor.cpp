@@ -18,7 +18,13 @@ namespace
 // forever: the version hint feeds the VST3 parameter ID, so moving it on a live
 // parameter is indistinguishable from renaming it. CLAUDE.md section 8.
 constexpr int kSchemaV1 = 1;
-constexpr int kStateSchemaVersion = kSchemaV1;
+
+/// Phase 3. Every parameter added by the phase-3 work carries this, and
+/// existing parameters keep V1 forever -- the version hint feeds the VST3
+/// parameter ID, so bumping a live one is indistinguishable from renaming it.
+constexpr int kSchemaV2 = 2;
+
+constexpr int kStateSchemaVersion = kSchemaV2;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// Where the tuning is stashed inside the state tree.
@@ -452,6 +458,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                    ids::ampRelease, ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT },
                  "Amp", 0.8f);
 
+    // Snap-to-tempo, one per envelope. The quantising happens in the engine,
+    // which knows the live tempo -- Engine::snappedVoice.
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::ampSnap, kSchemaV2 }, "Amp snap", false));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::ampVelocity, kSchemaV1 }, "Velocity to level",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.5f, percentAttributes()));
@@ -460,9 +471,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                    ids::env1Release, ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT },
                  "Env 1", 0.0f);
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::env1Snap, kSchemaV2 }, "Env 1 snap", false));
+
     addEnvelope ({ ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
                    ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
                  "Env 2", 0.0f);
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::env2Snap, kSchemaV2 }, "Env 2 snap", false));
 
     // ---- keyboard -----------------------------------------------------------
 
@@ -506,6 +523,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                 return juce::String (value, value < 10.0f ? 2 : 1) + " Hz";
             })));
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::lfo1Sync, kSchemaV2 }, "LFO 1 sync", false));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::lfo1Div, kSchemaV2 }, "LFO 1 division",
+        choices::lfoDivision, dsp::defaultDivision));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo1Smooth, kSchemaV1 }, "LFO 1 smooth",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
@@ -535,6 +559,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
                 return juce::String (value, value < 10.0f ? 2 : 1) + " Hz";
             })));
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::lfo2Sync, kSchemaV2 }, "LFO 2 sync", false));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::lfo2Div, kSchemaV2 }, "LFO 2 division",
+        choices::lfoDivision, dsp::defaultDivision));
 
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::lfo2Smooth, kSchemaV1 }, "LFO 2 smooth",
@@ -629,6 +660,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::subMono, kSchemaV1 }, "Sub to mono", true));
+
+    // Default ON, which is the engine that shipped -- a project saved before
+    // this parameter existed reopens sounding the same (CLAUDE.md section 8).
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::subSplit, kSchemaV2 }, "Sub split", true));
 
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::order, kSchemaV1 }, "Order", choices::order, 0));
@@ -918,14 +954,17 @@ void SonitusProcessor::pullParameters()
 
     pullEnvelope (v.amp, ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain,
                   ids::ampRelease, ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT);
+    v.amp.snap = valueOf (state_, ids::ampSnap) > 0.5f;
 
     v.ampVelocity = valueOf (state_, ids::ampVelocity);
 
     pullEnvelope (v.mod1, ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain,
                   ids::env1Release, ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT);
+    v.mod1.snap = valueOf (state_, ids::env1Snap) > 0.5f;
 
     pullEnvelope (v.mod2, ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain,
                   ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT);
+    v.mod2.snap = valueOf (state_, ids::env2Snap) > 0.5f;
 
     v.level = 1.0;
 
@@ -996,12 +1035,16 @@ void SonitusProcessor::pullParameters()
 
     p.lfo1Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo1Wave));
     p.lfo1RateHz = valueOf (state_, ids::lfo1Rate);
+    p.lfo1Sync = valueOf (state_, ids::lfo1Sync) > 0.5f;
+    p.lfo1Division = indexOf (state_, ids::lfo1Div);
     p.lfo1Smooth = valueOf (state_, ids::lfo1Smooth);
     p.lfo1Retrigger = valueOf (state_, ids::lfo1Retrig) > 0.5f;
     p.lfo1KeyTrack = valueOf (state_, ids::lfo1Key);
     p.lfo1AttackSeconds = valueOf (state_, ids::lfo1Att);
     p.lfo2Wave = static_cast<dsp::Lfo::Wave> (indexOf (state_, ids::lfo2Wave));
     p.lfo2RateHz = valueOf (state_, ids::lfo2Rate);
+    p.lfo2Sync = valueOf (state_, ids::lfo2Sync) > 0.5f;
+    p.lfo2Division = indexOf (state_, ids::lfo2Div);
     p.lfo2Smooth = valueOf (state_, ids::lfo2Smooth);
     p.lfo2Retrigger = valueOf (state_, ids::lfo2Retrig) > 0.5f;
     p.lfo2KeyTrack = valueOf (state_, ids::lfo2Key);
@@ -1030,6 +1073,7 @@ void SonitusProcessor::pullParameters()
 
     p.splitHz = valueOf (state_, ids::splitHz);
     p.subMono = valueOf (state_, ids::subMono) > 0.5f;
+    p.subSplit = valueOf (state_, ids::subSplit) > 0.5f;
 
     p.order = static_cast<MangleOrder> (indexOf (state_, ids::order));
     p.tubeDriveDb = valueOf (state_, ids::tubeDrive);

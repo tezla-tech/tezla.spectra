@@ -1203,23 +1203,23 @@ EnvelopePage::EnvelopePage (juce::AudioProcessorValueTreeState& state, ui::Palet
               { ids::ampAttack, ids::ampHold, ids::ampDecay, ids::ampSustain, ids::ampRelease,
                 ids::ampAttackT, ids::ampDecayT, ids::ampReleaseT },
               ids::ampVelocity, "Velocity",
-              "How much of the level comes from how hard the note was played.");
+              "How much of the level comes from how hard the note was played.", ids::ampSnap);
 
     addBlock (state, "MOD ENVELOPE 1", "point it at something in MOD",
               { ids::env1Attack, ids::env1Hold, ids::env1Decay, ids::env1Sustain, ids::env1Release,
                 ids::env1AttackT, ids::env1DecayT, ids::env1ReleaseT },
-              nullptr, {}, {});
+              nullptr, {}, {}, ids::env1Snap);
 
     addBlock (state, "MOD ENVELOPE 2", "and the mangle takes these too",
               { ids::env2Attack, ids::env2Hold, ids::env2Decay, ids::env2Sustain, ids::env2Release,
                 ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT },
-              nullptr, {}, {});
+              nullptr, {}, {}, ids::env2Snap);
 }
 
 void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
                              const juce::String& detail, const EnvelopeEditor::Ids& ids_,
                              const char* extraId, const juce::String& extraName,
-                             const juce::String& extraTooltip)
+                             const juce::String& extraTooltip, const char* snapId)
 {
     Block block;
 
@@ -1270,6 +1270,19 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
 
     if (extraId != nullptr)
         knob (extraId, extraName, extraTooltip);
+
+    // The tempo grid. A toggle rather than a knob, in the same cell grid.
+    if (snapId != nullptr)
+    {
+        auto cell = std::make_unique<ToggleCell> (state, snapId, "Snap",
+            "Quantises Attack, Hold, Decay and Release to note lengths at the host tempo -- "
+            "nearest in musical distance, from 1/32 up to 8 bars. Times under half a 1/32 pass "
+            "through untouched, so an instant attack stays instant. The knobs keep their "
+            "positions; the sound follows the grid, live, when the tempo changes.",
+            palette_);
+        addAndMakeVisible (*cell);
+        block.knobs.push_back (std::move (cell));
+    }
 
     blocks_.push_back (std::move (block));
 }
@@ -1735,7 +1748,9 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     viewport_.setComponentID ("pages");
     viewport_.setScrollBarsShown (true, false);
-    viewport_.setScrollBarThickness (9);
+    // 14 px, up from 9: the user could not tell the pages scrolled at all.
+    // The width pairs with the rail-and-thumb drawing in KnobLookAndFeel.
+    viewport_.setScrollBarThickness (14);
     addAndMakeVisible (viewport_);
 
     // The MOD page's palette, because that is the only page it appears on --
@@ -2046,13 +2061,17 @@ void SonitusEditor::buildPages()
 
     auto mod = std::make_unique<ControlPage> (state, paletteForPage (kModPage));
 
-    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 6);
+    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 8);
 
     mod->addChoice (ids::lfo1Wave, "Wave", "Its shape. Sample & hold steps; smooth random glides.");
     mod->addKnob (ids::lfo1Rate, "Rate",
         "How fast, in hertz. **Zero is a legitimate setting and is the brief's original trick** "
         "-- the rate pinned at nothing so the depth is drawn from somewhere else entirely. Here "
         "that somewhere else is the sequencer below, or the host's automation on the depth.");
+    mod->addToggle (ids::lfo1Sync, "Sync",
+        "Locks the rate to the host tempo: the Rate knob stands aside and the division beside this picks the speed. With Retrig off and the transport running, the *phase* locks to the song position too -- rewind and the same bar is the same wobble, which is the whole reason to sync. With Retrig on, the phase belongs to the note and only the rate is synced.");
+    mod->addChoice (ids::lfo1Div, "Division",
+        "The note length one LFO cycle spans when Sync is on. Key track and Seq-to-rate still multiply on top in retrigger mode; phase-locked (Sync on, Retrig off, transport running) the position comes straight from the bar and they stand aside.");
     mod->addKnob (ids::lfo1Smooth, "Smooth",
         "Rounds the corners off a square or a sample-and-hold, so a step becomes a slide.");
     mod->addToggle (ids::lfo1Retrig, "Retrig",
@@ -2062,10 +2081,14 @@ void SonitusEditor::buildPages()
     mod->addKnob (ids::lfo1Key, "Key track",
         "How far the LFO's rate follows the played note, referenced to middle C. At 100% an octave up doubles the rate, so the modulation stays in the same relationship to the pitch all the way up the keyboard -- which is how you get a phase or a wobble that reads as part of the tone rather than as an effect laid over it. At 0 the rate is the same at every pitch.");
 
-    mod->addHeading ("LFO 2", 6);
+    mod->addHeading ("LFO 2", 8);
 
     mod->addChoice (ids::lfo2Wave, "Wave", "Its shape.");
     mod->addKnob (ids::lfo2Rate, "Rate", "How fast, in hertz.");
+    mod->addToggle (ids::lfo2Sync, "Sync",
+        "Locks the rate to the host tempo: the Rate knob stands aside and the division beside this picks the speed. With Retrig off and the transport running, the *phase* locks to the song position too -- rewind and the same bar is the same wobble, which is the whole reason to sync. With Retrig on, the phase belongs to the note and only the rate is synced.");
+    mod->addChoice (ids::lfo2Div, "Division",
+        "The note length one LFO cycle spans when Sync is on. Key track and Seq-to-rate still multiply on top in retrigger mode; phase-locked (Sync on, Retrig off, transport running) the position comes straight from the bar and they stand aside.");
     mod->addKnob (ids::lfo2Smooth, "Smooth", "Rounds its corners off.");
     mod->addToggle (ids::lfo2Retrig, "Retrig",
         "Restarts the LFO from the top of its cycle every time a note is pressed. Free-running is right for a wobble that should keep its place across a phrase; retriggered is right for anything that has to line up with the note -- a sweep, a stab, a phase that has to start in the same place every time. On a reese the difference is the whole sound: with this on, every note gets the same phase relationship and the growl is repeatable.");
@@ -2093,28 +2116,9 @@ void SonitusEditor::buildPages()
         "of speeds, in octaves. With LFO 1 on the cutoff this is a wobble that changes tempo on "
         "the step, which is the thing that used to take an automation lane and a steady hand.");
 
-    mod->addHeading ("VOICE MATRIX -- one set of these per sounding note", 6);
-
-    for (int slot = 0; slot < VoiceParameters::kSlots; ++slot)
-    {
-        const auto number = juce::String (slot + 1);
-
-        mod->addChoice (ids::modSource (slot), "Src " + number,
-            "What drives slot " + number + ". These are the per-note sources: each voice has its "
-            "own envelopes, its own velocity and its own note-on random, so eight notes modulate "
-            "eight different ways.");
-
-        mod->addChoice (ids::modDest (slot), "To " + number,
-            "What slot " + number + " drives. Continuous controls only -- a switch reconfigures "
-            "rather than adjusts, and modulating one would mean rebuilding a filter every chunk.");
-
-        mod->addKnob (ids::modDepth (slot), "Depth " + number,
-            "How much, and which way. **The law is square, so this knob is fine at the bottom and "
-            "enormous at the top**: a tenth of the travel on Pitch is 72 cents and the end of it "
-            "is six octaves. Ten octaves on Cutoff, an octave on Detune, sixteen on PM. "
-            "Full depth is meant to be too much -- that is what it is for.");
-    }
-
+    // The global matrix first: it is the one the user reaches for -- the comb,
+    // the formant and the tube live there -- and the first thing on a page
+    // should be the thing the page is opened for.
     mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note", 6);
 
     for (int slot = 0; slot < EngineParameters::kGlobalSlots; ++slot)
@@ -2139,6 +2143,28 @@ void SonitusEditor::buildPages()
             "rather than a character, and a level swinging under an envelope is a hazard.");
     }
 
+    mod->addHeading ("VOICE MATRIX -- one set of these per sounding note", 6);
+
+    for (int slot = 0; slot < VoiceParameters::kSlots; ++slot)
+    {
+        const auto number = juce::String (slot + 1);
+
+        mod->addChoice (ids::modSource (slot), "Src " + number,
+            "What drives slot " + number + ". These are the per-note sources: each voice has its "
+            "own envelopes, its own velocity and its own note-on random, so eight notes modulate "
+            "eight different ways.");
+
+        mod->addChoice (ids::modDest (slot), "To " + number,
+            "What slot " + number + " drives. Continuous controls only -- a switch reconfigures "
+            "rather than adjusts, and modulating one would mean rebuilding a filter every chunk.");
+
+        mod->addKnob (ids::modDepth (slot), "Depth " + number,
+            "How much, and which way. **The law is square, so this knob is fine at the bottom and "
+            "enormous at the top**: a tenth of the travel on Pitch is 72 cents and the end of it "
+            "is six octaves. Ten octaves on Cutoff, an octave on Detune, sixteen on PM. "
+            "Full depth is meant to be too much -- that is what it is for.");
+    }
+
     pages_[kModPage] = std::move (mod);
 
     // ---- MANGLE --------------------------------------------------------------
@@ -2146,6 +2172,12 @@ void SonitusEditor::buildPages()
     auto mangle = std::make_unique<ControlPage> (state, paletteForPage (kManglePage));
 
     mangle->addHeading ("THE SPLIT -- the sub bypasses everything below", 5);
+
+    mangle->addToggle (ids::subSplit, "Split on",
+        "The whole crossover, on or off. Off is the pure path: no split, no sub mono, the "
+        "complete signal through the mangle and one gentle DC blocker on the way out -- for "
+        "when you want to band-split on a DAW mixer bus yourself instead of inside the "
+        "instrument. Costs nothing either way; the toggle crossfades over 30 ms.");
 
     mangle->addKnob (ids::splitHz, "Split",
         "Where the sub is taken out of the mangle. Below this the signal gets a DC blocker and "
@@ -2337,6 +2369,7 @@ void SonitusEditor::updateForSwitches()
     const int syncB = index (ids::syncB);
     const int shapeA = index (ids::shapeA);
     const int shapeB = index (ids::shapeB);
+    const int lfoSync = index (ids::lfo1Sync) + 2 * index (ids::lfo2Sync);
     const int latency = sonitus_.isPrepared() ? sonitus_.getLatencySamples() : -1;
 
     // The notch moves continuously, so it is rounded before being compared --
@@ -2348,7 +2381,8 @@ void SonitusEditor::updateForSwitches()
 
     if (combMode == shownCombMode_ && keyMode == shownKeyMode_ && oversample == shownOversample_
         && latency == shownLatency_ && syncB == shownSyncB_ && shapeA == shownShapeA_
-        && shapeB == shownShapeB_ && notch == shownNotch_ && scale == shownScale_)
+        && shapeB == shownShapeB_ && notch == shownNotch_ && scale == shownScale_
+        && lfoSync == shownLfoSync_)
         return;
 
     const bool combChanged = combMode != shownCombMode_;
@@ -2365,6 +2399,19 @@ void SonitusEditor::updateForSwitches()
     shownShapeB_ = shapeB;
     shownNotch_ = notch;
     shownScale_ = scale;
+    shownLfoSync_ = lfoSync;
+
+    // A synced LFO's Rate knob is inert and its Division is live; free, the
+    // other way round. Greyed rather than hidden, because a control that
+    // vanishes reads as a bug and one that moves without doing anything reads
+    // as a worse one.
+    if (auto* mod = controlPage (kModPage))
+    {
+        mod->setControlEnabled (ids::lfo1Rate, (lfoSync & 1) == 0);
+        mod->setControlEnabled (ids::lfo1Div, (lfoSync & 1) != 0);
+        mod->setControlEnabled (ids::lfo2Rate, (lfoSync & 2) == 0);
+        mod->setControlEnabled (ids::lfo2Div, (lfoSync & 2) != 0);
+    }
 
     auto* osc = controlPage (kOscPage);
     auto* filter = controlPage (kFilterPage);

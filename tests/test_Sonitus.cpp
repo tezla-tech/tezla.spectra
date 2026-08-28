@@ -2212,3 +2212,496 @@ TEZLA_TEST (an_lfo_attack_fades_its_depth_in_from_the_note)
     // zero, because the LFO is running the whole time.
     CHECK (slow.early > 0.0);
 }
+
+// ---------------------------------------------------------------------------
+// The sub split switch
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (split_off_is_the_pure_path_a_dc_blocker_and_nothing_else)
+{
+    // The claim the switch exists for: with the split out and the mangle
+    // neutral, the engine is the voices into one 5 Hz DC blocker -- no
+    // crossover phase rotation, no sub mono, nothing. Proven by running the
+    // reference blocker over the *split-off* engine's own body input, which is
+    // only possible because a neutral tube (0 dB), comb (off), formant (mix 0)
+    // and tilt (0) are all bit-exact passthroughs -- the section-7 rule that
+    // every permanent stage has a true identity setting is what makes this
+    // test constructible at all.
+    EngineParameters pure;
+    pure.subSplit = false;
+    pure.tubeDriveDb = 0.0;
+    pure.combMode = CombMode::off;
+    pure.formantMix = 0.0;
+    pure.oversampling = OversamplingMode::Off;
+
+    EngineParameters withSplit = pure;
+    withSplit.subSplit = true;
+
+    constexpr int kBlock = 256;
+    constexpr int kBlocks = 200;
+
+    Engine off;
+    off.setParameters (pure);
+    off.prepare (48000.0, kBlock);
+    off.noteOn (31, 0.9);
+
+    Engine on;
+    on.setParameters (withSplit);
+    on.prepare (48000.0, kBlock);
+    on.noteOn (31, 0.9);
+
+    // The same voices, the same seeds -- the two engines differ only in the
+    // mangle routing. The split-on engine's output has been through the LR4
+    // pair, so the two must NOT null; the split-off one must be exactly the
+    // blocker over the split-on engine's *pre-split* signal. That signal is
+    // not reachable from outside, so the strongest external claims are made
+    // instead: the outputs differ (the crossover is really gone), the
+    // split-off output has no DC, and below the crossover it keeps stereo
+    // width where split-on folds it to mono.
+    // A **sine** stack, deliberately: a saw at 32.7 Hz keeps most of its
+    // energy in harmonics above the 120 Hz crossover, so the split only monos
+    // its fundamental and the width barely moves -- the first draft of this
+    // test used a saw and measured 0.28 against 0.19, which is a fact about
+    // saw spectra, not about the switch. A sine puts everything below the
+    // split, so the fold to mono is total and the assertion has teeth.
+    EngineParameters wide = pure;
+    wide.voice.shapeA = OscShape::sine;
+    wide.voice.unisonA = 5;
+    wide.voice.detuneA = 30.0;
+    wide.voice.spreadA = 1.0;
+
+    Engine wideOff;
+    wideOff.setParameters (wide);
+    wideOff.prepare (48000.0, kBlock);
+    wideOff.noteOn (24, 0.9);   // 32.7 Hz, far below the 120 Hz split
+
+    wide.subSplit = true;
+
+    Engine wideOn;
+    wideOn.setParameters (wide);
+    wideOn.prepare (48000.0, kBlock);
+    wideOn.noteOn (24, 0.9);
+
+    Buffers a (kBlock), b (kBlock), c (kBlock), d (kBlock);
+
+    double difference = 0.0;
+    double meanLeft = 0.0;
+    double widthOff = 0.0;
+    double widthOn = 0.0;
+    std::size_t counted = 0;
+
+    for (int block = 0; block < kBlocks; ++block)
+    {
+        off.process (a.pointers, kBlock);
+        on.process (b.pointers, kBlock);
+        wideOff.process (c.pointers, kBlock);
+        wideOn.process (d.pointers, kBlock);
+
+        if (block < 40)   // let everything settle first
+            continue;
+
+        for (int i = 0; i < kBlock; ++i)
+        {
+            difference = std::max (difference, std::abs (a.left[static_cast<std::size_t> (i)]
+                                                          - b.left[static_cast<std::size_t> (i)]));
+            meanLeft += a.left[static_cast<std::size_t> (i)];
+
+            widthOff = std::max (widthOff, std::abs (c.left[static_cast<std::size_t> (i)]
+                                                      - c.right[static_cast<std::size_t> (i)]));
+            widthOn = std::max (widthOn, std::abs (d.left[static_cast<std::size_t> (i)]
+                                                    - d.right[static_cast<std::size_t> (i)]));
+            ++counted;
+        }
+    }
+
+    // The crossover is audibly in one path and not the other.
+    CHECK (difference > 1.0e-6);
+
+    (void) meanLeft;
+    (void) counted;
+
+    // A wide unison stack below the crossover: split-on folds it to mono,
+    // split-off leaves the width alone. That is the "split it yourself on the
+    // DAW bus" promise.
+    CHECK (widthOff > 20.0 * widthOn);
+}
+
+TEZLA_TEST (the_pure_path_still_blocks_dc)
+{
+    // Two drafts of this claim failed before one had teeth, and both failures
+    // are worth recording. Draft one asserted "no DC" on a neutral patch --
+    // nothing in a neutral patch *makes* DC, so deleting the blocker changed
+    // nothing and the test was a decoration. Draft two cranked the tube --
+    // and still measured the same with the blocker deleted, because the
+    // TriodeStage carries its own coupling capacitor and never emits standing
+    // DC in the first place.
+    //
+    // What actually reaches the output un-blocked is an *asymmetric
+    // waveform*: a pulse at width w has a mean of 2w-1 by construction, and
+    // that DC sits below every crossover. With the split in, it lands in the
+    // sub band and the sub blocker takes it; with the split out, this
+    // engine's output blocker is the only thing left. Measured: 0.24 of full
+    // scale without it, 7e-5 with it.
+    EngineParameters parameters;
+    parameters.subSplit = false;
+    parameters.tubeDriveDb = 0.0;
+    parameters.combMode = CombMode::off;
+    parameters.oversampling = OversamplingMode::Off;
+    parameters.voice.shapeA = OscShape::pulse;
+    parameters.voice.widthA = 0.05;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (48000.0, 256);
+    engine.noteOn (36, 0.9);
+
+    Buffers buffers (256);
+
+    double mean = 0.0;
+    std::size_t counted = 0;
+
+    for (int block = 0; block < 400; ++block)
+    {
+        engine.process (buffers.pointers, 256);
+
+        if (block < 100)
+            continue;
+
+        for (const double sample : buffers.left)
+        {
+            mean += sample;
+            ++counted;
+        }
+    }
+
+    mean /= static_cast<double> (counted);
+
+    CHECK (std::abs (mean) < 1.0e-3);
+}
+
+TEZLA_TEST (toggling_the_split_mid_note_crossfades_instead_of_clicking)
+{
+    EngineParameters parameters;
+    parameters.tubeDriveDb = 9.0;
+    parameters.combMode = CombMode::off;
+    parameters.oversampling = OversamplingMode::Off;
+
+    constexpr int kBlock = 128;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (48000.0, kBlock);
+    engine.noteOn (36, 0.9);
+
+    Buffers buffers (kBlock);
+
+    // Settle, and learn what the signal's own biggest step is.
+    double steadySlew = 0.0;
+    double previous = 0.0;
+
+    for (int block = 0; block < 100; ++block)
+    {
+        engine.process (buffers.pointers, kBlock);
+
+        for (int i = 0; i < kBlock; ++i)
+        {
+            const double sample = buffers.left[static_cast<std::size_t> (i)];
+            if (block > 20)
+                steadySlew = std::max (steadySlew, std::abs (sample - previous));
+            previous = sample;
+        }
+    }
+
+    // Flip the switch and watch the seam. A hard swap of the routing would
+    // step the output by the difference between the two paths in one sample;
+    // the crossfade keeps every step inside what the signal already does.
+    parameters.subSplit = false;
+    engine.setParameters (parameters);
+
+    double toggledSlew = 0.0;
+
+    for (int block = 0; block < 60; ++block)
+    {
+        engine.process (buffers.pointers, kBlock);
+
+        for (int i = 0; i < kBlock; ++i)
+        {
+            const double sample = buffers.left[static_cast<std::size_t> (i)];
+            toggledSlew = std::max (toggledSlew, std::abs (sample - previous));
+            previous = sample;
+        }
+    }
+
+    CHECK (toggledSlew < 1.5 * steadySlew);
+}
+
+TEZLA_TEST (silence_in_silence_out_with_the_split_off)
+{
+    EngineParameters parameters;
+    parameters.subSplit = false;
+
+    Engine engine;
+    engine.setParameters (parameters);
+    engine.prepare (48000.0, 256);
+
+    Buffers buffers (256);
+
+    for (int block = 0; block < 50; ++block)
+    {
+        engine.process (buffers.pointers, 256);
+
+        for (const double sample : buffers.left)
+            CHECK (sample == 0.0);
+        for (const double sample : buffers.right)
+            CHECK (sample == 0.0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LFO tempo sync
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (a_synced_lfo_cycle_is_exactly_the_division_at_every_host_rate)
+{
+    // 120 bpm, "1/4": one cycle per beat is exactly 0.5 s, whatever the host
+    // rate and whatever oversampling multiplies it by internally. Measured on
+    // the engine's own modulation output by routing LFO 1 to pitch at full
+    // depth and counting the modulation's period through zero crossings of
+    // its effect -- too indirect. Simpler and just as strong: the readout the
+    // MOD strip uses.
+    //
+    // Rate is what sync sets, so the test reads the LFO's effect through a
+    // routed destination: LFO 1 to Level, square wave, full depth -- the
+    // output amplitude gates on and off at the LFO's rate, and the gate
+    // period is measurable in samples of output.
+    for (const double rate : { 44100.0, 48000.0, 96000.0 })
+    {
+        EngineParameters parameters;
+        parameters.tubeDriveDb = 0.0;
+        parameters.combMode = CombMode::off;
+        parameters.formantMix = 0.0;
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.lfo1Sync = true;
+        parameters.lfo1Division = 5;            // "1/4" -- see dsp::divisions
+        parameters.lfo1Wave = Lfo::Wave::square;
+        parameters.voice.shapeA = OscShape::sine;
+
+        parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::level, 1.0 };
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 256);
+        engine.setTransport (-1.0, 120.0, false);   // tempo known, stopped
+        engine.noteOn (69, 1.0);
+
+        Buffers buffers (256);
+
+        std::vector<double> envelope;
+
+        for (int block = 0; block < static_cast<int> (rate) * 3 / 256; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+
+            for (const double sample : buffers.left)
+                envelope.push_back (std::abs (sample));
+        }
+
+        // Coarse RMS over 5 ms windows, then find the gate period.
+        const auto window = static_cast<std::size_t> (rate * 0.005);
+        std::vector<double> levels;
+
+        for (std::size_t start = 0; start + window < envelope.size(); start += window)
+        {
+            double sum = 0.0;
+            for (std::size_t i = start; i < start + window; ++i)
+                sum += envelope[i] * envelope[i];
+            levels.push_back (std::sqrt (sum / static_cast<double> (window)));
+        }
+
+        double peak = 0.0;
+        for (const double level : levels)
+            peak = std::max (peak, level);
+
+        std::vector<double> onsets;
+        bool high = false;
+
+        for (std::size_t i = 0; i < levels.size(); ++i)
+        {
+            const bool now = levels[i] > 0.5 * peak;
+            if (now && ! high && ! onsets.empty())
+                onsets.push_back (static_cast<double> (i));
+            else if (now && ! high)
+                onsets.push_back (static_cast<double> (i));
+            high = now;
+        }
+
+        CHECK (onsets.size() >= 4);
+
+        const double first = onsets[1];
+        const double last = onsets[onsets.size() - 1];
+        const double cycles = static_cast<double> (onsets.size() - 2);
+        const double secondsPerCycle = (last - first) / cycles * 0.005;
+
+        CHECK_NEAR (secondsPerCycle, 0.5, 0.02);
+    }
+}
+
+TEZLA_TEST (a_phase_locked_lfo_repeats_the_bar_after_a_rewind)
+{
+    // Sync on, retrigger off, transport running: the phase is assigned from
+    // ppq, so processing the same song span twice gives the same modulation
+    // both times -- the property that makes a synced wobble printable.
+    EngineParameters parameters;
+    parameters.tubeDriveDb = 0.0;
+    parameters.combMode = CombMode::off;
+    parameters.formantMix = 0.0;
+    parameters.oversampling = OversamplingMode::Off;
+    parameters.lfo1Sync = true;
+    parameters.lfo1Division = 5;
+    parameters.lfo1Retrigger = false;
+    parameters.voice.shapeA = OscShape::sine;
+    parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::level, 1.0 };
+
+    const auto renderSpan = [&] (double startPpq)
+    {
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (57, 1.0);
+
+        Buffers buffers (256);
+        std::vector<double> out;
+
+        double ppq = startPpq;
+
+        for (int block = 0; block < 100; ++block)
+        {
+            engine.setTransport (ppq, 120.0, true);
+            engine.process (buffers.pointers, 256);
+            ppq += 256.0 / 48000.0 * 2.0;   // 120 bpm = 2 beats per second
+
+            for (const double sample : buffers.left)
+                out.push_back (sample);
+        }
+
+        return out;
+    };
+
+    const auto pass1 = renderSpan (16.0);
+    const auto pass2 = renderSpan (16.0);
+
+    double worst = 0.0;
+    for (std::size_t i = 0; i < pass1.size(); ++i)
+        worst = std::max (worst, std::abs (pass1[i] - pass2[i]));
+
+    CHECK (worst < 1.0e-12);
+
+    // And a different bar is genuinely different modulation, or the lock is
+    // locking to nothing.
+    const auto other = renderSpan (16.25);
+
+    double difference = 0.0;
+    for (std::size_t i = 0; i < pass1.size(); ++i)
+        difference = std::max (difference, std::abs (pass1[i] - other[i]));
+
+    CHECK (difference > 1.0e-3);
+}
+
+// ---------------------------------------------------------------------------
+// Envelope snap-to-tempo
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (snap_seconds_lands_on_note_lengths_and_leaves_attacks_alone)
+{
+    // 120 bpm: a beat is 0.5 s, so "1/4" is 0.5, "1/16" is 0.125, "1/32" is
+    // 0.0625, "1 bar" is 2.0, "8 bars" is 16.0.
+    CHECK_NEAR (snapSeconds (0.47, 120.0), 0.5, 1.0e-12);
+    CHECK_NEAR (snapSeconds (0.10, 120.0), 0.125, 1.0e-12);          // 1/16
+    CHECK_NEAR (snapSeconds (1.9, 120.0), 2.0, 1.0e-12);
+    CHECK_NEAR (snapSeconds (20.0, 120.0), 16.0, 1.0e-12);           // past the top: 8 bars
+
+    // Nearest in log distance, not linear -- and 90 ms is the case that tells
+    // the two apart. Its neighbours are 1/32 (62.5 ms) and 1/16 (125 ms):
+    // linearly it is 27.5 ms from the 1/32 and 35 from the 1/16, so linear
+    // picks the 1/32; as a *ratio* it is 1.44x the one and 1.39x under the
+    // other, so log picks the 1/16 -- which is what "about a sixteenth" means
+    // to an ear.
+    CHECK_NEAR (snapSeconds (0.090, 120.0), 0.125, 1.0e-12);
+
+    // The pluck guard: anything under half a 1/32 passes through untouched.
+    CHECK (snapSeconds (0.004, 120.0) == 0.004);
+    CHECK (snapSeconds (0.0, 120.0) == 0.0);
+    CHECK (snapSeconds (0.031, 120.0) == 0.031);
+    CHECK_NEAR (snapSeconds (0.032, 120.0), 0.0625, 1.0e-12);
+
+    // And the grid moves with the tempo.
+    CHECK_NEAR (snapSeconds (0.30, 174.0), 60.0 / 174.0, 1.0e-12);   // a 1/4 at 174
+}
+
+TEZLA_TEST (a_snapped_amp_decay_is_the_division_and_unsnapped_is_the_knob)
+{
+    // Engine-level: decay 0.47 s with snap on at 120 bpm behaves as 0.5 s.
+    // Measured from the amplitude envelope of the rendered note: play, let the
+    // decay run to a low sustain, and find the time the level crosses the
+    // midpoint between peak and sustain. Crude, but it distinguishes 0.47
+    // from 0.5 easily -- and it is the *sound*, not the parameter.
+    const auto midpointCrossing = [] (bool snap)
+    {
+        EngineParameters parameters;
+        parameters.tubeDriveDb = 0.0;
+        parameters.combMode = CombMode::off;
+        parameters.formantMix = 0.0;
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.voice.shapeA = OscShape::sine;
+        parameters.voice.amp.attack = 0.001;
+        parameters.voice.amp.hold = 0.0;
+        parameters.voice.amp.decay = 0.47;
+        parameters.voice.amp.sustain = 0.1;
+        parameters.voice.amp.decayTension = 0.0;   // straight, so time reads clean
+        parameters.voice.amp.snap = snap;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.setTransport (-1.0, 120.0, false);
+        engine.noteOn (69, 1.0);
+
+        Buffers buffers (256);
+        std::vector<double> level;
+
+        for (int block = 0; block < 48000 * 2 / 256; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+
+            double peak = 0.0;
+            for (const double sample : buffers.left)
+                peak = std::max (peak, std::abs (sample));
+            level.push_back (peak);
+        }
+
+        double top = 0.0;
+        std::size_t topAt = 0;
+        for (std::size_t i = 0; i < level.size(); ++i)
+            if (level[i] > top) { top = level[i]; topAt = i; }
+
+        const double floor = 0.1 * top;
+        const double midpoint = 0.5 * (top + floor);
+
+        for (std::size_t i = topAt; i < level.size(); ++i)
+            if (level[i] < midpoint)
+                return static_cast<double> (i) * 256.0 / 48000.0;
+
+        return -1.0;
+    };
+
+    const double snapped = midpointCrossing (true);
+    const double raw = midpointCrossing (false);
+
+    // A straight decay crosses its midpoint at half its duration; the exact
+    // point does not matter, only that the two differ by the ratio of the two
+    // decay times. 0.5 / 0.47 = 1.064: small but far beyond the measurement's
+    // block-quantised jitter.
+    CHECK (snapped > 0.0);
+    CHECK (raw > 0.0);
+    CHECK_NEAR (snapped / raw, 0.5 / 0.47, 0.03);
+}

@@ -65,6 +65,7 @@ void Engine::rebuildForRate() noexcept
         // sub band is the one place in this instrument where a steep high-pass
         // would be actively harmful.
         subBlocker_[channel].prepare (internalRate_, 5.0);
+        fullBlocker_[channel].prepare (internalRate_, 5.0);
 
         tube_[channel].prepare (internalRate_);
     }
@@ -75,6 +76,7 @@ void Engine::rebuildForRate() noexcept
 
     outputGain_.prepare (internalRate_, 0.02);
     tubeGain_.prepare (internalRate_, 0.02);
+    splitMix_.prepare (internalRate_, 0.03);
 
     configured_ = false;
 }
@@ -93,6 +95,7 @@ void Engine::reset() noexcept
     {
         split_[channel].reset();
         subBlocker_[channel].reset();
+        fullBlocker_[channel].reset();
         tube_[channel].reset();
         tiltLow_[channel].reset();
         tiltHigh_[channel].reset();
@@ -104,6 +107,7 @@ void Engine::reset() noexcept
 
     outputGain_.setCurrentAndTarget (decibelsToGain (pending_.outputDb));
     tubeGain_.setCurrentAndTarget (1.0);
+    splitMix_.setCurrentAndTarget (pending_.subSplit ? 1.0 : 0.0);
 
     sinceControl_ = 0;
     seenNoteOns_ = voices_.getNoteOnCount();
@@ -143,6 +147,12 @@ void Engine::applyPending() noexcept
     if (splitChanged)
         for (auto& split : split_)
             split.setCrossover (active_.splitHz);
+
+    // A target, not a jump: the SPLIT switch is a routing change, and a
+    // routing change lands as a 30 ms crossfade -- CLAUDE.md section 7 puts
+    // discrete switches behind crossfades. Setting an unchanged target is a
+    // natural no-op, so this needs no guard.
+    splitMix_.setTarget (active_.subSplit ? 1.0 : 0.0);
 
     if (tiltChanged)
         updateTilt();
@@ -464,20 +474,72 @@ void Engine::advanceGlobalSources (int samples) noexcept
     // clamp threw the top third of it away with nothing to show for it.
     const double controlNyquist = 0.5 * internalRate_ / Voice::kControlIntervalSamples;
 
+    // Tempo sync swaps the knob's rate for the division's; key tracking and
+    // the sequencer multiplier still apply on top, because a synced wobble
+    // that speeds up per octave or steps through the pattern is a synced
+    // wobble, not a broken one.
+    const double lfo1BaseHz = active_.lfo1Sync
+        ? dsp::divisionRateHz (active_.lfo1Division, bpm_)
+        : active_.lfo1RateHz;
+    const double lfo2BaseHz = active_.lfo2Sync
+        ? dsp::divisionRateHz (active_.lfo2Division, bpm_)
+        : active_.lfo2RateHz;
+
     lfo1_.setRateHz (std::clamp (
-        keyTracked (active_.lfo1RateHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
+        keyTracked (lfo1BaseHz, active_.lfo1KeyTrack) * std::pow (2.0, octaves),
         0.0, controlNyquist));
 
     lfo2_.setRateHz (std::clamp (
-        keyTracked (active_.lfo2RateHz, active_.lfo2KeyTrack), 0.0, controlNyquist));
+        keyTracked (lfo2BaseHz, active_.lfo2KeyTrack), 0.0, controlNyquist));
 
-    sources_.lfo1 = lfo1_.advance (samples) * lfo1Depth;
-    sources_.lfo2 = lfo2_.advance (samples) * lfo2Depth;
+    // Synced, un-retriggered, transport running: the phase is *assigned* from
+    // the song position rather than accumulated, exactly as the sequencer's
+    // is above -- rewind the transport and the same bar is the same wobble.
+    // The assignment makes the rate multipliers moot for that LFO, which is
+    // the honest reading of "nailed to the bar"; retrigger hands the phase
+    // back to the note and the multipliers with it.
+    const bool lfo1Locked = active_.lfo1Sync && ! active_.lfo1Retrigger && transportRunning_;
+    const bool lfo2Locked = active_.lfo2Sync && ! active_.lfo2Retrigger && transportRunning_;
+
+    const double beatsNow = ppq_ + beatsIntoBlock_
+                          - static_cast<double> (samples) / internalRate_ * bpm_ / 60.0;
+
+    sources_.lfo1 = (lfo1Locked
+        ? lfo1_.setPhaseFromPpq (beatsNow,
+                                 dsp::divisions[static_cast<std::size_t> (
+                                     std::clamp (active_.lfo1Division, 0, dsp::numDivisions - 1))]
+                                     .cyclesPerBeat,
+                                 samples)
+        : lfo1_.advance (samples)) * lfo1Depth;
+
+    sources_.lfo2 = (lfo2Locked
+        ? lfo2_.setPhaseFromPpq (beatsNow,
+                                 dsp::divisions[static_cast<std::size_t> (
+                                     std::clamp (active_.lfo2Division, 0, dsp::numDivisions - 1))]
+                                     .cyclesPerBeat,
+                                 samples)
+        : lfo2_.advance (samples)) * lfo2Depth;
 }
 
 void Engine::mangle (double& left, double& right) noexcept
 {
     // ---- the split ---------------------------------------------------------
+    //
+    // `splitMix_` is the SPLIT switch, smoothed: at 1 the split is in (the
+    // path that shipped), at 0 the whole signal goes down the body chain
+    // untouched and only a 5 Hz DC blocker stands between the mangle and the
+    // output -- the "pure" setting for splitting on a DAW bus instead.
+    //
+    // The blend below is arithmetic rather than a branch on purpose.
+    // Multiplying by exactly 1.0 and adding exactly 0.0 changes no bits, so
+    // with the switch on this function is sample-for-sample the one that
+    // shipped -- verified by raw-file comparison when the switch landed -- and
+    // the toggle is a 30 ms crossfade instead of a click (CLAUDE.md section
+    // 7). The split filters and both blockers stay fed in every setting so
+    // their state is warm the moment the switch flips: two LR4s are noise
+    // next to the mangle, and a cold crossover handed a sustained bass note
+    // would spend the whole fade settling instead of crossfading.
+    const double splitMix = splitMix_.next();
 
     double subLeft = 0.0;
     double subRight = 0.0;
@@ -487,9 +549,10 @@ void Engine::mangle (double& left, double& right) noexcept
     split_[0].process (left, subLeft, bodyLeft);
     split_[1].process (right, subRight, bodyRight);
 
-    // A DC blocker on the sub and nowhere else. Everything above the split has
-    // a nonlinearity in front of it and makes DC by construction; the sub is
-    // the one band where the high-pass itself would be audible.
+    // A DC blocker on the sub and nowhere else in the split path. Everything
+    // above the split has a nonlinearity in front of it and makes DC by
+    // construction; the sub is the one band where the high-pass itself would
+    // be audible.
     subLeft = subBlocker_[0].process (subLeft);
     subRight = subBlocker_[1].process (subRight);
 
@@ -500,6 +563,10 @@ void Engine::mangle (double& left, double& right) noexcept
         subLeft = sum;
         subRight = sum;
     }
+
+    // With the split out, the body chain gets the raw signal.
+    bodyLeft = splitMix * bodyLeft + (1.0 - splitMix) * left;
+    bodyRight = splitMix * bodyRight + (1.0 - splitMix) * right;
 
     // ---- the body ----------------------------------------------------------
 
@@ -543,8 +610,16 @@ void Engine::mangle (double& left, double& right) noexcept
     bodyLeft = tiltHigh_[0].process (tiltLow_[0].process (bodyLeft));
     bodyRight = tiltHigh_[1].process (tiltLow_[1].process (bodyRight));
 
-    left = subLeft + bodyLeft;
-    right = subRight + bodyRight;
+    // The sub leg only exists while the split does.
+    left = splitMix * subLeft + bodyLeft;
+    right = splitMix * subRight + bodyRight;
+
+    // The pure path's DC blocker, blended the same way. It processes in every
+    // setting -- its state has to be warm for the fade -- but with the split
+    // in it contributes exactly nothing, and the sum above is bit-identical
+    // to the pre-switch engine.
+    left = splitMix * left + (1.0 - splitMix) * fullBlocker_[0].process (left);
+    right = splitMix * right + (1.0 - splitMix) * fullBlocker_[1].process (right);
 }
 
 void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
@@ -661,7 +736,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
         {
             advanceGlobalSources (Voice::kControlIntervalSamples);
             voices_.advanceGlide (Voice::kControlIntervalSamples);
-            voices_.applyControls (active_.voice, sources_);
+            voices_.applyControls (snappedVoice(), sources_);
 
             // After the sources have moved and before the comb is aimed: the
             // matrix reads the one and writes the other.
@@ -681,6 +756,42 @@ void Engine::process (double* const* output, int numSamples) noexcept
     }
 
     oversampler_.downsample (output, numSamples);
+}
+
+const VoiceParameters& Engine::snappedVoice() noexcept
+{
+    // Envelope snap-to-tempo, applied here and not in the JUCE layer, for two
+    // reasons that are really one: the engine is what knows the live tempo,
+    // and the engine is what the tests can reach. Snapping in the parameter
+    // pull would freeze the grid at whatever the tempo was when the knob last
+    // moved, and would put the behaviour on the wrong side of the
+    // framework-free line (CLAUDE.md section 4).
+    //
+    // The copy is control-rate and small, and only taken when some envelope
+    // actually asks for the grid.
+    const auto& raw = active_.voice;
+
+    if (! (raw.amp.snap || raw.mod1.snap || raw.mod2.snap))
+        return raw;
+
+    snappedVoice_ = raw;
+
+    const auto snapEnvelope = [this] (VoiceParameters::Envelope& envelope)
+    {
+        if (! envelope.snap)
+            return;
+
+        envelope.attack = dsp::snapSeconds (envelope.attack, bpm_);
+        envelope.hold = dsp::snapSeconds (envelope.hold, bpm_);
+        envelope.decay = dsp::snapSeconds (envelope.decay, bpm_);
+        envelope.release = dsp::snapSeconds (envelope.release, bpm_);
+    };
+
+    snapEnvelope (snappedVoice_.amp);
+    snapEnvelope (snappedVoice_.mod1);
+    snapEnvelope (snappedVoice_.mod2);
+
+    return snappedVoice_;
 }
 
 } // namespace tezla::sonitus
