@@ -580,6 +580,27 @@ below −240 dBFS for a second with no voice sounding, the render and the
 decimation filters are skipped. The clocks keep running, so a slow LFO is where
 it would have been when the next note arrives.
 
+### Tails, and what oversampling multiplies
+
+Two things decide the bill when chords are played over each other, and they
+multiply:
+
+- **A releasing voice costs the same as a held one** until its envelope goes
+  idle, so the real polyphony of a pad passage is *notes per chord × chords
+  per release time*. Overlapping four three-note chords through a two-second
+  release is twelve full-price voices, legitimately. Releases now end exactly
+  when the knob says — an envelope defect that stretched every release to
+  roughly eleven times its stated time, piling up inaudible full-price voices
+  until the meter pinned, is fixed and regression-tested — so the release
+  knob is also the CPU knob for pad work.
+- **Oversampling multiplies the whole voice.** Auto at 48 kHz is ×4: near
+  enough four times the per-voice price, bought back as aliasing that stays
+  below −60 dB at full drive (the table above). Turning it off on a clean
+  patch — low fold, moderate filter drive, no tube push — is an honest trade:
+  the aliasing table's "off" column says exactly what it costs at each note,
+  and on a patch that barely distorts the answer is "very little". At 96 kHz
+  sessions Auto already halves the factor, and at 192 kHz it turns off.
+
 ### Tuning
 
 - 12-TET against `440·2^((n−69)/12)`, worst of 128 notes: **3.6e-12 Hz**
@@ -617,7 +638,7 @@ it would have been when the next note arrives.
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **618 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **655 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.

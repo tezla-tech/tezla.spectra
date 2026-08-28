@@ -2081,7 +2081,7 @@ const std::vector<Preset>& presets()
 
                 { ids::cutoff, 9000.0f },        // the shape is the filter here
 
-                { ids::ampAttack, 0.01f }, { ids::ampSustain, 0.9f }, { ids::ampRelease, 0.25f },
+                { ids::ampAttack, 0.01f }, { ids::ampSustain, 0.9f }, { ids::ampRelease, 1.0f },
 
                 // A slow four-point breathing loop on the pressing.
                 { "adv1Enable", 1.0f }, { "adv1Loop", 1.0f },
@@ -2193,8 +2193,10 @@ const std::vector<Preset>& presets()
 
                 { ids::cutoff, 14000.0f },
 
-                { ids::ampAttack, 0.002f }, { ids::ampDecay, 2.5f },
-                { ids::ampSustain, 0.0f }, { ids::ampRelease, 2.8f },
+                // The ring must outlast the ADV's 3.5 s index fade, or the amp
+                // curtails the shimmer the envelope was drawn for.
+                { ids::ampAttack, 0.002f }, { ids::ampDecay, 8.0f },
+                { ids::ampSustain, 0.0f }, { ids::ampRelease, 6.0f },
                 { ids::ampDecayT, 0.5f },
 
                 // The index's life: strike hard, duck, shimmer back up a
@@ -2232,7 +2234,7 @@ const std::vector<Preset>& presets()
 
                 { ids::cutoff, 4200.0f }, { ids::filterTrack, 0.3f },
 
-                { ids::ampAttack, 0.5f }, { ids::ampSustain, 0.85f }, { ids::ampRelease, 0.5f },
+                { ids::ampAttack, 0.5f }, { ids::ampSustain, 0.85f }, { ids::ampRelease, 2.0f },
                 { ids::ampSnap, 1.0f },
                 { ids::env1Snap, 1.0f },
 
