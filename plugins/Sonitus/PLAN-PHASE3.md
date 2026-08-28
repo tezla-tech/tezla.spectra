@@ -14,26 +14,30 @@ nothing until seen to fail).
 
 ## Status
 
-- [ ] 1. Sub split bypass
-- [ ] 2. MOD page reorder + thicker scrollbars
-- [ ] 3. Division table extracted to a framework-free header
-- [ ] 4. LFO tempo sync (toggle + division per LFO)
-- [ ] 5. Envelope snap-to-tempo (amp, mod 1, mod 2)
-- [ ] 6. Morph plumbing + shared naive-waveform function (no new shapes yet)
-- [ ] 7a. Shapes: Dome + Double saw
-- [ ] 7b. Shape: Noise
-- [ ] 7c. Shape: Vintage
+- [x] 1. Sub split bypass
+- [x] 2. MOD page reorder + thicker scrollbars
+- [x] 3. Division table extracted to a framework-free header
+- [x] 4. LFO tempo sync (toggle + division per LFO)
+- [x] 5. Envelope snap-to-tempo (amp, mod 1, mod 2)
+- [x] 6. Morph plumbing + shared naive-waveform function (no new shapes yet)
+- [x] 7a. Shapes: Dome + Double saw
+- [x] 7b. Shape: Noise
+- [x] 7c. Shape: Vintage
 - [x] 7d. Shape: Shark — CUT: redundant. The triangle already reads Width
       as skew (`widthA` doc: "pulse width / triangle skew"), so tri→saw
       morphing shipped long ago under another name.
-- [ ] 7e. Shape: Harmonic
-- [ ] 8. Waveform preview + morph slider UI
-- [ ] 9. ADV envelope DSP: `MultiEnvelope` (multi-stage, loop, sustain point)
-- [ ] 10. ADV Envelopes 1–3: params, sources, matrix, ENV page
-- [ ] 11. Docs, measurements, validator, final sweep
+- [x] 7e. Shape: Harmonic
+- [x] 8. Waveform preview + morph slider UI
+- [x] 9. ADV envelope DSP: `MultiEnvelope` (multi-stage, loop, sustain point)
+- [x] 10. ADV Envelopes 1–3: params, sources, matrix, ENV page
+- [x] 11. Docs, measurements, validator, final sweep
 
 Baseline at planning time: commit `4c379a1`, **622 tests, 0 failed**, all six
 plugins validate 47/47, `scripts/check-editors.sh` green.
+
+**COMPLETE.** All eleven steps landed (7d cut as redundant — see its entry);
+650 tests at close-out, validator 47/47 on all six, editor checks green. This
+document stays as the record of the decisions; the READMEs carry the results.
 
 ## Ground rules for every step
 

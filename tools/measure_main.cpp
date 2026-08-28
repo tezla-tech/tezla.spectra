@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Decibels.hpp>
 #include <tezla/dsp/Scales.hpp>
@@ -2038,6 +2039,113 @@ int runSonitus (const Args& args)
     std::printf ("  is allowed to run one up. Sixteen is the default because it is the most\n");
     std::printf ("  a sane arrangement holds at once; the ceiling is there for pads whose\n");
     std::printf ("  releases overlap, where most of the sounding voices are tails.\n\n");
+
+    // ---- the phase-3 shapes ---------------------------------------------------
+
+    std::printf ("The phase-3 oscillator shapes: worst inharmonic component, oscillator\n");
+    std::printf ("alone at 48 kHz, bin-exact probes, morph at its default and its top.\n\n");
+
+    std::printf ("  %-11s %10s %10s     note\n", "shape", "morph 0", "morph 1");
+
+    {
+        struct ShapeRow { dsp::OscShape shape; const char* name; const char* note; };
+
+        const ShapeRow rows[] {
+            { dsp::OscShape::vintage,   "vintage",    "the saw's class: the reset step dominates" },
+            { dsp::OscShape::dome,      "dome",       "band-limited by construction" },
+            { dsp::OscShape::doubleSaw, "double saw", "two BLEP ramps" },
+            { dsp::OscShape::harmonic,  "harmonic",   "finite series, Nyquist-faded" },
+        };
+
+        constexpr std::size_t kWindow = 1 << 14;
+
+        for (const auto& row : rows)
+        {
+            std::printf ("  %-11s", row.name);
+
+            for (const double morph : { 0.0, 1.0 })
+            {
+                const double probe = measure::binExactFrequency (987.0, 48000.0, kWindow);
+
+                dsp::Oscillator osc;
+                osc.setShape (row.shape);
+                osc.setMorph (morph);
+                osc.setIncrement (probe / 48000.0);
+                osc.reset();
+
+                std::vector<double> rendered (kWindow);
+                for (auto& sample : rendered)
+                    sample = osc.advance();
+
+                // The double saw at full offset *is* the octave-up saw -- its
+                // odd harmonics, fundamental included, cancel exactly -- so an
+                // analyser referenced to the played fundamental divides by a
+                // vanished tone and reports nonsense. Reference that one cell
+                // to the octave, which is the waveform's real fundamental; the
+                // identity itself is nulled to 1e-9 in the tests.
+                const bool octaveCase = row.shape == dsp::OscShape::doubleSaw && morph == 1.0;
+
+                std::printf (" %8.1f dB",
+                             measure::analyseHarmonics (rendered, 48000.0,
+                                                        octaveCase ? 2.0 * probe : probe)
+                                 .audibleAliasingDb);
+            }
+
+            std::printf ("     %s\n", row.note);
+        }
+
+        std::printf ("\n  These are naked-oscillator figures; the voice oversamples on top.\n");
+        std::printf ("  Dome and harmonic are the by-construction pair -- the tests hold them\n");
+        std::printf ("  under -120 and -100 rather than the house -60. Noise is exempt: no\n");
+        std::printf ("  pitch, nothing to alias against.\n\n");
+    }
+
+    // ---- ADV envelope cost ----------------------------------------------------
+
+    std::printf ("ADV envelopes: eight held notes, all three enabled and looping,\n");
+    std::printf ("against the same patch with all three off.\n\n");
+
+    for (const bool enabled : { false, true })
+    {
+        auto parameters = harmonicPatch();
+
+        parameters.keyboard = sonitus::KeyboardMode::poly;
+        parameters.polyphony = 8;
+
+        for (auto& adv : parameters.voice.adv)
+        {
+            adv.enable = enabled;
+            adv.loop = true;
+            adv.points = 4;
+            adv.sustain = 2;
+        }
+
+        sonitus::Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (rate, 512);
+
+        for (int note = 0; note < 8; ++note)
+            engine.noteOn (36 + 3 * note, 0.9);
+
+        std::vector<double> left (512), right (512);
+        double* channels[2] { left.data(), right.data() };
+
+        engine.process (channels, 512);
+
+        const auto started = std::chrono::steady_clock::now();
+
+        for (int i = 0; i < static_cast<int> (rate); i += 512)
+            engine.process (channels, 512);
+
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        const double ms = std::chrono::duration<double, std::milli> (elapsed).count();
+
+        std::printf ("  ADV x3 %s %8.1f ms/s = %.1f%% of one core\n",
+                     enabled ? "on: " : "off:", ms, ms / 10.0);
+    }
+
+    std::printf ("\n  Three breakpoint envelopes per sounding voice cost a rounding error;\n");
+    std::printf ("  a disabled slot costs exactly nothing, byte-proven at the wiring commit.\n\n");
 
     // ---- 4. tuning ------------------------------------------------------------
 
