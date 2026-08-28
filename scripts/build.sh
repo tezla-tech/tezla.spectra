@@ -10,12 +10,14 @@
 #    ./scripts/build.sh Emberdrive          one plugin
 #    ./scripts/build.sh Emberdrive,Foo      a list
 #    ./scripts/build.sh ALL --install       everything, installed for the user
+#    ./scripts/build.sh --installbuild      install an existing build, no rebuild
 #    ./scripts/build.sh NONE --test         DSP core + tests only, no JUCE
 #    ./scripts/build.sh --list              show available plugins
 #
 #  Options:
 #    --config <cfg>   Debug | Release | RelWithDebInfo   (default Release)
 #    --install        copy the built plugins to the user plug-in folders
+#    --installbuild   copy an existing build and skip building entirely
 #    --test           run the DSP unit tests after building
 #    --clean          delete the build folder first
 #    --build-dir <d>  use a different build folder
@@ -41,6 +43,7 @@ plugins="ALL"
 config="Release"
 run_tests=0
 do_install=0
+install_only=0
 extra_args=()
 
 case "$(uname -s)" in
@@ -72,6 +75,7 @@ while [[ $# -gt 0 ]]; do
         --native)      extra_args+=("-DTEZLA_UNIVERSAL_BINARY=OFF"); shift ;;
         --test)        run_tests=1; shift ;;
         --install)     do_install=1; shift ;;
+        --installbuild) do_install=1; install_only=1; shift ;;
         --clean)       rm -rf "${build_dir}"; shift ;;
         --list)        list_plugins; exit 0 ;;
         -h|--help)     usage; exit 0 ;;
@@ -102,25 +106,39 @@ fi
 generator=()
 command -v ninja >/dev/null 2>&1 && generator=(-G Ninja)
 
-# ------------------------------------------------------------ configure -----
-echo "Configuring (${config}, plugins: ${plugins})..."
-cmake -S "${repo_root}" -B "${build_dir}" "${generator[@]}" \
-      -DCMAKE_BUILD_TYPE="${config}" \
-      -DTEZLA_PLUGINS="${plugins}" \
-      "${extra_args[@]}"
-
-echo "Building..."
-cmake --build "${build_dir}" --parallel
-
-# ----------------------------------------------------------------- test -----
-if [[ ${run_tests} -eq 1 ]]; then
-    echo "Running DSP tests..."
-    test_exe="$(find "${build_dir}" -name tezla-tests -type f -perm -u+x | head -1)"
-    if [[ -z "${test_exe}" ]]; then
-        echo "ERROR: tezla-tests was not built." >&2
+# --installbuild does no configuring, no building and no tool checks: the build
+# directory either has bundles in it or it does not, and cmake has no part in
+# answering that.
+if [[ ${install_only} -eq 1 ]]; then
+    if [[ ! -d "${build_dir}" ]]; then
+        echo "ERROR: --installbuild found no build directory at ${build_dir}." >&2
+        echo "       There is nothing built to install. Build first, or point" >&2
+        echo "       at another one with --build-dir <dir>." >&2
         exit 1
     fi
-    "${test_exe}"
+fi
+
+if [[ ${install_only} -eq 0 ]]; then
+    # ------------------------------------------------------------ configure -----
+    echo "Configuring (${config}, plugins: ${plugins})..."
+    cmake -S "${repo_root}" -B "${build_dir}" "${generator[@]}" \
+          -DCMAKE_BUILD_TYPE="${config}" \
+          -DTEZLA_PLUGINS="${plugins}" \
+          "${extra_args[@]}"
+
+    echo "Building..."
+    cmake --build "${build_dir}" --parallel
+
+    # ----------------------------------------------------------------- test -----
+    if [[ ${run_tests} -eq 1 ]]; then
+        echo "Running DSP tests..."
+        test_exe="$(find "${build_dir}" -name tezla-tests -type f -perm -u+x | head -1)"
+        if [[ -z "${test_exe}" ]]; then
+            echo "ERROR: tezla-tests was not built." >&2
+            exit 1
+        fi
+        "${test_exe}"
+    fi
 fi
 
 # -------------------------------------------------------------- report ------

@@ -75,7 +75,8 @@ scripts\build.bat                          :: all plugins, Release
 scripts\build.bat Emberdrive               :: one plugin
 scripts\build.bat Emberdrive,Foo           :: a list
 scripts\build.bat -config Debug            :: debug build
-scripts\build.bat -install                 :: copy to the system VST3 folder
+scripts\build.bat --install                :: build, then copy to the VST3 folder
+scripts\build.bat --installbuild           :: copy an existing build; no rebuild
 scripts\build.bat -test                    :: run the DSP tests afterwards
 scripts\build.bat -clean                   :: wipe build\ first
 scripts\build.bat NONE -test               :: DSP + tests only; skips JUCE entirely
@@ -84,6 +85,18 @@ scripts\build.bat -ninja                   :: force Ninja (needs a developer pro
 scripts\build.bat -juce C:\dev\JUCE        :: use a JUCE you already have
 scripts\build.bat -juce-system             :: use a JUCE you installed
 ```
+
+Options take **one dash or two** — `-install` and `--install` are the same
+option. Before, a `--` prefix fell through to the "this must be a plugin name"
+branch, so `build.bat --install` quietly configured a build of a plugin called
+`--install`.
+
+**`--installbuild` does no building at all.** It skips the tool checks, CMake and
+the tests, looks in `build\` for `.vst3` bundles and copies them. That is the
+right option when you have just built by hand and only want the bundles where FL
+Studio will find them; going through CMake again to be told there is nothing to
+do is a wait for nothing. It fails with a clear message if there is nothing
+built.
 
 By default the script uses the Visual Studio generator, which works from any
 Command Prompt. It switches to Ninja only when it can confirm both `ninja` and
@@ -239,13 +252,22 @@ build\bin\Release\tezla-tests.exe oversampler
 A VST3 "file" on Windows is a folder. Copy the whole `.vst3` directory:
 
 ```bat
-:: from an Administrator prompt
 xcopy /E /I /Y ^
   "build\plugins\Emberdrive\Emberdrive_artefacts\Release\VST3\Tezla Emberdrive.vst3" ^
   "%CommonProgramFiles%\VST3\Tezla Emberdrive.vst3"
 ```
 
-Or skip the elevation entirely by putting it in your user VST3 folder and
+**Whether that needs an Administrator prompt is up to the machine.**
+`%CommonProgramFiles%\VST3` is not writable by an ordinary account by default,
+but it is a perfectly ordinary thing to grant once — right-click the folder,
+Properties → Security, give your user **Modify** — and after that neither this
+command nor `build.bat --install` needs elevation. The script does not check
+before trying, precisely so that granting it is worth something; it explains the
+fix only if the copy actually fails.
+
+The other common failure is a DAW holding the old bundle open. Close it first.
+
+Or avoid the question entirely by putting the bundle in your user VST3 folder and
 pointing FL Studio at that instead:
 
 ```bat
