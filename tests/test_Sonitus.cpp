@@ -2872,3 +2872,59 @@ TEZLA_TEST (the_global_matrix_reads_the_tracked_notes_adv_envelope)
     CHECK (pumping > 4.0);
     CHECK (still < 2.5);
 }
+
+// ---------------------------------------------------------------------------
+// Voices must die
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (voices_retire_once_their_release_is_over)
+{
+    // The defect this guards reached the user as a pinned CPU meter, and every
+    // silence-based test missed it: after note-off the voices *were* becoming
+    // inaudible, they just never went idle -- the per-chunk parameter push
+    // re-aimed each release from its current level, stretching the exit ~11x
+    // -- so each new chord stacked another set of full-price voices on top of
+    // the last. Activity is the claim, not silence: CLAUDE.md section 10's
+    // Capstone lesson in another key. This drives the real engine loop, the
+    // same path that re-applies every envelope setting every control chunk.
+    Engine engine;
+    engine.prepare (48000.0, 256);
+
+    auto parameters = brutal();
+    parameters.keyboard = KeyboardMode::poly;
+    parameters.voice.unisonA = 1;
+    parameters.voice.unisonB = 1;
+    parameters.voice.amp.release = 0.3;
+    parameters.oversampling = OversamplingMode::Off;
+
+    engine.setParameters (parameters);
+
+    Buffers buffers (256);
+
+    // One block first: turning oversampling off is a graph rebuild, and the
+    // engine deliberately cuts every note when it happens. Notes started
+    // before the rebuild would be killed by it, not by the release.
+    engine.process (buffers.pointers, 256);
+
+    const int notes[] = { 48, 52, 55, 59 };
+
+    for (const int note : notes)
+        engine.noteOn (note, 1.0);
+
+    for (int block = 0; block < 20; ++block)
+        engine.process (buffers.pointers, 256);
+
+    CHECK (engine.activeVoiceCount() == 4);
+
+    for (const int note : notes)
+        engine.noteOff (note);
+
+    // Twice the stated release is a generous funeral. Before the fix the
+    // count was still 4 here -- and four release-times later, still 4.
+    const int untilFree = static_cast<int> (2.0 * 0.3 * 48000.0 / 256.0) + 1;
+
+    for (int block = 0; block < untilFree; ++block)
+        engine.process (buffers.pointers, 256);
+
+    CHECK (engine.activeVoiceCount() == 0);
+}

@@ -263,7 +263,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **650 on x86-64**; the
+  validator 47/47 on Linux. The count has since grown to **655 on x86-64**; the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -413,7 +413,7 @@ Every plugin must satisfy these before it is considered done:
   day it shipped; it ticked once per change and nothing measured it.
 - **Any setter that clears state must refuse a no-op, and the guard goes in the
   setter.** The rule above is the special case; this is the general one, and it
-  has now bitten three times. `BypassMixer::setLatency` clears the dry delay
+  has now bitten four times. `BypassMixer::setLatency` clears the dry delay
   line, correctly — a ring at a new length holds nothing meaningful — and its
   own doc comment ("safe from the audio thread") invites a caller to push the
   current latency every block. Capstone did, and every callback wiped the bypass
@@ -427,6 +427,15 @@ Every plugin must satisfy these before it is considered done:
   caller comparing against its own previous value would skip the call and leave
   the dry path delayed by the worst case. One guard, in the object that knows
   what it is currently set to.
+  The fourth bite widens "clears state" to *re-aims a running process*, and it
+  reached the user as a CPU meter. Sonitus pushes all eight envelope settings
+  at every voice every control chunk; `Adsr`'s unguarded setters re-aimed the
+  running release from its current level each time, which turned the
+  finite-time exit into a geometric crawl of ~11× the stated release. Voices
+  retired slower than chords arrived and the meter pinned at 100% seconds
+  after every key was up. Every silence-based test passed throughout, because
+  the zombies were inaudible — assert **activity**, not silence, for anything
+  whose cost is the claim.
 - **Anything too expensive to recompute per sample gets a timer counted in
   samples, and the sample loop is cut at the timer's boundary** — not at the
   callback's. Rebuilding "once per block" makes the output depend on the host's

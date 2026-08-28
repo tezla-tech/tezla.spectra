@@ -327,12 +327,16 @@ asserts that a Pythagorean fifth is 701.955 cents and its limma bit-exactly
 exactly 5/4, and that each Carlos scale's minor third is as flat as its major
 third is sharp.
 
-**What is deliberately absent, and why.** Javanese slendro and pelog, the maqam
-sets and the 22 shruti are *not* built in. They have no canonical tuning — a
-slendro is whatever a particular gamelan was tuned to — so any specific numbers
-would be one instrument's measurements presented as a standard. Those are exactly
-what `.scl` loading is for, and the Scala archive has hundreds of them measured
-from real instruments.
+**What is deliberately absent, and the line that decides it.** Javanese slendro
+and pelog and the 22 shruti are *not* built in. They have no canonical tuning —
+a slendro is whatever a particular gamelan was tuned to — so any specific
+numbers would be one instrument's measurements presented as a standard. Those
+are exactly what `.scl` loading is for. The maqam and dastgah entries that *are*
+built in do not cross that line: they are **named theorists' published
+constructions** — al-Farabi's ratio for Zalzal's fret, Farhat's mean neutral
+seconds, the Arel–Ezgi–Uzdilek comma grid — attributable the same way
+Werckmeister's temperament is, with their stories saying the living practice
+bends around them.
 
 **The three historical temperaments are a middle case.** Werckmeister III,
 Kirnberger III and Vallotti are generated from their constructions, and the
@@ -340,6 +344,24 @@ constructions are written out in `Scales.hpp`. What comes from general reference
 rather than from a source that could be read is *which* fifths each one tempers.
 The defining intervals are asserted, so a wrong assignment would show up as a
 wrong C–E; a wrong assignment that still gave the right C–E would not.
+
+### The microtuning expansion — sources and access, honestly
+
+The container's proxy blocks the primary literature, so these entries rest on
+web-search snippets and general reference, recorded per CLAUDE.md §9. Each
+scale's tests assert everything the construction lets them assert; what a test
+cannot check is the attribution itself.
+
+| Scales | Source | Access |
+|---|---|---|
+| Shur, Chahargah (Persian) | Hormoz Farhat, *The Dastgah Concept in Persian Music*, Cambridge 1990 | **Not read.** Search snippets confirm his two neutral-second families (125–145 and 150–170 cents) and proposed means of 135 and 165, plus the flexible-interval doctrine. The frame (pure 498/702/996, the 270-cent plus tone, which degrees carry the koron) is general reference. Tests pin the numbers used. |
+| The seven Old Babylonian tunings | The tuning texts UET VII 74 / UET VI/3 899 and CBS 10996, via Kilmer, Gurney, West (*Music and Letters* 1994), Crickmore | **Not read.** Snippets confirm: the standard seven-name cycle order; nīd qabli read as the major-scale octave species (the Hurrian hymn tuning); embūbum as the palindromic mode; išartum as "strings 2 and 6 tuned to a fifth". The rotation-to-name assignment for the other four follows the cycle order around those anchors, and each story says the rising/falling debate renames the set without changing its sounds — all seven rotations ship either way. |
+| Rast (Zalzal, just) | al-Farabi's *Kitab al-Musiqa al-Kabir* description of Zalzal's wusṭā fret, 27/22 | **Not read**; the 27/22 attribution is standard general reference. The construction (jins rast doubled at the fifth) is the ordinary definition of the maqam's scale. |
+| Rast (Turkish, AEU) | Arel–Ezgi–Uzdilek theory, 53 Holdrian commas | **Not read.** Snippets confirm the 53-EDO basis, 9 commas per 9/8 tone, and Rast's implementation in it; the T-K-S comma sizes (9/8/5) are general reference. The test asserts the grid and the schismatic third. |
+| Ptolemy even (homalon) diatonic | Ptolemy, *Harmonics* II | **Not read**; 12/11 · 11/10 · 10/9 is the standard citation of the genus, and the telescoping product is arithmetic the test checks. |
+| Twelve lü | *Guanzi*, *Lüshi Chunqiu* — the san fen sun yi rule | **Not read**; the generation rule (alternating ×3/2, ×4/3 = a one-way chain of fifths) is standard general reference, and the test re-derives every degree in integers. |
+| Partch 43 | Harry Partch, *Genesis of a Music*, 2nd ed. 1974 | **Not read here; reproduced, not derived.** The 43 ratios are Partch's artistic selection and there is no generating rule. The test verifies every structural property the book states — 43 degrees, strictly ascending, 11-limit, exact inversional symmetry — which would catch most transcription slips but not a symmetric pair swapped for another symmetric pair. |
+| Golden phi | After Heinz Bohlen's 833-cent studies | Bohlen's own degree set was **not used** — it could not be fetched — so the entry is this instrument's own equal seven-fold division of his 833.09-cent repeat, and both the code and the panel say so. His exact scale can be added verbatim if the page is supplied: huygens-fokker.org/bpsite/833cent.html. |
 
 ---
 

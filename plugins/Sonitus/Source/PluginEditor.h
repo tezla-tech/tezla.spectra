@@ -503,6 +503,45 @@ private:
     int length_ { dsp::StepSequencer::kMaxSteps };
 };
 
+/// The degree table on the tuning page: one row per scale degree, showing the
+/// exact fraction where the degree *is* one, the cents, and the step up to
+/// the next degree, with the repeat interval as a final row.
+///
+/// Painted directly rather than through a ListBox -- the rows only change
+/// when the scale does, and there is nothing to select. Fractions come from
+/// `dsp::nearestFraction`, which accepts near-exact rationals only, so an
+/// equal-tempered degree shows its cents and never a lie of a fraction.
+class DegreeTable final : public juce::Component
+{
+public:
+    explicit DegreeTable (ui::Palette palette) : palette_ (palette) {}
+
+    void setScale (const dsp::Scale& scale);
+
+    void paint (juce::Graphics& g) override;
+
+    /// The height the full table wants; the viewport shows what fits.
+    [[nodiscard]] int preferredHeight() const noexcept
+    {
+        return kHeaderHeight + kRowHeight * static_cast<int> (rows_.size());
+    }
+
+    static constexpr int kRowHeight = 15;
+    static constexpr int kHeaderHeight = 17;
+
+private:
+    struct Row
+    {
+        juce::String degree, ratio, cents, step;
+        bool isRepeat { false };
+    };
+
+    ui::Palette palette_;
+    std::vector<Row> rows_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DegreeTable)
+};
+
 /// The tuning page: pick a built-in scale, or load a Scala file.
 ///
 /// Its own component rather than a `ControlPage` because none of it is a
@@ -517,7 +556,7 @@ public:
     /// changed the tuning, including a state load from the host.
     void refresh();
 
-    [[nodiscard]] int getPreferredHeight() const override { return 300; }
+    [[nodiscard]] int getPreferredHeight() const override { return 360; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -543,6 +582,13 @@ private:
     WrappingLabel    descriptionLabel_;
     WrappingLabel    explanationLabel_;
     WrappingLabel    errorLabel_;
+
+    /// What the selected scale *is*: the construction it is generated from,
+    /// the story of where it comes from, and every degree in a table.
+    WrappingLabel    constructionLabel_;
+    WrappingLabel    storyLabel_;
+    DegreeTable      degreeTable_;
+    juce::Viewport   tableViewport_;
 
     std::unique_ptr<juce::FileChooser> chooser_;
 

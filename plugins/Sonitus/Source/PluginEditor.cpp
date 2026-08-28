@@ -1992,8 +1992,111 @@ void StepStrip::resized()
 // TuningPage
 // ---------------------------------------------------------------------------
 
+void DegreeTable::setScale (const dsp::Scale& scale)
+{
+    rows_.clear();
+    rows_.reserve (static_cast<std::size_t> (scale.size()) + 1);
+
+    for (int degree = 0; degree < scale.size(); ++degree)
+    {
+        const double ratio = scale.ratios[static_cast<std::size_t> (degree)];
+        const double next = degree + 1 < scale.size()
+                              ? scale.ratios[static_cast<std::size_t> (degree + 1)]
+                              : scale.repeat;
+
+        Row row;
+        row.degree = juce::String (degree);
+
+        // A fraction only when the degree is exactly one -- a tempered degree
+        // shows a dash here and speaks through its cents instead.
+        const auto fraction = dsp::nearestFraction (ratio);
+
+        row.ratio = fraction.found
+                      ? juce::String (fraction.numerator) + "/" + juce::String (fraction.denominator)
+                      : juce::String ("-");
+
+        row.cents = juce::String (scale.cents (degree), 1);
+        row.step = juce::String (1200.0 * std::log2 (next / ratio), 1);
+
+        rows_.push_back (std::move (row));
+    }
+
+    // The repeat interval as its own row: 2/1 for the octave scales, 3/1 for
+    // Bohlen-Pierce, and the golden section's 1.618 has no fraction at all.
+    Row repeat;
+    repeat.degree = "R";
+
+    const auto fraction = dsp::nearestFraction (scale.repeat);
+
+    repeat.ratio = fraction.found
+                     ? juce::String (fraction.numerator) + "/" + juce::String (fraction.denominator)
+                     : juce::String (scale.repeat, 5);
+
+    repeat.cents = juce::String (scale.repeatCents(), 1);
+    repeat.step = "";
+    repeat.isRepeat = true;
+
+    rows_.push_back (std::move (repeat));
+
+    setSize (juce::jmax (getWidth(), 1), preferredHeight());
+    repaint();
+}
+
+void DegreeTable::paint (juce::Graphics& g)
+{
+    const auto mono = juce::FontOptions()
+                        .withName (juce::Font::getDefaultMonospacedFontName())
+                        .withHeight (11.0f);
+
+    const int width = getWidth();
+
+    // Four columns: degree, ratio, cents, step. The ratio column gets the
+    // most room because 177147/131072 is a real resident.
+    const int degreeRight = 30;
+    const int ratioRight = juce::jmin (degreeRight + 110, width / 2 + 20);
+    const int centsRight = ratioRight + 62;
+    const int stepRight = juce::jmin (centsRight + 56, width - 4);
+
+    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    g.setColour (palette_.dimText);
+    g.drawText ("#", 0, 0, degreeRight, kHeaderHeight, juce::Justification::centredRight);
+    g.drawText ("RATIO", degreeRight, 0, ratioRight - degreeRight, kHeaderHeight,
+                juce::Justification::centredRight);
+    g.drawText ("CENTS", ratioRight, 0, centsRight - ratioRight, kHeaderHeight,
+                juce::Justification::centredRight);
+    g.drawText ("STEP", centsRight, 0, stepRight - centsRight, kHeaderHeight,
+                juce::Justification::centredRight);
+
+    g.setFont (mono);
+
+    for (std::size_t index = 0; index < rows_.size(); ++index)
+    {
+        const auto& row = rows_[index];
+        const int y = kHeaderHeight + static_cast<int> (index) * kRowHeight;
+
+        if (index % 2 == 0)
+        {
+            g.setColour (palette_.panel.brighter (0.06f));
+            g.fillRect (0, y, width, kRowHeight);
+        }
+
+        g.setColour (row.isRepeat ? palette_.accent : palette_.dimText);
+        g.drawText (row.degree, 0, y, degreeRight, kRowHeight, juce::Justification::centredRight);
+
+        g.setColour (row.isRepeat ? palette_.accent : palette_.text);
+        g.drawText (row.ratio, degreeRight, y, ratioRight - degreeRight, kRowHeight,
+                    juce::Justification::centredRight);
+        g.drawText (row.cents, ratioRight, y, centsRight - ratioRight, kRowHeight,
+                    juce::Justification::centredRight);
+
+        g.setColour (palette_.dimText);
+        g.drawText (row.step, centsRight, y, stepRight - centsRight, kRowHeight,
+                    juce::Justification::centredRight);
+    }
+}
+
 TuningPage::TuningPage (SonitusProcessor& processorToUse, ui::Palette palette)
-    : sonitus_ (processorToUse), palette_ (palette)
+    : sonitus_ (processorToUse), palette_ (palette), degreeTable_ (palette)
 {
     headingLabel_.setText ("TUNING", juce::dontSendNotification);
     headingLabel_.setColour (juce::Label::textColourId, palette_.accent);
@@ -2073,16 +2176,13 @@ TuningPage::TuningPage (SonitusProcessor& processorToUse, ui::Palette palette)
     addAndMakeVisible (descriptionLabel_);
 
     explanationLabel_.setColour (juce::Label::textColourId, palette_.dimText);
-    explanationLabel_.setFont (juce::FontOptions (12.0f));
+    explanationLabel_.setFont (juce::FontOptions (11.0f));
     explanationLabel_.setJustificationType (juce::Justification::topLeft);
     explanationLabel_.setText (
-        "Microtuning is here rather than bolted on because the comb key-tracks onto harmonics of "
-        "the played note. In twelve-tone equal temperament a major third is fourteen cents sharp "
-        "of the real 5/4 and beats against its own comb; in just intonation it does not, and a "
-        "sustained chord locks instead of churning. The difference is large on a bass.\n\n"
-        "The scale travels with the project: the .scl text is saved into the plugin's state, so "
-        "a session opened on another machine is in tune without the file. Detune and glide stay "
-        "in cents -- they are a spread around a pitch, not a scale degree.",
+        "Microtuning is built in because the comb key-tracks onto harmonics of the played note: "
+        "a just interval locks against it where a tempered one churns. The scale travels with "
+        "the project -- .scl text is saved into the plugin's state. Detune and glide stay in "
+        "cents; they are a spread around a pitch, not a scale degree.",
         juce::dontSendNotification);
     addAndMakeVisible (explanationLabel_);
 
@@ -2091,12 +2191,50 @@ TuningPage::TuningPage (SonitusProcessor& processorToUse, ui::Palette palette)
     errorLabel_.setJustificationType (juce::Justification::topLeft);
     addAndMakeVisible (errorLabel_);
 
+    // What the selected scale is: theorem, story, and every degree.
+    constructionLabel_.setColour (juce::Label::textColourId, palette_.accent);
+    constructionLabel_.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+    constructionLabel_.setJustificationType (juce::Justification::topLeft);
+    addAndMakeVisible (constructionLabel_);
+
+    storyLabel_.setColour (juce::Label::textColourId, palette_.text);
+    storyLabel_.setFont (juce::FontOptions (12.0f));
+    storyLabel_.setJustificationType (juce::Justification::topLeft);
+    addAndMakeVisible (storyLabel_);
+
+    tableViewport_.setViewedComponent (&degreeTable_, false);
+    tableViewport_.setScrollBarsShown (true, false);
+    tableViewport_.setScrollBarThickness (14);
+    addAndMakeVisible (tableViewport_);
+
     refresh();
 }
 
 void TuningPage::refresh()
 {
     descriptionLabel_.setText (sonitus_.describeTuning(), juce::dontSendNotification);
+
+    // The info panel follows whatever is actually loaded -- built-in or file.
+    // A built-in carries its construction and story; a file-loaded scale has
+    // neither, so the panel says where it came from and lets the computed
+    // table speak for the numbers.
+    const auto& scale = sonitus_.getScale();
+
+    degreeTable_.setScale (scale);
+
+    constructionLabel_.setText (
+        scale.construction.empty()
+            ? juce::String ("Loaded from a Scala file: the degrees are the file's own.")
+            : juce::String (scale.construction),
+        juce::dontSendNotification);
+
+    storyLabel_.setText (
+        scale.story.empty()
+            ? juce::String ("The table shows every degree as the instrument will play it -- "
+                            "an exact fraction where the file gave a ratio, cents where it "
+                            "gave cents.")
+            : juce::String (scale.story),
+        juce::dontSendNotification);
 
     const auto name = sonitus_.getScaleName();
 
@@ -2197,14 +2335,35 @@ void TuningPage::resized()
     row.removeFromLeft (6);
     resetButton_.setBounds (row.removeFromLeft (90).reduced (0, 2));
 
-    bounds.removeFromTop (10);
-    descriptionLabel_.setBounds (bounds.removeFromTop (38));
+    bounds.removeFromTop (8);
+    descriptionLabel_.setBounds (bounds.removeFromTop (18));
+
+    bounds.removeFromTop (4);
+    errorLabel_.setBounds (bounds.removeFromTop (18));
 
     bounds.removeFromTop (6);
-    errorLabel_.setBounds (bounds.removeFromTop (34));
 
-    bounds.removeFromTop (6);
-    explanationLabel_.setBounds (bounds);
+    // The info panel: the degree table on the left, the theorem and the story
+    // on the right. The table scrolls -- Partch has 43 rows and 53-TET has 53
+    // -- and the prose wraps in the room that remains.
+    auto info = bounds;
+    auto tableArea = info.removeFromLeft (juce::jmin (300, info.getWidth() * 2 / 5));
+
+    tableViewport_.setBounds (tableArea);
+    degreeTable_.setSize (tableArea.getWidth() - tableViewport_.getScrollBarThickness(),
+                          degreeTable_.preferredHeight());
+
+    info.removeFromLeft (12);
+
+    constructionLabel_.setBounds (info.removeFromTop (44));
+    info.removeFromTop (4);
+
+    const int explanation = 46;
+    storyLabel_.setBounds (info.removeFromTop (
+        juce::jmax (40, info.getHeight() - explanation - 6)));
+
+    info.removeFromTop (6);
+    explanationLabel_.setBounds (info);
 }
 
 

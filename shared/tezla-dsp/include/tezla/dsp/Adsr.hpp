@@ -89,6 +89,14 @@
 // `isActive()` is then the voice manager's answer to "can I take this one", and
 // CLAUDE.md section 7's silence-in-silence-out is a property of the envelope
 // rather than of a gate somewhere downstream.
+//
+// And it ends *on time even under a control-rate caller*, which took two
+// separate defences to make true: every setter refuses an unchanged value (see
+// the Controls block), and the release aims from the level it started at
+// rather than from wherever it currently is (see `aimRelease`). Without them,
+// a voice pushing its settings every 32 samples re-aimed the release from the
+// current level each chunk, the exit stretched to ~11x the stated time, and
+// the user met it as a CPU meter pinned at 100% seconds after every key was up.
 
 #include <algorithm>
 #include <cmath>
@@ -182,17 +190,33 @@ public:
         level_ = 0.0;
         target_ = 0.0;
         coefficient_ = 0.0;
+        releaseFrom_ = 0.0;
         heldSamples_ = 0;
         stage_ = AdsrStage::idle;
     }
 
     // -----------------------------------------------------------------------
     // Controls
+    //
+    // **Every setter refuses a no-op** -- CLAUDE.md section 7's general rule,
+    // and here it is load-bearing rather than hygiene. A synth voice pushes
+    // all eight settings at the control rate whether they moved or not, and
+    // re-aiming a running segment is not free of consequence: the decay and
+    // release aim relative to where they are, so re-aiming them every chunk
+    // restarts the curve at its own steep end each time and the exit becomes
+    // a geometric crawl -- a release took ~11x its stated time to cross the
+    // silence floor, voices retired slower than chords arrived, and the user
+    // met the bug as a CPU meter pinned at 100% long after every key was up.
     // -----------------------------------------------------------------------
 
     void setAttackSeconds (double seconds) noexcept
     {
-        attackSeconds_ = std::clamp (seconds, kMinimumSeconds, kMaximumSeconds);
+        const double clamped = std::clamp (seconds, kMinimumSeconds, kMaximumSeconds);
+
+        if (isExactly (clamped, attackSeconds_))
+            return;
+
+        attackSeconds_ = clamped;
         updateCoefficients();
         refreshCurrentSegment();
     }
@@ -205,7 +229,12 @@ public:
 
     void setDecaySeconds (double seconds) noexcept
     {
-        decaySeconds_ = std::clamp (seconds, kMinimumSeconds, kMaximumSeconds);
+        const double clamped = std::clamp (seconds, kMinimumSeconds, kMaximumSeconds);
+
+        if (isExactly (clamped, decaySeconds_))
+            return;
+
+        decaySeconds_ = clamped;
         updateCoefficients();
         refreshCurrentSegment();
     }
@@ -213,13 +242,23 @@ public:
     /// The level the envelope holds at while the note is down, 0 to 1.
     void setSustain (double sustain) noexcept
     {
-        sustain_ = std::clamp (sustain, 0.0, 1.0);
+        const double clamped = std::clamp (sustain, 0.0, 1.0);
+
+        if (isExactly (clamped, sustain_))
+            return;
+
+        sustain_ = clamped;
         refreshCurrentSegment();
     }
 
     void setReleaseSeconds (double seconds) noexcept
     {
-        releaseSeconds_ = std::clamp (seconds, kMinimumSeconds, kMaximumSeconds);
+        const double clamped = std::clamp (seconds, kMinimumSeconds, kMaximumSeconds);
+
+        if (isExactly (clamped, releaseSeconds_))
+            return;
+
+        releaseSeconds_ = clamped;
         updateCoefficients();
         refreshCurrentSegment();
     }
@@ -233,21 +272,36 @@ public:
     /// the header.
     void setAttackTension (double tension) noexcept
     {
-        attackTension_ = std::clamp (tension, -1.0, 1.0);
+        const double clamped = std::clamp (tension, -1.0, 1.0);
+
+        if (isExactly (clamped, attackTension_))
+            return;
+
+        attackTension_ = clamped;
         updateCoefficients();
         refreshCurrentSegment();
     }
 
     void setDecayTension (double tension) noexcept
     {
-        decayTension_ = std::clamp (tension, -1.0, 1.0);
+        const double clamped = std::clamp (tension, -1.0, 1.0);
+
+        if (isExactly (clamped, decayTension_))
+            return;
+
+        decayTension_ = clamped;
         updateCoefficients();
         refreshCurrentSegment();
     }
 
     void setReleaseTension (double tension) noexcept
     {
-        releaseTension_ = std::clamp (tension, -1.0, 1.0);
+        const double clamped = std::clamp (tension, -1.0, 1.0);
+
+        if (isExactly (clamped, releaseTension_))
+            return;
+
+        releaseTension_ = clamped;
         updateCoefficients();
         refreshCurrentSegment();
     }
@@ -294,6 +348,7 @@ public:
             return;
 
         stage_ = AdsrStage::release;
+        releaseFrom_ = level_;
         aimRelease();
     }
 
@@ -422,10 +477,20 @@ private:
         target_ = isInstant (attackSeconds_) ? 1.0 : targetFor (0.0, 1.0, attackTension_);
     }
 
+    /// Aims from the level the release *started* at, not from wherever it now
+    /// is -- and that distinction is what lets a release survive being
+    /// re-aimed. The target of a segment aimed from the current level shrinks
+    /// with the level, so re-aiming it repeatedly (a knob dragged during a
+    /// tail, a genuine modulation of the release time) restarts the curve at
+    /// its own steep end every time and the exit recedes towards forever.
+    /// Aimed from the fixed starting level, the target stays put: a re-aim
+    /// with unchanged settings is exactly idempotent, and one with changed
+    /// settings still crosses the silence floor within the new stated time.
     void aimRelease() noexcept
     {
         coefficient_ = releaseCoefficient_;
-        target_ = isInstant (releaseSeconds_) ? 0.0 : targetFor (level_, 0.0, releaseTension_);
+        target_ = isInstant (releaseSeconds_) ? 0.0
+                                              : targetFor (releaseFrom_, 0.0, releaseTension_);
     }
 
     /// Re-aims the segment in progress at the new settings.
@@ -549,6 +614,10 @@ private:
     /// travelling without inferring it from the target -- which is on the far
     /// side for a negative tension.
     double startedDecayAbove_ { 1.0 };
+
+    /// Where the release started from, so `aimRelease` aims a fixed target
+    /// however often it is called -- see its comment.
+    double releaseFrom_ { 0.0 };
 
     int heldSamples_ { 0 };
 

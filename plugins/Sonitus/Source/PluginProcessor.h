@@ -459,6 +459,11 @@ public:
 
     [[nodiscard]] juce::String getScaleName() const;
 
+    /// The scale as loaded -- degrees, repeat, and for the built-ins the
+    /// construction and story the tuning panel shows. Message thread only,
+    /// like every other panel accessor: the engine has its own copy.
+    [[nodiscard]] const dsp::Scale& getScale() const noexcept { return scale_; }
+
     /// A sentence describing the tuning currently loaded -- how many notes, what
     /// it repeats at, and whether that is an octave.
     [[nodiscard]] juce::String describeTuning() const;

@@ -450,7 +450,8 @@ away. Set aside from the vocal reading, it is a hole you can put anywhere.
 
 ### TUNING
 
-Scala `.scl` scale files and `.kbm` keyboard maps, plus 22 built-in scales.
+Scala `.scl` scale files and `.kbm` keyboard maps, plus **44 built-in scales**
+— and a panel that says what each one *is*.
 
 **This belongs in this instrument rather than being a bolt-on**, because the
 comb key-tracks onto harmonics of the played note. In twelve-tone equal
@@ -460,16 +461,32 @@ instead of churning. The difference is large on a bass.
 
 | group | scales |
 |---|---|
-| pure | just major, just minor, Pythagorean, harmonic series 8–16 |
+| pure | just major/minor, 7-limit, Pythagorean (12 and 17), harmonic series 8–16 and 16–32, undertone series, **Partch 43** |
 | historical | quarter-comma meantone, Werckmeister III, Kirnberger III, Vallotti |
-| ancient | Archytas' enharmonic, diatonic and chromatic tetrachords |
-| non-octave | **Bohlen–Pierce** (repeats at 3/1), **Carlos Alpha / Beta / Gamma** |
-| equal | 5, 7, 12, 19, 24, 31, 53 |
+| ancient Greece | Archytas' enharmonic, diatonic and chromatic; **Ptolemy's even diatonic** (the 12/11 neutral second, 2nd century AD) |
+| **Old Babylonian** | the seven tunings of the tablets — **nīd qabli** (the Hurrian hymn tuning, ~1400 BC, the oldest named tuning of the oldest written music), išartum, embūbum, kitmum, pītum, nīš gabrim, qablītum — the diatonic's seven modes from a chain of pure fifths, a millennium before Pythagoras |
+| ancient China | the **twelve lü** by the san fen sun yi rule — the one-way chain of fifths of the Yellow Bell |
+| **Persian dastgah** | **Shur** and **Chahargah** on Farhat's theoretical intervals — the koron neutral seconds (135/165 cents) and the 270-cent plus tone |
+| maqam theory | **Rast** twice: al-Farabi's just ratios with Zalzal's 27/22 neutral third, and the Turkish Arel–Ezgi–Uzdilek Rast on the 53-comma grid — 30 cents apart on the third, both on purpose |
+| non-octave | **Bohlen–Pierce** (repeats at 3/1), **Carlos Alpha / Beta / Gamma** (divisions of the fifth), **Golden phi** (seven equal parts of 833.09 cents — the golden ratio as the repeat) |
+| equal | 5, 7, 12, 17, 19, 22, 24, 31, 41, 53 |
+
+**The panel shows the selected scale's theorem and its story.** Every built-in
+carries its construction — the one sentence of arithmetic its degrees fall out
+of — and a few sentences of where it comes from and why it matters, beside a
+degree table: exact fraction where the degree is one (the detector accepts
+near-exact rationals only, so a tempered degree never wears a fraction it did
+not earn), cents, and the step to the next degree, with the repeat interval as
+the last row. A scale loaded from a file gets the same table computed from its
+own numbers.
 
 Every one is **generated from its definition** rather than shipped from an
 archive — a Pythagorean scale is a chain of 3/2s, Bohlen–Pierce is thirteen
-equal steps of 3/1. That is arithmetic, and it is also how CLAUDE.md §2.1 and
-§9 want it done.
+equal steps of 3/1, the Babylonian seven are rotations of six pure fifths, and
+Partch's 43 (the one list with no generating rule) is reproduced with
+attribution and verified for the symmetry its book claims. That is arithmetic,
+and it is also how CLAUDE.md §2.1 and §9 want it done; the access honesty for
+the historical numbers is in `docs/DSP-REFERENCES.md`.
 
 The parser refuses a file it cannot fully read and says which line stopped it.
 That is not caution for its own sake: Transpectus's `.tzref` loader took
@@ -538,9 +555,9 @@ One second of audio in 512-sample blocks, after two seconds of pre-roll.
 | | ms/s | core |
 |---|---|---|
 | idle, nothing playing, all 32 slots | **0.5** | 0.05% |
-| 8 voices, 1 unison each (16 oscillators) | 387 | 39% |
-| 8 voices, 3 unison each (48 oscillators) | 422 | 42% |
-| 8 voices, 7 unison each (112 oscillators) | 504 | 50% |
+| 8 voices, 1 unison each (16 oscillators) | 274 | 27% |
+| 8 voices, 3 unison each (48 oscillators) | 312 | 31% |
+| 8 voices, 7 unison each (112 oscillators) | 403 | 40% |
 
 **The voices dominate, not the oscillators.** Seven times the oscillators costs
 about a third more; an eighth of the *voices* costs an eighth, because the
@@ -555,30 +572,52 @@ because they look like the same number:
 
 | notes held | ms/s | core | per voice |
 |---|---|---|---|
-| 1 | 94 | 9% | 94 |
-| 2 | 135 | 14% | 68 |
-| 4 | 217 | 22% | 54 |
-| 8 | 386 | 39% | 48 |
-| 16 | 724 | 72% | 45 |
-| 32 | 1431 | 143% | 45 |
+| 1 | 80 | 8% | 80 |
+| 2 | 107 | 11% | 54 |
+| 4 | 160 | 16% | 40 |
+| 8 | 265 | 26% | 33 |
+| 16 | 486 | 49% | 30 |
+| 32 | 937 | 94% | 29 |
 
 Thirty-two *idle* slots plus the whole mangle cost 0.5 ms/s — five hundredths
 of a core, and the same figure the engine read when the ceiling was eight —
 because `Voice::process` returns on its first line when the amp envelope is
 idle and `applyControls` skips inactive voices entirely. A *sounding* voice
-costs about 45 ms/s; the first note carries the mangle's fixed 50 on top.
+costs about 29 ms/s; the first note carries the mangle's fixed 50 on top.
 
 So the Voices control decides the bill and `kMaxVoices` only decides whether
-you are allowed to run one up. It defaults to **16** — about 72% of one core
-with all sixteen ringing, and more than any sane arrangement holds at once. The
+you are allowed to run one up. It defaults to **16** — about half a core with
+all sixteen ringing, and more than any sane arrangement holds at once. The
 ceiling above that is for a pad whose releases overlap, where most of the
 sounding voices are tails on their way out. Thirty-two genuinely sounding at
-once is more than a core, which is why it is the ceiling and not the default.
+once is nearly a whole core, which is why it is the ceiling and not the
+default.
 
 Idle was 17.9 ms/s until the engine learned to stop: once the chain has been
 below −240 dBFS for a second with no voice sounding, the render and the
 decimation filters are skipped. The clocks keep running, so a slow LFO is where
 it would have been when the next note arrives.
+
+### Tails, and what oversampling multiplies
+
+Two things decide the bill when chords are played over each other, and they
+multiply:
+
+- **A releasing voice costs the same as a held one** until its envelope goes
+  idle, so the real polyphony of a pad passage is *notes per chord × chords
+  per release time*. Overlapping four three-note chords through a two-second
+  release is twelve full-price voices, legitimately. Releases now end exactly
+  when the knob says — an envelope defect that stretched every release to
+  roughly eleven times its stated time, piling up inaudible full-price voices
+  until the meter pinned, is fixed and regression-tested — so the release
+  knob is also the CPU knob for pad work.
+- **Oversampling multiplies the whole voice.** Auto at 48 kHz is ×4: near
+  enough four times the per-voice price, bought back as aliasing that stays
+  below −60 dB at full drive (the table above). Turning it off on a clean
+  patch — low fold, moderate filter drive, no tube push — is an honest trade:
+  the aliasing table's "off" column says exactly what it costs at each note,
+  and on a patch that barely distorts the answer is "very little". At 96 kHz
+  sessions Auto already halves the factor, and at 192 kHz it turns off.
 
 ### Tuning
 
@@ -617,7 +656,7 @@ it would have been when the next note arrives.
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **618 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **663 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.

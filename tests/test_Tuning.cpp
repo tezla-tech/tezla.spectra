@@ -497,6 +497,13 @@ TEZLA_TEST (every_built_in_scale_is_usable_and_uniquely_named)
         CHECK (! scale.name.empty());
         CHECK (scale.size() >= 1);
 
+        // Every built-in carries its theorem and its story -- the tuning
+        // panel shows them, so an empty one is a blank panel, and the whole
+        // point of generating scales from definitions is that the definition
+        // can be said out loud.
+        CHECK (! scale.construction.empty());
+        CHECK (! scale.story.empty());
+
         names.push_back (scale.name);
 
         // And every one of them can actually tune a keyboard.
@@ -702,4 +709,352 @@ TEZLA_TEST (the_new_scales_are_the_arithmetic_they_claim_to_be)
         CHECK (static_cast<int> (scale.ratios.size()) == entry.second);
         CHECK_NEAR (cents (scale.ratios[1]), 1200.0 / entry.second, 1.0e-9);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The microtuning expansion: Persia, Babylon, Baghdad, Istanbul, China,
+// Partch, and the golden section
+// ---------------------------------------------------------------------------
+
+namespace
+{
+const Scale* findScale (const std::vector<Scale>& everything, const std::string& name)
+{
+    for (const auto& scale : everything)
+        if (scale.name == name)
+            return &scale;
+
+    return nullptr;
+}
+} // namespace
+
+TEZLA_TEST (the_babylonian_tunings_are_the_seven_rotations_of_the_chain)
+{
+    const auto everything = scales::all();
+
+    // Nid qabli is the major rotation, bit-exact against the chain of fifths
+    // computed independently here in integers.
+    const auto* nidQabli = findScale (everything, "Nid qabli (Babylonian)");
+    CHECK (nidQabli != nullptr);
+    CHECK (nidQabli->size() == 7);
+
+    const double major[7] = { 1.0, 9.0 / 8.0, 81.0 / 64.0, 4.0 / 3.0,
+                              3.0 / 2.0, 27.0 / 16.0, 243.0 / 128.0 };
+
+    for (int degree = 0; degree < 7; ++degree)
+        CHECK_NEAR (nidQabli->ratios[static_cast<std::size_t> (degree)], major[degree], 1.0e-15);
+
+    // Embubum is the palindrome: its step pattern reads the same up and down.
+    // That property is what survives every scholarly argument about rising
+    // versus falling readings, which is why it is the one asserted.
+    const auto* embubum = findScale (everything, "Embubum (Babylonian)");
+    CHECK (embubum != nullptr);
+
+    std::vector<double> steps;
+
+    for (int degree = 0; degree < embubum->size(); ++degree)
+    {
+        const double from = embubum->ratios[static_cast<std::size_t> (degree)];
+        const double to = degree + 1 < embubum->size()
+                            ? embubum->ratios[static_cast<std::size_t> (degree + 1)]
+                            : embubum->repeat;
+
+        steps.push_back (centsBetween (from, to));
+    }
+
+    for (std::size_t i = 0; i < steps.size(); ++i)
+        CHECK (std::abs (steps[i] - steps[steps.size() - 1 - i]) < 1.0e-9);
+
+    // Isartum leads with the semitone (the limma, 256/243), which is what
+    // makes it the Greek Dorian species under the rising reading.
+    const auto* isartum = findScale (everything, "Isartum (Babylonian)");
+    CHECK (isartum != nullptr);
+    CHECK_NEAR (isartum->ratios[1], 256.0 / 243.0, 1.0e-15);
+
+    // Six of the seven contain the pure fifth; qablitum -- the Locrian-shaped
+    // rotation -- has the diminished 1024/729 where the fifth would be, and
+    // that is its identity rather than a defect.
+    const char* names[] = { "Nid qabli (Babylonian)", "Isartum (Babylonian)",
+                            "Embubum (Babylonian)",   "Kitmum (Babylonian)",
+                            "Pitum (Babylonian)",     "Nis gabrim (Babylonian)",
+                            "Qablitum (Babylonian)" };
+
+    int withFifth = 0;
+    std::vector<std::vector<double>> allSeven;
+
+    for (const char* name : names)
+    {
+        const auto* scale = findScale (everything, name);
+        CHECK (scale != nullptr);
+        CHECK (scale->size() == 7);
+
+        allSeven.push_back (scale->ratios);
+
+        bool hasFifth = false;
+
+        for (const double ratio : scale->ratios)
+            if (std::abs (ratio - 1.5) < 1.0e-12)
+                hasFifth = true;
+
+        if (hasFifth)
+            ++withFifth;
+        else
+            CHECK (std::string (name) == "Qablitum (Babylonian)");
+    }
+
+    CHECK (withFifth == 6);
+
+    const auto* qablitum = findScale (everything, "Qablitum (Babylonian)");
+    bool hasDiminished = false;
+
+    for (const double ratio : qablitum->ratios)
+        if (std::abs (ratio - 1024.0 / 729.0) < 1.0e-12)
+            hasDiminished = true;
+
+    CHECK (hasDiminished);
+
+    // And all seven are genuinely different scales.
+    for (std::size_t a = 0; a < allSeven.size(); ++a)
+        for (std::size_t b = a + 1; b < allSeven.size(); ++b)
+        {
+            double difference = 0.0;
+
+            for (std::size_t i = 0; i < 7; ++i)
+                difference = std::max (difference, std::abs (allSeven[a][i] - allSeven[b][i]));
+
+            CHECK (difference > 1.0e-6);
+        }
+}
+
+TEZLA_TEST (farhats_dastgah_frames_close_and_carry_their_neutral_seconds)
+{
+    const auto everything = scales::all();
+
+    // Shur: Farhat's 135-cent neutral second on a pure Pythagorean frame.
+    const auto* shur = findScale (everything, "Shur (Persian)");
+    CHECK (shur != nullptr);
+    CHECK (shur->size() == 7);
+
+    CHECK_NEAR (shur->cents (1), 135.0, 1.0e-9);
+    CHECK_NEAR (shur->cents (3), 498.0, 1.0e-9);   // the pure fourth
+    CHECK_NEAR (shur->cents (4), 702.0, 1.0e-9);   // the pure fifth
+    CHECK_NEAR (shur->cents (6), 996.0, 1.0e-9);   // the minor seventh
+
+    // The second neutral step is the large one: 300 - 135 = 165.
+    CHECK_NEAR (shur->cents (2) - shur->cents (1), 165.0, 1.0e-9);
+
+    // Chahargah: two *identical* tetrachords of 135 + 270 + 93, each spanning
+    // the pure fourth, joined by a 204 tone. The identity of the two is the
+    // construction, so it is what gets asserted.
+    const auto* chahargah = findScale (everything, "Chahargah (Persian)");
+    CHECK (chahargah != nullptr);
+    CHECK (chahargah->size() == 7);
+
+    const double lower[3] = { chahargah->cents (1) - chahargah->cents (0),
+                              chahargah->cents (2) - chahargah->cents (1),
+                              chahargah->cents (3) - chahargah->cents (2) };
+    const double upper[3] = { chahargah->cents (5) - chahargah->cents (4),
+                              chahargah->cents (6) - chahargah->cents (5),
+                              1200.0 - chahargah->cents (6) };
+
+    for (int i = 0; i < 3; ++i)
+        CHECK_NEAR (lower[i], upper[i], 1.0e-9);
+
+    CHECK_NEAR (lower[0], 135.0, 1.0e-9);
+    CHECK_NEAR (lower[1], 270.0, 1.0e-9);          // the plus tone
+    CHECK_NEAR (chahargah->cents (3), 498.0, 1.0e-9);
+    CHECK_NEAR (chahargah->cents (4) - chahargah->cents (3), 204.0, 1.0e-9);
+}
+
+TEZLA_TEST (the_two_rasts_disagree_exactly_where_history_says)
+{
+    const auto everything = scales::all();
+
+    // Zalzal's wosta: 27/22, 354.55 cents, and the upper tetrachord is the
+    // lower one moved up a pure fifth.
+    const auto* zalzal = findScale (everything, "Rast (Zalzal, just)");
+    CHECK (zalzal != nullptr);
+    CHECK (zalzal->size() == 7);
+    CHECK_NEAR (zalzal->ratios[2], 27.0 / 22.0, 1.0e-15);
+    CHECK_NEAR (zalzal->cents (2), 354.547, 0.01);
+
+    for (int degree = 0; degree < 2; ++degree)
+        CHECK_NEAR (zalzal->ratios[static_cast<std::size_t> (degree + 5)],
+                    1.5 * zalzal->ratios[static_cast<std::size_t> (degree + 1)], 1.0e-12);
+
+    // The AEU Rast: comma degrees on the 53 grid, and its third is the
+    // *schismatic* one -- 17 commas is 384.9 cents, under two cents from a
+    // pure 5/4, where Zalzal's neutral third floats thirty cents below.
+    const auto* aeu = findScale (everything, "Rast (Turkish, AEU)");
+    CHECK (aeu != nullptr);
+    CHECK (aeu->size() == 7);
+
+    const int commas[] = { 0, 9, 17, 22, 31, 40, 48 };
+
+    for (int degree = 0; degree < 7; ++degree)
+        CHECK_NEAR (aeu->cents (degree), commas[degree] * 1200.0 / 53.0, 1.0e-9);
+
+    CHECK (std::abs (aeu->cents (2) - 386.31) < 2.0);
+    CHECK (std::abs (aeu->cents (2) - zalzal->cents (2)) > 25.0);
+
+    // Its fourth and fifth are the near-perfect 53-EDO ones.
+    CHECK (std::abs (aeu->cents (3) - 498.04) < 0.2);
+    CHECK (std::abs (aeu->cents (4) - 701.96) < 0.2);
+}
+
+TEZLA_TEST (ptolemys_even_genus_telescopes_to_an_exact_fourth)
+{
+    const auto everything = scales::all();
+    const auto* even = findScale (everything, "Ptolemy even diatonic");
+
+    CHECK (even != nullptr);
+
+    // 12/11 * 11/10 * 10/9 = 4/3 by cancellation; the doubles get there to
+    // rounding. And the 12/11 neutral second is the point of the genus.
+    CHECK_NEAR (even->ratios[3], 4.0 / 3.0, 1.0e-14);
+    CHECK_NEAR (even->cents (1), 150.64, 0.01);
+}
+
+TEZLA_TEST (the_twelve_lu_run_the_chain_of_fifths_one_way_only)
+{
+    const auto everything = scales::all();
+    const auto* lu = findScale (everything, "Twelve lu (China)");
+
+    CHECK (lu != nullptr);
+    CHECK (lu->size() == 12);
+
+    // Independently in integers: 3^k folded into the octave, k = 0..11.
+    std::vector<double> expected;
+
+    for (int k = 0; k <= 11; ++k)
+    {
+        long long numerator = 1, denominator = 1;
+
+        for (int i = 0; i < k; ++i)
+            numerator *= 3, denominator *= 2;
+
+        while (numerator >= 2 * denominator) denominator *= 2;
+        while (numerator < denominator)      numerator *= 2;
+
+        expected.push_back (static_cast<double> (numerator) / static_cast<double> (denominator));
+    }
+
+    std::sort (expected.begin(), expected.end());
+
+    for (int degree = 0; degree < 12; ++degree)
+        CHECK_NEAR (lu->ratios[static_cast<std::size_t> (degree)],
+                    expected[static_cast<std::size_t> (degree)], 1.0e-15);
+
+    // The one-directional chain is what distinguishes it from the Pythagorean
+    // scale in this same menu: no pure fourth anywhere -- the eleventh fifth
+    // lands at 521.5 cents instead of 498.
+    bool hasPureFourth = false;
+    bool hasSharpFourth = false;
+
+    for (const double ratio : lu->ratios)
+    {
+        if (std::abs (ratio - 4.0 / 3.0) < 1.0e-9)
+            hasPureFourth = true;
+
+        if (std::abs (ratio - 177147.0 / 131072.0) < 1.0e-9)
+            hasSharpFourth = true;
+    }
+
+    CHECK (! hasPureFourth);
+    CHECK (hasSharpFourth);
+}
+
+TEZLA_TEST (partch_forty_three_is_symmetric_eleven_limit_and_ordered)
+{
+    // The list is reproduced from Genesis of a Music rather than derived --
+    // there is no rule that generates it -- so the test verifies every
+    // structural property the book states: 43 degrees, strictly ascending,
+    // nothing beyond the 11-limit, and exact inversional symmetry.
+    const auto everything = scales::all();
+    const auto* partch = findScale (everything, "Partch 43");
+
+    CHECK (partch != nullptr);
+    CHECK (partch->size() == 43);
+    CHECK (partch->isUsable());
+
+    for (const double ratio : partch->ratios)
+    {
+        // Recover the fraction and factor it: nothing above 11 may remain.
+        const auto fraction = nearestFraction (ratio);
+
+        CHECK (fraction.found);
+
+        long long numerator = fraction.numerator;
+        long long denominator = fraction.denominator;
+
+        for (const long long prime : { 2LL, 3LL, 5LL, 7LL, 11LL })
+        {
+            while (numerator % prime == 0)   numerator /= prime;
+            while (denominator % prime == 0) denominator /= prime;
+        }
+
+        CHECK (numerator == 1);
+        CHECK (denominator == 1);
+    }
+
+    // Inversional symmetry: for every ratio r above the tonic, 2/r is also a
+    // degree. Partch's Monophony is built on the identity of otonality and
+    // utonality, and this is that identity as arithmetic.
+    for (int a = 1; a < partch->size(); ++a)
+    {
+        const double complement = 2.0 / partch->ratios[static_cast<std::size_t> (a)];
+        bool present = false;
+
+        for (int b = 1; b < partch->size(); ++b)
+            if (std::abs (partch->ratios[static_cast<std::size_t> (b)] - complement) < 1.0e-12)
+                present = true;
+
+        CHECK (present);
+    }
+}
+
+TEZLA_TEST (the_golden_scale_repeats_at_phi_and_phi_behaves)
+{
+    const auto everything = scales::all();
+    const auto* golden = findScale (everything, "Golden phi");
+
+    CHECK (golden != nullptr);
+    CHECK (golden->size() == 7);
+    CHECK_NEAR (golden->repeatCents(), 833.0903, 0.001);
+
+    // The property the scale is built on: 1/phi = phi - 1, so the difference
+    // tone of two notes a repeat apart lands exactly one repeat below the
+    // lower note. This is the golden ratio's defining identity, checked here
+    // so the construction's claim is arithmetic rather than prose.
+    const double phi = golden->repeat;
+
+    CHECK_NEAR (1.0 / phi, phi - 1.0, 1.0e-15);
+
+    for (int degree = 1; degree < golden->size(); ++degree)
+        CHECK_NEAR (golden->cents (degree) - golden->cents (degree - 1), 833.0903 / 7.0, 0.001);
+}
+
+TEZLA_TEST (nearest_fraction_finds_ratios_and_refuses_temperament)
+{
+    // Finds the genuine rationals...
+    const auto simple = nearestFraction (1.5);
+    CHECK (simple.found);
+    CHECK (simple.numerator == 3);
+    CHECK (simple.denominator == 2);
+
+    const auto wosta = nearestFraction (27.0 / 22.0);
+    CHECK (wosta.found);
+    CHECK (wosta.numerator == 27);
+    CHECK (wosta.denominator == 22);
+
+    const auto wide = nearestFraction (160.0 / 81.0);
+    CHECK (wide.found);
+    CHECK (wide.numerator == 160);
+    CHECK (wide.denominator == 81);
+
+    // ...and refuses the tempered degrees, which is just as important: an
+    // equal-tempered fifth labelled "3/2" would be a lie of half a percent.
+    CHECK (! nearestFraction (std::pow (2.0, 7.0 / 12.0)).found);
+    CHECK (! nearestFraction (std::pow (2.0, 17.0 / 53.0)).found);
+    CHECK (! nearestFraction (0.0).found);
 }
