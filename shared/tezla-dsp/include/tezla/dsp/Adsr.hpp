@@ -152,6 +152,24 @@ public:
                  * std::pow (kSharpestOvershoot / kStraightestOvershoot, magnitude);
     }
 
+    /// Where a segment aims, given where it starts, where it must arrive and
+    /// how it bends. Public and static because `MultiEnvelope` shares this --
+    /// one definition of the tension curve, not two that drift.
+    [[nodiscard]] static double targetFor (double from, double to, double tension) noexcept
+    {
+        const double distance = to - from;
+        const double beyond = distance * (overshootFor (tension) - 1.0);
+
+        return tension < 0.0 ? from - beyond : to + beyond;
+    }
+
+    /// How many time constants a segment spans for a given overshoot. Shared
+    /// with `MultiEnvelope` for the same reason as `targetFor`.
+    [[nodiscard]] static double scaleFor (double overshoot) noexcept
+    {
+        return std::log (overshoot / (overshoot - 1.0));
+    }
+
     void prepare (double sampleRate) noexcept
     {
         sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -363,11 +381,6 @@ public:
 private:
     /// `ln(T / (T - 1))`: how many time constants a segment aiming at T takes to
     /// cover the distance it was actually asked to cover.
-    [[nodiscard]] static double scaleFor (double overshoot) noexcept
-    {
-        return std::log (overshoot / (overshoot - 1.0));
-    }
-
     /// exp(-1 / (tau * fs)), with `tau` derived so the segment lasts `seconds`.
     ///
     /// **Inverted for a negative tension**, which is the whole of the mirror:
@@ -397,14 +410,6 @@ private:
     /// Positive tension aims past the destination and approaches it; negative
     /// aims past the *origin* and recedes from it. Both land exactly on `to`
     /// after the stated time.
-    [[nodiscard]] static double targetFor (double from, double to, double tension) noexcept
-    {
-        const double distance = to - from;
-        const double beyond = distance * (overshootFor (tension) - 1.0);
-
-        return tension < 0.0 ? from - beyond : to + beyond;
-    }
-
     /// A zero-length segment must still finish. With no time to travel in, the
     /// coefficient is zero and the level jumps to the target -- which for a
     /// negative tension would be on the wrong side of the destination, so the
