@@ -1992,6 +1992,263 @@ const std::vector<Preset>& presets()
                 { ids::output, -9.0f },
             }
         },
+        // -------------------------------------------------------------------
+        // The phase-3 set: each one exists to show one new mechanism doing the
+        // thing it was built for. Same rule as the rest -- a preset is a
+        // complete parameter set over the defaults, and every one is a sound,
+        // not a demo.
+        // -------------------------------------------------------------------
+        {
+            // The ADV envelope as a wobble engine: a looping two-leg envelope,
+            // snapped to the grid, closing and opening the filter in exact
+            // 1/8s. This is the dubstep wobble with no LFO anywhere -- and
+            // because the legs have independent times and tensions, the down
+            // is a snap and the up is a swell, which no symmetric LFO does.
+            "Clockwork wobble -- ADV loop, snapped",
+            {
+                { ids::levelB, 1.0f }, { ids::centsB, 8.0f },
+                { ids::unisonA, 3.0f }, { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
+                { ids::unisonB, 3.0f }, { ids::detuneB, 16.0f }, { ids::spreadB, 0.6f },
+
+                { ids::subLevel, 0.5f }, { ids::subOctave, -1.0f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.02f },
+
+                { ids::cutoff, 2600.0f }, { ids::resonance, 0.42f }, { ids::filterTrack, 0.3f },
+
+                { ids::ampSustain, 1.0f }, { ids::ampRelease, 0.1f },
+
+                // ADV 1: down fast-with-a-snap, up slow-with-a-swell, looping
+                // between point 1 and the sustain at point 2, every time on
+                // the grid. Tempo changes retune the wobble live.
+                { "adv1Enable", 1.0f }, { "adv1Loop", 1.0f }, { "adv1Snap", 1.0f },
+                { "adv1Points", 2.0f }, { "adv1Sustain", 2.0f }, { "adv1LoopStart", 1.0f },
+                { "adv1T1", 0.11f }, { "adv1L1", 1.0f }, { "adv1C1", 0.6f },
+                { "adv1T2", 0.24f }, { "adv1L2", 0.0f }, { "adv1C2", -0.5f },
+
+                // Slot 1: ADV 1 closes the filter by four octaves.
+                { ids::modSource (0), 10.0f },   // ADV 1
+                { ids::modDest (0), 1.0f },      // cutoff
+                { ids::modDepth (0), -0.63f },   // ~4 octaves on the square law
+
+                { ids::tubeDrive, 7.0f },
+                { ids::output, -4.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The one-oscillator flanger: a double saw whose second ramp is
+            // swept by a bar-locked LFO on Morph. No comb, no delay line --
+            // the cancellation is inside the waveform, and because the LFO is
+            // synced with retrigger off, the same bar of the song gets the
+            // same sweep on every pass. Print it and it stays printed.
+            "Twin ramp -- the flanger inside the wave",
+            {
+                { ids::shapeA, 6.0f },           // double saw
+                { ids::unisonA, 3.0f }, { ids::detuneA, 10.0f }, { ids::spreadA, 0.6f },
+
+                { ids::subLevel, 0.45f }, { ids::subOctave, -1.0f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.025f },
+
+                { ids::cutoff, 3200.0f }, { ids::resonance, 0.2f }, { ids::filterTrack, 0.4f },
+
+                { ids::ampSustain, 1.0f },
+
+                { ids::lfo1Sync, 1.0f }, { ids::lfo1Div, 3.0f },   // one bar
+                { ids::lfo1Wave, 1.0f },                            // triangle
+
+                { ids::modSource (0), 7.0f },    // LFO 1
+                { ids::modDest (0), 17.0f },     // Morph A
+                { ids::modDepth (0), 0.9f },
+
+                { ids::tubeDrive, 6.0f },
+                { ids::output, -3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The Dome doing the thing only it can do: a bass that grows
+            // harmonics with **zero aliasing at any drive**, because the shape
+            // never has a partial above k times the note. ADV 1 breathes the
+            // pressing slowly; velocity adds bite per note.
+            "Dome bloom -- harmonics from a pure tone",
+            {
+                { ids::shapeA, 5.0f },           // dome
+                { ids::unisonA, 2.0f }, { ids::detuneA, 6.0f }, { ids::spreadA, 0.35f },
+
+                { ids::subLevel, 0.35f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 9000.0f },        // the shape is the filter here
+
+                { ids::ampAttack, 0.01f }, { ids::ampSustain, 0.9f }, { ids::ampRelease, 0.25f },
+
+                // A slow four-point breathing loop on the pressing.
+                { "adv1Enable", 1.0f }, { "adv1Loop", 1.0f },
+                { "adv1Points", 3.0f }, { "adv1Sustain", 3.0f }, { "adv1LoopStart", 1.0f },
+                { "adv1T1", 0.8f },  { "adv1L1", 0.85f }, { "adv1C1", 0.3f },
+                { "adv1T2", 1.4f },  { "adv1L2", 0.15f }, { "adv1C2", -0.3f },
+                { "adv1T3", 1.2f },  { "adv1L3", 0.7f },  { "adv1C3", 0.0f },
+
+                { ids::modSource (0), 10.0f },   // ADV 1
+                { ids::modDest (0), 17.0f },     // Morph A
+                { ids::modDepth (0), 0.85f },
+
+                { ids::modSource (1), 4.0f },    // velocity
+                { ids::modDest (1), 17.0f },     // Morph A
+                { ids::modDepth (1), 0.4f },
+
+                { ids::tubeDrive, 9.0f },        // drive it: still nothing folds
+                { ids::output, -3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // Noise into a key-tracked comb: broadband in, *pitch* out. The
+            // comb's feedback rings the noise at harmonics of the played note,
+            // which is how a filter-swept hiss becomes a playable metallic
+            // growl. The classic jungle riser lives at the top of this patch's
+            // mod wheel... or its LFO, here, fading in per note.
+            "Steam pipe -- noise made pitched",
+            {
+                { ids::shapeA, 8.0f },           // noise
+                { ids::morphA, 0.25f },          // just off white
+                { ids::unisonA, 5.0f }, { ids::spreadA, 1.0f },   // five streams, wide
+
+                { ids::subLevel, 0.55f }, { ids::subOctave, 0.0f },  // sine at pitch: the tone
+
+                { ids::cutoff, 7000.0f }, { ids::resonance, 0.15f },
+
+                { ids::ampAttack, 0.02f }, { ids::ampSustain, 1.0f }, { ids::ampRelease, 0.3f },
+
+                { ids::combMode, 1.0f },         // flange
+                { ids::combTrack, 1.0f },        // locked to the note
+                { ids::combFeed, 0.88f },        // ring it hard
+                { ids::combMix, 1.0f }, { ids::combDamp, 0.35f }, { ids::combSpread, 0.3f },
+
+                { ids::lfo1Att, 0.6f }, { ids::lfo1Retrig, 1.0f },
+                { ids::lfo1Rate, 0.9f },
+
+                { ids::modSource (0), 7.0f },    // LFO 1, fading in
+                { ids::modDest (0), 17.0f },     // Morph A: the colour breathes
+                { ids::modDepth (0), 0.5f },
+
+                { ids::output, -4.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // Two-operator FM, the DX way: B is a silent modulator a twelfth
+            // up (a 3:1 ratio -- FM lives on integer ratios, and Semis is
+            // snapped so the ratio holds), A is a sine carrier, and the PM
+            // index rides a fast-decay envelope. The brightness *is* the
+            // envelope, which is the whole FM bass trick.
+            "FM punch -- the index is the envelope",
+            {
+                { ids::shapeA, 3.0f },           // sine carrier... but see below:
+                // PM in this instrument runs A -> B, so the *carrier* is B and
+                // the modulator is A. A is set silent and a twelfth up; B
+                // carries at the note.
+                { ids::levelA, 0.0f },
+                { ids::semitonesA, 19.0f },      // 3:1 against B
+                { ids::shapeB, 3.0f },           // sine
+                { ids::levelB, 1.0f },
+                { ids::pmIndex, 0.0f },          // the envelope brings it
+
+                { ids::subLevel, 0.4f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 12000.0f },       // FM makes its own brightness
+
+                { ids::ampAttack, 0.002f }, { ids::ampDecay, 0.4f },
+                { ids::ampSustain, 0.55f }, { ids::ampRelease, 0.12f },
+
+                { ids::env1Attack, 0.001f }, { ids::env1Decay, 0.16f },
+                { ids::env1Sustain, 0.12f }, { ids::env1Release, 0.1f },
+                { ids::env1DecayT, 0.7f },       // the DX snap
+
+                { ids::modSource (0), 2.0f },    // mod env 1
+                { ids::modDest (0), 4.0f },      // PM index
+                { ids::modDepth (0), 0.55f },
+
+                { ids::modSource (1), 4.0f },    // velocity opens it further
+                { ids::modDest (1), 4.0f },
+                { ids::modDepth (1), 0.25f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.015f },
+                { ids::output, -3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The same two operators pushed inharmonic: the modulator a major
+            // seventh plus two octaves up, which lands the sidebands between
+            // the harmonics -- bell territory -- with an ADV envelope giving
+            // the index a strike, a shimmer-back, and a slow fade that no
+            // ADSR draws. Poly, long release: chords ring like a gamelan.
+            "Bell foundry -- inharmonic FM, ADV-shaped",
+            {
+                { ids::levelA, 0.0f },
+                { ids::octaveA, 2.0f }, { ids::semitonesA, 11.0f },  // 4.756:1 -- inharmonic
+                { ids::shapeB, 3.0f }, { ids::levelB, 1.0f },
+
+                { ids::cutoff, 14000.0f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampDecay, 2.5f },
+                { ids::ampSustain, 0.0f }, { ids::ampRelease, 2.8f },
+                { ids::ampDecayT, 0.5f },
+
+                // The index's life: strike hard, duck, shimmer back up a
+                // little, then fade over seconds -- four points, no loop.
+                { "adv1Enable", 1.0f },
+                { "adv1Points", 4.0f }, { "adv1Sustain", 4.0f },
+                { "adv1T1", 0.004f }, { "adv1L1", 1.0f },  { "adv1C1", 0.0f },
+                { "adv1T2", 0.35f },  { "adv1L2", 0.25f }, { "adv1C2", 0.6f },
+                { "adv1T3", 0.8f },   { "adv1L3", 0.45f }, { "adv1C3", -0.4f },
+                { "adv1T4", 3.5f },   { "adv1L4", 0.0f },  { "adv1C4", 0.4f },
+
+                { ids::modSource (0), 10.0f },   // ADV 1
+                { ids::modDest (0), 4.0f },      // PM index
+                { ids::modDepth (0), 0.5f },
+
+                { ids::polyphony, 12.0f },
+                { ids::output, -6.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The Vintage saw doing pad work: the RC curve softens the top the
+            // way the old polys did, drift keeps the stack breathing, and both
+            // envelopes are snapped so the swell always lands on the grid.
+            // Slow bar-locked movement on the vowel from a synced LFO 2.
+            "Vintage swell -- the analogue curve, on the grid",
+            {
+                { ids::shapeA, 4.0f },           // vintage
+                { ids::morphA, 0.45f },
+                { ids::shapeB, 4.0f }, { ids::morphB, 0.45f },
+                { ids::levelB, 0.8f }, { ids::centsB, 7.0f },
+                { ids::unisonA, 3.0f }, { ids::detuneA, 9.0f }, { ids::spreadA, 0.7f },
+                { ids::unisonB, 3.0f }, { ids::detuneB, 11.0f }, { ids::spreadB, 0.8f },
+                { ids::driftA, 6.0f }, { ids::driftB, 6.0f },
+
+                { ids::cutoff, 4200.0f }, { ids::filterTrack, 0.3f },
+
+                { ids::ampAttack, 0.5f }, { ids::ampSustain, 0.85f }, { ids::ampRelease, 0.5f },
+                { ids::ampSnap, 1.0f },
+                { ids::env1Snap, 1.0f },
+
+                { ids::formantMix, 0.35f }, { ids::formantSharp, 0.3f },
+
+                { ids::lfo2Sync, 1.0f }, { ids::lfo2Div, 2.0f },   // two bars
+                { ids::globalSource (0), 2.0f },   // LFO 2, bar-locked
+                { ids::globalDest (0), 5.0f },     // Vowel
+                { ids::globalDepth (0), 0.4f },
+
+                { ids::output, -6.0f },
+
+                { ids::polyphony, 12.0f },
+            }
+        },
+
     };
 
     return list;

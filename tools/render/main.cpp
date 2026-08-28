@@ -573,6 +573,8 @@ int main (int argc, char** argv)
         return 0;
     }
 
+    int playNote = -1;
+
     // Parameters before prepareToPlay, so the engine is built for them.
     for (int argument = 4; argument < argc; ++argument)
     {
@@ -593,6 +595,17 @@ int main (int argc, char** argv)
             processor->setCurrentProgram (juce::roundToInt (value));
             std::printf ("  preset %d (%s)\n", juce::roundToInt (value),
                          processor->getProgramName (juce::roundToInt (value)).toRawUTF8());
+            continue;
+        }
+
+        // "note=52": play that MIDI note for the first 60% of the render, so
+        // an *instrument* renders something. Without it a synth renders exact
+        // silence and every preset comparison is a comparison of nothing --
+        // which is how the phase-3 preset batch would have "verified".
+        if (id == "note")
+        {
+            playNote = juce::roundToInt (value);
+            std::printf ("  note %d on, off at 60%%\n", playNote);
             continue;
         }
 
@@ -636,6 +649,8 @@ int main (int argc, char** argv)
 
     std::size_t index = 0;
 
+    const int noteOffAt = (totalSamples * 3) / 5;
+
     for (int written = 0; written < totalSamples; written += blockSize)
     {
         const int span = std::min (blockSize, totalSamples - written);
@@ -646,6 +661,17 @@ int main (int argc, char** argv)
             const double value = source (index++);
             buffer.setSample (0, i, value);
             buffer.setSample (1, i, value * 0.85);
+        }
+
+        midi.clear();
+
+        if (playNote >= 0)
+        {
+            if (written == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, playNote, 0.9f), 0);
+
+            if (written <= noteOffAt && noteOffAt < written + span)
+                midi.addEvent (juce::MidiMessage::noteOff (1, playNote), noteOffAt - written);
         }
 
         processor->processBlock (buffer, midi);
