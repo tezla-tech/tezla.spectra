@@ -202,6 +202,9 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::modEnvelope1:
             case GlobalSource::modEnvelope2:
             case GlobalSource::velocity:
+            case GlobalSource::advEnv1:
+            case GlobalSource::advEnv2:
+            case GlobalSource::advEnv3:
             {
                 const Voice* voice = voices_.trackedVoice();
 
@@ -214,6 +217,10 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
                     case GlobalSource::modEnvelope1: value = voice->getModEnvelopeLevel (0); break;
                     case GlobalSource::modEnvelope2: value = voice->getModEnvelopeLevel (1); break;
                     case GlobalSource::velocity:     value = voice->getVelocity(); break;
+
+                    case GlobalSource::advEnv1:      value = voice->getAdvLevel (0); break;
+                    case GlobalSource::advEnv2:      value = voice->getAdvLevel (1); break;
+                    case GlobalSource::advEnv3:      value = voice->getAdvLevel (2); break;
 
                     // Unreachable -- the outer switch has already sorted these
                     // out -- but listed rather than defaulted, so a source
@@ -771,7 +778,11 @@ const VoiceParameters& Engine::snappedVoice() noexcept
     // actually asks for the grid.
     const auto& raw = active_.voice;
 
-    if (! (raw.amp.snap || raw.mod1.snap || raw.mod2.snap))
+    const bool advSnaps = (raw.adv[0].enable && raw.adv[0].snap)
+                       || (raw.adv[1].enable && raw.adv[1].snap)
+                       || (raw.adv[2].enable && raw.adv[2].snap);
+
+    if (! (raw.amp.snap || raw.mod1.snap || raw.mod2.snap || advSnaps))
         return raw;
 
     snappedVoice_ = raw;
@@ -790,6 +801,15 @@ const VoiceParameters& Engine::snappedVoice() noexcept
     snapEnvelope (snappedVoice_.amp);
     snapEnvelope (snappedVoice_.mod1);
     snapEnvelope (snappedVoice_.mod2);
+
+    for (auto& adv : snappedVoice_.adv)
+    {
+        if (! (adv.enable && adv.snap))
+            continue;
+
+        for (auto& seconds : adv.seconds)
+            seconds = dsp::snapSeconds (seconds, bpm_);
+    }
 
     return snappedVoice_;
 }

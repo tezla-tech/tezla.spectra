@@ -44,6 +44,7 @@
 
 #include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/MultiEnvelope.hpp>
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Oscillator.hpp>
@@ -97,6 +98,12 @@ enum class ModSource
     lfo2,
     sequencer,
 
+    /// The three ADV envelopes. **Appended** -- a stored slot is an index into
+    /// this list, CLAUDE.md section 8. A disabled ADV envelope reads 0.
+    advEnv1,
+    advEnv2,
+    advEnv3,
+
     count
 };
 
@@ -132,6 +139,10 @@ enum class ModDestination
     /// How deep the period doubling goes. **Appended**, because a stored slot
     /// is an index into this list -- CLAUDE.md section 8.
     kargyraa,
+
+    /// The two morphs. Appended for the same reason.
+    morphA,
+    morphB,
 
     count
 };
@@ -193,6 +204,7 @@ struct VoiceParameters
     double semitonesA { 0.0 };         ///< -12 .. +12
     double centsA { 0.0 };             ///< -100 .. +100
     double widthA { 0.5 };             ///< pulse width / triangle skew
+    double morphA { 0.0 };             ///< the shape's own tweak, 0 = canonical
     int unisonA { 1 };                 ///< 1 .. 7
     double detuneA { 0.0 };            ///< cents
     double spreadA { 0.0 };            ///< 0 .. 1
@@ -206,6 +218,7 @@ struct VoiceParameters
     double semitonesB { 0.0 };
     double centsB { 0.0 };
     double widthB { 0.5 };
+    double morphB { 0.0 };
     int unisonB { 1 };
     double detuneB { 0.0 };
     double spreadB { 0.0 };
@@ -308,6 +321,27 @@ struct VoiceParameters
         bool snap { false };
     };
 
+    /// One ADV envelope's whole description -- the multi-stage breakpoint
+    /// envelopes, off by default so a project that never heard of them is
+    /// untouched. `sustain` and `loopStart` are 0-based here; the parameters
+    /// display them 1-based.
+    struct AdvEnvelope
+    {
+        bool enable { false };
+        bool loop { false };
+        bool snap { false };
+        int points { 4 };
+        int sustain { 2 };
+        int loopStart { 0 };
+
+        std::array<double, dsp::MultiEnvelope::kMaxPoints> seconds {
+            0.01, 0.25, 0.05, 0.2, 0.1, 0.1, 0.1, 0.1 };
+        std::array<double, dsp::MultiEnvelope::kMaxPoints> level {
+            1.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0 };
+        std::array<double, dsp::MultiEnvelope::kMaxPoints> tension {
+            0.35, 0.35, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0 };
+    };
+
     Envelope amp { 0.005, 0.0, 0.200, 0.8, 0.150, 0.35, 0.35, 0.35 };
 
     /// How much velocity affects loudness. 0 is an organ, 1 is a piano.
@@ -315,6 +349,9 @@ struct VoiceParameters
 
     Envelope mod1 { 0.005, 0.0, 0.300, 0.0, 0.200, 0.35, 0.35, 0.35 };
     Envelope mod2 { 0.005, 0.0, 0.300, 0.0, 0.200, 0.35, 0.35, 0.35 };
+
+    /// The three ADV envelopes, all disabled by default.
+    std::array<AdvEnvelope, 3> adv {};
 
     double level { 0.5 };
 
@@ -373,6 +410,8 @@ public:
 
         amp_.prepare (sampleRate_);
         modEnvelope1_.prepare (sampleRate_);
+        for (auto& advEnvelope : advEnvelope_)
+            advEnvelope.prepare (sampleRate_);
         modEnvelope2_.prepare (sampleRate_);
 
         for (auto& filter : filters_)
@@ -398,6 +437,8 @@ public:
 
         amp_.reset();
         modEnvelope1_.reset();
+        for (auto& advEnvelope : advEnvelope_)
+            advEnvelope.reset();
         modEnvelope2_.reset();
 
         for (auto& filter : filters_)
@@ -459,6 +500,15 @@ public:
         amp_.noteOn();
         modEnvelope1_.noteOn();
         modEnvelope2_.noteOn();
+
+        // All three, unconditionally -- the first draft gated this on the
+        // enable flag, which is only learned at the first control chunk,
+        // *after* the note-on: an ADV envelope enabled in the parameters could
+        // never start on the note that revealed it. Starting a disabled one is
+        // free (it is never ticked and its level reads 0), and it means
+        // enabling mid-note joins from the gate rather than from nowhere.
+        for (auto& advEnvelope : advEnvelope_)
+            advEnvelope.noteOn();
     }
 
     void noteOff() noexcept
@@ -467,6 +517,9 @@ public:
         amp_.noteOff();
         modEnvelope1_.noteOff();
         modEnvelope2_.noteOff();
+
+        for (auto& advEnvelope : advEnvelope_)
+            advEnvelope.noteOff();
     }
 
     /// Silences the voice immediately, for stealing.
@@ -474,6 +527,8 @@ public:
     {
         amp_.kill();
         modEnvelope1_.kill();
+        for (auto& advEnvelope : advEnvelope_)
+            advEnvelope.kill();
         modEnvelope2_.kill();
         held_ = false;
     }
@@ -497,6 +552,12 @@ public:
     [[nodiscard]] double getModEnvelopeLevel (int index) const noexcept
     {
         return index == 0 ? modEnvelope1_.getLevel() : modEnvelope2_.getLevel();
+    }
+
+    /// The ADV envelopes' current levels, for the global matrix and the panel.
+    [[nodiscard]] double getAdvLevel (int index) const noexcept
+    {
+        return advLevel_[std::clamp (index, 0, 2)];
     }
 
     /// This note's random draw. Fixed for the note's whole life.
@@ -538,9 +599,44 @@ public:
         // inside the smoothing that follows, and running them per sample would
         // cost more than the oscillators do.
         applyEnvelope (modEnvelope1_, parameters.mod1);
+
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto& adv = parameters.adv[static_cast<std::size_t> (i)];
+
+            // Turning a running slot off silences it now rather than letting
+            // it finish inaudibly and surprise the next enable mid-flight.
+            if (advEnabled_[i] && ! adv.enable)
+                advEnvelope_[i].kill();
+
+            advEnabled_[i] = adv.enable;
+
+            if (! adv.enable)
+            {
+                advLevel_[i] = 0.0;
+                continue;
+            }
+
+            auto& envelope = advEnvelope_[i];
+
+            envelope.setPointCount (adv.points);
+            envelope.setSustainIndex (adv.sustain);
+            envelope.setLoopStart (adv.loopStart);
+            envelope.setLoop (adv.loop);
+
+            for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
+                envelope.setPoint (point,
+                                   adv.seconds[static_cast<std::size_t> (point)],
+                                   adv.level[static_cast<std::size_t> (point)],
+                                   adv.tension[static_cast<std::size_t> (point)]);
+        }
         applyEnvelope (modEnvelope2_, parameters.mod2);
 
         modLevel1_ = modEnvelope1_.skip (kControlIntervalSamples);
+
+        for (int i = 0; i < 3; ++i)
+            if (advEnabled_[i])
+                advLevel_[i] = advEnvelope_[i].skip (kControlIntervalSamples);
         modLevel2_ = modEnvelope2_.skip (kControlIntervalSamples);
 
         resolveModulation (global);
@@ -553,6 +649,7 @@ public:
 
         configureBank (bankA_, parameters.shapeA,
                        parameters.widthA + amount (ModDestination::pulseWidthA),
+                       parameters.morphA + amount (ModDestination::morphA),
                        parameters.unisonA,
                        parameters.detuneA + amount (ModDestination::detuneA),
                        parameters.spreadA, parameters.driftA, nominalA);
@@ -563,6 +660,7 @@ public:
 
         configureBank (bankB_, parameters.shapeB,
                        parameters.widthB + amount (ModDestination::pulseWidthB),
+                       parameters.morphB + amount (ModDestination::morphB),
                        parameters.unisonB,
                        parameters.detuneB + amount (ModDestination::detuneB),
                        parameters.spreadB, parameters.driftB,
@@ -761,6 +859,9 @@ private:
                 return frequency_ > 0.0 ? std::log2 (frequency_ / kMiddleCHz) : 0.0;
 
             case ModSource::noteRandom:   return random_;
+            case ModSource::advEnv1:      return advLevel_[0];
+            case ModSource::advEnv2:      return advLevel_[1];
+            case ModSource::advEnv3:      return advLevel_[2];
             case ModSource::lfo1:         return global.lfo1;
             case ModSource::lfo2:         return global.lfo2;
             case ModSource::sequencer:    return global.sequencer;
@@ -796,11 +897,13 @@ private:
         return std::pow (2.0, octaves + semitones / 12.0 + cents / 1200.0);
     }
 
-    void configureBank (UnisonBank& bank, OscShape shape, double width, int unison,
+    void configureBank (UnisonBank& bank, OscShape shape, double width, double morph,
+                        int unison,
                         double detune, double spread, double drift, double frequency) noexcept
     {
         bank.setShape (shape);
         bank.setWidth (width);
+        bank.setMorph (std::clamp (morph, 0.0, 1.0));
         bank.setVoiceCount (unison);
         bank.setDetuneCents (detune);
         bank.setSpread (spread);
@@ -1006,7 +1109,11 @@ private:
     SvfFilter filters_[2];
 
     Adsr modEnvelope1_;
+    dsp::MultiEnvelope advEnvelope_[3];
     Adsr modEnvelope2_;
+
+    double advLevel_[3] { 0.0, 0.0, 0.0 };
+    bool advEnabled_[3] { false, false, false };
 
     double modLevel1_ { 0.0 };
     double modLevel2_ { 0.0 };

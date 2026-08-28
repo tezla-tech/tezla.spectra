@@ -673,6 +673,51 @@ ever sit genuinely inside the loop without iterating.
 
 ### Unreleased
 
+**Nine oscillator shapes, a Morph slider, and a live waveform preview.** Five
+new shapes join the classic four, each read through a per-oscillator **Morph**
+whose meaning is the shape's own and whose zero is always the classic form —
+the four originals ignore it entirely, held to the bit by a test. **Vintage**
+is an analogue saw core: an RC charging curve with the saw's reset, Morph
+deepening the sag. **Dome** is a pressed sine with *zero aliasing by
+construction* — integer exponents of the kargyraa identity, blended — measured
+at −300 dB where the house line is −60. **Double saw** is two BLEP ramps with
+Morph as the offset: a one-oscillator flanger, and at full offset provably the
+octave-up saw (nulled to 1e-9). **Harmonic** is sixteen partials with Morph as
+the roll-off, each partial faded out approaching Nyquist so pitch sweeps cannot
+pop one. **Noise** ignores pitch, sync and PM (the tooltip says so), spreads
+wide under unison because every voice gets its own stream, and darkens under
+Morph. A small waveform picture beside each shape combo draws the *same
+function the DSP reads*, live, so the picture cannot lie; Morph rides a compact
+slider beneath it, greyed when the shape ignores it. Morph A/B are modulation
+destinations.
+
+**ADV envelopes 1–3: multi-stage breakpoint envelopes.** Off by default and
+free when off — byte-proven — each unfolds on the ENV page into up to eight
+draggable points (x a segment's time, y its level, a segment's *middle* dragged
+vertically for its curve), a ringed sustain point, a loop region that cycles
+between the loop point and the sustain while the key is held, and Snap. The
+curve arithmetic is the AHDSRs' own, shared rather than copied. They appear as
+sources in both matrices as ADV 1–3; loop + snap is a tempo-locked rhythmic
+modulator.
+
+**Tempo sync, in two places.** Each LFO gains a Sync toggle and a note-division
+choice — synced with Retrig off and the transport running, the *phase* is
+assigned from the song position, so the same bar is the same wobble on every
+pass, exactly. And every envelope (AHDSRs and ADVs) gains **Snap**, quantising
+its times to note lengths at the host tempo — nearest in musical (log)
+distance, times under half a 1/32 passing through so plucks stay plucks, the
+grid retuning live when the tempo moves.
+
+**The sub split has a bypass.** SPLIT off on the MANGLE page is the pure path:
+no crossover, no sub mono, the whole signal through the mangle and one 5 Hz DC
+blocker on the way out — for band-splitting on a DAW mixer bus instead. On (the
+default) is bit-identical to the engine that shipped; the toggle crossfades
+over 30 ms.
+
+**Voices, and the pages.** The global matrix now sits above the voice matrix —
+it is the one you reach for — and the page scrollbars grew from a 4 px sliver
+to a rail and thumb that can be seen and hit.
+
 **A brushed silver chassis with dark control plates.** The pink-tinted panel had
 pink knobs sitting on it and both stopped reading; a saturated accent needs
 somewhere uncoloured to sit against. The chassis is now painted metal — a

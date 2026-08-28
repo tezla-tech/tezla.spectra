@@ -232,7 +232,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     const auto addOscillator = [&layout] (const char* shapeId, const char* octaveId,
                                           const char* semitoneId, const char* centsId,
-                                          const char* widthId, const char* unisonId,
+                                          const char* widthId, const char* morphId,
+                                          const char* unisonId,
                                           const char* detuneId, const char* spreadId,
                                           const char* driftId, const char* levelId,
                                           const juce::String& prefix, float defaultLevel)
@@ -256,6 +257,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
             juce::ParameterID { widthId, kSchemaV1 }, prefix + " width",
             juce::NormalisableRange<float> { 0.02f, 0.98f }, 0.5f, percentAttributes()));
 
+        // The shape's own tweak, in the Surge sense: its meaning depends on
+        // the shape and 0 is always that shape's canonical self. The original
+        // four shapes ignore it entirely, which is what keeps old projects
+        // bit-exact -- the morphable relatives of saw, sine and triangle are
+        // the new shapes.
+        layout.add (std::make_unique<Parameter> (
+            juce::ParameterID { morphId, kSchemaV2 }, prefix + " morph",
+            juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
         layout.add (std::make_unique<Integer> (
             juce::ParameterID { unisonId, kSchemaV1 }, prefix + " unison", 1, 7, 1));
 
@@ -277,11 +287,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     };
 
     addOscillator (ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
-                   ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
+                   ids::morphA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
                    "Osc A", 1.0f);
 
     addOscillator (ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
-                   ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
+                   ids::morphB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
                    "Osc B", 0.0f);
 
     layout.add (std::make_unique<Boolean> (
@@ -480,6 +490,69 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::env2Snap, kSchemaV2 }, "Env 2 snap", false));
+
+    // ---- ADV envelopes ------------------------------------------------------
+    //
+    // Three multi-stage breakpoint envelopes, ninety parameters built by
+    // ids::adv rather than typed. Everything defaults to a disabled, sensible
+    // four-point ADSR-ish curve, so switching one on does something audible
+    // before any editing and a project that never heard of them is untouched.
+    for (int envelope = 0; envelope < 3; ++envelope)
+    {
+        const auto prefix = "ADV " + juce::String (envelope + 1);
+
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { ids::adv (envelope, "Enable"), kSchemaV2 },
+            prefix + " enable", false));
+
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { ids::adv (envelope, "Loop"), kSchemaV2 },
+            prefix + " loop", false));
+
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { ids::adv (envelope, "Snap"), kSchemaV2 },
+            prefix + " snap", false));
+
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { ids::adv (envelope, "Points"), kSchemaV2 },
+            prefix + " points", 2, dsp::MultiEnvelope::kMaxPoints, 4));
+
+        // Displayed 1-based; the engine subtracts one.
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { ids::adv (envelope, "Sustain"), kSchemaV2 },
+            prefix + " sustain point", 1, dsp::MultiEnvelope::kMaxPoints, 3));
+
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { ids::adv (envelope, "LoopStart"), kSchemaV2 },
+            prefix + " loop start", 1, dsp::MultiEnvelope::kMaxPoints, 1));
+
+        constexpr float defaultSeconds[] { 0.01f, 0.25f, 0.05f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f };
+        constexpr float defaultLevel[]   { 1.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f, 0.0f, 0.0f, 0.0f, 0.0f };
+
+        for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
+        {
+            const auto n = juce::String (point + 1);
+
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { ids::adv (envelope, "T" + n), kSchemaV2 },
+                prefix + " time " + n,
+                skewedRange (0.0f, 20.0f, 0.12f),
+                defaultSeconds[point], timeAttributes()));
+
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { ids::adv (envelope, "L" + n), kSchemaV2 },
+                prefix + " level " + n,
+                juce::NormalisableRange<float> { 0.0f, 1.0f },
+                defaultLevel[point], percentAttributes()));
+
+            layout.add (std::make_unique<Parameter> (
+                juce::ParameterID { ids::adv (envelope, "C" + n), kSchemaV2 },
+                prefix + " tension " + n,
+                juce::NormalisableRange<float> { -1.0f, 1.0f },
+                defaultTension[point], percentAttributes()));
+        }
+    }
 
     // ---- keyboard -----------------------------------------------------------
 
@@ -896,6 +969,7 @@ void SonitusProcessor::pullParameters()
     v.semitonesA = valueOf (state_, ids::semitonesA);
     v.centsA = valueOf (state_, ids::centsA);
     v.widthA = valueOf (state_, ids::widthA);
+    v.morphA = valueOf (state_, ids::morphA);
     v.unisonA = indexOf (state_, ids::unisonA);
     v.detuneA = valueOf (state_, ids::detuneA);
     v.spreadA = valueOf (state_, ids::spreadA);
@@ -907,6 +981,7 @@ void SonitusProcessor::pullParameters()
     v.semitonesB = valueOf (state_, ids::semitonesB);
     v.centsB = valueOf (state_, ids::centsB);
     v.widthB = valueOf (state_, ids::widthB);
+    v.morphB = valueOf (state_, ids::morphB);
     v.unisonB = indexOf (state_, ids::unisonB);
     v.detuneB = valueOf (state_, ids::detuneB);
     v.spreadB = valueOf (state_, ids::spreadB);
@@ -966,6 +1041,28 @@ void SonitusProcessor::pullParameters()
                   ids::env2Release, ids::env2AttackT, ids::env2DecayT, ids::env2ReleaseT);
     v.mod2.snap = valueOf (state_, ids::env2Snap) > 0.5f;
 
+    for (int envelope = 0; envelope < 3; ++envelope)
+    {
+        auto& adv = v.adv[static_cast<std::size_t> (envelope)];
+
+        adv.enable = valueOf (state_, ids::adv (envelope, "Enable")) > 0.5f;
+        adv.loop = valueOf (state_, ids::adv (envelope, "Loop")) > 0.5f;
+        adv.snap = valueOf (state_, ids::adv (envelope, "Snap")) > 0.5f;
+        adv.points = static_cast<int> (std::lround (valueOf (state_, ids::adv (envelope, "Points"))));
+        adv.sustain = static_cast<int> (std::lround (valueOf (state_, ids::adv (envelope, "Sustain")))) - 1;
+        adv.loopStart = static_cast<int> (std::lround (valueOf (state_, ids::adv (envelope, "LoopStart")))) - 1;
+
+        for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
+        {
+            const auto n = juce::String (point + 1);
+            const auto i = static_cast<std::size_t> (point);
+
+            adv.seconds[i] = valueOf (state_, ids::adv (envelope, "T" + n));
+            adv.level[i] = valueOf (state_, ids::adv (envelope, "L" + n));
+            adv.tension[i] = valueOf (state_, ids::adv (envelope, "C" + n));
+        }
+    }
+
     v.level = 1.0;
 
     for (int slot = 0; slot < VoiceParameters::kSlots; ++slot)
@@ -1024,6 +1121,8 @@ void SonitusProcessor::pullParameters()
             // sum to 0..1, so full depth reaches either end of the control from
             // wherever the knob is set.
             case ModDestination::kargyraa:
+            case ModDestination::morphA:
+            case ModDestination::morphB:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }

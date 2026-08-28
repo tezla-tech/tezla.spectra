@@ -21,6 +21,7 @@ inline constexpr auto octaveA     = "octaveA";
 inline constexpr auto semitonesA  = "semitonesA";
 inline constexpr auto centsA      = "centsA";
 inline constexpr auto widthA      = "widthA";
+inline constexpr auto morphA      = "morphA";
 inline constexpr auto unisonA     = "unisonA";
 inline constexpr auto detuneA     = "detuneA";
 inline constexpr auto spreadA     = "spreadA";
@@ -33,6 +34,7 @@ inline constexpr auto octaveB     = "octaveB";
 inline constexpr auto semitonesB  = "semitonesB";
 inline constexpr auto centsB      = "centsB";
 inline constexpr auto widthB      = "widthB";
+inline constexpr auto morphB      = "morphB";
 inline constexpr auto unisonB     = "unisonB";
 inline constexpr auto detuneB     = "detuneB";
 inline constexpr auto spreadB     = "spreadB";
@@ -136,6 +138,15 @@ inline constexpr auto seqToLfoRate = "seqToLfoRate";
     return "seq" + juce::String (index + 1);
 }
 
+/// `adv1Enable`, `adv2T5`, and the rest of the ninety ADV-envelope names --
+/// built for the same reason as `step`: ninety hand-typed identifiers invite
+/// the typo that silently points one at nothing. `field` is e.g. "Enable",
+/// "T5", "L2", "C8". These are parameter IDs and therefore frozen forever.
+[[nodiscard]] inline juce::String adv (int envelope, const juce::String& field)
+{
+    return "adv" + juce::String (envelope + 1) + field;
+}
+
 /// `modSource1` / `modDest1` / `modDepth1`, and so on.
 [[nodiscard]] inline juce::String modSource (int slot) { return "modSource" + juce::String (slot + 1); }
 [[nodiscard]] inline juce::String modDest (int slot)   { return "modDest" + juce::String (slot + 1); }
@@ -189,7 +200,9 @@ inline constexpr auto oversampling = "oversampling";
 /// project.
 namespace choices
 {
-inline const juce::StringArray shape { "Saw", "Pulse", "Triangle", "Sine" };
+inline const juce::StringArray shape { "Saw", "Pulse", "Triangle", "Sine",
+                                       "Vintage", "Dome", "Double saw",
+                                       "Harmonic", "Noise" };
 inline const juce::StringArray subShape { "Sine", "Square" };
 inline const juce::StringArray filterMode { "Lowpass", "Bandpass", "Highpass", "Notch" };
 inline const juce::StringArray keyMode { "Poly", "Mono", "Legato" };
@@ -214,7 +227,8 @@ inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 /// The modulation sources, in the order the matrix indexes them.
 inline const juce::StringArray modSource { "Off", "Amp env", "Mod env 1", "Mod env 2",
                                            "Velocity", "Key track", "Note random",
-                                           "LFO 1", "LFO 2", "Sequencer" };
+                                           "LFO 1", "LFO 2", "Sequencer",
+                                           "ADV 1", "ADV 2", "ADV 3" };
 
 /// The modulation destinations, likewise. **Continuous controls only** -- a
 /// choice or a switch reconfigures rather than adjusts, so modulating one would
@@ -224,7 +238,7 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "Detune A", "Detune B", "Osc mix",
                                          "Sub level", "Ring", "Fold",
                                          "Pitch", "Pitch B", "Level",
-                                         "Kargyraa" };
+                                         "Kargyraa", "Morph A", "Morph B" };
 
 /// How many oscillator cycles one kargyraa modulator cycle spans.
 ///
@@ -236,7 +250,8 @@ inline const juce::StringArray kargyraaDivisor { "/2  true kargyraa", "/3", "/4"
 /// note. Pointing an amp envelope at a global control has no answer when eight
 /// notes are down, which is why the voice's list is not reused here.
 inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer",
-                                             "Amp env", "Mod env 1", "Mod env 2", "Velocity" };
+                                             "Amp env", "Mod env 1", "Mod env 2", "Velocity",
+                                             "ADV 1", "ADV 2", "ADV 3" };
 
 /// The global matrix's destinations: the mangle's continuous controls. **Comb
 /// time is the one this instrument exists for** -- the brief's flanger-at-rate-
@@ -245,11 +260,16 @@ inline const juce::StringArray globalDest { "Off", "Comb time", "Comb feedback",
                                             "Phase centre", "Vowel", "Tube", "Output",
                                             "Harmonic", "Notch" };
 
-static_assert (static_cast<int> (dsp::OscShape::saw)      == 0
-            && static_cast<int> (dsp::OscShape::pulse)    == 1
-            && static_cast<int> (dsp::OscShape::triangle) == 2
-            && static_cast<int> (dsp::OscShape::sine)     == 3
-            && static_cast<int> (dsp::OscShape::count)    == 4,
+static_assert (static_cast<int> (dsp::OscShape::saw)       == 0
+            && static_cast<int> (dsp::OscShape::pulse)     == 1
+            && static_cast<int> (dsp::OscShape::triangle)  == 2
+            && static_cast<int> (dsp::OscShape::sine)      == 3
+            && static_cast<int> (dsp::OscShape::vintage)   == 4
+            && static_cast<int> (dsp::OscShape::dome)      == 5
+            && static_cast<int> (dsp::OscShape::doubleSaw) == 6
+            && static_cast<int> (dsp::OscShape::harmonic)  == 7
+            && static_cast<int> (dsp::OscShape::noise)     == 8
+            && static_cast<int> (dsp::OscShape::count)     == 9,
                "the shape option list is indexed straight into OscShape");
 
 static_assert (static_cast<int> (SubShape::sine)   == 0
@@ -293,20 +313,26 @@ static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
 
 static_assert (static_cast<int> (ModSource::none)      == 0
             && static_cast<int> (ModSource::sequencer) == 9
-            && static_cast<int> (ModSource::count)     == 10,
+            && static_cast<int> (ModSource::advEnv1)   == 10
+            && static_cast<int> (ModSource::advEnv3)   == 12
+            && static_cast<int> (ModSource::count)     == 13,
                "the modulation source list is indexed straight into ModSource");
 
 static_assert (static_cast<int> (ModDestination::none)     == 0
             && static_cast<int> (ModDestination::level)    == 15
             && static_cast<int> (ModDestination::kargyraa) == 16
-            && static_cast<int> (ModDestination::count)    == 17,
+            && static_cast<int> (ModDestination::morphA)   == 17
+            && static_cast<int> (ModDestination::morphB)   == 18
+            && static_cast<int> (ModDestination::count)    == 19,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0
             && static_cast<int> (GlobalSource::sequencer)    == 3
             && static_cast<int> (GlobalSource::ampEnvelope)  == 4
             && static_cast<int> (GlobalSource::velocity)     == 7
-            && static_cast<int> (GlobalSource::count)        == 8,
+            && static_cast<int> (GlobalSource::advEnv1)      == 8
+            && static_cast<int> (GlobalSource::advEnv3)      == 10
+            && static_cast<int> (GlobalSource::count)        == 11,
                "the global source list is indexed straight into GlobalSource");
 
 static_assert (static_cast<int> (GlobalDestination::none)            == 0

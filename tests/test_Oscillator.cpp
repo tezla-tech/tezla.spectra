@@ -771,3 +771,346 @@ TEZLA_TEST (oscillator_is_silent_before_it_is_told_a_frequency)
         CHECK (! osc.didWrap());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Morph: the shape's own tweak, and what it must NOT touch
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_original_four_shapes_ignore_morph_to_the_bit)
+{
+    // The compatibility contract in one test: saw, pulse, triangle and sine
+    // are frozen -- their morphable relatives are the new shapes -- so a
+    // project that never heard of morph reopens identical, and so does one
+    // where a curious hand swept the knob with a legacy shape selected.
+    for (const auto shape : { OscShape::saw, OscShape::pulse, OscShape::triangle, OscShape::sine })
+        for (const double morph : { 0.25, 1.0 })
+        {
+            Oscillator plain;
+            plain.setShape (shape);
+            plain.setWidth (0.3);
+            plain.setIncrement (110.0 / 48000.0);
+            plain.reset();
+
+            Oscillator morphed;
+            morphed.setShape (shape);
+            morphed.setWidth (0.3);
+            morphed.setMorph (morph);
+            morphed.setIncrement (110.0 / 48000.0);
+            morphed.reset();
+
+            for (int i = 0; i < 4800; ++i)
+                CHECK (plain.advance() == morphed.advance());
+        }
+}
+
+TEZLA_TEST (naive_shape_sample_is_the_waveform_the_audio_path_makes)
+{
+    // One definition serves the DSP, the tests and the on-panel preview; this
+    // pins the two ends together. For saw, pulse and sine the audio path's
+    // uncorrected waveform IS the static function. The triangle is the
+    // documented exception -- the audio path integrates a corrected square --
+    // so its check is against the integral's known shape instead: peak at the
+    // skew point, straight flanks.
+    for (const auto shape : { OscShape::saw, OscShape::pulse, OscShape::sine })
+        for (int i = 0; i < 97; ++i)
+        {
+            const double phase = static_cast<double> (i) / 97.0;
+
+            // A slow oscillator barely corrects, so its output approaches the
+            // naive shape away from the discontinuities.
+            Oscillator osc;
+            osc.setShape (shape);
+            osc.setWidth (0.41);
+            osc.setIncrement (1.0e-9);
+            osc.reset (phase);
+
+            const double naive = Oscillator::naiveShapeSample (shape, phase, 0.41, 0.0);
+            const double heard = osc.advance();
+
+            CHECK_NEAR (heard, naive, 1.0e-6);
+        }
+
+    // The triangle: rises to +1 exactly at the skew point, -1 at the ends.
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.0, 0.3, 0.0), -1.0, 1e-12);
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.3, 0.3, 0.0), 1.0, 1e-12);
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.65, 0.3, 0.0), 0.0, 1e-12);
+    CHECK_NEAR (Oscillator::naiveShapeSample (OscShape::triangle, 0.15, 0.3, 0.0), 0.0, 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+// The phase-3 shapes: Vintage, Dome, Double saw, Harmonic, Noise
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (dome_has_no_aliasing_at_all_because_it_cannot)
+{
+    // The finite-Fourier identity: integer k of (0.5 - 0.5 cos)^k is exactly k
+    // harmonics, and morph blends adjacent integers -- a blend of two
+    // band-limited signals is band-limited. So the assertion is not the house
+    // -60: it is the analyser's own floor.
+    // The low-k, high-note case is the one with teeth. A fractional exponent
+    // is NOT band-limited -- sin^2k for non-integer k decays only like
+    // n^-(2k+1) -- but at k of six or thirteen that tail is inaudibly steep,
+    // and the first break-check of this test sailed through with the blend
+    // deleted. At k = 1.5 the tail decays like n^-4 and a high note folds it
+    // straight back into the band, which is what the 1/30 morph is doing in
+    // this list.
+    for (const double morph : { 0.0, 1.0 / 30.0, 0.37, 0.81, 1.0 })
+        for (const double frequency : { 220.0, 1760.0, 3520.0 })
+        {
+            const double binExact = measure::binExactFrequency (frequency, kRate, kFft);
+
+            Oscillator osc;
+            osc.setShape (OscShape::dome);
+            osc.setMorph (morph);
+            osc.setIncrement (binExact / kRate);
+            osc.reset();
+
+            CHECK (aliasingOf (render (osc, kFft), binExact) < -120.0);
+        }
+}
+
+TEZLA_TEST (dome_has_no_dc_at_any_morph)
+{
+    for (const double morph : { 0.0, 0.2, 0.5, 0.77, 1.0 })
+    {
+        Oscillator osc;
+        osc.setShape (OscShape::dome);
+        osc.setMorph (morph);
+        osc.setIncrement (100.0 / kRate);   // 100 Hz at 48 k: 480 whole cycles in the window
+        osc.reset();
+
+        const auto out = render (osc, 48000);
+
+        double mean = 0.0;
+        for (const double sample : out)
+            mean += sample;
+
+        CHECK (std::abs (mean / static_cast<double> (out.size())) < 1.0e-9);
+    }
+}
+
+TEZLA_TEST (double_saw_at_morph_zero_is_the_saw_and_offset_makes_a_comb)
+{
+    // Aligned ramps sum straight back into the corrected saw, sample for
+    // sample; a half-cycle offset cancels the odd harmonics exactly -- the
+    // comb the shape exists for.
+    Oscillator saw;
+    saw.setShape (OscShape::saw);
+    saw.setIncrement (110.0 / kRate);
+    saw.reset();
+
+    Oscillator aligned;
+    aligned.setShape (OscShape::doubleSaw);
+    aligned.setMorph (0.0);
+    aligned.setIncrement (110.0 / kRate);
+    aligned.reset();
+
+    for (int i = 0; i < 9600; ++i)
+        CHECK_NEAR (saw.advance(), aligned.advance(), 1.0e-12);
+
+    const double binExact = measure::binExactFrequency (110.0, kRate, kFft);
+
+    Oscillator offset;
+    offset.setShape (OscShape::doubleSaw);
+    offset.setMorph (1.0);   // half a cycle
+    offset.setIncrement (binExact / kRate);
+    offset.reset();
+
+    const auto spectrum = measure::fftOfReal (render (offset, kFft));
+    const double bin = binExact * kFft / kRate;
+
+    const auto magnitudeAt = [&spectrum] (double where)
+    {
+        return std::abs (spectrum[static_cast<std::size_t> (std::llround (where))]);
+    };
+
+    // Even harmonics stand, odd ones vanish.
+    CHECK (magnitudeAt (2.0 * bin) > 100.0 * magnitudeAt (1.0 * bin));
+    CHECK (magnitudeAt (4.0 * bin) > 100.0 * magnitudeAt (3.0 * bin));
+}
+
+TEZLA_TEST (double_saw_aliases_no_worse_than_the_saw_it_is_made_of)
+{
+    const double binExact = measure::binExactFrequency (987.0, kRate, kFft);
+
+    Oscillator saw;
+    saw.setShape (OscShape::saw);
+    saw.setIncrement (binExact / kRate);
+    saw.reset();
+
+    const double sawAliasing = aliasingOf (render (saw, kFft), binExact);
+
+    // Mid offsets only, and that is a lesson about the analyser rather than
+    // the shape: the offset *attenuates* harmonics on its way to cancelling
+    // the odd ones, and aliasingOf is referenced to the fundamental -- so as
+    // the fundamental sinks, genuine but unchanged aliasing reads as growth.
+    // At morph 1.0 the fundamental is gone entirely and the figure read +36 dB
+    // against a waveform that is provably an octave-up saw. The identity test
+    // below is the honest form of that case.
+    for (const double morph : { 0.2, 0.33, 0.5 })
+    {
+        Oscillator doubled;
+        doubled.setShape (OscShape::doubleSaw);
+        doubled.setMorph (morph);
+        doubled.setIncrement (binExact / kRate);
+        doubled.reset();
+
+        CHECK (aliasingOf (render (doubled, kFft), binExact) < sawAliasing + 3.0);
+    }
+}
+
+TEZLA_TEST (double_saw_at_half_offset_is_exactly_the_octave_up_saw)
+{
+    // 0.5 * (saw(p) + saw(p + 0.5)) == 0.5 * saw2f(2p) as an identity, and the
+    // corrections agree too: the double saw drops -1 twice per cycle exactly
+    // where the octave saw drops -2 once per *its* cycle. So the two must
+    // null to numerical noise -- corrections, phase and all.
+    const double f = 110.0;
+
+    Oscillator doubled;
+    doubled.setShape (OscShape::doubleSaw);
+    doubled.setMorph (1.0);
+    doubled.setIncrement (f / kRate);
+    doubled.reset();
+
+    Oscillator octave;
+    octave.setShape (OscShape::saw);
+    octave.setIncrement (2.0 * f / kRate);
+    octave.reset();
+
+    for (int i = 0; i < 48000; ++i)
+        CHECK_NEAR (doubled.advance(), 0.5 * octave.advance(), 1.0e-9);
+}
+
+TEZLA_TEST (vintage_is_a_curved_saw_with_the_saw_class_of_aliasing_and_no_dc)
+{
+    // The curve: at morph 0 the ramp sags visibly away from straight -- the
+    // midpoint of an RC ramp is above the line -- and more so at morph 1.
+    const double middleAt0 = Oscillator::naiveShapeSample (OscShape::vintage, 0.5, 0.5, 0.0);
+    const double middleAt1 = Oscillator::naiveShapeSample (OscShape::vintage, 0.5, 0.5, 1.0);
+    const double sawMiddle = 0.0;
+
+    CHECK (middleAt0 > sawMiddle + 0.1);
+    CHECK (middleAt1 > middleAt0 + 0.1);
+
+    const double binExact = measure::binExactFrequency (987.0, kRate, kFft);
+
+    Oscillator saw;
+    saw.setShape (OscShape::saw);
+    saw.setIncrement (binExact / kRate);
+    saw.reset();
+
+    const double sawAliasing = aliasingOf (render (saw, kFft), binExact);
+
+    for (const double morph : { 0.0, 1.0 })
+    {
+        Oscillator vintage;
+        vintage.setShape (OscShape::vintage);
+        vintage.setMorph (morph);
+        vintage.setIncrement (binExact / kRate);
+        vintage.reset();
+
+        const auto out = render (vintage, kFft);
+
+        // Same class of aliasing as the saw: the reset step dominates both,
+        // and the slope mismatch the curve adds is second order. The margin is
+        // measured, not hoped -- 6 dB held with room when this was written.
+        CHECK (aliasingOf (out, binExact) < sawAliasing + 6.0);
+
+        double mean = 0.0;
+        for (const double sample : out)
+            mean += sample;
+
+        CHECK (std::abs (mean / static_cast<double> (out.size())) < 2.0e-3);
+    }
+}
+
+TEZLA_TEST (harmonic_rolls_off_with_morph_and_fades_partials_at_nyquist)
+{
+    const double binExact = measure::binExactFrequency (220.0, kRate, kFft);
+
+    const auto seventhOverFirst = [&] (double morph)
+    {
+        Oscillator osc;
+        osc.setShape (OscShape::harmonic);
+        osc.setMorph (morph);
+        osc.setIncrement (binExact / kRate);
+        osc.reset();
+
+        const auto spectrum = measure::fftOfReal (render (osc, kFft));
+        const double bin = binExact * kFft / kRate;
+
+        const double first = std::abs (spectrum[static_cast<std::size_t> (std::llround (bin))]);
+        const double seventh = std::abs (spectrum[static_cast<std::size_t> (std::llround (7.0 * bin))]);
+
+        return 20.0 * std::log10 (seventh / first);
+    };
+
+    // p = 1 at morph 0: the 7th sits at -16.9 dB. p = 3 at morph 1: -50.7.
+    CHECK_NEAR (seventhOverFirst (0.0), -16.9, 0.5);
+    CHECK_NEAR (seventhOverFirst (1.0), -50.7, 0.5);
+
+    // Band-limited by construction: nothing inharmonic even played high.
+    const double high = measure::binExactFrequency (3520.0, kRate, kFft);
+
+    Oscillator osc;
+    osc.setShape (OscShape::harmonic);
+    osc.setMorph (0.0);
+    osc.setIncrement (high / kRate);
+    osc.reset();
+
+    CHECK (aliasingOf (render (osc, kFft), high) < -100.0);
+}
+
+TEZLA_TEST (noise_is_flat_darkens_with_morph_and_two_seeds_are_two_streams)
+{
+    Oscillator white;
+    white.setShape (OscShape::noise);
+    white.seedNoise (12345);
+    white.setNoiseCoefficient (1.0);
+
+    Oscillator dark;
+    dark.setShape (OscShape::noise);
+    dark.seedNoise (12345);
+    dark.setNoiseCoefficient (0.02);
+
+    Oscillator other;
+    other.setShape (OscShape::noise);
+    other.seedNoise (99999);
+    other.setNoiseCoefficient (1.0);
+
+    const auto a = render (white, kFft);
+    const auto b = render (dark, kFft);
+    const auto c = render (other, kFft);
+
+    // Same seed, different colour: the dark one has lost its top end.
+    const auto sa = measure::fftOfReal (a);
+    const auto sb = measure::fftOfReal (b);
+
+    double lowA = 0.0, highA = 0.0, lowB = 0.0, highB = 0.0;
+
+    for (std::size_t k = 8; k < kFft / 2; ++k)
+    {
+        const double hz = static_cast<double> (k) * kRate / kFft;
+
+        if (hz < 400.0) { lowA += std::norm (sa[k]); lowB += std::norm (sb[k]); }
+        if (hz > 8000.0) { highA += std::norm (sa[k]); highB += std::norm (sb[k]); }
+    }
+
+    const double tiltA = 10.0 * std::log10 (highA / lowA);
+    const double tiltB = 10.0 * std::log10 (highB / lowB);
+
+    CHECK (tiltA > -6.0);              // white-ish
+    CHECK (tiltB < tiltA - 20.0);      // visibly darker
+
+    // Different seeds decorrelate: near-zero normalised cross-correlation.
+    double dot = 0.0, ea = 0.0, ec = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+        dot += a[i] * c[i];
+        ea += a[i] * a[i];
+        ec += c[i] * c[i];
+    }
+
+    CHECK (std::abs (dot) / std::sqrt (ea * ec) < 0.05);
+}
