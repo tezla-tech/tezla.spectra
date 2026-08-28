@@ -273,6 +273,15 @@ void Engine::aimComb() noexcept
     // go.
     comb_.setDelaySeconds (combDelaySeconds());
     comb_.setNoteHz (voices_.trackedFrequency());
+
+    // Published where the panel can read it without racing the audio thread.
+    // This is the boundary the comb is actually aimed on, so it is also the
+    // only place the figure is true.
+    readouts_.combNotchHz.store (comb_.firstNotchHz(), std::memory_order_relaxed);
+    readouts_.sequencerStep.store (sequencer_.getStepIndex(), std::memory_order_relaxed);
+    readouts_.lfo1.store (sources_.lfo1, std::memory_order_relaxed);
+    readouts_.lfo2.store (sources_.lfo2, std::memory_order_relaxed);
+    readouts_.sequencer.store (sources_.sequencer, std::memory_order_relaxed);
 }
 
 void Engine::advanceGlobalSources (int samples) noexcept

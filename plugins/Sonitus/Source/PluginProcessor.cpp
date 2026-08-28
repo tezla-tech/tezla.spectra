@@ -1168,7 +1168,7 @@ juce::String SonitusProcessor::describeComb() const
         // Read off the comb rather than off the knob. Key tracking and the
         // global matrix both move the delay, so a figure worked out from the
         // control would be wrong exactly when the control is interesting.
-        const double first = engine_.getCombNotchHz();
+        const double first = engine_.readouts().combNotchHz.load (std::memory_order_relaxed);
         const double spacing = inverted ? first : 2.0 * first;
 
         juce::String text = "Flange -- notches every " + juce::String (spacing, 0)

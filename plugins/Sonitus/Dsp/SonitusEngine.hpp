@@ -63,6 +63,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 
 #include <tezla/dsp/Biquad.hpp>
@@ -325,24 +326,46 @@ public:
         return oversampler_.getFactor();
     }
 
-    /// The current values of the global modulation sources. For the UI's
-    /// modulation display, and for tests.
+    /// The current values of the global modulation sources. **Same thread
+    /// only** -- for tests and for the offline measurement tool. Anything on
+    /// the message thread reads `readouts()` instead.
     [[nodiscard]] const GlobalSources& getGlobalSources() const noexcept { return sources_; }
 
-    /// Which step the sequencer is on. The panel lights it, which is the only
-    /// way to tell a pattern that is running from one that is stopped -- and
-    /// with the rate at a quarter of a step per beat, "stopped" and "slow" look
-    /// identical for four seconds at a time.
-    [[nodiscard]] int getSequencerStep() const noexcept { return sequencer_.getStepIndex(); }
+    /// What the panel shows, published for the message thread to read.
+    ///
+    /// Atomics rather than plain members, and not as a formality: a `double`
+    /// read on one thread while another writes it is a data race, and the whole
+    /// point of these is that the audio thread is moving them. Anvil's meters
+    /// are built the same way. Relaxed ordering throughout -- each of these is
+    /// a single independent number and nothing is inferred from seeing one
+    /// before another.
+    struct Readouts
+    {
+        /// Where the comb's first notch is *actually* sitting -- modulation and
+        /// key tracking included. Not a figure worked out from the knob,
+        /// because the knob is wrong whenever anything is sweeping it, which in
+        /// this instrument is most of the time.
+        std::atomic<double> combNotchHz { 0.0 };
 
-    /// Where the comb's first notch is *actually* sitting -- modulation and key
-    /// tracking included. The panel shows this rather than a figure worked out
-    /// from the knob, because the knob is wrong whenever anything is sweeping
-    /// it, which in this instrument is most of the time.
-    [[nodiscard]] double getCombNotchHz() const noexcept { return comb_.firstNotchHz(); }
+        /// Which step the sequencer is on. The panel lights it, which is the
+        /// only way to tell a pattern that is running from one that is stopped
+        /// -- with the rate at a quarter of a step per beat, "stopped" and
+        /// "slow" look identical for four seconds at a time.
+        std::atomic<int> sequencerStep { 0 };
 
-    /// The phaser's centre as it is actually running, likewise.
+        std::atomic<double> lfo1 { 0.0 };
+        std::atomic<double> lfo2 { 0.0 };
+        std::atomic<double> sequencer { 0.0 };
+    };
+
+    [[nodiscard]] const Readouts& readouts() const noexcept { return readouts_; }
+
+    /// The phaser's centre as it is actually running. Same-thread only, like
+    /// `getGlobalSources`.
     [[nodiscard]] double getPhaseFrequencyHz() const noexcept { return phaser_.getFrequencyHz(); }
+
+    /// Where the comb's first notch is sitting. Same-thread only.
+    [[nodiscard]] double getCombNotchHz() const noexcept { return comb_.firstNotchHz(); }
 
 private:
     void applyPending() noexcept;
@@ -374,6 +397,7 @@ private:
     dsp::Lfo lfo2_;
     dsp::StepSequencer sequencer_;
     GlobalSources sources_;
+    Readouts readouts_;
 
     dsp::Oversampler oversampler_;
 

@@ -311,18 +311,25 @@ public:
 
     [[nodiscard]] MeterValues& getMeterValues() noexcept { return meters_; }
 
-    /// Where the global modulation sources are right now, so the panel can show
-    /// the LFOs moving and light the sequencer's current step.
-    [[nodiscard]] const GlobalSources& getGlobalSources() const noexcept
+    /// What the panel shows: where the LFOs and the sequencer are, and where
+    /// the comb's notch is actually sitting. Published by the audio thread
+    /// through atomics, because the message thread reads them while it moves.
+    [[nodiscard]] const Engine::Readouts& getReadouts() const noexcept
     {
-        return engine_.getGlobalSources();
+        return engine_.readouts();
     }
 
-    [[nodiscard]] int getSequencerStep() const noexcept { return engine_.getSequencerStep(); }
+    [[nodiscard]] int getSequencerStep() const noexcept
+    {
+        return engine_.readouts().sequencerStep.load (std::memory_order_relaxed);
+    }
 
     /// Where the comb's first notch is actually sitting -- key tracking and the
     /// global matrix included, rather than worked out from the knob.
-    [[nodiscard]] double getCombNotchHz() const noexcept { return engine_.getCombNotchHz(); }
+    [[nodiscard]] double getCombNotchHz() const noexcept
+    {
+        return engine_.readouts().combNotchHz.load (std::memory_order_relaxed);
+    }
 
     // ---- tuning ------------------------------------------------------------
 
