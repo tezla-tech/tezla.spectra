@@ -131,6 +131,9 @@ whichever octave it is in.
 **Ring** — A × B. The sum and difference of every pair of their harmonics and
 almost nothing at either original pitch.
 
+**Kargyraa** — period doubling, the way a Tuvan throat singer gets one. See its
+own section below.
+
 **Fold** — a sine wave folder. Past full scale the transfer curve turns round
 and comes back, so the harder you push the more harmonics appear — the opposite
 of a clipper, which runs out. Antialiased, and the widest-band thing here.
@@ -188,6 +191,22 @@ Two LFOs, a sixteen-step sequencer, and two matrices.
 rate pinned at nothing so the depth comes from somewhere else. The panel shows
 it as "held" rather than "0.00 Hz".
 
+**The other end goes to 160 Hz**, which is well past a wobble and into audio
+rate: above roughly 20 Hz an LFO on the cutoff stops being movement and starts
+being modulation, making sidebands of its own — the same mechanism as the FILTER
+page's FM control, reached from the matrix instead. The centre of the travel is
+still 2 Hz, so everything below it feels as it did and the old 40 Hz maximum now
+sits at 80% of the knob.
+
+Two clamps used to stop it well short: `Lfo::setRateHz` capped at 100 Hz, and
+the engine capped the *effective* rate at 100 again after key tracking and the
+sequencer had multiplied it. Neither was reachable from a 40 Hz knob without key
+tracking, which is exactly why nothing caught it — and key tracking is what the
+instrument is for. The engine's ceiling is now derived from its own control rate
+(half of it, so the output means what the knob says), which moves with the
+oversampling factor: 3000 Hz at 48 kHz ×4, 689 Hz at 44.1 kHz with oversampling
+off. A fixed constant would be wrong at one end or the other.
+
 **Retrig** restarts an LFO from the top of its cycle on every note. Free-running
 is right for a wobble that should keep its place across a phrase; retriggered is
 right for anything that has to line up with the note. On a reese the difference
@@ -241,6 +260,84 @@ an envelope is a hazard, not a sound.
 
 The sequencer is drawn as sixteen faders rather than sixteen knobs, because the
 *shape* of the pattern is the thing being edited. The playing step is lit.
+
+### KARGYRAA
+
+The third throat-singing mechanism, and the only one that is a **source** change
+rather than a filter change.
+
+In the Tuvan and Tibetan style the **ventricular folds** — the false vocal folds
+sitting above the true ones — are drawn into vibration by the airflow and close
+at exactly *half* the true folds' rate. Every second glottal pulse is damped by
+them. The voice gains a real subharmonic while the pitch being sung, and the
+formants shaping it, stay where they were.
+
+**It is not an octave divider and it is not the Sub knob.** A sub adds a
+separate tone an octave down, generated independently, which has to be tuned and
+can beat against the note. This damps alternate cycles of the waveform that is
+already there, so what appears is the **half-integer series** — f/2, 3f/2, 5f/2 —
+around every harmonic, at levels set by how different the two cycles are. The
+same voice with a doubled period, which is why it growls rather than sounding
+like two notes.
+
+3f/2 is the measurement that separates the two, and there is a test for exactly
+that: with the control down a saw has energy at 110, 220 and 330 Hz and nothing
+between; with it up, 55 Hz **and** 165 Hz and 275 Hz all arrive.
+
+| control | note |
+|---|---|
+| **Kargyraa** | Depth. 0 is bit-exactly out of the path. It gets quieter as it goes up, because the effect is a periodic absence — that is the sound, not a fault, and there is no hidden make-up gain hiding it |
+| **Rasp** | How sharp the damped part of the cycle is. Low is a smooth subharmonic with little more than f/2; high is a narrow rasp with much more of the series |
+| **Divisor** | **/2 is kargyraa** — it is what the throat does. /3 and /4 are not anything anatomical; the machinery is the same and a third-order subdivision is a sound this instrument should be able to make |
+
+It is also a voice modulation destination, appended to the end of that list.
+
+#### The lock is by construction
+
+The modulator's phase is *derived* from oscillator A's own cycle counter —
+`(cycle + phase) / N` — rather than accumulated from a clock of its own. So it
+cannot drift against the note however long it is held, a glide takes it along,
+and there is no tuning to get wrong. Measured at A1, A2 and A3: the loudest
+component below the fundamental lands at half of it every time, within an FFT
+bin. A free-running modulator passes at one note and fails at the others, which
+is why the test measures three.
+
+Legato deliberately does **not** restart the clock, so a phrase played without
+gaps keeps the growl running through it rather than re-articulating it on every
+note. A cold note does restart, from the top of the group, so it always begins
+on the undamped cycle.
+
+#### Why the shape is a power of a raised cosine
+
+A gain that steps between cycles is a square wave at f/N multiplying the signal,
+and a square has infinite bandwidth. CLAUDE.md §7 calls aliasing a defect
+everywhere except where it is the instrument, and here it is not — and
+oversampling would not save it, for the same reason it does not save a hard
+clipper.
+
+`(0.5 − 0.5·cos t)^k` is `sin²ᵏ(t/2)`, and `sin²ᵏ` expands into a **finite**
+cosine series: exactly *k* harmonics of *t* and nothing above them. The
+modulator is therefore band-limited by construction, at a bandwidth the Rasp
+control names, and the product widens the carrier by exactly `k·f/N` — 220 Hz at
+the bottom of the keyboard with the default. No antiderivative, no oversampling
+argument, and nothing to measure in order to *know* the bound.
+
+Rasp interpolates between two adjacent integer powers rather than varying *k*
+continuously, because a fractional power is an infinite series and would throw
+the guarantee away. A linear blend of two band-limited signals is band-limited to
+the wider of them.
+
+Measured anyway, because an argument about the modulator is not a statement
+about the instrument. At full depth, sharpest rasp, A5, everything above where
+the maths says the modulation stops:
+
+| | worst inharmonic, 5–18 kHz |
+|---|---|
+| raised-cosine power | **−200.5 dB** — the numerical floor, nothing there at all |
+| hard gate on the alternate cycle | **−24.4 dB at 5.7 kHz** |
+
+176 dB, between a modulator with a finite Fourier series and one without. The
+second row is the break-check: the obvious implementation, seen red.
 
 ### MANGLE
 
@@ -430,45 +527,32 @@ it would have been when the next note arrives.
 | **Phase wash** | Allpass cascade, 8 stages, LFO on the centre, polyphonic |
 | **Metal fold** | Ring and folder, ×8 oversampling |
 | **Just growl** | For a pure scale — load one on the TUNING page |
+| **Kargyraa** | The doubled voice: a legato drone, the period halved, and a mod envelope walking the vowel over the top — the folds and the tongue doing two independent things at once, which is what the style actually is |
 
 ---
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and 579 DSP tests pass on x86-64
-and under `qemu-aarch64`. None of that says it sounds good, and **nobody has
-loaded this into a DAW from here** — the whole project is developed in a Linux
-container. Your ears are the acceptance test, and the first useful thing after
-it loads is telling me which presets are wrong.
+Steinberg's validator passes 47/47 on Linux and **613 DSP tests pass on x86-64**.
+The last four-platform run was at 579 tests; ARM64 and macOS are paused on
+purpose while the Windows build is finished, so those figures are older than the
+count — CLAUDE.md §2.3.
+
+None of that says it sounds good. Your ears are the acceptance test, and the
+instrument has now been played on the rig once — the panel rework, the LFO range
+and the envelope range all came from that. Kargyraa has not: it is measured and
+it is not yet heard.
 
 ---
 
 ## Roadmap
 
+Kargyraa has been built — see its section under Controls. What is left of the
+throat-singing thread is the vowel work below.
+
+
 Things considered and deliberately not built yet, with the reasoning, so the
 next pass does not start from scratch.
-
-### Kargyraa — phase-locked period doubling
-
-**The one worth doing next**, and the only one on this list that is a *source*
-change rather than a filter change.
-
-Kargyraa is the third throat-singing mechanism and it is not a resonance trick
-at all: the singer's **ventricular folds vibrate at exactly half the frequency
-of the true vocal folds**. Real period doubling, phase-locked — an octave down
-that cannot beat against the fundamental, because it is the same waveform with
-alternate cycles modified rather than a second oscillator.
-
-For a bass instrument that is exactly the interesting property. Sonitus's sub
-oscillator today is generated *independently*, so it is a clean sine or square
-that has to be tuned and can drift against the note. A kargyraa sub would be the
-oscillator's own output with every other cycle attenuated, locked to its own
-phase by construction.
-
-Lives in `Voice`, needs its own aliasing thought (period doubling makes the
-harmonics *denser*, not higher, so it is benign — but that should be measured
-rather than assumed). Held until the instrument has been heard, because it is a
-sound decision as much as a DSP one.
 
 ### More vowels, including non-Western
 
@@ -511,6 +595,22 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+**Kargyraa.** The third throat-singing mechanism, and the only one that changes
+the source rather than the filter: alternate cycles of the waveform damped,
+locked to oscillator A's own cycle counter, producing the half-integer series
+around every harmonic. Three controls, a modulation destination, a preset, and
+four tests — the subharmonic series, the phase lock at three pitches, bit-exact
+bypass at zero, and aliasing at **−200.5 dB** against a hard gate's −24.4 dB.
+The `kargyraa` destination is **appended** to the voice list and every new
+control defaults to neutral, so nothing that existed before it changes.
+
+**The LFOs reach 160 Hz**, up from 40, and two clamps that would have eaten it
+are gone — including one that key tracking could already hit. See MOD above.
+
+**The envelopes reach 20 seconds** on attack, decay and release, up from 5 and
+10: long enough for a pad that takes a phrase to arrive. The centres are
+unchanged, so the short end feels exactly as it did.
 
 **The panel, reworked.** Smaller controls, denser layout, and the envelopes
 drawn rather than tabulated.

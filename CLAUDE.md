@@ -97,6 +97,44 @@ the sound and the workflow*, never a source of code.
   whenever it changes.
 - **Bypass must be click-free and latency-matched**, so A/B comparison is honest.
 
+### 2.3 Order of work — x86-64 Windows first, and ARM64 comes later
+
+**Do not build or test for ARM64 until the x86-64 Windows build is finished.**
+Not the cross-compile, not `qemu-aarch64`, not the macOS or ARM64 CI jobs. This
+is a standing instruction from the user and it overrides the cross-check
+suggestions in §5 and §10 — those describe *how* to do it, and this says *when*.
+
+The reason is throughput, in the user's words: it speeds up testing and
+development. The rig is Windows 11 and FL Studio; a feature is only real once it
+has been played there, and every ARM build is minutes spent on a platform nobody
+is listening on yet. Six hours of macOS CI bought nothing that the user's ears
+had not already bought faster.
+
+The gate is explicit. ARM64 and macOS resume when **the x86-64 Windows build is
+bug-squashed and feature-complete** — when the user says the features are
+finalised and the bugs are gone, not when a milestone merely looks finished from
+here. At that point, and only then:
+
+1. Push out a macOS ARM64 build and test it.
+2. Fix whatever the Apple clang and AArch64 toolchains turn up — compiler
+   warnings and errors included. Expect some; that is what the stage is for.
+
+Two things this does **not** license:
+
+- **Do not remove or weaken architecture-correct code.** The denormal guard's
+  AArch64 branch (§2.2, FPCR bit 24) stays exactly as it is, and so does every
+  other non-x86 path. Writing portable code costs nothing; *running* the
+  cross-build is the expense being deferred. Deleting the ARM path to "simplify"
+  would turn a deferral into a regression, and it is invisible until it runs.
+- **Do not claim ARM64 or macOS coverage that was not obtained.** Say "the
+  ARM64 cross-check was not run" in the commit message and the report. §10's
+  reporting rule applies with full force here: a skipped step is stated, never
+  implied.
+
+CI already agrees with this. The workflow's `platforms` input defaults to
+`windows`, which skips `test-arm64` and the macOS matrix entries; choosing
+`all` is the deliberate act that opts back in.
+
 ---
 
 ## 3. Repository layout
@@ -225,7 +263,10 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux.
+  validator 47/47 on Linux. The count has since grown to **613 on x86-64**; the
+  `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
+  gate lifts. Quote the two separately rather than letting the newer number
+  stand for both.
   What is **still not observed** is the thing that matters most: nobody has
   loaded those bundles into a DAW on Windows or macOS from here. This project is
   developed in a Linux container, so "CI is green" means the code compiles and
@@ -610,7 +651,11 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
 - **CI also cross-compiles for ARM64 and runs the suite under emulation.**
   Apple Silicon is ARM, and an x86-only assumption is invisible until it runs
   there. That job costs a Linux minute and is how this class of bug gets caught
-  without waiting on a Mac runner. Cross-check locally the same way:
+  without waiting on a Mac runner.
+  **Both the job and the local cross-check below are switched off for now —
+  see §2.3.** They are the right technique at the wrong time; the gate is the
+  x86-64 Windows build being finished. Left here because that is the command
+  to use when it is:
   ```
   cmake -B build-arm -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -659,3 +704,8 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
 - Prefer a working, measurable, minimal version early over a large unproven
   one. Get it building on Windows, get it loading in FL Studio, then refine
   the sound with the user in the loop — the user's ears are the acceptance test.
+- **That loop is x86-64 Windows only until it is finished.** No ARM64
+  cross-build, no `qemu-aarch64`, no macOS CI — see §2.3 for the rule and the
+  gate that lifts it. It is the same principle as the bullet above, applied to
+  platforms rather than to features: the fastest route to a plugin that sounds
+  right is the shortest loop between a change and the user hearing it.

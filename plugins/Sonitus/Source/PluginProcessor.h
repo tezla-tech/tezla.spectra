@@ -47,6 +47,11 @@ inline constexpr auto subLevel    = "subLevel";
 inline constexpr auto ringAmount  = "ringAmount";
 inline constexpr auto foldAmount  = "foldAmount";
 
+// ---- kargyraa --------------------------------------------------------------
+inline constexpr auto kargyraa        = "kargyraa";
+inline constexpr auto kargyraaRasp    = "kargyraaRasp";
+inline constexpr auto kargyraaDivisor = "kargyraaDivisor";
+
 // ---- filter ----------------------------------------------------------------
 inline constexpr auto filterMode  = "filterMode";
 inline constexpr auto cutoff      = "cutoff";
@@ -180,7 +185,14 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "PM index", "Width A", "Width B",
                                          "Detune A", "Detune B", "Osc mix",
                                          "Sub level", "Ring", "Fold",
-                                         "Pitch", "Pitch B", "Level" };
+                                         "Pitch", "Pitch B", "Level",
+                                         "Kargyraa" };
+
+/// How many oscillator cycles one kargyraa modulator cycle spans.
+///
+/// The stored value is an **index**, so this is append-only like every other
+/// choice list here -- CLAUDE.md section 8.
+inline const juce::StringArray kargyraaDivisor { "/2  true kargyraa", "/3", "/4" };
 
 /// The global matrix's sources: the three that exist once rather than once per
 /// note. Pointing an amp envelope at a global control has no answer when eight
@@ -246,9 +258,10 @@ static_assert (static_cast<int> (ModSource::none)      == 0
             && static_cast<int> (ModSource::count)     == 10,
                "the modulation source list is indexed straight into ModSource");
 
-static_assert (static_cast<int> (ModDestination::none)  == 0
-            && static_cast<int> (ModDestination::level) == 15
-            && static_cast<int> (ModDestination::count) == 16,
+static_assert (static_cast<int> (ModDestination::none)     == 0
+            && static_cast<int> (ModDestination::level)    == 15
+            && static_cast<int> (ModDestination::kargyraa) == 16
+            && static_cast<int> (ModDestination::count)    == 17,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0
