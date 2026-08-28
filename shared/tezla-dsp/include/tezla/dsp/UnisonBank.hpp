@@ -132,6 +132,12 @@ public:
             const auto index = static_cast<std::size_t> (i);
 
             voices_[index].reset (randomisePhases ? random_.next() : 0.0);
+
+            // Every voice its own noise stream, derived from the bank's seed:
+            // a noise stack whose voices agree is mono however wide the pan.
+            voices_[index].seedNoise (seed_ ^ (0x9e3779b97f4a7c15ull
+                                                 * static_cast<std::uint64_t> (i + 1)));
+
             drift_[index] = 0.0;
             driftTarget_[index] = 0.0;
         }
@@ -218,6 +224,16 @@ public:
     {
         for (auto& voice : voices_)
             voice.setMorph (morph);
+
+        // The Noise shape's colour lives here because the oscillator does not
+        // know the sample rate: morph sweeps the one-pole's corner from wide
+        // open down to ~200 Hz, logarithmically.
+        const double clamped = std::clamp (morph, 0.0, 1.0);
+        const double cornerHz = 20000.0 * std::pow (200.0 / 20000.0, clamped);
+        const double g = std::clamp (6.283185307179586 * cornerHz / sampleRate_, 0.0, 1.0);
+
+        for (auto& voice : voices_)
+            voice.setNoiseCoefficient (g);
     }
 
     /// Direct access, so a caller can wire hard sync between two banks voice by

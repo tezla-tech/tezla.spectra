@@ -191,7 +191,9 @@ inline constexpr auto oversampling = "oversampling";
 /// project.
 namespace choices
 {
-inline const juce::StringArray shape { "Saw", "Pulse", "Triangle", "Sine" };
+inline const juce::StringArray shape { "Saw", "Pulse", "Triangle", "Sine",
+                                       "Vintage", "Dome", "Double saw",
+                                       "Harmonic", "Noise" };
 inline const juce::StringArray subShape { "Sine", "Square" };
 inline const juce::StringArray filterMode { "Lowpass", "Bandpass", "Highpass", "Notch" };
 inline const juce::StringArray keyMode { "Poly", "Mono", "Legato" };
@@ -247,11 +249,16 @@ inline const juce::StringArray globalDest { "Off", "Comb time", "Comb feedback",
                                             "Phase centre", "Vowel", "Tube", "Output",
                                             "Harmonic", "Notch" };
 
-static_assert (static_cast<int> (dsp::OscShape::saw)      == 0
-            && static_cast<int> (dsp::OscShape::pulse)    == 1
-            && static_cast<int> (dsp::OscShape::triangle) == 2
-            && static_cast<int> (dsp::OscShape::sine)     == 3
-            && static_cast<int> (dsp::OscShape::count)    == 4,
+static_assert (static_cast<int> (dsp::OscShape::saw)       == 0
+            && static_cast<int> (dsp::OscShape::pulse)     == 1
+            && static_cast<int> (dsp::OscShape::triangle)  == 2
+            && static_cast<int> (dsp::OscShape::sine)      == 3
+            && static_cast<int> (dsp::OscShape::vintage)   == 4
+            && static_cast<int> (dsp::OscShape::dome)      == 5
+            && static_cast<int> (dsp::OscShape::doubleSaw) == 6
+            && static_cast<int> (dsp::OscShape::harmonic)  == 7
+            && static_cast<int> (dsp::OscShape::noise)     == 8
+            && static_cast<int> (dsp::OscShape::count)     == 9,
                "the shape option list is indexed straight into OscShape");
 
 static_assert (static_cast<int> (SubShape::sine)   == 0

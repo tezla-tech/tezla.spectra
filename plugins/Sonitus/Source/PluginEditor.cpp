@@ -1870,8 +1870,17 @@ void SonitusEditor::buildPages()
         page.addChoice (shapeId, "Shape",
             "Saw is the dense one and where a reese starts -- every harmonic present, which is "
             "what gives a comb something to cut. Pulse is hollow and its Width knob sweeps which "
-            "harmonics survive. Triangle is soft, Sine has nothing above the fundamental and is "
-            "for sub and for driving PM.");
+            "harmonics survive. Triangle is soft, and its Width is a *skew* -- push it off centre "
+            "and it leans towards a saw. Sine has nothing above the fundamental and is for sub "
+            "and for driving PM.\n\n"
+            "The rest read the Morph slider, and 0 is always the classic form. Vintage is an "
+            "analogue saw core -- an RC curve instead of a straight ramp, Morph deepening the "
+            "sag. Dome is a pressed sine with **zero aliasing by construction**, Morph pressing "
+            "it from a sine towards a rounded pulse. Double saw is two ramps, Morph sliding the "
+            "second -- a one-oscillator flanger, and a great Morph target for an LFO. Harmonic "
+            "is sixteen partials with Morph setting the roll-off, bright to dark. Noise is "
+            "noise: pitch, sync and PM do nothing to it, unison spread makes it wide, and Morph "
+            "darkens it.");
 
         page.addKnob (octaveId, "Octave", "Whole octaves, -3 to +3.");
         page.addKnob (semitoneId, "Semis", "Semitones, -24 to +24. Snapped, so an interval stays an interval.");

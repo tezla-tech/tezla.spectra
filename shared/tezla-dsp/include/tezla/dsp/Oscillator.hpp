@@ -119,6 +119,35 @@ enum class OscShape
     triangle,
     sine,
 
+    // ---- phase 3 ------------------------------------------------------------
+    //
+    // Every one of these reads Morph, and 0 is that shape's canonical self.
+    // The four above ignore Morph forever -- they are frozen for project
+    // compatibility, and these are their morphable relatives.
+
+    /// An analogue saw core: an RC charging curve instead of a straight ramp,
+    /// with the same -2 reset the saw has. Morph deepens the curve.
+    vintage,
+
+    /// A pressed sine, `(0.5 - 0.5 cos)^k` -- **band-limited by construction**:
+    /// integer k has exactly k harmonics, and Morph blends between adjacent
+    /// integers, so there is nothing above k+1 times the fundamental, ever.
+    /// The identity is the one the kargyraa work proved.
+    dome,
+
+    /// Two saw ramps, the second offset by Morph x half a cycle. At 0 they
+    /// align into a plain saw; moving the offset is a one-oscillator flanger.
+    doubleSaw,
+
+    /// Additive: sixteen harmonics at n^-p, Morph setting the roll-off from
+    /// bright to dark. Band-limited by construction, with each partial faded
+    /// out as it nears Nyquist so a pitch sweep cannot pop one in.
+    harmonic,
+
+    /// White noise, one-poled darker as Morph rises. No pitch: frequency,
+    /// sync, PM, detune and drift all have no effect, and the tooltip says so.
+    noise,
+
     count
 };
 
@@ -147,7 +176,11 @@ public:
         pendingSyncFrac_ = 0.0;
     }
 
-    void setShape (OscShape shape) noexcept { shape_ = shape; }
+    void setShape (OscShape shape) noexcept
+    {
+        shape_ = shape;
+        refreshShapeState();
+    }
     [[nodiscard]] OscShape getShape() const noexcept { return shape_; }
 
     /// Pulse width, 0.02 to 0.98. The pulse reads it as duty; the triangle
@@ -171,9 +204,24 @@ public:
     void setMorph (double morph) noexcept
     {
         morph_ = std::clamp (morph, 0.0, 1.0);
+        refreshShapeState();
     }
 
     [[nodiscard]] double getMorph() const noexcept { return morph_; }
+
+    /// Seeds the Noise shape's generator. The unison bank hands every voice a
+    /// different one, which is what makes a noise stack wide instead of mono.
+    void seedNoise (std::uint64_t seed) noexcept
+    {
+        noiseState_ = seed | 1ull;
+    }
+
+    /// The Noise shape's one-pole coefficient, 0..1, computed by whoever knows
+    /// the sample rate -- this class deliberately does not. 1 is white.
+    void setNoiseCoefficient (double g) noexcept
+    {
+        noiseCoefficient_ = std::clamp (g, 1.0e-4, 1.0);
+    }
 
     /// The ideal (un-band-limited) waveform of a shape, for anything that
     /// draws or checks one -- the on-panel preview renders exactly this, so
@@ -189,8 +237,8 @@ public:
                                                   double width, double morph) noexcept
     {
         const double clampedWidth = std::clamp (width, kMinimumWidth, 1.0 - kMinimumWidth);
+        const double clampedMorph = std::clamp (morph, 0.0, 1.0);
         phase -= std::floor (phase);
-        (void) morph;   // read by the shapes still to come
 
         switch (shape)
         {
@@ -208,6 +256,77 @@ public:
             case OscShape::sine:
                 return std::sin (6.283185307179586 * phase);
 
+            case OscShape::vintage:
+            {
+                const double a = 1.5 + 6.0 * clampedMorph;
+                const double e = std::exp (-a);
+                const double norm = 2.0 / (1.0 - e);
+                const double mean = norm * (1.0 - (1.0 - e) / a) - 1.0;
+
+                return norm * (1.0 - std::exp (-a * phase)) - 1.0 - mean;
+            }
+
+            case OscShape::dome:
+            {
+                const double k = 1.0 + 15.0 * clampedMorph;
+                const int kLo = std::max (1, static_cast<int> (k));
+                const int kHi = kLo + 1;
+                const double blend = std::clamp (k - static_cast<double> (kLo), 0.0, 1.0);
+
+                double meanLo = 0.5;
+                for (int n = 2; n <= kLo; ++n)
+                    meanLo *= (2.0 * n - 1.0) / (2.0 * n);
+                const double meanHi = meanLo * (2.0 * kHi - 1.0) / (2.0 * kHi);
+
+                const double x = 0.5 - 0.5 * std::cos (6.283185307179586 * phase);
+                const double lo = (std::pow (x, static_cast<double> (kLo)) - meanLo)
+                                    / (1.0 - meanLo);
+                const double hi = (std::pow (x, static_cast<double> (kHi)) - meanHi)
+                                    / (1.0 - meanHi);
+
+                return lo + blend * (hi - lo);
+            }
+
+            case OscShape::doubleSaw:
+            {
+                const double offset = 0.5 * clampedMorph;
+                double second = phase + offset;
+                second -= std::floor (second);
+
+                return 0.5 * ((2.0 * phase - 1.0) + (2.0 * second - 1.0));
+            }
+
+            case OscShape::harmonic:
+            {
+                // The ideal series, with no Nyquist fades: this is the shape,
+                // and the audio path's fades are the method.
+                const double p = 1.0 + 2.0 * clampedMorph;
+
+                double norm = 0.0;
+                for (int n = 1; n <= kHarmonicCount; ++n)
+                    norm += std::pow (static_cast<double> (n), -p);
+
+                double sum = 0.0;
+                for (int n = 1; n <= kHarmonicCount; ++n)
+                    sum += std::pow (static_cast<double> (n), -p) / norm
+                             * std::sin (6.283185307179586 * static_cast<double> (n) * phase);
+
+                return sum;
+            }
+
+            case OscShape::noise:
+            {
+                // Drawable, not audible: a phase-hashed value so a preview has
+                // something honest-looking to stroke. The audio path runs a
+                // real generator.
+                auto z = static_cast<std::uint64_t> (phase * 4096.0) * 0x9e3779b97f4a7c15ull;
+                z ^= z >> 30;
+                z *= 0xbf58476d1ce4e5b9ull;
+                z ^= z >> 27;
+
+                return 2.0 * (static_cast<double> (z >> 11) / 9007199254740992.0) - 1.0;
+            }
+
             case OscShape::count:
             default:
                 return 0.0;
@@ -219,6 +338,12 @@ public:
     void setIncrement (double increment) noexcept
     {
         increment_ = std::clamp (increment, 0.0, 0.49);
+
+        // Dome's harmonic-count clamp and Harmonic's Nyquist fades depend on
+        // the increment, so a pitch change re-derives them. Control-rate: the
+        // banks push increments once per chunk, not per sample.
+        if (shape_ == OscShape::dome || shape_ == OscShape::harmonic)
+            refreshShapeState();
     }
 
     [[nodiscard]] double getIncrement() const noexcept { return increment_; }
@@ -259,6 +384,24 @@ public:
     {
         wrapped_ = false;
         wrapFraction_ = 0.0;
+
+        // Noise stands outside the phase machinery entirely: no cycle, no
+        // wrap, nothing for a sync slave to reset to. A pending sync is
+        // consumed and ignored rather than left to fire on the next shape.
+        if (shape_ == OscShape::noise)
+        {
+            pendingSync_ = false;
+
+            noiseState_ ^= noiseState_ << 13;
+            noiseState_ ^= noiseState_ >> 7;
+            noiseState_ ^= noiseState_ << 17;
+
+            const double white = 2.0 * (static_cast<double> (noiseState_ >> 11)
+                                          / 9007199254740992.0) - 1.0;
+
+            noiseLowpass_ += noiseCoefficient_ * (white - noiseLowpass_);
+            return noiseLowpass_;
+        }
 
         // ---- read the waveform where the phase is now ------------------------
         //
@@ -312,9 +455,20 @@ private:
         switch (shape_)
         {
             case OscShape::saw:      return -2.0;   // +1 falls to -1
+            case OscShape::vintage:  return -2.0;   // the curve spans the same -1..+1
             case OscShape::pulse:
             case OscShape::triangle: return  2.0;   // the square rises
+
+            // Half the saw's step: the second ramp's own wrap carries the
+            // other half, scheduled as a duty-point edge below.
+            case OscShape::doubleSaw: return -1.0;
+
+            // Smooth at the wrap by construction: dome and harmonic are sums
+            // of sines, and noise has no cycle at all.
             case OscShape::sine:
+            case OscShape::dome:
+            case OscShape::harmonic:
+            case OscShape::noise:
             case OscShape::count:
             default:                 return  0.0;
         }
@@ -375,6 +529,28 @@ private:
             }
         }
 
+        // The double saw's second ramp wraps at 1 - offset, dropping its half
+        // of the amplitude. The edge sits in [0.5, 1], which the increment's
+        // 0.49 ceiling can never straddle from below zero -- so the simple
+        // crossing test is exhaustive, the same argument the pulse edge makes.
+        if (shape_ == OscShape::doubleSaw)
+        {
+            // At offset 0 the edge sits at exactly 1.0 and fires together with
+            // the wrap above -- two -1 steps at the same fraction, which is
+            // precisely the saw's -2. The first draft guarded offset > 0 and
+            // thereby corrected only half the aligned step: the morph-0 test
+            // caught it as a doubled saw that did not equal the saw.
+            const double edge = 1.0 - doubleOffset_;
+
+            if (phase_ < edge && next >= edge)
+            {
+                const double frac = std::clamp ((edge - phase_) / increment_, 0.0, 1.0);
+
+                if (frac <= syncAt)
+                    corrector_.addStep (-1.0, frac);
+            }
+        }
+
         // ---- the reset itself ------------------------------------------------
 
         if (pendingSync_)
@@ -387,7 +563,9 @@ private:
         }
     }
 
-    /// The naive waveform, before any correction.
+    /// The naive waveform, before any correction. The new shapes read the
+    /// coefficients `refreshShapeState` cached, so this stays cheap per
+    /// sample; the public static recomputes the same formulas from scratch.
     [[nodiscard]] double valueAtPhase (double phase) const noexcept
     {
         switch (shape_)
@@ -402,9 +580,150 @@ private:
             case OscShape::sine:
                 return std::sin (6.283185307179586 * phase);
 
-            case OscShape::count:
+            case OscShape::vintage:
+                return vintageNorm_ * (1.0 - std::exp (-vintageA_ * phase)) - 1.0 - vintageMean_;
+
+            case OscShape::dome:
+            {
+                const double x = 0.5 - 0.5 * std::cos (6.283185307179586 * phase);
+                const double lo = (std::pow (x, static_cast<double> (domeKLo_)) - domeMeanLo_)
+                                    * domeScaleLo_;
+                const double hi = (std::pow (x, static_cast<double> (domeKHi_)) - domeMeanHi_)
+                                    * domeScaleHi_;
+
+                return lo + domeBlend_ * (hi - lo);
+            }
+
+            case OscShape::doubleSaw:
+            {
+                const double second = wrapUnit (phase + doubleOffset_);
+                return 0.5 * ((2.0 * phase - 1.0) + (2.0 * second - 1.0));
+            }
+
+            case OscShape::harmonic:
+            {
+                // sin(n w) by recurrence: one sincos, then a multiply-add per
+                // partial. The amplitudes carry the roll-off, the Nyquist
+                // fades and the normalisation, all pre-baked.
+                const double w = 6.283185307179586 * phase;
+                const double c = 2.0 * std::cos (w);
+
+                double previous = 0.0;
+                double current = std::sin (w);
+                double sum = harmonicAmp_[0] * current;
+
+                for (int n = 1; n < kHarmonicCount; ++n)
+                {
+                    const double next = c * current - previous;
+                    previous = current;
+                    current = next;
+                    sum += harmonicAmp_[static_cast<std::size_t> (n)] * current;
+                }
+
+                return sum;
+            }
+
+            case OscShape::noise:   // handled in advance(); 0 here keeps the
+            case OscShape::count:   // generic sync arithmetic inert
             default:
                 return 0.0;
+        }
+    }
+
+    /// Re-derives every cached coefficient the current shape needs. Called
+    /// from the setters, which are control-rate.
+    void refreshShapeState() noexcept
+    {
+        switch (shape_)
+        {
+            case OscShape::vintage:
+            {
+                vintageA_ = 1.5 + 6.0 * morph_;
+
+                const double e = std::exp (-vintageA_);
+
+                vintageNorm_ = 2.0 / (1.0 - e);
+                vintageMean_ = vintageNorm_ * (1.0 - (1.0 - e) / vintageA_) - 1.0;
+                break;
+            }
+
+            case OscShape::dome:
+            {
+                // Integer exponents blended, because the finite-series
+                // identity -- sin^2k has exactly k harmonics -- holds for
+                // integers only. A blend of two band-limited waveforms is
+                // band-limited; a fractional exponent is not.
+                const double k = 1.0 + 15.0 * morph_;
+
+                // No harmonic above Nyquist: k harmonics of the fundamental
+                // must fit under half the rate, with the house 0.45 margin.
+                const int kMax = increment_ > 0.0
+                    ? std::max (1, static_cast<int> (0.45 / increment_))
+                    : 16;
+
+                domeKLo_ = std::clamp (static_cast<int> (k), 1, kMax);
+                domeKHi_ = std::min (domeKLo_ + 1, kMax);
+                domeBlend_ = std::clamp (k - static_cast<double> (domeKLo_), 0.0, 1.0);
+
+                // The mean of x^k over a cycle, exactly: m(1) = 1/2 and
+                // m(k) = m(k-1) * (2k-1) / 2k -- the central binomial over 4^k
+                // without computing either.
+                domeMeanLo_ = 0.5;
+                for (int n = 2; n <= domeKLo_; ++n)
+                    domeMeanLo_ *= (2.0 * n - 1.0) / (2.0 * n);
+
+                domeMeanHi_ = domeMeanLo_;
+                if (domeKHi_ > domeKLo_)
+                    domeMeanHi_ *= (2.0 * domeKHi_ - 1.0) / (2.0 * domeKHi_);
+
+                domeScaleLo_ = 1.0 / (1.0 - domeMeanLo_);
+                domeScaleHi_ = 1.0 / (1.0 - domeMeanHi_);
+                break;
+            }
+
+            case OscShape::doubleSaw:
+                doubleOffset_ = 0.5 * morph_;
+                break;
+
+            case OscShape::harmonic:
+            {
+                const double p = 1.0 + 2.0 * morph_;
+
+                double norm = 0.0;
+                for (int n = 1; n <= kHarmonicCount; ++n)
+                    norm += std::pow (static_cast<double> (n), -p);
+
+                for (int n = 1; n <= kHarmonicCount; ++n)
+                {
+                    const double raw = std::pow (static_cast<double> (n), -p) / norm;
+
+                    // Fade each partial out across 0.40..0.48 of the rate's
+                    // half, so a pitch sweep slides partials away instead of
+                    // popping them.
+                    const double x = static_cast<double> (n) * increment_;
+                    double gain = 1.0;
+
+                    if (x >= 0.24)
+                        gain = 0.0;
+                    else if (x > 0.20)
+                    {
+                        const double u = (0.24 - x) / 0.04;
+                        gain = u * u * (3.0 - 2.0 * u);
+                    }
+
+                    harmonicAmp_[static_cast<std::size_t> (n - 1)] = raw * gain;
+                }
+                break;
+            }
+
+            case OscShape::saw:
+            case OscShape::pulse:
+            case OscShape::triangle:
+            case OscShape::sine:
+            case OscShape::noise:
+            case OscShape::count:
+            default:
+                break;
         }
     }
 
@@ -427,6 +746,29 @@ private:
     double increment_ { 0.0 };
     double width_     { 0.5 };
     double morph_     { 0.0 };
+
+    static constexpr int kHarmonicCount = 16;
+
+    // Cached by refreshShapeState for the shape that needs them.
+    double vintageA_    { 1.5 };
+    double vintageNorm_ { 0.0 };
+    double vintageMean_ { 0.0 };
+
+    int    domeKLo_     { 1 };
+    int    domeKHi_     { 2 };
+    double domeBlend_   { 0.0 };
+    double domeMeanLo_  { 0.5 };
+    double domeMeanHi_  { 0.375 };
+    double domeScaleLo_ { 2.0 };
+    double domeScaleHi_ { 1.6 };
+
+    double doubleOffset_ { 0.0 };
+
+    double harmonicAmp_[static_cast<std::size_t> (kHarmonicCount)] {};
+
+    std::uint64_t noiseState_ { 0x9e3779b97f4a7c15ull };
+    double noiseLowpass_     { 0.0 };
+    double noiseCoefficient_ { 1.0 };
 
     double triangleState_ { 0.0 };
 

@@ -2705,3 +2705,52 @@ TEZLA_TEST (a_snapped_amp_decay_is_the_division_and_unsnapped_is_the_knob)
     CHECK (raw > 0.0);
     CHECK_NEAR (snapped / raw, 0.5 / 0.47, 0.03);
 }
+
+TEZLA_TEST (every_shape_plays_through_the_whole_voice_and_dies_away)
+{
+    // The cheap insurance for the new shapes: each one reaches the output
+    // through the full stack -- unison, filter, mangle -- stays finite and
+    // bounded at a brutal patch, and stops when told. Character is measured at
+    // the oscillator level; this is the wiring.
+    for (int shape = 0; shape < static_cast<int> (OscShape::count); ++shape)
+    {
+        EngineParameters parameters = brutal();
+        parameters.voice.shapeA = static_cast<OscShape> (shape);
+        parameters.voice.morphA = 0.6;
+        parameters.oversampling = OversamplingMode::X2;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (43, 1.0);
+
+        Buffers buffers (256);
+
+        double peak = 0.0;
+
+        for (int block = 0; block < 100; ++block)
+        {
+            engine.process (buffers.pointers, 256);
+
+            for (const double sample : buffers.left)
+            {
+                CHECK (std::isfinite (sample));
+                peak = std::max (peak, std::abs (sample));
+            }
+        }
+
+        CHECK (peak > 1.0e-4);
+        CHECK (peak < 8.0);
+
+        engine.noteOff (43);
+
+        for (int block = 0; block < 400; ++block)
+            engine.process (buffers.pointers, 256);
+
+        double tail = 0.0;
+        for (const double sample : buffers.left)
+            tail = std::max (tail, std::abs (sample));
+
+        CHECK (tail < 1.0e-6);
+    }
+}
