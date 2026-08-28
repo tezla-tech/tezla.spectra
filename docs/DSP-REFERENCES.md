@@ -90,7 +90,7 @@ be band-limited (ADAA, or a smooth shaper) as well. These numbers are pinned in
 | [Calf Studio Gear](https://github.com/calf-studio-gear/calf) | LGPL/GPL | Classic effect topologies, clearly written. |
 | [Faust libraries](https://faustlibraries.grame.fr/) | permissive | Reference implementations worth comparing our measurements against. |
 | Laakso, Valimaki, Karjalainen & Laine, *"Splitting the Unit Delay"*, IEEE Signal Processing Magazine 13(1), 1996 | paper | Fractional-delay filter design. `Comb.hpp` uses the 4-point Lagrange kernel from it, derived rather than copied — the closed form for four points is short enough that a reimplementation is checkable, and `tests/test_Comb.cpp` checks it. **Not fetched**; the kernel and its properties are from general reference. |
-| Peterson & Barney, *"Control Methods Used in a Study of the Vowels"*, JASA 24(2), 1952 | paper | The vowel formant frequencies in `Formant.hpp`. **Not fetched** — the proxy refuses the journal — so the table is the widely reproduced adult-male averages quoted from general reference and rounded to 10 Hz. This is exactly the case CLAUDE.md §9 says to *copy* rather than derive: no measurement of ours could tell us the numbers were wrong. Worth verifying against the paper. |
+| Peterson & Barney, *"Control Methods Used in a Study of the Vowels"*, JASA 24(2), 1952 | paper | The vowel data in `Formant.hpp`, from **Table II**. **Read** — saved to [`technical references/sonitus/`](../technical%20references/sonitus/). The fifteen *frequencies* quoted from general reference were exactly right. The *amplitudes* were not: they had been one constant set of three for every vowel, where the paper gives them per vowel over a thirty-decibel span. See below. |
 
 **Measured caveat on biquads.** Computing coefficients from the actual sample
 rate is necessary but not sufficient for rate-independence. Bilinear-transform
@@ -186,6 +186,52 @@ loaded as something unplayable.
 |---|---|---|
 | [The Scala scale file format](https://www.huygens-fokker.org/scala/scl_format.html) and [keyboard map format](https://www.huygens-fokker.org/scala/help.htm#mappings) | public specification | `ScalaFile.hpp` parses both. **Read** — saved to [`technical references/sonitus/`](../technical%20references/sonitus/) after the proxy refused `huygens-fokker.org`. It settled four things the implementation had guessed wrong; see below. |
 | Peterson & Barney, JASA 24(2), 1952 | paper | See the Formant row above. |
+
+### What Peterson & Barney corrected
+
+The frequencies survived contact with the paper unchanged — all fifteen match
+Table II's adult-male row for the five vowels used, which are its columns for
+/i ɛ ɑ ɔ u/ (heed, head, hod, hawed, who'd).
+
+The **amplitudes** did not. The paper gives a relative level per vowel per
+formant, referred to the first formant of [ɑ], and they span thirty decibels:
+
+| | F1 | F2 | F3 |
+|---|---|---|---|
+| ee /i/ | −4 | **−24** | −28 |
+| eh /ɛ/ | −2 | −17 | −24 |
+| ah /ɑ/ | −1 | −5 | −28 |
+| oh /ɔ/ | 0 | −7 | −34 |
+| oo /u/ | −3 | −19 | **−43** |
+
+`Formant.hpp` held one constant set — 0, −7, −12 — for every vowel, which gave
+every vowel the same spectral balance. **The balance is most of what tells one
+vowel from another.** An "ee" wants its second formant 24 dB below its first;
+a constant −7 leaves it seventeen decibels too loud, which is most of the way to
+not being an "ee".
+
+One thing the paper is careful about and this now records: the amplitudes were
+averaged across men, women and children, because the measurements "did not show
+decided differences between classes of speakers". So they are not the male row
+specifically, unlike the frequencies.
+
+Measuring the fix produced a reading worth keeping, because a careless test
+would have hidden it. The *summed* response at each formant's centre lands on
+the table for F1 and F2, and reads **high for F3 — by up to 6.7 dB**:
+
+|  | F1 | F2 | F3 |
+|---|---|---|---|
+| ee | −4.000 (−4) | −23.898 (−24) | −27.746 (−28) |
+| eh | −2.000 (−2) | −16.931 (−17) | −23.670 (−24) |
+| ah | −0.986 (−1) | −4.919 (−5) | −26.488 (−28) |
+| oh | 0.016 (0) | −6.766 (−7) | −30.183 (−34) |
+| oo | −3.000 (−3) | −18.557 (−19) | −36.322 (−43) |
+
+That is the filter being right. The table describes each resonator's own peak;
+the measurement is of three resonators summed, and a formant forty decibels
+below its neighbours is buried under their skirts. The exact claim is checked
+against the coefficients instead, and the summed response is held to a bound
+the data explains rather than a tolerance wide enough to hide it.
 
 **The scales are generated, not tabulated**, which is both a licence question and
 a testing one — CLAUDE.md §2.1 and §9. A Pythagorean scale is a chain of 3/2s, a

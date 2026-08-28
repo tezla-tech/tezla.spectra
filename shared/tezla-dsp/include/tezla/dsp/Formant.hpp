@@ -25,12 +25,18 @@
 // because a subtle reimplementation is strictly worse than a faithful copy and
 // no measurement of ours could tell us we had got it wrong.
 //
-// **These are the widely reproduced Peterson & Barney (1952) adult-male
-// averages, quoted from general reference rather than read from the paper** --
-// the container's egress proxy refuses the journal. They are rounded to the
-// nearest 10 Hz, which is well inside the spread of the original data. The
-// citation and that caveat are both recorded in docs/DSP-REFERENCES.md, and
-// the paper is on the list of things to fetch.
+// **These are Peterson & Barney (1952), Table II, the adult-male row** -- read
+// from the paper, which is saved under `technical references/sonitus/`. The
+// fifteen frequencies were already right when they were quoted from general
+// reference; the amplitudes were not, and that is the interesting half.
+//
+// The paper gives a relative amplitude *per vowel per formant*, referred to the
+// first formant of [a], and they range over thirty decibels. This used to hold
+// one set of three constants for every vowel, which made every vowel have the
+// same formant balance -- and the balance is a large part of what tells one
+// vowel from another. An "ee" wants its second formant 24 dB down; a constant
+// -7 dB leaves it seventeen decibels too loud, which is most of the way to not
+// being an "ee" at all.
 //
 // Bandwidths are held constant per formant rather than per vowel, because a
 // formant's bandwidth is set by how lossy the tract is rather than by where the
@@ -71,21 +77,47 @@ public:
     static constexpr int kFormants = 3;
     static constexpr int kVowels = static_cast<int> (Vowel::count);
 
-    /// Peterson & Barney adult-male averages, in Hz. See the header.
+    /// Peterson & Barney (1952) Table II, adult-male row, in Hz.
+    ///
+    /// The paper's ten vowels in its own order are /i ɪ ɛ æ ɑ ɔ ʊ u ʌ ɜ˞/; these
+    /// five are its columns 1, 3, 5, 6 and 8 -- heed, head, hod, hawed, who'd.
     static constexpr double kFrequencies[kVowels][kFormants] = {
-        { 270.0, 2290.0, 3010.0 },   // ee
-        { 530.0, 1840.0, 2480.0 },   // eh
-        { 730.0, 1090.0, 2440.0 },   // ah
-        { 570.0,  840.0, 2410.0 },   // oh
-        { 300.0,  870.0, 2240.0 },   // oo
+        { 270.0, 2290.0, 3010.0 },   // ee -- /i/
+        { 530.0, 1840.0, 2480.0 },   // eh -- /ɛ/
+        { 730.0, 1090.0, 2440.0 },   // ah -- /ɑ/
+        { 570.0,  840.0, 2410.0 },   // oh -- /ɔ/
+        { 300.0,  870.0, 2240.0 },   // oo -- /u/
     };
 
     /// Nominal bandwidths, in Hz -- constant per formant, not per vowel.
+    ///
+    /// The paper does not give bandwidths, so these are not from it: a
+    /// formant's bandwidth is set by how lossy the tract is rather than by
+    /// where the resonance sits, and these are the conventional figures. Q
+    /// therefore changes as the morph moves, which is what happens in a mouth.
     static constexpr double kBandwidths[kFormants] = { 80.0, 90.0, 120.0 };
 
-    /// Relative peak amplitudes. F1 carries the vowel, F2 carries most of what
-    /// distinguishes one from another, F3 is colour.
-    static constexpr double kAmplitudesDb[kFormants] = { 0.0, -7.0, -12.0 };
+    /// Relative formant amplitudes in dB, from the same table.
+    ///
+    /// **Per vowel, and that matters.** The paper refers them all to the first
+    /// formant of [ɑ] and they span thirty decibels: /u/'s third formant is
+    /// 43 dB down where /ɛ/'s is 24. Holding them constant -- which is what
+    /// this did before the paper was read -- gives every vowel the same
+    /// spectral balance, and the balance is most of what distinguishes one
+    /// vowel from another.
+    ///
+    /// The amplitudes were averaged across men, women and children in the
+    /// original: the paper says the measurements "did not show decided
+    /// differences between classes of speakers, and so have been averaged all
+    /// together". So these are not the male row specifically, unlike the
+    /// frequencies above.
+    static constexpr double kAmplitudesDb[kVowels][kFormants] = {
+        {  -4.0, -24.0, -28.0 },     // ee -- /i/
+        {  -2.0, -17.0, -24.0 },     // eh -- /ɛ/
+        {  -1.0,  -5.0, -28.0 },     // ah -- /ɑ/
+        {   0.0,  -7.0, -34.0 },     // oh -- /ɔ/
+        {  -3.0, -19.0, -43.0 },     // oo -- /u/
+    };
 
     /// How far the sharpness control can narrow or widen the bandwidths.
     ///
@@ -160,6 +192,20 @@ public:
             return 0.0;
 
         return bands_[static_cast<std::size_t> (index)].q;
+    }
+
+    /// The peak gain formant `index` currently has, in dB relative to the first
+    /// formant of [ɑ] -- the reference the paper's table uses. Q is divided
+    /// back out, so this is the amplitude the table states rather than what the
+    /// resonator's sharpness happens to make of it.
+    [[nodiscard]] double formantAmplitudeDb (int index) const noexcept
+    {
+        if (index < 0 || index >= kFormants)
+            return 0.0;
+
+        const auto& band = bands_[static_cast<std::size_t> (index)];
+
+        return 20.0 * std::log10 (std::max (band.gain * band.q, 1.0e-12));
     }
 
     // -----------------------------------------------------------------------
@@ -258,12 +304,21 @@ private:
             band.k = 1.0 / band.q;
             band.denominator = 1.0 / (1.0 + band.g * (band.g + band.k));
 
+            // Blended **in decibels**, which is the linear interpolation of a
+            // logarithm and so a geometric blend of the amplitudes -- the same
+            // shape as the frequency blend above, and for the same reason: the
+            // ear hears ratios. Interpolating the linear gains instead would
+            // make the midpoint between a 0 dB and a -24 dB formant sit at
+            // -6 dB rather than -12.
+            const double decibels = kAmplitudesDb[first][static_cast<std::size_t> (index)]
+                                  + blend * (kAmplitudesDb[second][static_cast<std::size_t> (index)]
+                                             - kAmplitudesDb[first][static_cast<std::size_t> (index)]);
+
             // The bandpass node reads Q at its own corner, so dividing by Q
             // makes the stated amplitude the peak gain rather than the peak
             // gain times however sharp the resonance happens to be. Without it
             // the sharpness control is a volume control.
-            band.gain = std::pow (10.0, kAmplitudesDb[static_cast<std::size_t> (index)] / 20.0)
-                          / band.q;
+            band.gain = std::pow (10.0, decibels / 20.0) / band.q;
         }
     }
 

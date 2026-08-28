@@ -1,6 +1,7 @@
 #include "TestFramework.hpp"
 
 #include <algorithm>
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 #include <vector>
@@ -123,17 +124,32 @@ TEZLA_TEST (the_response_has_a_peak_at_each_formant_and_at_the_stated_height)
     // be filled. Back vowels having merged formants is the data being right,
     // not the filter being wrong.
     //
-    // **And at the height the amplitude table states**, which is what the
-    // division by Q in updateCoefficients() buys. Measured, every vowel, wet
-    // only, sharpness 0.8:
+    // **And at a height the table explains**, which is what the division by Q
+    // in updateCoefficients() buys. Without it the peaks would sit 20*log10(Q)
+    // high -- 17.7 dB out at "ee" F2 -- and the sharpness control would be a
+    // tone control and a fader at the same time.
     //
-    //     F1   0.000  0.000  0.009  0.017  0.002   dB   (table:   0.0)
-    //     F2  -6.989 -6.982 -6.871 -6.772 -6.920        (table:  -7.0)
-    //     F3 -11.938 -11.913 -11.944 -11.949 -11.943    (table: -12.0)
+    // The height is checked here against the table *loosely*, and the exact
+    // claim is the next test's. Measured, every vowel, wet only, sharpness 0.8:
     //
-    // Without it the peaks would sit 20*log10(Q) high -- 17.7 dB out at "ee"
-    // F2 -- and the sharpness control would be a tone control and a fader at
-    // the same time.
+    //           F1                  F2                   F3
+    //     ee  -4.000 (-4)     -23.898 (-24)      -27.746 (-28)
+    //     eh  -2.000 (-2)     -16.931 (-17)      -23.670 (-24)
+    //     ah  -0.986 (-1)      -4.919  (-5)      -26.488 (-28)
+    //     oh   0.016  (0)      -6.766  (-7)      -30.183 (-34)
+    //     oo  -3.000 (-3)     -18.557 (-19)      -36.322 (-43)
+    //
+    // **F1 and F2 land on the table; F3 reads high, by as much as 6.7 dB, and
+    // that is the filter being right.** This measures the *summed* response of
+    // three resonators, and the table describes each one's own peak. When a
+    // formant is thirty decibels below its neighbours, what you measure at its
+    // centre is mostly the skirts of the other two. Peterson & Barney's [u] has
+    // its third formant 43 dB down and its second 19 -- so at 2240 Hz the F2
+    // skirt is simply louder than F3's own peak.
+    //
+    // This is the reading that would have made a naive test fail after the
+    // paper was read, and reaching for a wider tolerance would have hidden it.
+    // The claim about the coefficients is checked directly instead.
     constexpr double rate = 48000.0;
 
     for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
@@ -148,14 +164,117 @@ TEZLA_TEST (the_response_has_a_peak_at_each_formant_and_at_the_stated_height)
             const double below = dbOf (magnitudeAt (formant, centre / 1.06, rate));
             const double above = dbOf (magnitudeAt (formant, centre * 1.06, rate));
 
-            // A local maximum. The tightest margin in the whole table is
-            // 2.586 dB, at "ee" F1 where Q is only 7.75.
-            CHECK (atPeak > below + 2.0);
-            CHECK (atPeak > above + 2.0);
+            const double stated = Formant::kAmplitudesDb[static_cast<std::size_t> (vowel)]
+                                                        [static_cast<std::size_t> (index)];
 
-            CHECK_NEAR (atPeak, Formant::kAmplitudesDb[static_cast<std::size_t> (index)], 0.25);
+            // A local maximum, **except where the vowel's own data merges two
+            // formants**. In [ɔ] F1 and F2 are 570 and 840 Hz apart with F1
+            // seven decibels the louder, so the response is still climbing
+            // towards F1 six percent below F2's centre. Back vowels having
+            // merged formants is the data being right, not the filter being
+            // wrong -- the same note as above, and the per-vowel amplitudes
+            // made it sharper.
+            const bool merged = std::abs (formant.formantHz (1) / formant.formantHz (0)) < 1.6;
+
+            if (! merged || index != 1)
+            {
+                // Still a bump, always.
+                CHECK (atPeak > below);
+                CHECK (atPeak > above);
+
+                // A *prominent* bump only where the formant is not buried
+                // under its neighbours. [ɔ] and [u] put their third formant 34
+                // and 43 dB below their first, and at that depth the summed
+                // response barely dips either side of it -- measured, the peak
+                // clears its neighbours by 1.44 dB at [ɔ] and 0.80 at [u],
+                // against 2 dB or better everywhere else. That is the paper's
+                // own data showing through, and loosening the margin for every
+                // cell to accommodate it would have thrown the test away.
+                const double loudest = *std::max_element (
+                    std::begin (Formant::kAmplitudesDb[static_cast<std::size_t> (vowel)]),
+                    std::end (Formant::kAmplitudesDb[static_cast<std::size_t> (vowel)]));
+
+                if (stated > loudest - 25.0)
+                {
+                    CHECK (atPeak > below + 2.0);
+                    CHECK (atPeak > above + 2.0);
+                }
+            }
+
+            // Never below what the table asks for: skirts can only add.
+            CHECK (atPeak > stated - 0.25);
+
+            // And never far above it. Seven decibels of headroom is what the
+            // [u] third formant needs and nothing needs more.
+            CHECK (atPeak < stated + 7.0);
         }
     }
+}
+
+TEZLA_TEST (the_amplitude_table_is_applied_per_vowel)
+{
+    // The exact claim, read off the coefficients rather than out of the summed
+    // response: each resonator's own peak gain is what Peterson & Barney's
+    // Table II says it should be, for that vowel.
+    //
+    // **This was one constant set of three for every vowel before the paper was
+    // read**, which gave every vowel the same spectral balance -- and the
+    // balance is most of what tells one vowel from another. An "ee" wants its
+    // second formant 24 dB below its first; the old constant put it 7 dB below,
+    // seventeen decibels too loud.
+    constexpr double rate = 48000.0;
+
+    for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
+    {
+        auto formant = made (rate, vowel / (Formant::kVowels - 1.0), 0.8, 1.0);
+
+        for (int index = 0; index < Formant::kFormants; ++index)
+            CHECK_NEAR (formant.formantAmplitudeDb (index),
+                        Formant::kAmplitudesDb[static_cast<std::size_t> (vowel)]
+                                              [static_cast<std::size_t> (index)],
+                        1.0e-9);
+    }
+
+    // The spread is the point: thirty decibels between the quietest formant in
+    // the table and the loudest, where a single constant set has none.
+    double lowest = 0.0;
+    double highest = -100.0;
+
+    for (int vowel = 0; vowel < Formant::kVowels; ++vowel)
+        for (int index = 0; index < Formant::kFormants; ++index)
+        {
+            const double db = Formant::kAmplitudesDb[static_cast<std::size_t> (vowel)]
+                                                    [static_cast<std::size_t> (index)];
+
+            lowest = std::min (lowest, db);
+            highest = std::max (highest, db);
+        }
+
+    CHECK_NEAR (highest, 0.0, 1.0e-12);      // [ɔ] F1, the table's reference
+    CHECK_NEAR (lowest, -43.0, 1.0e-12);     // [u] F3
+}
+
+TEZLA_TEST (the_amplitudes_blend_in_decibels_across_the_morph)
+{
+    // The amplitudes interpolate the same way the frequencies do -- geometric
+    // in linear gain, which is linear in decibels -- because the ear hears
+    // ratios. Blending the linear gains instead would put the midpoint between
+    // a 0 dB and a -24 dB formant at -6 dB rather than -12.
+    constexpr double rate = 48000.0;
+
+    // Half way from "ee" to "eh": F2 goes from -24 to -17, so the midpoint is
+    // -20.5 dB and not the -19.3 that a linear-gain blend would give.
+    auto formant = made (rate, 0.5 / (Formant::kVowels - 1.0), 0.8, 1.0);
+
+    CHECK_NEAR (formant.formantAmplitudeDb (1), -20.5, 1.0e-9);
+
+    const double linearBlend = 20.0 * std::log10 (
+        0.5 * (std::pow (10.0, -24.0 / 20.0) + std::pow (10.0, -17.0 / 20.0)));
+
+    // Measured: the dB blend gives -20.5 and a linear-gain blend would give
+    // -19.81, so they differ by 0.69 dB. Small, but it is the difference
+    // between a morph that passes through the vowels and one that bulges.
+    CHECK (std::abs (formant.formantAmplitudeDb (1) - linearBlend) > 0.5);
 }
 
 TEZLA_TEST (the_sharpness_control_is_not_a_volume_control)
@@ -168,15 +287,21 @@ TEZLA_TEST (the_sharpness_control_is_not_a_volume_control)
     // Measured at "ah", F1 = 730 Hz, wet only:
     //
     //     sharpness       Q    peak dB    down at x1.09
-    //          0.00    2.28      0.638             0.90
-    //          0.25    4.56      0.187             2.77
-    //          0.50    9.12      0.049             6.26
-    //          0.75   18.25      0.012            11.27
-    //          1.00   36.50      0.003            17.00
+    //          0.00    2.28     -0.099            0.891
+    //          0.25    4.56     -0.730            2.942
+    //          0.50    9.12     -0.929            6.525
+    //          0.75   18.25     -0.982           11.571
+    //          1.00   36.50     -0.996           17.303
     //
-    // Sixteen times the Q, nineteen times the skirt, and 0.64 dB of movement
-    // in the peak -- which is the residual overlap from F2 and F3, not the
-    // resonance's own gain.
+    // Sixteen times the Q, nineteen times the skirt, and the peak **converging
+    // on the -1.0 dB that Peterson & Barney give [ɑ]'s first formant**. The
+    // 0.9 dB it travels is the neighbours filling in underneath: at the widest
+    // setting F2 and F3 are broad enough to lift the peak almost to 0, and as
+    // they narrow they stop reaching. That is overlap, not the resonance's own
+    // gain -- which is the whole claim.
+    //
+    // These numbers moved when the amplitude table became per-vowel: [ɑ] F1 was
+    // 0.0 dB under one constant set and is -1.0 in the paper.
     constexpr double rate = 48000.0;
     constexpr double centre = 730.0;
 
@@ -194,9 +319,9 @@ TEZLA_TEST (the_sharpness_control_is_not_a_volume_control)
         const double peak = dbOf (magnitudeAt (formant, centre, rate));
         const double skirt = peak - dbOf (magnitudeAt (formant, centre * 1.09, rate));
 
-        // The peak barely moves...
-        CHECK (peak > -0.1);
-        CHECK (peak < 0.7);
+        // The peak barely moves, and settles on what the table asks for.
+        CHECK (peak > -1.05);
+        CHECK (peak < 0.0);
 
         // ...while the Q and the skirt climb together, every step.
         CHECK (formant.formantQ (0) > previousQ);
@@ -208,7 +333,7 @@ TEZLA_TEST (the_sharpness_control_is_not_a_volume_control)
 
     // The two ends, so a change to kNarrowest or kWidest shows up here.
     CHECK_NEAR (previousQ, 36.50, 0.05);
-    CHECK_NEAR (previousSkirt, 17.00, 0.15);
+    CHECK_NEAR (previousSkirt, 17.30, 0.15);
 }
 
 TEZLA_TEST (the_formants_are_where_they_were_asked_for_at_every_sample_rate)
