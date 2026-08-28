@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<title>Scala scale file (.scl) format</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="DESCRIPTION" content="SCL format, .scl file format">
+<meta name="AUTHOR" content="E.F. Op de Coul">
+<meta name="KEYWORDS" content="Tuning software, musical scales, standard scale file format">
+<link rel="SHORTCUT ICON" href="https://www.huygens-fokker.org/scala/scala.ico">
+</head>
+<body bgcolor="white" text="black" link="#FF2233" vlink="#0000FF" alink="#008800">
+<font face="Calibri, Arial, Tahoma">
+<h1 align="CENTER">Scala scale file format</h1>
+
+This page is intended for developers of music software who wish to support reading or 
+writing of Scala scale (.scl) files. This file format for musical tunings is a standard 
+for exchange of scales, owing to the size of the <a href="http://www.huygens-fokker.org/scala/downloads.html#scales">scale archive</a> of 
+over <b>4000 scales</b> and the popularity of the 
+<a href="http://www.huygens-fokker.org/scala/">Scala program</a>. With the 
+file's human readable format it's also useable for including scales in e-mail or 
+discussion group postings.
+<p>
+</p><h2>The rules</h2>
+<ul>
+<li>The files are human readable ASCII or 8-bit character text-files.
+<sup><font size="-1">1)</font></sup>
+</li><li>The file type is <b>.scl</b> .
+</li><li>There is one scale per file.
+</li><li>Lines beginning with an exclamation mark are regarded as comments and are to be ignored.
+</li><li>The first (non comment) line contains a short description of the scale,
+but long lines are possible and should not give a read error. The description is 
+only one line. If there is no description, there should be an empty line.
+</li><li>The second line contains the number of notes. This number indicates the
+number of lines with pitch values that follow. In principle there is no upper
+limit to this, but it is allowed to reject files exceeding a certain size. 
+The lower limit is 0, which is possible since degree 0 of 1/1 is implicit.
+Spaces before or after the number are allowed.
+</li><li>After that come the pitch values, each on a separate line, either as a
+ratio or as a value in cents. <b>If the value contains a period, it is a cents
+value, otherwise a ratio</b>. Ratios are written with a slash, and only one. 
+Integer values with no period or slash should be regarded as such, for example
+"2" should be taken as "2/1". Numerators and denominators should be supported to
+at least 2<sup>31</sup>-1 = 2147483647. Anything after a valid pitch value should be
+ignored. Space or horizontal tab characters are allowed and should be ignored.
+Negative ratios are meaningless and should give a read error. For a description of cents, 
+go <a href="http://www.huygens-fokker.org/docs/measures.html#Ellis">here</a>.
+</li><li>The first note of 1/1 or 0.0 cents is implicit and not in the files.
+</li><li>Files for which Scala gives <i>Error in file format</i> are incorrectly
+formatted. They should give a read error and be rejected.
+</li></ul>
+So these lines are all valid pitch lines:<blockquote><pre>81/64
+408.0
+408.
+5
+-5.0
+10/20
+100.0 cents
+ 100.0 C#
+ 5/4   E\
+</pre></blockquote>
+Here is an example of a valid file:<blockquote><pre>! meanquar.scl
+!
+1/4-comma meantone scale. Pietro Aaron's temperament (1523)
+ 12
+!
+ 76.04900
+ 193.15686
+ 310.26471
+ 5/4
+ 503.42157
+ 579.47057
+ 696.57843
+ 25/16
+ 889.73529
+ 1006.84314
+ 1082.89214
+ 2/1
+</pre></blockquote>
+A simple advise: put the filename on the first line behind an exclamation mark. Then someone 
+receiving the file and reading it knows a name under which to save it.
+<p>
+To developers of MIDI software: you should be aware that there is another Scala file 
+type for mapping key/note numbers to scale degrees, called a keyboard
+mapping, with file extension <b>.kbm</b> . In absence of support for keyboard
+mapping files, you may choose any mapping you want, but it will severely limit
+the musical usability, as argued in <a href="https://soundbytesmag.net/microtonality-in-falcon/">this article from <i>SoundBytes</i></a>.
+
+The description is here: <a href="https://www.huygens-fokker.org/scala/help.htm#mappings">Scala Keyboard Mappings</a>.
+</p><p>
+<sup>1)</sup> The user can choose the character set that he/she requires, but
+if a file is intended to become included in the scale archive, it should be in
+ISO&nbsp;8859-1 'Latin-1' or the ASCII subset.
+</p><p>
+</p><h2>Scale Archive</h2>
+
+The scale archive can be freely downloaded. See the <a href="http://www.huygens-fokker.org/docs/scalesdir.txt">contents
+listing</a> for a brief description of each scale file. The scales are at:
+<a href="http://www.huygens-fokker.org/docs/scales.zip">http://www.huygens-fokker.org/docs/scales.zip</a>.
+
+<p>
+</p><h2>Other software</h2>
+Other programs which support the Scala scale format:
+<ul>
+<li>
+<a href="https://madronalabs.com/products/aalto">Aalto (Madrona Labs)</a>
+</li><li>
+<a href="https://www.ableton.com/en/packs/microtuner/">Ableton Microtuner (Ableton)</a>
+</li><li>
+<a href="https://alsamodular.sourceforge.net/">AlsaModularSynth by Matthias Nagorni</a>
+</li><li>
+<a href="https://www.linuxsynths.com/amSynthdemos/amsynth.html">amSynth by Nick Dowell</a> (also .kbm files)
+</li><li>
+<a href="http://www.mark-henning.de/am_about_eng.php">AnaMark by Mark Henning</a> (also .kbm files)
+</li><li>
+<a href="http://ariaengine.com/">ARIA Engine (Plogue Art et Technologie and Garritan Corp)</a>
+</li><li>
+<a href="https://hgsounds.com/product/astralis-vst-collection/">Astralis v2 (Homegrown Sounds)</a> (also output with
+<a href="https://hgsounds.com/product/scala-creator-vsti/">Scala Creator VSTi</a>)
+</li><li>
+<a href="http://www.nicolasfournel.com/?page_id=125#comment-4827">Audiopaint by Nicolas Fournel</a>
+</li><li>
+<a href="https://www.soniare.net/auwen">Auwen by Nes Croft</a> (also output plus output of .kbm files)
+</li><li>
+<a href="https://github.com/BespokeSynth" <="" a="">Bespoke Synth by various people</a> (also .kbm files)
+</li><li>
+<a href="https://www.bitwig.com/en/community/learning/micro-pitch-device.html">Bitwig Studio (Bitwig)</a>
+</li><li>
+<a href="http://victorx.eu/buddhaorc/BuddhaOrchestra.html">Buddha Orchestra by Victor Khashchanskiy</a>
+</li><li>
+<a href="http://blue.kunstmusik.com/">Blue by Steven Yi: PianoRoll and Tracker sound objects</a>
+</li><li>
+<a href="https://blog.rosseaux.net/page/1c360906bfb7b0dfa7d11796b7c82634/BR808">BR808 by Benjamin Rosseaux</a> (also .kbm files)
+</li><li>
+<a href="https://bristol.sourceforge.net/">Bristol by Nick Copeland</a>
+</li><li>
+<a href="http://www.virsyn.de/en/E_Products/E_CANTOR/e_cantor.html">Cantor (VirSyn Software Synthesizer)</a>
+</li><li>
+<a href="https://www.plogue.com/products/chipsounds/">chipsounds (Plogue)</a> (also .kbm files)
+</li><li>
+<a href="https://www.plogue.com/products/chipsynth-md.html">chipsynth (Plogue)</a> (also .kbm files)
+</li><li>
+<a href="https://www.applied-acoustics.com/chromaphone-2/">Chromaphone (Applied Acoustics)</a>
+</li><li>
+<a href="http://www.fmjsoft.com/chromatia.html">Chromatia Tuner (FMJ-Software)</a> (12 tones)
+</li><li>
+<a href="https://apps.apple.com/us/app/chromatic-tuner/id449266133">Chromatic Tuner by Daniele Cenni</a>
+</li><li>
+<a href="https://www.looperman.com/free-music-software/detail/martinic-combo-model-f">Combo Model F (Martinic)</a>
+</li><li>
+<a href="https://www.accsone.com/">crusher-X (accSone)</a>
+</li><li>
+<a href="http://www.virsyn.de/en/E_Products/E_CUBE/e_cube.html">Cube 2 (VirSyn Software Synthesizer)</a>
+</li><li>
+<a href="https://hpi.zentral.zone/cse">Custom Tuning Editor by Aaron Andrew Hunt</a>
+</li><li>
+<a href="https://www.decentsamples.com/product/decent-sampler-plugin/">Decent Sampler Plugin by David Hillowitz</a> (also .kbm files)
+</li><li>
+<a href="https://surge-synth-team.org/dexed/">Dexed fork by Surge Team</a> (also .kbm files)
+</li><li>
+<a href="https://motu.com/products/software/dp">Digital Performer (MOTU)</a>
+</li><li>
+<a href="https://www.cakewalk.com/Products/Dimension-Pro">Dimension Pro 1.2 (Cakewalk)</a>
+</li><li>
+<a href="https://entonal.studio/">Entonal Studio (Entonal)</a>
+</li><li>
+<a href="https://www.escaladormusic.com/Escalador/">Escalador by Oswaldo González</a> (output)
+</li><li>
+<a href="https://motu.com/products/software/ethno">Ethno 2 (MOTU)</a>
+</li><li>
+<a href="https://www.uvi.net/en/software/falcon.html">Falcon (UVI)</a> (also .kbm files)
+</li><li>
+<a href="https://www.fullbucket.de/music/fb3100.html">FB-3100</a>, 
+<a href="https://www.fullbucket.de/music/fb3200.html">FB-3200</a>, 
+<a href="https://www.fullbucket.de/music/fb3300.html">FB-3300</a> and
+<a href="https://www.fullbucket.de/music/modulair.html">ModulAir VSTs (Full Bucket Music)</a>
+</li><li>
+<a href="https://jhhl.net/iPhone/Fortuna/">Fortuna Tuner by Henry Lowengard</a>
+</li><li>
+<a href="https://maxforlive.com/library/device/6946/fractal-filters">Fractal Filters by Dillon Bastan</a> (also .kbm files)
+</li><li>
+<a href="http://www.tunesmithy.co.uk/">Fractal Tune Smithy by Robert Walker</a>
+</li><li>
+<a href="http://gillesdegottex.github.io/fmit/">Free Music Instrument Tuner by Gilles Degottex</a>
+</li><li>
+<a href="https://www.ekips.org/tools/guitar/">FretFind by Aaron Spike</a>
+</li><li>
+<a href="http://electro-music.com/forum/topic-17192.html">G2ools Scala to Nord Modular G2 converter by Ian Sayer</a>
+</li><li>
+<a href="https://www.steinberg.net/vst-instruments/halion/">HALion 6 (Steinberg)</a>
+</li><li>
+<a href="http://www.dogstar.dantimax.dk/midiutil/index.htm">Harmonic Analyser, MidiTemper and PianoTuner by Fred Nachbaur</a>
+</li><li>
+<a href="https://harmonync.harmonicarium.org/settings-overview/">Harmonync by Walter Mantovani</a>
+</li><li>
+<a href="https://www.image-line.com/fl-studio/plugins/harmor">Harmor (Image-Line)</a>
+</li><li>
+<a href="https://github.com/Chysn/O_C-HemisphereSuite/wiki/Scale-Editor">Hemisphere Scale Editor by Jason Justian</a> and <a href="http://www.beigemaze.com/scala">Scala to Hemisphere Suite converter</a>
+</li><li>
+<a href="https://hpi.zentral.zone/">H-Pi Instruments microtonal software by Aaron Andrew Hunt</a>
+</li><li>
+<a href="https://infinitone.com/">Infinitone (Infinitone)</a>
+</li><li>
+<a href="https://jjicalc.sourceforge.net/">Java Just Intonation Calculator by Charles Céleste Hutchins</a>
+</li><li>
+<a href="https://www.2caudio.com/products/kaleidoscope#_overview">Kaleidoscope (2CAudio)</a>
+</li><li>
+<a href="https://madronalabs.com/products/kaivo">Kaivo (Madrona Labs)</a>
+</li><li>
+<a href="https://sites.google.com/site/octarone/code/midi-tools/key-tuner">Key Tuner by Octarone</a> (with minimal modification)
+</li><li>
+<a href="https://hgsounds.com/product/kit-creator-for-mac-and-windows/">Kit Creator (Homegrown Sounds)</a>
+</li><li>
+<a href="https://lingot.nongnu.org/">LINGOT Is Not a Guitar-Only Tuner by Ibán Cereijo-Graña and Jairo Chapela-Martínez</a>.
+Windows version <a href="http://lingot.gitara.org.pl/index.php.en">here</a>
+</li><li>
+<a href="https://linotune.com/">Linotune harmonic strobe tuner by Lino Schraudolph</a>
+</li><li>
+<a href="https://lmms.io/">LMMS by various authors</a>
+</li><li>
+<a href="https://www.apple.com/logic-pro/">Logic Pro 7 and Logic Express 7 (Apple)</a> (+/- 100 cents 12-tET offsets)
+</li><li>
+<a href="https://www.applied-acoustics.com/loungelizard/overview/">Lounge Lizard EP-4 (Applied Acoustics)</a>
+</li><li>
+<a href="https://motu.com/products/software/machfive">MachFive 3 (MOTU)</a>
+</li><li>
+<a href="https://www.apple.com/mainstage/">Mainstage 3 (Apple)</a>
+</li><li>
+<a href="https://maxforlive.com/library/device/3068/retune-for-live">Max for Ableton Live Retune for Live module by John Platter</a> (also .kbm files). It uses this <a href="https://surge-synth-team.org/tuning-library/">C++ source code to parse .scl and .kbm files for softsynths</a>
+</li><li>
+<a href="https://groups.yahoo.com/group/16tone/">Max Magic Microtuner by Victor Cerullo</a>
+</li><li>
+<a href="https://rnbo.cycling74.com/learn/scala-and-custom-tuning-reference">Max/MSP library (Cycling74)</a>
+</li><li>
+<a href="http://www.computermusicnotation.com/">MaxScore for Max and Ableton Live by Nick Didkovsky and Georg Hajdu</a>
+</li><li>
+<a href="http://www.maz-sound.com/">MAZ VSampler</a>
+</li><li>
+<a href="https://www.celemony.com/cms/">Melodyne (Celemony)</a>
+</li><li>
+<a href="https://www.oocities.org/br/hfmlacerda/abc/microabc-about.html">MicroABC by Hudson Lacerda</a>
+</li><li>
+<a href="https://hpi.zentral.zone/microsynth">microsynth by Aaron Andrew Hunt</a>
+</li><li>
+<a href="https://www.ableton.com/en/packs/microtuner/">Microtuner by Ableton (Ableton)</a> (uses Max)
+</li><li>
+<a href="https://tubbutec.de/%C2%B5tune">µTune module (Tubbutec)</a>
+</li><li>
+<a href="http://x31eq.com/software.htm">MIDI Relay and Midiconv by Graham Breed</a>
+</li><li>
+<a href="https://hpi.zentral.zone/miditapper">MIDI Tapper by Aaron Andrew Hunt</a>
+</li><li>
+<a href="https://www.korg.com/us/products/synthesizers/minilogue/">Minilogue (Korg)</a>
+</li><li>
+<a href="https://oddsound.com/mtsespmini.php">MTS-ESP Mini and
+</a><a href="https://oddsound.com/mtsespsuite.php">MTS-ESP Suite (Oddsound)</a> (also .kbm files)
+</li><li>
+<a href="http://www.zogotounga.net/comp/squeak/sqgeo.htm">mu0 by Stéphane Rollandin</a>
+</li><li>
+<a href="https://musescore.org/">MuseScore (MuseScore)</a>
+</li><li>
+<a href="http://mit.edu/music21/">Music21 by Michael Cuthbert et al. at MIT</a>
+</li><li>
+<a href="https://sourceforge.net/projects/mutabor/">Mutabor by Bernhard Ganter et al. at TU Dresden</a>
+</li><li>
+<a href="https://novationmusic.com/products/summit">Novation Summit via Novation Components (Novation)</a>
+</li><li>
+<a href="https://www.thewavegarden.com/odin2">Odin 2 (The Wave Garden)</a> (also .kbm files)
+</li><li>
+<a href="https://www.modplug.com/">OpenMPT ModPlug Tracker</a>
+</li><li>
+<a href="https://www.plogue.com/products/chipsynth-ops7.html">OPS7 (Plogue)</a> (also .kbm files)
+</li><li>
+<a href="https://www.synapse-audio.com/">Orion Platinum, Orion and Dune (Synapse Audio Software)</a> (max. 12 tones)
+</li><li>
+<a href="http://www.devine-machine.com/">OTR88 Electric Piano by Devine Machine</a>
+</li><li>
+<a href="https://padthv1.sourceforge.io/">padthv1</a>,
+<a href="https://samplv1.sourceforge.io/">samplv1</a>,
+<a href="https://synthv1.sourceforge.io/">synthv1</a> (rncbc) (also .kbm files)
+</li><li>
+<a href="https://metacpan.org/module/Music::Scala">Perl programming language via Scala module by Jeremy Mates</a>
+</li><li>
+<a href="https://www.garritan.com/products/personal-orchestra-4/">Personal Orchestra 5 (Garritan)</a> (also .kbm files)
+</li><li>
+<a href="https://www.moogmusic.com/products/sub-37">Phatty Tuner Alternate Scales Editor (Moog Music)</a> (12 tones)
+</li><li>
+<a href="https://www.pianoteq.com/">Pianoteq 5 (Modartt)</a> (also multichannel .kbm files)
+</li><li>
+<a href="http://www.supremepiano.com/index.html?thor.html">Piano Thor (Sound Magic)</a>
+</li><li>
+<a href="https://www.arturia.com/store/analog-classics/pigments">Pigments (Arturia)</a>
+</li><li>
+<a href="https://rhizomatic.fr/index.php/plasmonic/">Plasmonic (Rhizomatic Software Synthesis)</a>
+</li><li>
+<a href="http://stone-voices.ru/vst/polygas">PolyGAS (Stone Voices)</a>
+</li><li>
+<a href="http://ixox.fr/preenfm2/">PreenFM2 DIY frequency modulation sound generator by Xavier Hosxe</a>
+</li><li>
+<a href="https://sonic-cat.com/purity/" purity="" (sonic="" cat)<="" a="">
+</a></li><li><a href="https://sonic-cat.com/purity/" purity="" (sonic="" cat)<="" a="">
+</a><a href="https://pytuning.readthedocs.io/en/0.7.2/">PyTuning Python library by Mark Conway Wirt</a> (also output)
+</li><li>
+<a href="https://www.cakewalk.com/Products/Rapture">Rapture (Cakewalk)</a>
+</li><li>
+<a href="https://www.renoise.com/tools/scl-to-xrni">Renoise digital audio workstation via scl-to-xrni by Aftab Hussain</a>
+</li><li>
+<a href="https://rnbo.cycling74.com/">RNBO (Cycling74)</a> (also custom keyboard mapping)
+</li><li>
+<a href="https://roli.com/products/seaboard/rise2">ROLI Seaboard (Roli)</a>
+</li><li>
+<a href="http://www.supremepiano.com/index.html?ruby.html">Ruby Grand (Sound Magic)</a>
+</li><li>
+<a href="http://www.12equalboresme.com/">Scala Microtuners for Kontakt and SynthEdit by Robert Strauss</a>
+</li><li>
+<a href="https://hpi.zentral.zone/scalavista">ScalaVista by Aaron Andrew Hunt</a>
+</li><li>
+<a href="http://www.musikinformatik.uni-mainz.de/ag.php">Scale by Albert Gräf</a>
+</li><li>
+<a href="https://dspace.lib.ntua.gr/xmlui/handle/123456789/45504">Scale Generator by Gianis Potamitis</a> (output)
+</li><li>
+<a href="https://sevish.com/scaleworkshop/">ScaleWorkshop by Sean "Sevish" Archibald et al.</a> (also output plus .kbm)
+Also <a href="https://scaleworkshop.plainsound.org/">here</a>
+</li><li>
+<a href="https://www.danmozell.com/">Scarps by Dan Mozell</a>
+</li><li>
+<a href="http://schismata.net/index.html">Schismata by John Coutts</a>
+</li><li>
+<a href="https://www.semantic-danielou.com/">Semantic Daniélou-53 by Christian Braut, Jacques Dudon and Arnaud Sicard</a>
+</li><li>
+<a href="https://github.com/sfztools/sfizz">Sfizz sample player by Paul Ferrand et al.</a>
+</li><li>
+<a href="https://www.plogue.com/products/sforzando/">Sforzando SFZ free sound sample player (Plogue)</a> (also .kbm files)
+</li><li>
+<a href="http://audio.rosseauxnet.de/software/plugins/sobanth/">Sobanth by Benjamin Rosseaux</a> (also MTS dumps)
+</li><li>
+<a href="http://www.reveal-sound.com/">Spire (Reveal Sound)</a>
+</li><li>
+<a href="https://www.applied-acoustics.com/string-studio-vs-2/">String Studio VS-2 (Applied Acoustics)</a>
+</li><li>
+<a href="http://www.beepstreet.com/ios/sunrizerios">Sunrizer (BeepStreet)</a>
+</li><li>
+<a href="https://surge-synthesizer.github.io/">Surge Synthesizer (Vember Audio and Surge Team)</a> (also .kbm files).
+The Surge team created a free library with <a href="https://surge-synth-team.org/tuning-library/">C++ source code to parse .scl and .kbm files</a>
+</li><li>
+<a href="https://maxforlive.com/library/device/7027/swarmalators-t">Swarmalators T by Dillon Bastan</a> (also .kbm files)
+</li><li>
+<a href="https://www.synthmaster.com/">SynthMaster and Synthmaster One (KV331 Audio)</a> (also .kbm files)
+</li><li>
+<a href="https://audiokitpro.com/synth/">Synth One (Audiokit)</a> (iPad)
+</li><li>
+<a href="https://www.image-line.com/plugins/Synths/Sytrus/">Sytrus (Image-Line)</a>
+</li><li>
+<a href="https://0110.be/tags/Tarsos">Tarsos by Joren Six and Olmo Cornelis</a> (also output)
+</li><li>
+<a href="http://x31eq.com/temper/">Temperament search program by Graham Breed</a> (output)
+</li><li>
+<a href="https://www.virsyn.de/en/E_Products/E_TERA/e_tera.html">TERA 3 (VirSyn Software Synthesizer)</a>
+</li><li>
+<a href="http://terpstrakeyboard.com/play-it-now/">Terpstra Keyboard Webapp by James Fenn</a>
+</li><li>
+<a href="https://github.com/tmhglnd/th.scala">th.scala Max package by Timo Hoogland</a>
+</li><li>
+<a href="https://the-monochord.com/">The Monochord webapplet by Lajos Mészáros</a>
+</li><li>
+<a href="https://thumbjam.com/">ThumbJam</a>
+</li><li>
+<a href="https://hpi.zentral.zone/tpxe">Tonal Plexus Editor by Aaron Andrew Hunt</a>
+</li><li>
+<a href="http://www.breetvelt.org/">Tuner 6.3 and Tuner 7 by Jacob Breetvelt</a> (12 tones)
+</li><li>
+<a href="https://www.opajaap.nl/wordpress/programmas/tuner-8/">Tuner 8 by Jacob Breetvelt</a> (12 tones)
+</li><li>
+<a href="https://surge-synth-team.org/tuning-workbench-synth/">Tuning Workbench Synth by Surge Synth Team</a> (also .kbm files)
+</li><li>
+<a href="https://www.applied-acoustics.com/ultra-analog-va-3/">Ultra Analog VA-3 (Applied Acoustics)</a>
+</li><li>
+<a href="https://hpi.zentral.zone/ute">Universal Tuning Editor by Aaron Andrew Hunt</a>
+</li><li>
+<a href="https://library.vcvrack.com/NYSTHI/ScalaQuantizer">VCV Rack Scala Quantizer</a> and 
+<a href="https://vcvrack.com/Scalar.html">Scalar tuner</a> by Andrew Belt (only cents and &lt;= 24 tones, also output)
+</li><li>
+<a href="https://madronalabs.com/products/virta">Virta (Madrona Labs)</a>
+</li><li>
+<a href="https://vital.audio/">Vital</a> (also .kbm files)
+</li><li>
+<a href="http://voice-tweaker.sharewarejunction.com/">Voice Tweaker (Xponaut)</a>
+</li><li>
+<a href="https://cherryaudio.com/products/voltage-modular">Voltage Modular (Cherry Audio)</a> (with <a href="https://store.cherryaudio.com/modules/microtuning-plus">Microtuning Plus</a>)
+</li><li>
+<a href="https://www.fullbucket.de/music/whispair.html">WhispAir (Full Bucket Music)</a> (also .kbm files)
+</li><li>
+<a href="https://www.wallanderinstruments.com/">WIVI Standard and Professional (Wallander Instruments)</a>
+</li><li>
+<a href="https://bluehell.electro-music.com/wren/index.php">Wren software synthesizer by Jan Punter</a> (also .kbm files)
+</li><li>
+<a href="https://hpi.zentral.zone/xentone">Xentone Xenharmonic Ear Trainer by Aaron Andrew Hunt</a>
+</li><li>
+<a href="http://www.dynamictonality.com/xronomorph.htm">XronoMorph (Dynamic Tonality)</a> (output)
+</li><li>
+<a href="https://mutable-instruments.net/modules/yarns/manual">Yarns (Mutable Instruments)</a> via 
+<a href="http://scale-editor.appspot.com/">this app</a>
+</li><li>
+<a href="http://yoshimi.sourceforge.net/">Yoshimi software synthesizer by Will Godfrey, Jeremy Jongepier, Paul Nasca and Cal</a> (also .kbm files)
+</li><li>
+<a href="https://zynaddsubfx.sourceforge.io/">ZynAddSubFX software synthesizer by Paul Nasca</a> (also .kbm files)
+</li><li>
+<a href="https://legacy.cakewalk.com/products/z3ta/">Z3TA+ Waveshaping synthesizer (Cakewalk)</a> (version 2.1 and higher)
+</li></ul>
+<p>
+See also <a href="https://en.xen.wiki/w/List_of_Microtonal_Software_Plugins">List of microtonal software plugins</a>.
+</p><p><b>© Manuel Op de Coul, 2001-2026</b><br>
+<a href="mailto:coul@huygens-fokker.org"><i>coul@huygens-fokker.org</i></a>
+</p><p><a href="https://www.huygens-fokker.org/scala">Scala home page</a>
+</p></font><p><font face="Calibri, Arial, Tahoma">&nbsp;
+</font>
+</p></body></html>
