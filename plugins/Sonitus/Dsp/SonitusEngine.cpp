@@ -350,6 +350,21 @@ void Engine::aimComb() noexcept
     readouts_.lfo1.store (sources_.lfo1, std::memory_order_relaxed);
     readouts_.lfo2.store (sources_.lfo2, std::memory_order_relaxed);
     readouts_.sequencer.store (sources_.sequencer, std::memory_order_relaxed);
+
+    // The same tracked voice again. When nothing is sounding the envelopes read
+    // zero rather than holding their last value, which is the honest answer: an
+    // idle instrument's envelope is not paused part-way up, it is over.
+    if (const Voice* voice = voices_.trackedVoice())
+    {
+        readouts_.envelopeLevels[0].store (voice->getAmpLevel(), std::memory_order_relaxed);
+        readouts_.envelopeLevels[1].store (voice->getModEnvelopeLevel (0), std::memory_order_relaxed);
+        readouts_.envelopeLevels[2].store (voice->getModEnvelopeLevel (1), std::memory_order_relaxed);
+    }
+    else
+    {
+        for (auto& level : readouts_.envelopeLevels)
+            level.store (0.0, std::memory_order_relaxed);
+    }
 }
 
 void Engine::advanceGlobalSources (int samples) noexcept

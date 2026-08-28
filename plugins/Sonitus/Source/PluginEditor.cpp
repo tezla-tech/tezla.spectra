@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/Scales.hpp>
 
 namespace tezla::sonitus
@@ -12,9 +13,9 @@ namespace
 {
 // Sonitus's own accent: an acid green-yellow, against Emberdrive's ember,
 // Halo's gold, Capstone's steel, Anvil's hot iron and Transpectus's green. The
-// secondary carries the modulation -- the LFO bars, the playing step -- which
-// is the one reading here that is not a level, and the two must not be
-// confusable at a glance.
+// secondary carries the modulation -- the LFO bars, the playing step, an
+// envelope's live level -- which is the one reading here that is not a level,
+// and the two must not be confusable at a glance.
 const ui::Palette kPalette {
     juce::Colour { 0xff101312 },   // background
     juce::Colour { 0xff191d1c },   // panel
@@ -28,22 +29,96 @@ const ui::Palette kPalette {
     juce::Colour { 0xffab9bf5 }    // hold
 };
 
-constexpr int kLabelHeight = 15;
-constexpr int kValueHeight = 17;
-constexpr int kMinCellHeight = 84;
-constexpr int kMaxCellHeight = 120;
-constexpr int kHeadingHeight = 22;
-constexpr int kNoteHeight = 58;
+// The cell. Deliberately small: sixty controls on six pages only fit at a size
+// the stock JUCE rotary cannot be read at, which is what the arc-and-pointer
+// look and feel in shared/tezla-ui is for. 62 pixels is a 12-pixel name, a
+// 35-pixel knob and a 14-pixel number, and every one of those is legible.
+constexpr int kCellLabelHeight = 12;
+constexpr int kCellValueHeight = 14;
+constexpr int kMinCellHeight = 62;
+constexpr int kMaxCellHeight = 80;
 
-constexpr int kMinWidth  = 860;
-constexpr int kMinHeight = 620;
+/// Cells stop widening past this, and the grid centres instead. A four-column
+/// group on a wide window used to stretch each cell to two hundred pixels of
+/// which thirty-nine were the knob; capping the width is most of the answer to
+/// "too much space used".
+constexpr int kMaxCellWidth = 172;
+
+constexpr int kHeadingHeight = 19;
+constexpr int kGroupGap = 7;
+constexpr int kPagePad = 5;
+
+/// The strip along the bottom of the *editor* that carries the current page's
+/// note. It used to be the last thing on the page itself, which put it below
+/// the fold on exactly the two pages long enough to scroll -- and the MANGLE
+/// note is the one that says what oversampling is doing right now, which is the
+/// least useful thing in the plugin to have to scroll to find.
+constexpr int kNoteHeight = 38;
+
+// The envelope page's block: a heading, then a graph beside two rows of knobs.
+constexpr int kEnvKnobRows = 2;
+constexpr int kEnvKnobColumns = 3;
+constexpr int kEnvBodyHeight = kEnvKnobRows * kMinCellHeight + 4;
+constexpr int kEnvBlockHeight = kHeadingHeight + kEnvBodyHeight + 4;
+
+constexpr int kMinWidth  = 880;
+constexpr int kMinHeight = 560;
 constexpr int kMaxWidth  = 1720;
 constexpr int kMaxHeight = 1240;
 
 constexpr int kMeterWidth = ui::LevelMeter::kMinimumWidth + ui::LevelMeter::kScaleWidth;
-constexpr int kTabHeight = 28;
-constexpr int kStatusHeight = 34;
-constexpr int kStepStripHeight = 132;
+constexpr int kTabHeight = 26;
+constexpr int kStatusHeight = 26;
+constexpr int kStepStripHeight = 108;
+
+/// Splits "NAME -- what it is" into its two halves. Everything after the dashes
+/// is set in dim text, which is what stops six headings on a page reading as six
+/// paragraphs.
+[[nodiscard]] std::pair<juce::String, juce::String> splitHeading (const juce::String& text)
+{
+    const auto separator = text.indexOf (" -- ");
+
+    if (separator < 0)
+        return { text, {} };
+
+    return { text.substring (0, separator).trim(), text.substring (separator + 4).trim() };
+}
+
+/// Draws a group's heading: its name, its explanation, and a rule running out
+/// to the right edge so the group reads as one thing.
+void paintHeading (juce::Graphics& g, const ui::Palette& palette, juce::Rectangle<int> row,
+                   const juce::String& name, const juce::String& detail)
+{
+    const auto text = row.reduced (8, 0);
+
+    g.setColour (palette.accent);
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+
+    const auto nameWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), name);
+    g.drawText (name, text, juce::Justification::centredLeft, false);
+
+    int x = text.getX() + nameWidth + 8;
+
+    if (detail.isNotEmpty())
+    {
+        g.setColour (palette.dimText);
+        g.setFont (juce::FontOptions (10.5f));
+
+        const auto detailWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), detail);
+
+        g.drawText (detail, text.withX (x).withWidth (juce::jmax (0, text.getRight() - x)),
+                    juce::Justification::centredLeft, false);
+
+        x += juce::jmin (detailWidth, juce::jmax (0, text.getRight() - x)) + 8;
+    }
+
+    if (x < text.getRight())
+    {
+        g.setColour (palette.accent.withAlpha (0.16f));
+        g.drawHorizontalLine (row.getCentreY(), static_cast<float> (x),
+                              static_cast<float> (text.getRight()));
+    }
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -58,299 +133,882 @@ void WrappingLabel::paint (juce::Graphics& g)
 }
 
 // ---------------------------------------------------------------------------
+// Cells
+// ---------------------------------------------------------------------------
+
+ParameterCell::ParameterCell (juce::String parameterId, const juce::String& name, ui::Palette palette)
+    : id_ (std::move (parameterId)), palette_ (palette)
+{
+    // Upper case, because a name set beside a number wants to be read as a
+    // label rather than as a word -- and at ten pixels the capitals are the
+    // legible half of the alphabet anyway.
+    label_.setText (name.toUpperCase(), juce::dontSendNotification);
+    label_.setJustificationType (juce::Justification::centred);
+    label_.setColour (juce::Label::textColourId, palette_.dimText);
+    label_.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    label_.setMinimumHorizontalScale (0.65f);
+    addAndMakeVisible (label_);
+
+    // The parameter's own id, so `tezla-render editor hit:cutoff` can ask
+    // whether that control is the thing a click at its centre would reach. The
+    // Transpectus lesson: a buried control is still visible and still enabled,
+    // and from the outside is indistinguishable from one that was never added.
+    setComponentID (id_);
+}
+
+void ParameterCell::resized()
+{
+    label_.setBounds (getLocalBounds().removeFromTop (kCellLabelHeight));
+}
+
+juce::Rectangle<int> ParameterCell::controlBounds() const
+{
+    return getLocalBounds().withTrimmedTop (kCellLabelHeight);
+}
+
+KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                    const juce::String& name, const juce::String& tooltip, ui::Palette palette)
+    : ParameterCell (parameterId, name, palette)
+{
+    slider_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, kCellValueHeight);
+    slider_.setColour (juce::Slider::textBoxTextColourId, palette_.text);
+    slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    slider_.setTooltip (tooltip);
+    label_.setTooltip (tooltip);
+
+    // Double-click goes back to the parameter's own default rather than to the
+    // middle of its range, which on a skewed range is somewhere else entirely.
+    if (auto* parameter = state.getParameter (parameterId))
+        slider_.setDoubleClickReturnValue (
+            true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
+
+    addAndMakeVisible (slider_);
+
+    attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        state, parameterId, slider_);
+}
+
+void KnobCell::setControlEnabled (bool enabled)
+{
+    slider_.setEnabled (enabled);
+
+    // The number too. A greyed knob beside a bright reading says the control is
+    // inert but its value still matters, which is the opposite of the truth.
+    slider_.setColour (juce::Slider::textBoxTextColourId,
+                       enabled ? palette_.text : palette_.dimText.withAlpha (0.4f));
+
+    label_.setColour (juce::Label::textColourId,
+                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+    slider_.repaint();
+    label_.repaint();
+}
+
+void KnobCell::resized()
+{
+    ParameterCell::resized();
+    slider_.setBounds (controlBounds().reduced (2, 0));
+}
+
+ChoiceCell::ChoiceCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                        const juce::String& name, const juce::String& tooltip, ui::Palette palette)
+    : ParameterCell (parameterId, name, palette)
+{
+    // Populated from the parameter itself. A ComboBoxAttachment selects an item
+    // by index and does not create one, so a box left empty here stays empty on
+    // screen and cannot be operated at all.
+    if (auto* parameter = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (parameterId)))
+        box_.addItemList (parameter->choices, 1);
+    else
+        jassertfalse;   // a ChoiceCell on something that is not a choice parameter
+
+    box_.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.10f));
+    box_.setColour (juce::ComboBox::textColourId, palette_.text);
+    box_.setTooltip (tooltip);
+    label_.setTooltip (tooltip);
+    addAndMakeVisible (box_);
+
+    attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        state, parameterId, box_);
+}
+
+void ChoiceCell::setControlEnabled (bool enabled)
+{
+    box_.setEnabled (enabled);
+    label_.setColour (juce::Label::textColourId,
+                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+    label_.repaint();
+}
+
+void ChoiceCell::resized()
+{
+    ParameterCell::resized();
+    auto area = controlBounds();
+    box_.setBounds (area.withSizeKeepingCentre (juce::jmin (area.getWidth() - 6, 118), 22)
+                        .withY (area.getY() + 4));
+}
+
+ToggleCell::ToggleCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                        const juce::String& name, const juce::String& tooltip, ui::Palette palette)
+    : ParameterCell (parameterId, name, palette)
+{
+    button_.setButtonText ("");
+    button_.setTooltip (tooltip);
+    label_.setTooltip (tooltip);
+    addAndMakeVisible (button_);
+
+    attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        state, parameterId, button_);
+}
+
+void ToggleCell::setControlEnabled (bool enabled)
+{
+    button_.setEnabled (enabled);
+    label_.setColour (juce::Label::textColourId,
+                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+    label_.repaint();
+}
+
+void ToggleCell::resized()
+{
+    ParameterCell::resized();
+    auto area = controlBounds();
+    button_.setBounds (area.withSizeKeepingCentre (40, 20).withY (area.getY() + 6));
+}
+
+// ---------------------------------------------------------------------------
 // ControlPage
 // ---------------------------------------------------------------------------
+
+void ControlPage::addHeading (const juce::String& text, int columns)
+{
+    const auto parts = splitHeading (text);
+
+    groups_.push_back ({ parts.first, parts.second, juce::jmax (1, columns), {}, {} });
+}
+
+ControlPage::Group& ControlPage::currentGroup()
+{
+    if (groups_.empty())
+        groups_.push_back ({ {}, {}, 5, {}, {} });
+
+    return groups_.back();
+}
+
+void ControlPage::add (std::unique_ptr<ParameterCell> cell)
+{
+    auto* raw = cell.get();
+
+    addAndMakeVisible (*raw);
+    owned_.push_back (std::move (cell));
+    currentGroup().cells.push_back (raw);
+}
 
 void ControlPage::addKnob (const juce::String& parameterId, const juce::String& name,
                            const juce::String& tooltip)
 {
-    auto knob = std::make_unique<Knob>();
-
-    knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 112, kValueHeight);
-    knob->slider.setColour (juce::Slider::rotarySliderFillColourId, palette_.accent);
-    knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId, palette_.panel.brighter (0.25f));
-    knob->slider.setColour (juce::Slider::thumbColourId, palette_.accentBright);
-    knob->slider.setColour (juce::Slider::textBoxTextColourId, palette_.text);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    knob->slider.setTooltip (tooltip);
-    addAndMakeVisible (knob->slider);
-
-    knob->label.setText (name, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.setColour (juce::Label::textColourId, palette_.dimText);
-    knob->label.setFont (juce::FontOptions (12.0f));
-    knob->label.setTooltip (tooltip);
-    addAndMakeVisible (knob->label);
-
-    knob->id = parameterId;
-    knob->attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        state_, parameterId, knob->slider);
-
-    cells_.push_back ({ Cell::Kind::knob, static_cast<int> (knobs_.size()) });
-    knobs_.push_back (std::move (knob));
+    add (std::make_unique<KnobCell> (state_, parameterId, name, tooltip, palette_));
 }
 
 void ControlPage::addChoice (const juce::String& parameterId, const juce::String& name,
                              const juce::String& tooltip)
 {
-    auto choice = std::make_unique<Choice>();
-
-    // Populated from the parameter itself. A ComboBoxAttachment selects an item
-    // by index and does not create one, so a box left empty here stays empty on
-    // screen and cannot be operated at all.
-    if (auto* parameter = dynamic_cast<juce::AudioParameterChoice*> (state_.getParameter (parameterId)))
-        choice->box.addItemList (parameter->choices, 1);
-    else
-        jassertfalse;   // addChoice used on something that is not a choice parameter
-
-    choice->box.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.15f));
-    choice->box.setColour (juce::ComboBox::textColourId, palette_.text);
-    choice->box.setColour (juce::ComboBox::outlineColourId, palette_.panel.brighter (0.3f));
-    choice->box.setTooltip (tooltip);
-    addAndMakeVisible (choice->box);
-
-    choice->label.setText (name, juce::dontSendNotification);
-    choice->label.setJustificationType (juce::Justification::centred);
-    choice->label.setColour (juce::Label::textColourId, palette_.dimText);
-    choice->label.setFont (juce::FontOptions (12.0f));
-    choice->label.setTooltip (tooltip);
-    addAndMakeVisible (choice->label);
-
-    choice->id = parameterId;
-    choice->attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
-        state_, parameterId, choice->box);
-
-    cells_.push_back ({ Cell::Kind::choice, static_cast<int> (choices_.size()) });
-    choices_.push_back (std::move (choice));
+    add (std::make_unique<ChoiceCell> (state_, parameterId, name, tooltip, palette_));
 }
 
 void ControlPage::addToggle (const juce::String& parameterId, const juce::String& name,
                              const juce::String& tooltip)
 {
-    auto toggle = std::make_unique<Toggle>();
-
-    toggle->button.setButtonText ("");
-    toggle->button.setColour (juce::ToggleButton::tickColourId, palette_.accentBright);
-    toggle->button.setColour (juce::ToggleButton::tickDisabledColourId, palette_.panel.brighter (0.35f));
-    toggle->button.setTooltip (tooltip);
-    addAndMakeVisible (toggle->button);
-
-    toggle->label.setText (name, juce::dontSendNotification);
-    toggle->label.setJustificationType (juce::Justification::centred);
-    toggle->label.setColour (juce::Label::textColourId, palette_.dimText);
-    toggle->label.setFont (juce::FontOptions (12.0f));
-    toggle->label.setTooltip (tooltip);
-    addAndMakeVisible (toggle->label);
-
-    toggle->id = parameterId;
-    toggle->attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
-        state_, parameterId, toggle->button);
-
-    cells_.push_back ({ Cell::Kind::toggle, static_cast<int> (toggles_.size()) });
-    toggles_.push_back (std::move (toggle));
-}
-
-void ControlPage::addHeading (const juce::String& text)
-{
-    // Pad to the end of the current row first, so a group always starts at the
-    // left edge rather than halfway across.
-    while (! cells_.empty() && static_cast<int> (cells_.size()) % columns_ != 0)
-        cells_.push_back ({ Cell::Kind::gap, 0 });
-
-    auto heading = std::make_unique<Heading>();
-
-    heading->label.setText (text, juce::dontSendNotification);
-    heading->label.setJustificationType (juce::Justification::centredLeft);
-    heading->label.setColour (juce::Label::textColourId, palette_.accent);
-    heading->label.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    addAndMakeVisible (heading->label);
-
-    cells_.push_back ({ Cell::Kind::heading, static_cast<int> (headings_.size()) });
-    headings_.push_back (std::move (heading));
-
-    // A heading owns its whole row.
-    for (int column = 1; column < columns_; ++column)
-        cells_.push_back ({ Cell::Kind::gap, 0 });
+    add (std::make_unique<ToggleCell> (state_, parameterId, name, tooltip, palette_));
 }
 
 void ControlPage::addGap()
 {
-    cells_.push_back ({ Cell::Kind::gap, 0 });
-}
-
-void ControlPage::setNote (const juce::String& note)
-{
-    if (note_ == note)
-        return;
-
-    note_ = note;
-    resized();
-    repaint();
+    currentGroup().cells.push_back (nullptr);
 }
 
 void ControlPage::setControlEnabled (const juce::String& parameterId, bool enabled)
 {
-    const auto dim = [&] (juce::Label& label)
-    {
-        label.setColour (juce::Label::textColourId,
-                         enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
-        label.repaint();
-    };
-
-    for (auto& knob : knobs_)
-        if (knob->id == parameterId)
-        {
-            knob->slider.setEnabled (enabled);
-            dim (knob->label);
-        }
-
-    for (auto& choice : choices_)
-        if (choice->id == parameterId)
-        {
-            choice->box.setEnabled (enabled);
-            dim (choice->label);
-        }
-
-    for (auto& toggle : toggles_)
-        if (toggle->id == parameterId)
-        {
-            toggle->button.setEnabled (enabled);
-            dim (toggle->label);
-        }
+    for (auto& cell : owned_)
+        if (cell->parameterId() == parameterId)
+            cell->setControlEnabled (enabled);
 }
 
-int ControlPage::rowCount() const
+int ControlPage::rowsIn (const Group& group) const
 {
-    return (static_cast<int> (cells_.size()) + columns_ - 1) / columns_;
+    return (static_cast<int> (group.cells.size()) + group.columns - 1) / group.columns;
+}
+
+int ControlPage::totalRows() const
+{
+    int rows = 0;
+
+    for (const auto& group : groups_)
+        rows += rowsIn (group);
+
+    return rows;
 }
 
 int ControlPage::getPreferredHeight() const
 {
-    int height = 4;
+    int height = 2 * kPagePad;
 
-    for (int row = 0; row < rowCount(); ++row)
-    {
-        const auto index = static_cast<std::size_t> (row * columns_);
+    for (const auto& group : groups_)
+        height += kHeadingHeight + rowsIn (group) * kMinCellHeight + 4 + kGroupGap;
 
-        height += index < cells_.size() && cells_[index].kind == Cell::Kind::heading
-                    ? kHeadingHeight : kMinCellHeight;
-    }
-
-    return height + (note_.isEmpty() ? 0 : kNoteHeight);
+    return height;
 }
 
 void ControlPage::paint (juce::Graphics& g)
 {
+    // Only as far down as the content goes. A page with two groups in a tall
+    // window used to paint a panel over the whole of it and leave two thirds of
+    // that panel empty, which reads as a layout that has gone wrong rather than
+    // as a page that is simply short.
     g.setColour (palette_.panel);
-    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+    g.fillRoundedRectangle (getLocalBounds().withHeight (
+        contentHeight_ > 0 ? contentHeight_ : getHeight()).toFloat(), 6.0f);
 
-    if (note_.isEmpty() || noteArea_.isEmpty())
-        return;
+    for (const auto& group : groups_)
+    {
+        if (group.bounds.isEmpty())
+            continue;
 
-    g.setColour (palette_.dimText);
-    g.setFont (juce::FontOptions (12.0f));
+        g.setColour (palette_.panel.brighter (0.055f));
+        g.fillRoundedRectangle (group.bounds.toFloat(), 5.0f);
 
-    // Four lines, and the box is sized for four. These notes carry the measured
-    // numbers behind each control -- a note silently cut in half is worse than
-    // no note, because the half that survives still reads as a whole sentence.
-    g.drawFittedText (note_, noteArea_, juce::Justification::centredTop, 4, 1.0f);
+        if (group.heading.isNotEmpty())
+            paintHeading (g, palette_, group.bounds.withHeight (kHeadingHeight),
+                          group.heading, group.detail);
+    }
 }
 
 void ControlPage::resized()
 {
-    if (cells_.empty())
+    if (groups_.empty())
         return;
 
-    auto bounds = getLocalBounds().reduced (4, 2);
+    auto bounds = getLocalBounds().reduced (6, kPagePad);
 
-    // The note gets its space reserved before the grid takes any, rather than
-    // living on whatever is left over.
-    if (! note_.isEmpty())
-        noteArea_ = bounds.removeFromBottom (kNoteHeight).reduced (6, 0);
-    else
-        noteArea_ = {};
+    const int rows = totalRows();
+    const int groups = static_cast<int> (groups_.size());
+    const int available = bounds.getHeight() - groups * (kHeadingHeight + 4 + kGroupGap);
 
-    const int rows = rowCount();
-    const int cellWidth = bounds.getWidth() / columns_;
-
-    // Headings are a fixed height whatever the window is, so the knob rows get
-    // everything left over between them.
-    int headingRows = 0;
-
-    for (int row = 0; row < rows; ++row)
-    {
-        const auto index = static_cast<std::size_t> (row * columns_);
-
-        if (index < cells_.size() && cells_[index].kind == Cell::Kind::heading)
-            ++headingRows;
-    }
-
-    const int knobRows = juce::jmax (1, rows - headingRows);
-    const int available = bounds.getHeight() - headingRows * kHeadingHeight;
-
-    const int cellHeight = juce::jlimit (kMinCellHeight, kMaxCellHeight, available / knobRows);
+    const int cellHeight = rows > 0
+        ? juce::jlimit (kMinCellHeight, kMaxCellHeight, available / rows)
+        : kMinCellHeight;
 
     int y = bounds.getY();
 
-    for (int row = 0; row < rows; ++row)
+    for (auto& group : groups_)
     {
-        const auto first = static_cast<std::size_t> (row * columns_);
-        const bool isHeading = first < cells_.size() && cells_[first].kind == Cell::Kind::heading;
-        const int height = isHeading ? kHeadingHeight : cellHeight;
+        const int groupHeight = kHeadingHeight + rowsIn (group) * cellHeight + 4;
 
-        for (int column = 0; column < columns_; ++column)
+        group.bounds = { bounds.getX(), y, bounds.getWidth(), groupHeight };
+
+        auto inner = group.bounds.reduced (4, 2).withTrimmedTop (kHeadingHeight);
+
+        // A group with fewer controls than columns centres on what it has
+        // rather than on what it was allowed. Three knobs laid out on a
+        // five-column grid used to sit against the left of a centred block,
+        // which looks like two missing controls rather than like three.
+        const int used = juce::jmax (1, juce::jmin (group.columns,
+                                                    static_cast<int> (group.cells.size())));
+
+        const int cellWidth = juce::jmin (kMaxCellWidth, inner.getWidth() / group.columns);
+        const int left = inner.getX() + (inner.getWidth() - cellWidth * used) / 2;
+
+        for (std::size_t i = 0; i < group.cells.size(); ++i)
         {
-            const auto index = first + static_cast<std::size_t> (column);
+            if (group.cells[i] == nullptr)
+                continue;
 
-            if (index >= cells_.size())
-                break;
+            const int column = static_cast<int> (i) % group.columns;
+            const int row = static_cast<int> (i) / group.columns;
 
-            juce::Rectangle<int> cell { bounds.getX() + column * cellWidth, y, cellWidth, height };
-
-            switch (cells_[index].kind)
-            {
-                case Cell::Kind::knob:
-                {
-                    auto& knob = *knobs_[static_cast<std::size_t> (cells_[index].index)];
-                    knob.label.setBounds (cell.removeFromTop (kLabelHeight));
-                    knob.slider.setBounds (cell.reduced (3, 0));
-                    break;
-                }
-                case Cell::Kind::choice:
-                {
-                    auto& choice = *choices_[static_cast<std::size_t> (cells_[index].index)];
-                    choice.label.setBounds (cell.removeFromTop (kLabelHeight));
-                    choice.box.setBounds (cell.withSizeKeepingCentre (
-                        juce::jmin (cell.getWidth() - 10, 152), 26));
-                    break;
-                }
-                case Cell::Kind::toggle:
-                {
-                    auto& toggle = *toggles_[static_cast<std::size_t> (cells_[index].index)];
-                    toggle.label.setBounds (cell.removeFromTop (kLabelHeight));
-                    toggle.button.setBounds (cell.withSizeKeepingCentre (30, 30));
-                    break;
-                }
-                case Cell::Kind::heading:
-                {
-                    auto& heading = *headings_[static_cast<std::size_t> (cells_[index].index)];
-                    heading.label.setBounds (juce::Rectangle<int> { bounds.getX() + 6, y,
-                                                                    bounds.getWidth() - 12, height });
-                    break;
-                }
-                case Cell::Kind::gap:
-                    break;
-            }
+            group.cells[i]->setBounds ({ left + column * cellWidth,
+                                         inner.getY() + row * cellHeight,
+                                         cellWidth, cellHeight });
         }
 
-        y += height;
+        y += groupHeight + kGroupGap;
+    }
+
+    contentHeight_ = y - bounds.getY() - kGroupGap + 2 * kPagePad;
+}
+
+// ---------------------------------------------------------------------------
+// EnvelopeEditor
+// ---------------------------------------------------------------------------
+
+namespace
+{
+// How much of the graph's width each segment is allotted. The sustain's slice
+// is fixed and the other three are filled in proportion to their parameters, so
+// the four together are exactly the full width when all three are at maximum.
+constexpr float kAttackShare  = 0.26f;
+constexpr float kDecayShare   = 0.26f;
+constexpr float kHoldShare    = 0.16f;
+constexpr float kReleaseShare = 0.32f;
+
+constexpr float kHandleRadius = 4.5f;
+constexpr float kGrabRadius = 11.0f;
+
+/// The width the live-level column takes on the right.
+constexpr float kLevelColumn = 7.0f;
+
+/// The strip along the bottom that carries the A / D / S / R marks.
+constexpr float kAxisHeight = 11.0f;
+} // namespace
+
+EnvelopeEditor::EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
+                                juce::String attackId, juce::String decayId, juce::String sustainId,
+                                juce::String releaseId, juce::String shapeId)
+    : state_ (state), palette_ (palette),
+      attackId_ (std::move (attackId)), decayId_ (std::move (decayId)),
+      sustainId_ (std::move (sustainId)), releaseId_ (std::move (releaseId)),
+      shapeId_ (std::move (shapeId))
+{
+    setTooltip ("Drag the three corners: the first sets the attack, the middle one sets the decay "
+                "across and the sustain up and down, and the last sets the release. Double-click a "
+                "corner to put it back to its default. The knobs do the same job to the sample -- "
+                "this is for finding the shape, they are for pinning it down.\n\n"
+                "The curve drawn is the curve that plays, Shape included. The bar on the right is "
+                "this envelope's live output on the most recent note.");
+}
+
+double EnvelopeEditor::segment (double u, double from, double to, double overshoot)
+{
+    // The library's arithmetic, not an approximation of it: a segment aims past
+    // its destination by `overshoot` and stops when it arrives, so it traverses
+    // the first 1/T of an exponential -- the curved part -- rather than crawling
+    // asymptotically into its own target. See shared/tezla-dsp Adsr.hpp.
+    const double distance = to - from;
+
+    if (std::abs (distance) < 1.0e-12)
+        return to;
+
+    const double target = to + distance * (overshoot - 1.0);
+    const double decay = std::pow ((overshoot - 1.0) / overshoot, u);
+
+    return target + (from - target) * decay;
+}
+
+float EnvelopeEditor::normalised (const juce::String& id) const
+{
+    if (auto* parameter = state_.getParameter (id))
+        return parameter->getValue();
+
+    return 0.0f;
+}
+
+void EnvelopeEditor::setNormalised (const juce::String& id, float value, bool gesture)
+{
+    auto* parameter = state_.getParameter (id);
+
+    if (parameter == nullptr)
+        return;
+
+    const float clamped = juce::jlimit (0.0f, 1.0f, value);
+
+    if (gesture)
+        parameter->beginChangeGesture();
+
+    parameter->setValueNotifyingHost (clamped);
+
+    if (gesture)
+        parameter->endChangeGesture();
+}
+
+EnvelopeEditor::Geometry EnvelopeEditor::geometry() const
+{
+    Geometry g;
+
+    g.plot = getLocalBounds().toFloat().reduced (9.0f, 8.0f);
+    g.plot.removeFromBottom (kAxisHeight);
+    g.plot.removeFromRight (kLevelColumn + 5.0f);
+
+    const float width = g.plot.getWidth();
+    const float x0 = g.plot.getX();
+
+    g.attackX = x0 + width * kAttackShare * normalised (attackId_);
+    g.decayX = x0 + width * kAttackShare + width * kDecayShare * normalised (decayId_);
+    g.holdEndX = g.decayX + width * kHoldShare;
+    g.releaseX = g.holdEndX + width * kReleaseShare * normalised (releaseId_);
+
+    g.sustainY = g.plot.getBottom() - normalised (sustainId_) * g.plot.getHeight();
+
+    return g;
+}
+
+juce::Point<float> EnvelopeEditor::handlePosition (Handle handle, const Geometry& g) const
+{
+    switch (handle)
+    {
+        case Handle::attack:       return { g.attackX, g.plot.getY() };
+        case Handle::decaySustain: return { g.decayX, g.sustainY };
+        case Handle::release:      return { g.releaseX, g.plot.getBottom() };
+        case Handle::none:         break;
+    }
+
+    return {};
+}
+
+EnvelopeEditor::Handle EnvelopeEditor::handleAt (juce::Point<float> position) const
+{
+    const auto g = geometry();
+
+    Handle best = Handle::none;
+    float bestDistance = kGrabRadius;
+
+    for (auto handle : { Handle::attack, Handle::decaySustain, Handle::release })
+    {
+        const float distance = position.getDistanceFrom (handlePosition (handle, g));
+
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            best = handle;
+        }
+    }
+
+    return best;
+}
+
+void EnvelopeEditor::refresh (double level)
+{
+    const float values[5] { normalised (attackId_), normalised (decayId_), normalised (sustainId_),
+                            normalised (releaseId_), normalised (shapeId_) };
+
+    bool changed = std::abs (static_cast<float> (level) - shownLevel_) > 1.0e-3f;
+
+    for (int i = 0; i < 5; ++i)
+        if (std::abs (values[i] - shown_[i]) > 1.0e-6f)
+            changed = true;
+
+    if (! changed)
+        return;
+
+    for (int i = 0; i < 5; ++i)
+        shown_[i] = values[i];
+
+    shownLevel_ = static_cast<float> (level);
+    level_ = static_cast<float> (juce::jlimit (0.0, 1.0, level));
+
+    repaint();
+}
+
+void EnvelopeEditor::appendSegment (juce::Path& path, float x0, float y0, float x1, float y1,
+                                    double from, double to, double overshoot) const
+{
+    juce::ignoreUnused (y0, y1);
+
+    constexpr int kSteps = 28;
+
+    const auto g = geometry();
+
+    // A segment with no width is a vertical edge -- a zero attack is a click,
+    // and drawing it as one is honest.
+    if (x1 - x0 < 0.5f)
+    {
+        path.lineTo (x1, g.plot.getBottom() - static_cast<float> (to) * g.plot.getHeight());
+        return;
+    }
+
+    for (int step = 1; step <= kSteps; ++step)
+    {
+        const double u = static_cast<double> (step) / kSteps;
+        const double level = segment (u, from, to, overshoot);
+
+        path.lineTo (x0 + (x1 - x0) * static_cast<float> (u),
+                     g.plot.getBottom() - static_cast<float> (level) * g.plot.getHeight());
+    }
+}
+
+void EnvelopeEditor::paint (juce::Graphics& graphics)
+{
+    const auto g = geometry();
+    const auto full = getLocalBounds().toFloat();
+
+    graphics.setColour (palette_.panel.darker (0.45f));
+    graphics.fillRoundedRectangle (full, 4.0f);
+
+    // The grid: quarters, with the top and bottom rails brighter because those
+    // two are the ones a value is read against.
+    for (int line = 0; line <= 4; ++line)
+    {
+        const float y = g.plot.getBottom() - g.plot.getHeight() * static_cast<float> (line) / 4.0f;
+
+        graphics.setColour (palette_.dimText.withAlpha (line == 0 || line == 4 ? 0.22f : 0.09f));
+        graphics.drawHorizontalLine (juce::roundToInt (y), g.plot.getX(), g.plot.getRight());
+    }
+
+    const double sustain = normalised (sustainId_);
+    const double overshoot = dsp::Adsr::kSharpestOvershoot
+                           * std::pow (dsp::Adsr::kStraightestOvershoot / dsp::Adsr::kSharpestOvershoot,
+                                       static_cast<double> (normalised (shapeId_)));
+
+    juce::Path curve;
+    curve.startNewSubPath (g.plot.getX(), g.plot.getBottom());
+    appendSegment (curve, g.plot.getX(), 0.0f, g.attackX, 0.0f, 0.0, 1.0, overshoot);
+    appendSegment (curve, g.attackX, 0.0f, g.decayX, 0.0f, 1.0, sustain, overshoot);
+    curve.lineTo (g.holdEndX, g.sustainY);
+    appendSegment (curve, g.holdEndX, 0.0f, g.releaseX, 0.0f, sustain, 0.0, overshoot);
+
+    // Under the curve, so the shape reads as an amount rather than as a line.
+    {
+        juce::Path filled (curve);
+        filled.lineTo (g.releaseX, g.plot.getBottom());
+        filled.closeSubPath();
+
+        graphics.setColour (palette_.accent.withAlpha (0.13f));
+        graphics.fillPath (filled);
+    }
+
+    graphics.setColour (palette_.accent);
+    graphics.strokePath (curve, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved,
+                                                      juce::PathStrokeType::rounded));
+
+    // The hold, overdrawn dashed: it lasts as long as the key is down, which is
+    // the one part of the picture that is not a duration.
+    {
+        const float dashes[] { 3.0f, 3.0f };
+
+        graphics.setColour (palette_.panel.darker (0.45f));
+        graphics.drawLine (g.decayX, g.sustainY, g.holdEndX, g.sustainY, 2.6f);
+
+        graphics.setColour (palette_.accent.withAlpha (0.8f));
+        graphics.drawDashedLine ({ { g.decayX, g.sustainY }, { g.holdEndX, g.sustainY } },
+                                 dashes, 2, 1.8f);
+    }
+
+    // The handles.
+    for (auto handle : { Handle::attack, Handle::decaySustain, Handle::release })
+    {
+        const auto centre = handlePosition (handle, g);
+        const bool lit = handle == dragging_ || handle == hovered_;
+        const float radius = lit ? kHandleRadius + 1.0f : kHandleRadius;
+
+        graphics.setColour (palette_.panel.darker (0.6f));
+        graphics.fillEllipse (juce::Rectangle<float> { radius * 2.0f + 2.0f, radius * 2.0f + 2.0f }
+                                .withCentre (centre));
+
+        graphics.setColour (lit ? palette_.accentBright : palette_.accent);
+        graphics.fillEllipse (juce::Rectangle<float> { radius * 2.0f, radius * 2.0f }
+                                .withCentre (centre));
+    }
+
+    // The axis marks, under the segments they name rather than under the slices
+    // those segments were allotted. Under the allotments they stay put while a
+    // handle is dragged, which is tidier and wrong: with a 5 ms attack the "A"
+    // sat a quarter of the way across a graph whose attack was three pixels
+    // wide. A mark that does not point at the thing it names is decoration.
+    {
+        const auto axis = juce::Rectangle<float> { g.plot.getX(), g.plot.getBottom() + 1.0f,
+                                                   g.plot.getWidth(), kAxisHeight };
+
+        graphics.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+
+        const float edges[5] { g.plot.getX(), g.attackX, g.decayX, g.holdEndX, g.releaseX };
+        static const char* names[4] { "A", "D", "S", "R" };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            const float width = edges[i + 1] - edges[i];
+
+            // A segment too narrow to hold its own letter is left unlabelled --
+            // a zero attack has nothing to point at, and a letter squeezed
+            // between two others reads as belonging to neither.
+            if (width < 11.0f)
+                continue;
+
+            graphics.setColour (palette_.dimText.withAlpha (0.65f));
+            graphics.drawText (names[i], axis.withX (edges[i]).withWidth (width),
+                               juce::Justification::centred, false);
+        }
+    }
+
+    // The live level, in the modulation colour rather than the accent: it is a
+    // reading, and everything else on this panel is a control.
+    {
+        const auto column = juce::Rectangle<float> { full.getRight() - kLevelColumn - 4.0f,
+                                                     g.plot.getY(), kLevelColumn,
+                                                     g.plot.getHeight() };
+
+        graphics.setColour (palette_.panel.darker (0.25f));
+        graphics.fillRoundedRectangle (column, 2.0f);
+
+        if (level_ > 1.0e-4f)
+        {
+            graphics.setColour (palette_.secondary);
+            graphics.fillRoundedRectangle (
+                column.withTop (column.getBottom() - level_ * column.getHeight()), 2.0f);
+        }
+    }
+}
+
+void EnvelopeEditor::mouseDown (const juce::MouseEvent& event)
+{
+    dragging_ = handleAt (event.position);
+
+    if (dragging_ == Handle::none)
+        return;
+
+    const auto begin = [this] (const juce::String& id)
+    {
+        if (auto* parameter = state_.getParameter (id))
+            parameter->beginChangeGesture();
+    };
+
+    switch (dragging_)
+    {
+        case Handle::attack:       begin (attackId_); break;
+        case Handle::decaySustain: begin (decayId_); begin (sustainId_); break;
+        case Handle::release:      begin (releaseId_); break;
+        case Handle::none:         break;
+    }
+}
+
+void EnvelopeEditor::mouseDrag (const juce::MouseEvent& event)
+{
+    if (dragging_ == Handle::none)
+        return;
+
+    const auto g = geometry();
+    const float width = g.plot.getWidth();
+
+    if (width <= 0.0f)
+        return;
+
+    switch (dragging_)
+    {
+        case Handle::attack:
+            setNormalised (attackId_,
+                           (event.position.x - g.plot.getX()) / (width * kAttackShare), false);
+            break;
+
+        case Handle::decaySustain:
+            setNormalised (decayId_,
+                           (event.position.x - g.plot.getX() - width * kAttackShare)
+                             / (width * kDecayShare), false);
+            setNormalised (sustainId_,
+                           (g.plot.getBottom() - event.position.y) / g.plot.getHeight(), false);
+            break;
+
+        case Handle::release:
+            setNormalised (releaseId_,
+                           (event.position.x - g.holdEndX) / (width * kReleaseShare), false);
+            break;
+
+        case Handle::none:
+            break;
+    }
+}
+
+void EnvelopeEditor::mouseUp (const juce::MouseEvent&)
+{
+    const auto end = [this] (const juce::String& id)
+    {
+        if (auto* parameter = state_.getParameter (id))
+            parameter->endChangeGesture();
+    };
+
+    switch (dragging_)
+    {
+        case Handle::attack:       end (attackId_); break;
+        case Handle::decaySustain: end (decayId_); end (sustainId_); break;
+        case Handle::release:      end (releaseId_); break;
+        case Handle::none:         break;
+    }
+
+    dragging_ = Handle::none;
+}
+
+void EnvelopeEditor::mouseMove (const juce::MouseEvent& event)
+{
+    const auto hovered = handleAt (event.position);
+
+    if (hovered == hovered_)
+        return;
+
+    hovered_ = hovered;
+    setMouseCursor (hovered_ == Handle::none ? juce::MouseCursor::NormalCursor
+                                             : juce::MouseCursor::DraggingHandCursor);
+    repaint();
+}
+
+void EnvelopeEditor::mouseExit (const juce::MouseEvent&)
+{
+    if (hovered_ == Handle::none)
+        return;
+
+    hovered_ = Handle::none;
+    repaint();
+}
+
+void EnvelopeEditor::mouseDoubleClick (const juce::MouseEvent& event)
+{
+    const auto handle = handleAt (event.position);
+
+    const auto reset = [this] (const juce::String& id)
+    {
+        if (auto* parameter = state_.getParameter (id))
+            setNormalised (id, parameter->getDefaultValue(), true);
+    };
+
+    switch (handle)
+    {
+        case Handle::attack:       reset (attackId_); break;
+        case Handle::decaySustain: reset (decayId_); reset (sustainId_); break;
+        case Handle::release:      reset (releaseId_); break;
+        case Handle::none:         break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EnvelopePage
+// ---------------------------------------------------------------------------
+
+EnvelopePage::EnvelopePage (juce::AudioProcessorValueTreeState& state, ui::Palette palette)
+    : palette_ (palette)
+{
+    addBlock (state, "AMPLITUDE", "the voice's own level",
+              ids::ampAttack, ids::ampDecay, ids::ampSustain, ids::ampRelease, ids::ampShape,
+              ids::ampVelocity, "Velocity",
+              "How much of the level comes from how hard the note was played.");
+
+    addBlock (state, "MOD ENVELOPE 1", "point it at something in MOD",
+              ids::env1Attack, ids::env1Decay, ids::env1Sustain, ids::env1Release, ids::env1Shape,
+              nullptr, {}, {});
+
+    addBlock (state, "MOD ENVELOPE 2", "and the mangle takes these too",
+              ids::env2Attack, ids::env2Decay, ids::env2Sustain, ids::env2Release, ids::env2Shape,
+              nullptr, {}, {});
+}
+
+void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
+                             const juce::String& detail, const char* attackId, const char* decayId,
+                             const char* sustainId, const char* releaseId, const char* shapeId,
+                             const char* extraId, const juce::String& extraName,
+                             const juce::String& extraTooltip)
+{
+    Block block;
+
+    block.heading = heading;
+    block.detail = detail;
+
+    block.graph = std::make_unique<EnvelopeEditor> (state, palette_, attackId, decayId, sustainId,
+                                                    releaseId, shapeId);
+
+    // Named after its attack parameter, which is unique per envelope and needs
+    // no second list to keep in step.
+    block.graph->setComponentID (juce::String ("graph-") + attackId);
+    addAndMakeVisible (*block.graph);
+
+    const auto knob = [&] (const char* id, const juce::String& name, const juce::String& tooltip)
+    {
+        auto cell = std::make_unique<KnobCell> (state, id, name, tooltip, palette_);
+        addAndMakeVisible (*cell);
+        block.knobs.push_back (std::move (cell));
+    };
+
+    knob (attackId, "Attack",
+          "How long from nothing to full. Skewed so the short end has room: a tenth of the travel "
+          "is 5 ms and half of it is a second and a quarter.");
+    knob (decayId, "Decay", "How long from full down to the sustain level.");
+    knob (sustainId, "Sustain", "Where it holds while the key is down.");
+    knob (releaseId, "Release", "How long it takes to fall away after the key is up.");
+    knob (shapeId, "Shape",
+          "How curved each segment is, and **not** how long any of them lasts -- the time "
+          "constant is corrected for the shape, so this is a tone control rather than a second "
+          "time control. At zero it is nearly a straight line, which sounds mechanical because "
+          "nothing physical decays linearly. Turned up it is the sharp exponential of a capacitor "
+          "discharging. The graph bends with it.");
+
+    if (extraId != nullptr)
+        knob (extraId, extraName, extraTooltip);
+
+    blocks_.push_back (std::move (block));
+}
+
+void EnvelopePage::refresh (const SonitusProcessor& processor)
+{
+    for (std::size_t i = 0; i < blocks_.size(); ++i)
+        blocks_[i].graph->refresh (processor.getEnvelopeLevel (static_cast<int> (i)));
+}
+
+int EnvelopePage::getPreferredHeight() const
+{
+    return 2 * kPagePad
+         + static_cast<int> (blocks_.size()) * (kEnvBlockHeight + kGroupGap);
+}
+
+void EnvelopePage::paint (juce::Graphics& g)
+{
+    g.setColour (palette_.panel);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+
+    for (const auto& block : blocks_)
+    {
+        if (block.bounds.isEmpty())
+            continue;
+
+        g.setColour (palette_.panel.brighter (0.055f));
+        g.fillRoundedRectangle (block.bounds.toFloat(), 5.0f);
+
+        paintHeading (g, palette_, block.bounds.withHeight (kHeadingHeight),
+                      block.heading, block.detail);
+    }
+}
+
+void EnvelopePage::resized()
+{
+    auto bounds = getLocalBounds().reduced (6, kPagePad);
+
+    // The blocks share whatever is going spare equally, so the page fills a
+    // tall window rather than stacking against the top of it.
+    const int blocks = juce::jmax (1, static_cast<int> (blocks_.size()));
+    const int height = juce::jmax (kEnvBlockHeight,
+                                   (bounds.getHeight() - blocks * kGroupGap) / blocks);
+
+    for (auto& block : blocks_)
+    {
+        block.bounds = bounds.removeFromTop (height);
+        bounds.removeFromTop (kGroupGap);
+
+        auto inner = block.bounds.reduced (5, 3).withTrimmedTop (kHeadingHeight);
+
+        const int columns = kEnvKnobColumns;
+        const int rows = kEnvKnobRows;
+
+        const int cellWidth = juce::jlimit (86, kMaxCellWidth, inner.getWidth() / (2 * columns));
+        const int cellHeight = juce::jlimit (kMinCellHeight, kMaxCellHeight, inner.getHeight() / rows);
+
+        auto knobArea = inner.removeFromRight (cellWidth * columns);
+
+        for (std::size_t i = 0; i < block.knobs.size(); ++i)
+        {
+            const int column = static_cast<int> (i) % columns;
+            const int row = static_cast<int> (i) / columns;
+
+            block.knobs[i]->setBounds ({ knobArea.getX() + column * cellWidth,
+                                         knobArea.getY() + row * cellHeight,
+                                         cellWidth, cellHeight });
+        }
+
+        block.graph->setBounds (inner.withTrimmedRight (8).reduced (0, 1));
     }
 }
 
 // ---------------------------------------------------------------------------
 // StepStrip
 // ---------------------------------------------------------------------------
+
+namespace
+{
+/// The row of step numbers along the bottom.
+constexpr int kStepNumberHeight = 11;
+} // namespace
 
 StepStrip::StepStrip (juce::AudioProcessorValueTreeState& state, ui::Palette palette)
     : palette_ (palette)
@@ -362,10 +1020,15 @@ StepStrip::StepStrip (juce::AudioProcessorValueTreeState& state, ui::Palette pal
         slider.setSliderStyle (juce::Slider::LinearBarVertical);
         slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         slider.setColour (juce::Slider::trackColourId, palette_.accent.withAlpha (0.85f));
-        slider.setColour (juce::Slider::backgroundColourId, palette_.panel.darker (0.4f));
+        slider.setColour (juce::Slider::backgroundColourId, palette_.panel.brighter (0.04f));
         slider.setTooltip ("Step " + juce::String (step + 1)
                              + ". Bipolar: the centre is no modulation, and either end is full "
                                "depth in that direction. Drag; double-click to centre.");
+
+        if (auto* parameter = state.getParameter (ids::step (step)))
+            slider.setDoubleClickReturnValue (
+                true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
+
         addAndMakeVisible (slider);
 
         attachments_[static_cast<std::size_t> (step)]
@@ -395,15 +1058,19 @@ void StepStrip::paint (juce::Graphics& g)
     auto bounds = getLocalBounds().toFloat();
 
     g.setColour (palette_.panel);
-    g.fillRoundedRectangle (bounds, 4.0f);
+    g.fillRoundedRectangle (bounds, 5.0f);
+
+    paintHeading (g, palette_, getLocalBounds().withHeight (kHeadingHeight),
+                  "PATTERN", "sixteen steps, bipolar; the centre is no modulation");
+
+    bounds.removeFromTop (static_cast<float> (kHeadingHeight));
+
+    auto numbers = bounds.removeFromBottom (static_cast<float> (kStepNumberHeight));
+    bounds = bounds.reduced (3.0f, 2.0f);
 
     const float slotWidth = bounds.getWidth() / dsp::StepSequencer::kMaxSteps;
 
-    // The centre line: a bipolar fader with no zero mark is a fader whose
-    // neutral position has to be guessed.
-    g.setColour (palette_.dimText.withAlpha (0.30f));
-    g.drawHorizontalLine (juce::roundToInt (bounds.getCentreY()),
-                          bounds.getX() + 2.0f, bounds.getRight() - 2.0f);
+    g.setFont (juce::FontOptions (9.0f));
 
     for (int step = 0; step < dsp::StepSequencer::kMaxSteps; ++step)
     {
@@ -416,30 +1083,44 @@ void StepStrip::paint (juce::Graphics& g)
         if (step >= length_)
         {
             g.setColour (palette_.background.withAlpha (0.55f));
-            g.fillRect (slot.reduced (1.0f, 1.0f));
+            g.fillRect (slot.reduced (1.0f, 0.0f));
         }
 
         if (step == playing_)
         {
-            g.setColour (palette_.secondary.withAlpha (0.28f));
-            g.fillRect (slot.reduced (1.0f, 1.0f));
+            g.setColour (palette_.secondary.withAlpha (0.26f));
+            g.fillRect (slot.reduced (1.0f, 0.0f));
 
             g.setColour (palette_.secondary);
-            g.drawRect (slot.reduced (1.0f, 1.0f), 1.2f);
+            g.drawRect (slot.reduced (1.0f, 0.0f), 1.2f);
         }
+
+        // Every fourth step numbered, and the beats brighter -- sixteen numbers
+        // in a row is noise, four is a bar.
+        const bool onBeat = step % 4 == 0;
+
+        g.setColour (step == playing_ ? palette_.secondary
+                                      : palette_.dimText.withAlpha (onBeat ? 0.75f : 0.30f));
+
+        g.drawText (juce::String (step + 1),
+                    numbers.withWidth (slotWidth)
+                           .withX (bounds.getX() + slotWidth * static_cast<float> (step)),
+                    juce::Justification::centred, false);
     }
 }
 
 void StepStrip::resized()
 {
-    auto bounds = getLocalBounds().reduced (2);
+    auto bounds = getLocalBounds().withTrimmedTop (kHeadingHeight)
+                                  .withTrimmedBottom (kStepNumberHeight)
+                                  .reduced (3, 2);
 
     const int slotWidth = bounds.getWidth() / dsp::StepSequencer::kMaxSteps;
 
     for (int step = 0; step < dsp::StepSequencer::kMaxSteps; ++step)
         sliders_[static_cast<std::size_t> (step)].setBounds (
             juce::Rectangle<int> { bounds.getX() + slotWidth * step, bounds.getY(),
-                                   slotWidth, bounds.getHeight() }.reduced (2, 2));
+                                   slotWidth, bounds.getHeight() }.reduced (1, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +1342,7 @@ void TuningPage::resized()
     explanationLabel_.setBounds (bounds);
 }
 
+
 // ---------------------------------------------------------------------------
 // SonitusEditor
 // ---------------------------------------------------------------------------
@@ -669,8 +1351,13 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     : juce::AudioProcessorEditor (&processorToUse),
       sonitus_ (processorToUse),
       palette_ (kPalette),
+      lookAndFeel_ (kPalette),
       outputMeter_ (std::make_unique<ui::LevelMeter> (kPalette))
 {
+    // Set before anything is constructed under it, so every child inherits it
+    // rather than half of them being built against the default.
+    setLookAndFeel (&lookAndFeel_);
+
     // No bypass parameter: an instrument that is bypassed is an instrument that
     // is silent, which is what muting the track already does. The header takes
     // a null id and simply leaves the button out.
@@ -697,34 +1384,46 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     buildPages();
 
+    viewport_.setComponentID ("pages");
     viewport_.setScrollBarsShown (true, false);
-    viewport_.setColour (juce::ScrollBar::thumbColourId, palette_.accent.withAlpha (0.5f));
+    viewport_.setScrollBarThickness (9);
     addAndMakeVisible (viewport_);
 
     steps_ = std::make_unique<StepStrip> (sonitus_.getState(), palette_);
-    tuning_ = std::make_unique<TuningPage> (sonitus_, palette_);
 
-    // **Added as children, which they were not.** `setVisible` on a component
-    // with no parent does nothing at all -- it does not throw, it does not warn,
-    // and the component simply never paints. The MOD page showed a black gap
-    // where the sequencer should be and the TUNING tab was blank, and both were
-    // this one missing line. Nothing headless could have caught it: the editor
-    // is the one part of this plugin no test can run.
+    // **Added as a child, which it was not.** `setVisible` on a component with
+    // no parent does nothing at all -- it does not throw, it does not warn, and
+    // the component simply never paints. The MOD page showed a black gap where
+    // the sequencer should be and the TUNING tab was blank, and both were this
+    // one missing line. Nothing headless could have caught it: the editor is the
+    // one part of this plugin no test can run. The tuning page is no longer in
+    // this position to be forgotten -- it is a `Page` and the viewport owns its
+    // visibility now.
+    steps_->setComponentID ("steps");
     addAndMakeVisible (*steps_);
-    addAndMakeVisible (*tuning_);
 
     static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE", "TUNING" };
 
     for (int i = 0; i < kNumPages; ++i)
     {
-        tabs_[static_cast<std::size_t> (i)].setButtonText (tabNames[i]);
-        tabs_[static_cast<std::size_t> (i)].setClickingTogglesState (false);
-        tabs_[static_cast<std::size_t> (i)].onClick = [this, i] { showPage (i); };
-        addAndMakeVisible (tabs_[static_cast<std::size_t> (i)]);
+        auto& tab = tabs_[static_cast<std::size_t> (i)];
+
+        tab.setButtonText (tabNames[i]);
+        tab.setClickingTogglesState (false);
+        tab.onClick = [this, i] { showPage (i); };
+
+        // Named so `tezla-render editor` can drive the panel: `click:tab-mod`
+        // changes page, `hit:tab-mod` asks whether a click there would actually
+        // reach it. Both matter here -- this editor has already shipped a page
+        // that existed, was told to be visible, and was not on screen.
+        tab.setComponentID ("tab-" + juce::String (tabNames[i]).toLowerCase());
+
+        addAndMakeVisible (tab);
     }
 
     // An instrument's output has no ceiling parameter to measure against, so
     // the reference is 0 dBFS and "over" means over full scale.
+    outputMeter_->setComponentID ("meter");
     outputMeter_->setReferenceDb (0.0f);
     outputMeter_->setScaleVisible (true);
     outputMeter_->setTooltip (
@@ -736,31 +1435,50 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     outputMeterLabel_.setJustificationType (juce::Justification::centred);
     outputMeterLabel_.setColour (juce::Label::textColourId, palette_.dimText);
-    outputMeterLabel_.setFont (juce::FontOptions (10.0f));
+    outputMeterLabel_.setFont (juce::FontOptions (9.0f, juce::Font::bold));
     addAndMakeVisible (outputMeterLabel_);
+
+    noteLabel_.setJustificationType (juce::Justification::centred);
+    noteLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+    noteLabel_.setFont (juce::FontOptions (11.5f));
+    addAndMakeVisible (noteLabel_);
 
     statusLabel_.setJustificationType (juce::Justification::centred);
     statusLabel_.setColour (juce::Label::textColourId, palette_.dimText);
-    statusLabel_.setFont (juce::FontOptions (12.0f));
+    statusLabel_.setFont (juce::FontOptions (11.0f));
     addAndMakeVisible (statusLabel_);
 
     showPage (0);
 
     setResizable (true, true);
     setResizeLimits (kMinWidth, kMinHeight, kMaxWidth, kMaxHeight);
-    setSize (1020, 720);
+    setSize (1000, 660);
 
     startTimerHz (30);
 }
 
+SonitusEditor::~SonitusEditor()
+{
+    // Before any child is destroyed, and before the look and feel is. A
+    // component holding a dangling pointer to one is a use-after-free with no
+    // symptom until the host next repaints.
+    setLookAndFeel (nullptr);
+}
+
+ControlPage* SonitusEditor::controlPage (int index) const
+{
+    if (index < 0 || index >= kNumPages)
+        return nullptr;
+
+    return dynamic_cast<ControlPage*> (pages_[static_cast<std::size_t> (index)].get());
+}
 void SonitusEditor::buildPages()
 {
     auto& state = sonitus_.getState();
 
     // ---- OSC -----------------------------------------------------------------
 
-    auto& osc = pages_[0];
-    osc = std::make_unique<ControlPage> (state, palette_, 6);
+    auto osc = std::make_unique<ControlPage> (state, palette_);
 
     const auto addOscillator = [] (ControlPage& page, const char* shapeId, const char* octaveId,
                                    const char* semitoneId, const char* centsId, const char* widthId,
@@ -806,13 +1524,15 @@ void SonitusEditor::buildPages()
             "broken machine, which is occasionally what you want.");
     };
 
-    osc->addHeading ("OSCILLATOR A -- the sync master");
+    osc->addHeading ("OSCILLATOR A -- the sync master", 5);
     addOscillator (*osc, ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
                    ids::levelA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, "A");
 
-    osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target");
+    osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target", 5);
     addOscillator (*osc, ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, "B");
+
+    osc->addHeading ("SYNC AND PHASE MODULATION -- B is the target of both", 2);
 
     osc->addToggle (ids::syncB, "Sync B",
         "Hard sync: B's phase is reset every time the played note's period comes round, so B's "
@@ -825,13 +1545,17 @@ void SonitusEditor::buildPages()
         "sidebands with no DC drift, which is why every FM synth since the DX7 has actually been "
         "a PM synth. At small amounts it thickens; past about 2 it is a different instrument.");
 
-    osc->addHeading ("SUB AND DESTRUCTION");
+    osc->addHeading ("SUB AND DESTRUCTION", 5);
 
     osc->addChoice (ids::subShape, "Sub shape",
         "Sine is pure weight and disappears on a laptop; square has odd harmonics that carry it "
         "through a small speaker.");
 
-    osc->addKnob (ids::subOctave, "Sub oct", "One or two octaves below the played note.");
+    osc->addKnob (ids::subOctave, "Sub oct",
+        "Which octave the sub sits in, from two below the note to two above. Zero doubles the "
+        "note rather than underpinning it, which is a thickener rather than a sub -- and above "
+        "the note it stops being a sub at all and becomes a fixed-interval second voice that no "
+        "amount of filtering can detune.");
     osc->addKnob (ids::subLevel, "Sub",
         "The sub oscillator's level. It is generated in the voice and then taken *out* of the "
         "mangle by the split, so nothing downstream can smear it.");
@@ -847,12 +1571,13 @@ void SonitusEditor::buildPages()
         "out. Antialiased, and at full fold it is the widest-band thing in the instrument: this "
         "is the one control that genuinely wants x8 oversampling.");
 
+    pages_[kOscPage] = std::move (osc);
+
     // ---- FILTER --------------------------------------------------------------
 
-    auto& filter = pages_[1];
-    filter = std::make_unique<ControlPage> (state, palette_, 4);
+    auto filter = std::make_unique<ControlPage> (state, palette_);
 
-    filter->addHeading ("FILTER -- zero-delay state variable, drive inside the loop");
+    filter->addHeading ("FILTER -- zero-delay state variable, drive inside the loop", 4);
 
     filter->addChoice (ids::filterMode, "Mode",
         "Lowpass is the reese's shape. Bandpass throws the fundamental away and leaves the growl. "
@@ -890,7 +1615,7 @@ void SonitusEditor::buildPages()
         "How far velocity opens the filter. The standard expressive link, and the reason a "
         "programmed bassline can breathe.");
 
-    filter->addHeading ("KEYBOARD");
+    filter->addHeading ("KEYBOARD", 4);
 
     filter->addChoice (ids::keyMode, "Mode",
         "Poly is many notes. Mono retriggers the envelopes on every note; Legato does not, so a "
@@ -909,55 +1634,43 @@ void SonitusEditor::buildPages()
     filter->addKnob (ids::bendRange, "Bend",
         "How far the pitch wheel reaches, in semitones.");
 
+    pages_[kFilterPage] = std::move (filter);
+
     // ---- ENV -----------------------------------------------------------------
 
-    auto& env = pages_[2];
-    env = std::make_unique<ControlPage> (state, palette_, 6);
-
-    const auto addEnvelope = [] (ControlPage& page, const char* attackId, const char* decayId,
-                                 const char* sustainId, const char* releaseId, const char* shapeId)
-    {
-        page.addKnob (attackId, "Attack", "How long from nothing to full.");
-        page.addKnob (decayId, "Decay", "How long from full down to the sustain level.");
-        page.addKnob (sustainId, "Sustain", "Where it holds while the key is down.");
-        page.addKnob (releaseId, "Release", "How long it takes to fall away after the key is up.");
-        page.addKnob (shapeId, "Shape",
-            "How curved each segment is. At zero it is nearly a straight line -- which sounds "
-            "mechanical, because nothing physical decays linearly. Turned up it is the sharp "
-            "exponential of a capacitor discharging, which is what every analogue envelope does "
-            "and what the ear expects.");
-    };
-
-    env->addHeading ("AMPLITUDE");
-    addEnvelope (*env, ids::ampAttack, ids::ampDecay, ids::ampSustain, ids::ampRelease, ids::ampShape);
-
-    env->addKnob (ids::ampVelocity, "Velocity",
-        "How much of the level comes from how hard the note was played.");
-
-    env->addHeading ("MOD ENVELOPE 1 -- point it at something in MOD");
-    addEnvelope (*env, ids::env1Attack, ids::env1Decay, ids::env1Sustain, ids::env1Release, ids::env1Shape);
-
-    env->addHeading ("MOD ENVELOPE 2");
-    addEnvelope (*env, ids::env2Attack, ids::env2Decay, ids::env2Sustain, ids::env2Release, ids::env2Shape);
+    // Its own page rather than a grid of fifteen knobs: an envelope's shape is
+    // the thing being edited and five numbers do not show it. See EnvelopePage.
+    pages_[kEnvPage] = std::make_unique<EnvelopePage> (state, palette_);
 
     // ---- MOD -----------------------------------------------------------------
 
-    auto& mod = pages_[kModPage];
-    mod = std::make_unique<ControlPage> (state, palette_, 6);
+    auto mod = std::make_unique<ControlPage> (state, palette_);
 
-    mod->addHeading ("SOURCES");
+    mod->addHeading ("LFO 1 -- the one the sequencer can drive the rate of", 5);
 
-    mod->addChoice (ids::lfo1Wave, "LFO 1", "Its shape. Sample & hold steps; smooth random glides.");
-    mod->addKnob (ids::lfo1Rate, "Rate 1",
+    mod->addChoice (ids::lfo1Wave, "Wave", "Its shape. Sample & hold steps; smooth random glides.");
+    mod->addKnob (ids::lfo1Rate, "Rate",
         "How fast, in hertz. **Zero is a legitimate setting and is the brief's original trick** "
         "-- the rate pinned at nothing so the depth is drawn from somewhere else entirely. Here "
         "that somewhere else is the sequencer below, or the host's automation on the depth.");
-    mod->addKnob (ids::lfo1Smooth, "Smooth 1",
+    mod->addKnob (ids::lfo1Smooth, "Smooth",
         "Rounds the corners off a square or a sample-and-hold, so a step becomes a slide.");
+    mod->addToggle (ids::lfo1Retrig, "Retrig",
+        "Restarts the LFO from the top of its cycle every time a note is pressed. Free-running is right for a wobble that should keep its place across a phrase; retriggered is right for anything that has to line up with the note -- a sweep, a stab, a phase that has to start in the same place every time. On a reese the difference is the whole sound: with this on, every note gets the same phase relationship and the growl is repeatable.");
+    mod->addKnob (ids::lfo1Key, "Key track",
+        "How far the LFO's rate follows the played note, referenced to middle C. At 100% an octave up doubles the rate, so the modulation stays in the same relationship to the pitch all the way up the keyboard -- which is how you get a phase or a wobble that reads as part of the tone rather than as an effect laid over it. At 0 the rate is the same at every pitch.");
 
-    mod->addChoice (ids::lfo2Wave, "LFO 2", "Its shape.");
-    mod->addKnob (ids::lfo2Rate, "Rate 2", "How fast, in hertz.");
-    mod->addKnob (ids::lfo2Smooth, "Smooth 2", "Rounds its corners off.");
+    mod->addHeading ("LFO 2", 5);
+
+    mod->addChoice (ids::lfo2Wave, "Wave", "Its shape.");
+    mod->addKnob (ids::lfo2Rate, "Rate", "How fast, in hertz.");
+    mod->addKnob (ids::lfo2Smooth, "Smooth", "Rounds its corners off.");
+    mod->addToggle (ids::lfo2Retrig, "Retrig",
+        "Restarts the LFO from the top of its cycle every time a note is pressed. Free-running is right for a wobble that should keep its place across a phrase; retriggered is right for anything that has to line up with the note -- a sweep, a stab, a phase that has to start in the same place every time. On a reese the difference is the whole sound: with this on, every note gets the same phase relationship and the growl is repeatable.");
+    mod->addKnob (ids::lfo2Key, "Key track",
+        "How far the LFO's rate follows the played note, referenced to middle C. At 100% an octave up doubles the rate, so the modulation stays in the same relationship to the pitch all the way up the keyboard -- which is how you get a phase or a wobble that reads as part of the tone rather than as an effect laid over it. At 0 the rate is the same at every pitch.");
+
+    mod->addHeading ("SEQUENCER", 4);
 
     mod->addKnob (ids::seqRate, "Seq rate",
         "Steps per beat. With the transport running the pattern locks to it, so a sixteen-step "
@@ -976,7 +1689,7 @@ void SonitusEditor::buildPages()
         "of speeds, in octaves. With LFO 1 on the cutoff this is a wobble that changes tempo on "
         "the step, which is the thing that used to take an automation lane and a steady hand.");
 
-    mod->addHeading ("VOICE MATRIX -- one set of these per sounding note");
+    mod->addHeading ("VOICE MATRIX -- one set of these per sounding note", 6);
 
     for (int slot = 0; slot < VoiceParameters::kSlots; ++slot)
     {
@@ -992,12 +1705,13 @@ void SonitusEditor::buildPages()
             "rather than adjusts, and modulating one would mean rebuilding a filter every chunk.");
 
         mod->addKnob (ids::modDepth (slot), "Depth " + number,
-            "How much, and which way. The depth is stored as a percentage and scaled into each "
-            "destination's own units, so full depth on Cutoff is six octaves and full depth on "
-            "Pitch is two.");
+            "How much, and which way. **The law is square, so this knob is fine at the bottom and "
+            "enormous at the top**: a tenth of the travel on Pitch is 72 cents and the end of it "
+            "is six octaves. Ten octaves on Cutoff, an octave on Detune, sixteen on PM. "
+            "Full depth is meant to be too much -- that is what it is for.");
     }
 
-    mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note");
+    mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note", 6);
 
     for (int slot = 0; slot < EngineParameters::kGlobalSlots; ++slot)
     {
@@ -1013,17 +1727,21 @@ void SonitusEditor::buildPages()
             "instead of a hand on a fader.");
 
         mod->addKnob (ids::globalDepth (slot), "Depth " + number,
-            "How much, and which way. Comb time and Phase centre move in octaves -- three and "
-            "four at full depth -- because a delay and a filter centre are pitches in disguise. "
-            "Tube and Output move by 24 dB.");
+            "How much, and which way, on the same square law as the voice matrix. Comb time and "
+            "Phase centre move by six octaves at full depth -- a delay and a filter centre are "
+            "pitches in disguise -- which is deliberately further than either control's own range, "
+            "so a full-depth sweep drives into the ends and stays there. Tube moves 36 dB, "
+            "Harmonic walks 23 partials. Output is the one held back at 24 dB: it is a level "
+            "rather than a character, and a level swinging under an envelope is a hazard.");
     }
+
+    pages_[kModPage] = std::move (mod);
 
     // ---- MANGLE --------------------------------------------------------------
 
-    auto& mangle = pages_[4];
-    mangle = std::make_unique<ControlPage> (state, palette_, 5);
+    auto mangle = std::make_unique<ControlPage> (state, palette_);
 
-    mangle->addHeading ("THE SPLIT -- the sub bypasses everything below");
+    mangle->addHeading ("THE SPLIT -- the sub bypasses everything below", 5);
 
     mangle->addKnob (ids::splitHz, "Split",
         "Where the sub is taken out of the mangle. Below this the signal gets a DC blocker and "
@@ -1052,7 +1770,7 @@ void SonitusEditor::buildPages()
         "One knob of tone: two shelves moving in opposite directions about 700 Hz. A balance "
         "rather than a boost -- it moves where the energy sits rather than how much there is.");
 
-    mangle->addHeading ("THE COMB -- what this instrument is for");
+    mangle->addHeading ("THE COMB -- what this instrument is for", 5);
 
     mangle->addChoice (ids::combMode, "Comb",
         "Flange is a delay: every frequency is shifted by the same *time*, so the notches are "
@@ -1097,7 +1815,7 @@ void SonitusEditor::buildPages()
         "How many allpass sections, 2 to 16. Each pair makes one notch, so 8 stages is 4 notches. "
         "Only in Phase mode.");
 
-    mangle->addHeading ("VOWEL AND OUTPUT");
+    mangle->addHeading ("VOWEL -- the comb, shaped like a mouth", 3);
 
     mangle->addKnob (ids::formantMorph, "Vowel",
         "Morphs across ee - eh - ah - oh - oo. Three resonant peaks at the frequencies a human "
@@ -1111,7 +1829,7 @@ void SonitusEditor::buildPages()
     mangle->addKnob (ids::formantMix, "Vowel mix",
         "Dry against vowelled. At 0 the formant filter is bit-exactly out of the path.");
 
-    mangle->addHeading ("OVERTONE -- the same key tracking, on the vowel");
+    mangle->addHeading ("OVERTONE -- the same key tracking, on the vowel", 4);
 
     mangle->addKnob (ids::formantLock, "Harmonic lock",
         "Pulls the three resonances off the vowel and onto **harmonics of the played note**. "
@@ -1138,6 +1856,8 @@ void SonitusEditor::buildPages()
         "How deep the hole goes -- 26.6 dB at the centre when full, and localised: two octaves "
         "away it is within 3 dB of untouched. At 0 it is bit-exactly out of the path.");
 
+    mangle->addHeading ("OUTPUT", 2);
+
     mangle->addKnob (ids::output, "Output",
         "Trim, after everything. Defaults to -6 dB because an instrument with unison and a tube "
         "can comfortably exceed full scale, and clipping the host's bus is not a feature.");
@@ -1145,6 +1865,15 @@ void SonitusEditor::buildPages()
     mangle->addChoice (ids::oversampling, "Oversampling",
         "How much headroom the nonlinear stages get. Auto targets about 192 kHz internally and "
         "reads your session's rate to decide. See the note below for what it is doing right now.");
+
+    pages_[kManglePage] = std::move (mangle);
+
+    // ---- TUNING --------------------------------------------------------------
+
+    // A page like any other, and hosted by the viewport like any other. It was
+    // neither before: it was a component the editor parented by hand, and the
+    // hand-parenting is what got forgotten.
+    pages_[kTuningPage] = std::make_unique<TuningPage> (sonitus_, palette_);
 }
 
 void SonitusEditor::showPage (int index)
@@ -1158,27 +1887,23 @@ void SonitusEditor::showPage (int index)
         const bool active = i == currentPage_;
 
         tab.setColour (juce::TextButton::buttonColourId,
-                       active ? palette_.accent.withAlpha (0.55f) : palette_.panel.brighter (0.08f));
-        tab.setColour (juce::TextButton::textColourOffId, active ? palette_.text : palette_.dimText);
+                       active ? palette_.accent.withAlpha (0.55f) : palette_.panel.brighter (0.06f));
+        tab.setColour (juce::TextButton::textColourOffId, active ? palette_.background : palette_.dimText);
     }
 
     // `false`: the viewport must not take ownership -- the pages outlive the
     // page changes and are owned by the array.
     viewport_.setViewedComponent (pages_[static_cast<std::size_t> (currentPage_)].get(), false);
-    viewport_.setVisible (currentPage_ != kTuningPage);
 
-    // The step strip belongs to the MOD page and the tuning panel is its own
-    // page, so both follow the tab rather than being always on screen.
+    // The step strip belongs to the MOD page, so it follows the tab rather than
+    // being always on screen.
     if (steps_ != nullptr)
         steps_->setVisible (currentPage_ == kModPage);
 
-    if (tuning_ != nullptr)
-    {
-        tuning_->setVisible (currentPage_ == kTuningPage);
+    if (auto* tuning = dynamic_cast<TuningPage*> (pages_[static_cast<std::size_t> (currentPage_)].get()))
+        tuning->refresh();
 
-        if (currentPage_ == kTuningPage)
-            tuning_->refresh();
-    }
+    noteLabel_.setText (notes_[static_cast<std::size_t> (currentPage_)], juce::dontSendNotification);
 
     resized();
 }
@@ -1227,7 +1952,11 @@ void SonitusEditor::updateForSwitches()
     shownNotch_ = notch;
     shownScale_ = scale;
 
-    if (combChanged)
+    auto* osc = controlPage (kOscPage);
+    auto* filter = controlPage (kFilterPage);
+    auto* mangle = controlPage (kManglePage);
+
+    if (combChanged && mangle != nullptr)
     {
         // Greyed rather than hidden: a knob that moves and does nothing reads
         // as a broken plugin rather than as a mode.
@@ -1236,16 +1965,16 @@ void SonitusEditor::updateForSwitches()
         const bool anyComb = isFlange || isPhase;
 
         for (const char* id : { ids::combTime, ids::combTrack, ids::combDamp })
-            pages_[4]->setControlEnabled (id, isFlange);
+            mangle->setControlEnabled (id, isFlange);
 
         for (const char* id : { ids::phaseFreq, ids::phaseStages })
-            pages_[4]->setControlEnabled (id, isPhase);
+            mangle->setControlEnabled (id, isPhase);
 
         for (const char* id : { ids::combFeed, ids::combSpread, ids::combMix, ids::combInvert })
-            pages_[4]->setControlEnabled (id, anyComb);
+            mangle->setControlEnabled (id, anyComb);
     }
 
-    if (shapesChanged)
+    if (shapesChanged && osc != nullptr)
     {
         // Width does nothing to a saw or a sine: both are fully described
         // without it.
@@ -1255,32 +1984,37 @@ void SonitusEditor::updateForSwitches()
                 || shape == static_cast<int> (dsp::OscShape::triangle);
         };
 
-        pages_[0]->setControlEnabled (ids::widthA, hasWidth (shapeA));
-        pages_[0]->setControlEnabled (ids::widthB, hasWidth (shapeB));
+        osc->setControlEnabled (ids::widthA, hasWidth (shapeA));
+        osc->setControlEnabled (ids::widthB, hasWidth (shapeB));
     }
 
-    if (scaleChanged && tuning_ != nullptr)
-        tuning_->refresh();
+    if (scaleChanged)
+        if (auto* tuning = dynamic_cast<TuningPage*> (pages_[kTuningPage].get()))
+            tuning->refresh();
 
-    pages_[4]->setNote (sonitus_.describeComb() + "  " + sonitus_.describeOversampling());
+    juce::ignoreUnused (osc, filter);
 
-    pages_[0]->setNote (syncB != 0
+    notes_[kManglePage] = sonitus_.describeComb() + "  " + sonitus_.describeOversampling();
+
+    notes_[kOscPage] = syncB != 0
         ? juce::String ("Sync is on: B restarts every time the note's period comes round, so its "
                         "Semis and Fine knobs are sweeping a formant rather than setting a pitch. "
                         "Put a mod envelope on Pitch B in the matrix -- standing still it is just "
                         "a bright waveform.")
         : juce::String ("Two dense sources, and the denser the better: a comb can only cut "
                         "harmonics that are there. Saw plus saw a few cents apart is already a "
-                        "moving comb before anything on the MANGLE page is switched on."));
+                        "moving comb before anything on the MANGLE page is switched on.");
 
-    pages_[1]->setNote (keyMode == static_cast<int> (KeyboardMode::poly)
+    notes_[kFilterPage] = keyMode == static_cast<int> (KeyboardMode::poly)
         ? juce::String ("Poly. Eight voices with seven-way unison on both oscillators is 112 "
                         "oscillators -- the number to watch. A reese does not need any of it: "
                         "switch to Mono and spend the CPU on oversampling instead.")
         : juce::String ("Mono, so the whole instrument is one voice and the CPU is free. Legato "
                         "differs in one thing and it matters: it does not retrigger the envelopes, "
                         "so a phrase played without gaps runs through a single envelope and glides "
-                        "between its notes."));
+                        "between its notes.");
+
+    noteLabel_.setText (notes_[static_cast<std::size_t> (currentPage_)], juce::dontSendNotification);
 }
 
 void SonitusEditor::timerCallback()
@@ -1298,6 +2032,13 @@ void SonitusEditor::timerCallback()
 
         steps_->setPlaying (sonitus_.getSequencerStep(), length);
     }
+
+    // Only the page on screen. Three envelope graphs each comparing five
+    // parameters is cheap, but repainting a page nobody is looking at is not
+    // cheap enough to do thirty times a second.
+    if (auto* envelopes = dynamic_cast<EnvelopePage*> (pages_[kEnvPage].get()))
+        if (envelopes->isVisible())
+            envelopes->refresh (sonitus_);
 
     const double rate = sonitus_.getSampleRate() > 0.0 ? sonitus_.getSampleRate() : 48000.0;
 
@@ -1341,13 +2082,21 @@ void SonitusEditor::resized()
 
     header_->setBounds (bounds.removeFromTop (ui::HeaderBar::getPreferredHeight()));
 
-    statusLabel_.setBounds (bounds.removeFromBottom (kStatusHeight).reduced (12, 4));
+    statusLabel_.setBounds (bounds.removeFromBottom (kStatusHeight).reduced (12, 3));
 
-    auto right = bounds.removeFromRight (kMeterWidth + 10).reduced (4, 6);
-    outputMeterLabel_.setBounds (right.removeFromBottom (12));
+    // Reserved before anything else takes the space, and only when the page on
+    // screen has something to say -- the ENV, MOD and TUNING pages do not, and
+    // an empty strip is 38 pixels of nothing.
+    noteLabel_.setVisible (notes_[static_cast<std::size_t> (currentPage_)].isNotEmpty());
+
+    if (noteLabel_.isVisible())
+        noteLabel_.setBounds (bounds.removeFromBottom (kNoteHeight).reduced (16, 2));
+
+    auto right = bounds.removeFromRight (kMeterWidth + 8).reduced (3, 5);
+    outputMeterLabel_.setBounds (right.removeFromBottom (11));
     outputMeter_->setBounds (right);
 
-    auto tabRow = bounds.removeFromTop (kTabHeight).reduced (4, 2);
+    auto tabRow = bounds.removeFromTop (kTabHeight).reduced (4, 1);
     const int tabWidth = tabRow.getWidth() / kNumPages;
 
     for (int i = 0; i < kNumPages; ++i)
@@ -1357,10 +2106,7 @@ void SonitusEditor::resized()
     auto body = bounds.reduced (4, 2);
 
     if (steps_ != nullptr && steps_->isVisible())
-        steps_->setBounds (body.removeFromBottom (kStepStripHeight).reduced (0, 4));
-
-    if (tuning_ != nullptr && tuning_->isVisible())
-        tuning_->setBounds (body);
+        steps_->setBounds (body.removeFromBottom (kStepStripHeight).withTrimmedTop (4));
 
     viewport_.setBounds (body);
 
@@ -1369,7 +2115,7 @@ void SonitusEditor::resized()
         // Sized before it is asked how tall it wants to be: the note's height
         // depends on nothing, but the row count does not fit until the width
         // is known, and a page that fits gets the viewport's full height so it
-        // centres rather than sitting against the top.
+        // fills the window rather than sitting against the top.
         // Twice, because the two are circular: whether the scroll bar is shown
         // depends on the page's height, and the width the page gets depends on
         // whether the scroll bar is shown. One pass settles it, and the second

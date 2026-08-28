@@ -345,6 +345,16 @@ public:
         return engine_.readouts().combNotchHz.load (std::memory_order_relaxed);
     }
 
+    /// The tracked note's envelope level, 0 for the amplitude envelope and 1 or
+    /// 2 for the mod ones. The panel draws it as a playhead on the curve.
+    [[nodiscard]] double getEnvelopeLevel (int index) const noexcept
+    {
+        if (index < 0 || index > 2)
+            return 0.0;
+
+        return engine_.readouts().envelopeLevels[index].load (std::memory_order_relaxed);
+    }
+
     // ---- tuning ------------------------------------------------------------
 
     /// Loads a Scala scale file's **text**. Returns an empty string on success

@@ -410,6 +410,13 @@ public:
         std::atomic<double> lfo1 { 0.0 };
         std::atomic<double> lfo2 { 0.0 };
         std::atomic<double> sequencer { 0.0 };
+
+        /// The tracked note's three envelopes, so the panel can draw a playhead
+        /// on the curve it is editing. The **tracked** note rather than a sum,
+        /// for the same reason the comb and the formant follow it: an envelope
+        /// has one value per voice, and averaging eight of them describes none
+        /// of them. Index 0 is the amplitude envelope, 1 and 2 the mod ones.
+        std::atomic<double> envelopeLevels[3] { { 0.0 }, { 0.0 }, { 0.0 } };
     };
 
     [[nodiscard]] const Readouts& readouts() const noexcept { return readouts_; }

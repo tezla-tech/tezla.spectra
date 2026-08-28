@@ -297,6 +297,31 @@ spectrum-max is NOT reachable at (807, 177) -- a click there hits spectrum
 Seen red by adding the chrome before the panels and removing the raise, which
 reproduces the same burial without any clicking at all.
 
+### A panel that was never there at all
+
+The same tool, one class of bug further along. Sonitus shipped v0.1.0 with a
+step sequencer that showed a black rectangle and a tuning page that showed
+nothing: both were built, laid out, told to be visible — and parented nowhere.
+**`setVisible` on a component with no parent does nothing at all.** No throw, no
+warning, no assertion. From outside, a control that was never added and a
+control that is behind an opaque panel look identical, which is why the same
+check catches both: `hit:<id>` first has to *find* the component in the tree.
+
+Every tab, every page, the step strip, the three envelope graphs and every
+parameter cell now carry a component id, so one run covers the panel:
+
+```
+tezla-render editor size:1080x700 tick:3 tab-mod tick:2 hit:steps hit:lfo1Retrig
+```
+
+Seen red by putting the bug back — replacing that one `addAndMakeVisible` with a
+bare `setVisible` — which reports `no component with id steps` and exits 1.
+
+The lesson generalises past this repository: **the editor is the one part of a
+plugin no framework-free test can reach**, and this project has no DAW to load
+it into. Anything about a panel that can be checked without a display should be,
+because the alternative is finding out from the person playing it.
+
 ---
 
 ## Quick start (Windows 11)
