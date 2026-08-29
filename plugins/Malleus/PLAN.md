@@ -133,7 +133,7 @@ CLAUDE.md.
 | phase | status |
 |---|---|
 | M0 plan + references + registry | done (this commit) |
-| M1 ModalResonator | pending |
+| M1 ModalResonator | done |
 | M2 ModeShapes + Overtone Lock | pending |
 | M3 exciters | pending |
 | M4 bow | pending |
