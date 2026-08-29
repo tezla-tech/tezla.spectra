@@ -141,7 +141,7 @@ CLAUDE.md.
 | M6 Drop + SympatheticBank | done |
 | M7 voice + engine | done |
 | M8 JUCE layer + presets | done |
-| M9 editor | pending |
+| M9 editor | done |
 | M10 close-out | pending |
 
 **To resume**: read CLAUDE.md in full, then this file; take the first

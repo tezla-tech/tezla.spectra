@@ -80,6 +80,53 @@ struct VoiceSettings
     double rollHumanise { 0.35 };
 };
 
+/// What object these settings describe: every partial's frequency in Hz,
+/// written into `frequencies`, returning how many are AUDIBLE at this rate.
+///
+/// Material morph, then the inharmonicity stretch, then Overtone Lock
+/// rooted on the fundamental. Partials that would land above 0.45 fs are
+/// dropped rather than folded onto the frequency clamp, which is what keeps
+/// the strike band-limited by construction -- so the count returned is the
+/// count that sounds, and raising Partials past it adds nothing.
+///
+/// Free, and pure, because two callers need exactly the same answer: the
+/// voice building a note, and the editor drawing the object before a key
+/// has been touched. A second definition would let the picture and the
+/// sound disagree, which is the one thing this visualiser must never do.
+[[nodiscard]] inline int buildModeFrequencies (double* frequencies,
+                                               const VoiceSettings& settings,
+                                               double fundamentalHz,
+                                               const dsp::Scale& lockScale,
+                                               double sampleRate) noexcept
+{
+    const int partials = settings.partials < 1 ? 1
+                       : settings.partials > dsp::ModalResonator::kMaxModes
+                           ? dsp::ModalResonator::kMaxModes
+                           : settings.partials;
+
+    const double ceiling = 0.45 * (sampleRate > 0.0 ? sampleRate : 44100.0);
+
+    int audible = 0;
+
+    for (int mode = 0; mode < partials; ++mode)
+    {
+        const double ratio = dsp::ModeShapes::ratioAt (settings.material, mode,
+                                                       settings.stretch);
+        double frequency = fundamentalHz * ratio;
+
+        if (settings.lockAmount > 0.0)
+            frequency = dsp::ModeShapes::lockToScale (frequency, fundamentalHz,
+                                                      lockScale, settings.lockAmount);
+
+        frequencies[mode] = frequency;
+
+        if (frequency < ceiling)
+            ++audible;
+    }
+
+    return audible;
+}
+
 class MalleusVoice
 {
 public:
@@ -230,9 +277,10 @@ public:
     }
 
 private:
-    /// Material morph -> Overtone Lock (rooted on the landed fundamental)
-    /// -> per-mode T60 from decay and tilt. Super-Nyquist modes are muted
-    /// outright, never folded onto the frequency clamp.
+    /// The object this note's settings describe, plus the decay and drive
+    /// weights that go with it. The frequencies come from the shared
+    /// buildModeFrequencies() so the editor's picture cannot disagree with
+    /// what actually sounds.
     void rebuildModes (const dsp::Scale& lockScale) noexcept
     {
         const int partials = settings_.partials < 1 ? 1
@@ -242,22 +290,17 @@ private:
 
         bank_.setModeCount (partials);
 
+        (void) buildModeFrequencies (base_, settings_, fundamental_, lockScale,
+                                     sampleRate_);
+
         const double ceiling = 0.45 * sampleRate_;
 
         for (int mode = 0; mode < partials; ++mode)
         {
             const double ratio = dsp::ModeShapes::ratioAt (settings_.material,
                                                            mode, settings_.stretch);
-            double frequency = fundamental_ * ratio;
+            const bool audible = base_[mode] < ceiling;
 
-            if (settings_.lockAmount > 0.0)
-                frequency = dsp::ModeShapes::lockToScale (frequency, fundamental_,
-                                                          lockScale,
-                                                          settings_.lockAmount);
-
-            const bool audible = frequency < ceiling;
-
-            base_[mode] = frequency;
             t60_[mode] = settings_.decaySeconds
                        * std::pow (ratio, -2.0 * settings_.tilt);
             gain_[mode] = audible ? 1.0 / partials : 0.0;

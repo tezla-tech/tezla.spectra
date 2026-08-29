@@ -29,7 +29,10 @@ constexpr auto kScaleNameProperty = "scaleName";
 constexpr auto kKeyboardMapProperty = "keyboardMapText";
 constexpr auto kConcertPitchProperty = "concertPitch";
 
-[[nodiscard]] float valueOf (juce::AudioProcessorValueTreeState& state,
+// const, because the editor's mode-stack preview reads parameters from a
+// const processor: getRawParameterValue is itself const, so nothing here
+// needs to pretend otherwise.
+[[nodiscard]] float valueOf (const juce::AudioProcessorValueTreeState& state,
                              const juce::String& id)
 {
     if (auto* raw = state.getRawParameterValue (id))
@@ -596,10 +599,11 @@ double MalleusProcessor::getTailLengthSeconds() const
                      static_cast<double> (sympDecay->load()));
 }
 
-std::vector<double> MalleusProcessor::snapshotModeStack() const
+MalleusProcessor::ModeStack MalleusProcessor::snapshotModeStack() const
 {
-    std::vector<double> stack;
+    ModeStack stack;
 
+    // A sounding voice is the truth, so it wins.
     for (int index = 0; index < MalleusEngine::kMaxVoices; ++index)
     {
         const auto& voice = engine_.voiceForTest (index);
@@ -607,15 +611,49 @@ std::vector<double> MalleusProcessor::snapshotModeStack() const
         if (! voice.isActive())
             continue;
 
-        stack.clear();
+        stack.frequencies.clear();
 
         for (int mode = 0; mode < voice.getPartialCount(); ++mode)
             if (voice.modeGain (mode) > 0.0)
-                stack.push_back (voice.modeFrequency (mode));
+                stack.frequencies.push_back (voice.modeFrequency (mode));
 
-        if (! stack.empty())
+        if (! stack.frequencies.empty())
+        {
+            stack.sounding = true;
             return stack;
+        }
     }
+
+    // Nothing playing: draw the object the current settings DESCRIBE,
+    // at the tuning's own root. Turning Material, Stretch or Overtone Lock
+    // with no key held is exactly when a player wants to see the stack
+    // move, and an empty box would teach them nothing. Computed through
+    // the same buildModeFrequencies() the voice uses, so the preview and
+    // the sound cannot disagree.
+    const double root = previewTuning_.frequencyFor (previewTuning_.getRootNote());
+
+    if (root <= 0.0)
+        return stack;
+
+    VoiceSettings settings;
+    settings.material = valueOf (state_, ids::material);
+    settings.stretch = valueOf (state_, ids::stretch);
+    settings.lockAmount = valueOf (state_, ids::lockAmount);
+    settings.partials = static_cast<int> (valueOf (state_, ids::partials));
+
+    double frequencies[dsp::ModalResonator::kMaxModes] {};
+
+    const int audible = buildModeFrequencies (frequencies, settings, root, scale_,
+                                              sampleRate_);
+
+    (void) audible;
+
+    const double ceiling = 0.45 * sampleRate_;
+
+    for (int mode = 0; mode < settings.partials
+                       && mode < dsp::ModalResonator::kMaxModes; ++mode)
+        if (frequencies[mode] < ceiling)
+            stack.frequencies.push_back (frequencies[mode]);
 
     return stack;
 }

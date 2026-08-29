@@ -157,10 +157,18 @@ public:
     [[nodiscard]] bool isPrepared() const noexcept { return prepared_; }
     [[nodiscard]] double getPreparedRate() const noexcept { return sampleRate_; }
 
-    /// The mode stack the last struck voice built, for M9's visualiser:
-    /// frequencies in Hz, silent partials excluded. Copied under no lock --
-    /// it is a picture, and a torn one costs a redraw, not a click.
-    [[nodiscard]] std::vector<double> snapshotModeStack() const;
+    /// What the mode-stack picture should draw.
+    struct ModeStack
+    {
+        std::vector<double> frequencies;   ///< audible partials, Hz, ascending
+        bool sounding { false };           ///< a real voice, or a preview
+    };
+
+    /// The sounding voice's stack, or -- when nothing is playing -- the
+    /// object the current settings describe, at the tuning's root. Copied
+    /// under no lock: it is a picture, and a torn one costs a redraw rather
+    /// than a click.
+    [[nodiscard]] ModeStack snapshotModeStack() const;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
