@@ -28,6 +28,7 @@ inline constexpr auto target      = "target";
 inline constexpr auto truePeak    = "truePeak";
 inline constexpr auto monoCheckHz = "monoCheckHz";
 inline constexpr auto bypass      = "bypass";
+inline constexpr auto resolution  = "resolution";   // appended at schema v2
 } // namespace ids
 
 namespace choices
@@ -38,6 +39,11 @@ namespace choices
 [[nodiscard]] juce::StringArray targetNames();
 
 inline const juce::StringArray truePeak { "Off", "Standard", "Strict" };
+
+/// Spectrum resolution. Fast is one 2048-point transform (the original
+/// behaviour); Balanced one 4096; Fine adds a 16384-point transform below
+/// 500 Hz, crossfaded in -- sharp bass and a responsive top at once.
+inline const juce::StringArray resolution { "Fast", "Balanced", "Fine" };
 } // namespace choices
 
 class TranspectusProcessor final : public juce::AudioProcessor
@@ -111,6 +117,20 @@ public:
 
     void resetSpectrumPeakHold() noexcept;
 
+    /// The goniometer's excursion hold: per angular sector, the widest the
+    /// image has been. Same contract as the spectrum hold above -- storage
+    /// that outlives the editor, written only by the message thread; the
+    /// editor sizes it to the goniometer's sector count on attach.
+    [[nodiscard]] std::vector<float>& getImageExcursionHold() noexcept
+    {
+        return imageExcursionHold_;
+    }
+
+    void resetImageExcursionHold() noexcept
+    {
+        std::fill (imageExcursionHold_.begin(), imageExcursionHold_.end(), 0.0f);
+    }
+
     /// Clears the integration, the true-peak hold and the peak-hold bars.
     void resetMeasurement() noexcept { engine_.resetMeasurement(); }
 
@@ -141,6 +161,7 @@ private:
     /// kSpectrumBins of it, every entry at the floor until something louder
     /// arrives.
     std::vector<float> spectrumPeakHold_;
+    std::vector<float> imageExcursionHold_;
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
 

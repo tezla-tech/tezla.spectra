@@ -19,7 +19,8 @@ namespace tezla::transpectus
 namespace
 {
 constexpr int kSchemaV1 = 1;
-constexpr int kStateSchemaVersion = kSchemaV1;
+constexpr int kSchemaV2 = 2;   // added the spectrum Resolution choice
+constexpr int kStateSchemaVersion = kSchemaV2;
 constexpr auto kStateTypeName = "TranspectusState";
 
 /// Where the captured reference is kept inside the state tree.
@@ -84,6 +85,15 @@ TranspectusProcessor::createParameterLayout()
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::bypass, kSchemaV1 }, "Bypass", false));
+
+    // Appended at v2, defaulting to the new Fine mode: this is an analyser --
+    // the parameter changes what the screen resolves, never the audio, so an
+    // old project reopens sounding identical either way and simply gains the
+    // sharper bass. The Fast entry IS the original single-transform display
+    // for anyone who wants it back.
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::resolution, kSchemaV2 }, "Resolution",
+        choices::resolution, 2));
 
     return layout;
 }

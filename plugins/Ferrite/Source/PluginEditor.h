@@ -1,0 +1,152 @@
+// Copyright (c) 2026 The Tezla <thetezla@proton.me>
+// Created by The Tezla -- https://github.com/wingit33/tezla.tech
+// Music: https://soundcloud.com/thetezla | https://thetezla.bandcamp.com
+// Built with development assistance from Claude (Anthropic).
+// SPDX-License-Identifier: AGPL-3.0-only
+// GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
+
+#pragma once
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include <tezla/ui/TooltipHost.hpp>
+#include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/LevelMeter.hpp>
+#include <tezla/ui/Palette.hpp>
+
+#include "PluginProcessor.h"
+
+namespace tezla::ferrite
+{
+
+/// Wraps, so the "what this is doing right now" sentence is never truncated.
+class WrappingLabel final : public juce::Label
+{
+public:
+    void paint (juce::Graphics& g) override;
+};
+
+/// One page of the control surface. Holds its own controls and lays them out
+/// on a grid; the editor just decides which page is visible.
+class ControlPage final : public juce::Component
+{
+public:
+    ControlPage (juce::AudioProcessorValueTreeState& state, ui::Palette palette, int columns)
+        : state_ (state), palette_ (palette), columns_ (columns) {}
+
+    void addKnob (const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void addChoice (const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void addToggle (const char* parameterId, const juce::String& name, const juce::String& tooltip);
+    void addGap();
+
+    /// A line of guidance under the grid, for the things too important to
+    /// leave in a tooltip nobody hovers over.
+    void setNote (const juce::String& note);
+
+    /// Greys a control out. Used for the controls a setting makes inert: a
+    /// knob that moves and does nothing reads as a broken plugin.
+    void setControlEnabled (const char* parameterId, bool enabled);
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    struct Knob
+    {
+        juce::String id;
+        juce::Slider slider;
+        juce::Label  label;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+    };
+
+    struct Choice
+    {
+        juce::String   id;
+        juce::ComboBox box;
+        juce::Label    label;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
+    };
+
+    struct Toggle
+    {
+        juce::String       id;
+        juce::ToggleButton button;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+    };
+
+    struct Cell
+    {
+        enum class Kind { knob, choice, toggle, gap } kind {};
+        int index {};
+    };
+
+    juce::AudioProcessorValueTreeState& state_;
+    ui::Palette palette_;
+    int columns_;
+
+    std::vector<std::unique_ptr<Knob>>   knobs_;
+    std::vector<std::unique_ptr<Choice>> choices_;
+    std::vector<std::unique_ptr<Toggle>> toggles_;
+    std::vector<Cell> cells_;
+
+    juce::String note_;
+    juce::Rectangle<int> noteArea_;
+};
+
+class FerriteEditor final : public juce::AudioProcessorEditor,
+                            private juce::Timer
+{
+public:
+    explicit FerriteEditor (FerriteProcessor& processorToUse);
+    ~FerriteEditor() override = default;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    void timerCallback() override;
+    void buildPages();
+    void showPage (int index);
+
+    /// Greys the controls the current settings make inert, and refreshes the
+    /// notes. Only when something actually changed -- recomputing this thirty
+    /// times a second would repaint the whole panel for nothing.
+    void updateForSwitches();
+
+    FerriteProcessor& ferrite_;
+
+    ui::TooltipHost tooltips_ { *this };
+
+    ui::Palette palette_;
+    std::unique_ptr<ui::HeaderBar> header_;
+
+    static constexpr int kNumPages = 3;
+    std::array<std::unique_ptr<ControlPage>, kNumPages> pages_;
+    std::array<juce::TextButton, kNumPages> tabs_;
+    int currentPage_ { 0 };
+
+    /// The needles, flanking the panel: the level going ONTO the tape on the
+    /// left -- after the input gain, which is what a machine's meter shows --
+    /// and the level leaving the plugin on the right. VU ballistics with a
+    /// held peak, per CLAUDE.md section 7's analogue-metering rule.
+    std::unique_ptr<ui::LevelMeter> inputMeter_;
+    std::unique_ptr<ui::LevelMeter> outputMeter_;
+
+    juce::Label inputMeterLabel_  { {}, "TAPE" };
+    juce::Label outputMeterLabel_ { {}, "OUT" };
+
+    WrappingLabel statusLabel_;
+
+    /// What the panel is currently dressed for, so the greying and the notes
+    /// are not recomputed every tick. Deliberately impossible starting
+    /// values, so the first tick always applies the state.
+    int shownWowOn_      { -1 };
+    int shownFlutterOn_  { -1 };
+    int shownLatency_    { -1 };
+    int shownOversample_ { -1 };
+    int shownAutoTrim_   { -1 };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FerriteEditor)
+};
+
+} // namespace tezla::ferrite

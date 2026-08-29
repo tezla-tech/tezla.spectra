@@ -134,6 +134,30 @@ public:
 
     [[nodiscard]] bool isLowBandMonoSafe() const noexcept { return stereo_.isLowBandMonoSafe(); }
 
+    /// The worst (lowest) correlation seen since the last reset -- overall
+    /// and in the low band. This is the actionable number for mono
+    /// compatibility: the single worst moment, held until cleared, and held
+    /// HERE rather than in the editor so it keeps accumulating with the
+    /// window closed. Sampled per block against a 400 ms sliding window, so
+    /// nothing audible can slip between readings.
+    [[nodiscard]] double getMinCorrelation() const noexcept
+    {
+        return minCorrelation_.load (std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] double getMinLowCorrelation() const noexcept
+    {
+        return minLowCorrelation_.load (std::memory_order_relaxed);
+    }
+
+    /// Starts the worst-correlation hold over. Message thread; the audio
+    /// thread only ever lowers the values.
+    void resetCorrelationHold() noexcept
+    {
+        minCorrelation_.store (1.0, std::memory_order_relaxed);
+        minLowCorrelation_.store (1.0, std::memory_order_relaxed);
+    }
+
     /// What the selected platform will do to this master, in dB. Positive means
     /// it will be turned **down** by that much; negative means it will be turned
     /// up, and zero means nothing happens -- which is also the answer for a
@@ -170,6 +194,8 @@ private:
 
     dsp::LoudnessMeter  loudness_;
     dsp::StereoAnalyser stereo_;
+    std::atomic<double> minCorrelation_ { 1.0 };
+    std::atomic<double> minLowCorrelation_ { 1.0 };
     dsp::SpectrumCapture capture_;
     dsp::StereoScope     scope_;
 

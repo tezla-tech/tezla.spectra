@@ -251,3 +251,47 @@ TEZLA_TEST (transpectus_is_quiet_about_silence)
     // Two silent channels agree with each other.
     CHECK (engine.getCorrelation() == 1.0);
 }
+
+// ---------------------------------------------------------------------------
+// The worst-correlation hold (B2)
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_worst_correlation_moment_is_held_until_cleared)
+{
+    // A correlation meter is watched for its dips, and a dip that lasts half
+    // a second is exactly what a glance misses. The engine holds the minimum
+    // -- overall and in the low band -- until asked to forget it, so the
+    // single worst moment for mono compatibility survives being blinked at.
+    transpectus::Engine engine;
+    engine.prepare (kRate, 512, 2);
+
+    auto correlated = tone (1.0, -20.0, 60.0);
+    feed (engine, correlated);
+
+    CHECK (engine.getMinCorrelation() > 0.9);
+    CHECK (engine.getMinLowCorrelation() > 0.9);
+
+    // Six hundred milliseconds of anti-phase: live correlation dives to -1.
+    auto antiphase = tone (0.6, -20.0, 60.0);
+    for (auto& sample : antiphase[1])
+        sample = -sample;
+
+    feed (engine, antiphase);
+
+    CHECK (engine.getCorrelation() < -0.9);
+
+    // The music recovers; the live reading follows it back up, and the held
+    // minimum does not -- that is its whole job.
+    feed (engine, tone (1.5, -20.0, 60.0));
+
+    CHECK (engine.getCorrelation() > 0.9);
+    CHECK (engine.getMinCorrelation() < -0.9);
+    CHECK (engine.getMinLowCorrelation() < -0.9);
+
+    // Cleared, and re-primed by the next healthy block.
+    engine.resetCorrelationHold();
+    feed (engine, tone (0.2, -20.0, 60.0));
+
+    CHECK (engine.getMinCorrelation() > 0.9);
+    CHECK (engine.getMinLowCorrelation() > 0.9);
+}

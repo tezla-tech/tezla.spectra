@@ -180,8 +180,97 @@ public:
             edges_[i] = lowHz_ * std::exp (ratio * static_cast<double> (i)
                                            / static_cast<double> (numBins_));
 
+        powerScratch_.assign (numBins_, 0.0);
+        clearBassTransform();
+
         reset();
     }
+
+    /// Optional second, longer transform for the bass.
+    ///
+    /// The problem it solves, with the numbers: a 2048-point window at 48 kHz
+    /// resolves 23.4 Hz, which is wider than the whole tone between 45 and
+    /// 50 Hz -- the bottom two octaves of a bass-music spectrum read as one
+    /// smear. A 16384-point window resolves 2.9 Hz but takes a third of a
+    /// second of audio, far too sluggish to watch a mix move. So: two
+    /// transforms, each where it is good. The long one feeds the display bins
+    /// below `splitHz`, the short one those above, crossfaded over the octave
+    /// centred on the split -- cosine in log-frequency, blended as *power*,
+    /// so a tone inside the seam keeps its level (both transforms are
+    /// identically calibrated, so any blend of agreeing readings agrees).
+    ///
+    /// Allocates; message thread only. Call after prepare() -- prepare()
+    /// clears it, so a re-prepare reconfigures deliberately rather than
+    /// carrying a stale rate. The capture handed to update() must hold at
+    /// least the long window, or the long transform is skipped that frame
+    /// (wasBassUsed() says which happened).
+    void setBassTransform (int fftOrder, double splitHz)
+    {
+        bassSize_ = static_cast<std::size_t> (1)
+                      << static_cast<std::size_t> (std::clamp (fftOrder, 6, 15));
+        bassSplitHz_ = std::clamp (splitHz, lowHz_ * 2.0, highHz_ * 0.25);
+
+        bassWindow_.assign (bassSize_, 0.0);
+        bassScratch_.assign (bassSize_, 0.0);
+        bassPower_.assign (numBins_, 0.0);
+        bassWeight_.assign (numBins_, 0.0);
+
+        double sum = 0.0, sumOfSquares = 0.0;
+
+        for (std::size_t i = 0; i < bassSize_; ++i)
+        {
+            bassWindow_[i] = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi
+                                                   * static_cast<double> (i)
+                                                   / static_cast<double> (bassSize_));
+            sum += bassWindow_[i];
+            sumOfSquares += bassWindow_[i] * bassWindow_[i];
+        }
+
+        const double mean = sum / static_cast<double> (bassSize_);
+        const double meanSquare = sumOfSquares / static_cast<double> (bassSize_);
+        bassNoisePowerBandwidth_ = mean > 0.0 ? meanSquare / (mean * mean) : 1.0;
+
+        // The crossfade, precomputed per display bin: 1 below the octave
+        // around the split, 0 above it, a raised cosine in log-f between.
+        const double lower = bassSplitHz_ / std::numbers::sqrt2;
+        const double upper = bassSplitHz_ * std::numbers::sqrt2;
+
+        bassLastBin_ = 0;
+
+        for (std::size_t bin = 0; bin < numBins_; ++bin)
+        {
+            const double centre = getBinFrequency (bin);
+
+            double weight = 0.0;
+
+            if (centre <= lower)
+                weight = 1.0;
+            else if (centre < upper)
+                weight = 0.5 + 0.5 * std::cos (std::numbers::pi
+                                               * std::log (centre / lower)
+                                               / std::log (upper / lower));
+
+            bassWeight_[bin] = weight;
+
+            if (weight > 0.0)
+                bassLastBin_ = bin;
+        }
+    }
+
+    void clearBassTransform() noexcept
+    {
+        bassSize_ = 0;
+        bassUsed_ = false;
+    }
+
+    [[nodiscard]] bool hasBassTransform() const noexcept { return bassSize_ != 0; }
+
+    /// Whether the last update() actually ran the long transform -- false
+    /// when none is configured, and false when the capture was too short to
+    /// feed it, which would otherwise be an invisible degradation.
+    [[nodiscard]] bool wasBassUsed() const noexcept { return bassUsed_; }
+
+    [[nodiscard]] double getSampleRate() const noexcept { return sampleRate_; }
 
     void reset() noexcept
     {
@@ -225,15 +314,80 @@ public:
 
         fft (spectrum);
 
+        foldPowers (spectrum, noisePowerBandwidth_, 0, numBins_ - 1, 1, powerScratch_);
+
+        // The bass transform, where one is configured and the capture can
+        // feed it: fold the bins its crossfade touches and blend as power.
+        bassUsed_ = bassSize_ != 0
+                 && capture.readLatest (bassScratch_.data(), static_cast<int> (bassSize_));
+
+        if (bassUsed_)
+        {
+            Spectrum bass (bassSize_);
+            for (std::size_t i = 0; i < bassSize_; ++i)
+                bass[i] = Complex { bassScratch_[i] * bassWindow_[i], 0.0 };
+
+            fft (bass);
+
+            foldPowers (bass, bassNoisePowerBandwidth_, 0, bassLastBin_, 0, bassPower_);
+
+            for (std::size_t bin = 0; bin <= bassLastBin_; ++bin)
+            {
+                const double weight = bassWeight_[bin];
+                powerScratch_[bin] = weight * bassPower_[bin]
+                                   + (1.0 - weight) * powerScratch_[bin];
+            }
+        }
+
+        for (std::size_t bin = 0; bin < numBins_; ++bin)
+        {
+            const auto db = static_cast<float> (gainToDb (std::sqrt (powerScratch_[bin]),
+                                                          static_cast<double> (kFloorDb)));
+
+            // Instant rise, damped fall.
+            magnitudes_[bin] = db > magnitudes_[bin] ? db
+                                                     : std::max (db, magnitudes_[bin] - fallDb_);
+
+            peaks_[bin] = magnitudes_[bin] > peaks_[bin]
+                        ? magnitudes_[bin]
+                        : std::max (magnitudes_[bin], peaks_[bin] - peakFallDb_);
+        }
+
+        return true;
+    }
+
+private:
+    /// One transform's power, folded onto the display bins `firstBin..lastBin`.
+    ///
+    /// The whole fold lives here so the short and the long transform go
+    /// through byte-for-byte the same arithmetic; only the geometry differs.
+    ///
+    /// `widenOverlap` is the extra transform bin added on each side AFTER the
+    /// widen-to-centre branch. The short transform keeps 1 -- its display
+    /// bins down low are far narrower than a transform bin, and the extra
+    /// margin is what holds the level to 0.25 dB. The long transform passes
+    /// 0: its widen branch only runs below ~37 Hz (the one region where the
+    /// display grid is finer than 2.9 Hz), its three-bin window already
+    /// covers a whole Hann mainlobe there, and the extra bin would stretch
+    /// each 2 Hz display bin across 14.6 Hz of transform. Measured at 45 Hz
+    /// and above -- where the normal path runs -- the setting changes
+    /// nothing at all.
+    void foldPowers (const Spectrum& spectrum, double windowNpb,
+                     std::size_t firstBin, std::size_t lastBin,
+                     std::size_t widenOverlap,
+                     std::vector<double>& powers) const
+    {
+        const auto size = spectrum.size();
+
         // 2/N turns a one-sided bin magnitude into the amplitude of the sine
         // that made it; the further 1/0.5 undoes the Hann window's coherent
         // gain. A full-scale sine then reads 0 dBFS, which is what a user
         // expects a full-scale sine to read.
-        const double scale = 4.0 / static_cast<double> (fftSize_);
-        const double binWidth = sampleRate_ / static_cast<double> (fftSize_);
-        const std::size_t usable = fftSize_ / 2;
+        const double scale = 4.0 / static_cast<double> (size);
+        const double binWidth = sampleRate_ / static_cast<double> (size);
+        const std::size_t usable = size / 2;
 
-        for (std::size_t bin = 0; bin < numBins_; ++bin)
+        for (std::size_t bin = firstBin; bin <= lastBin && bin < numBins_; ++bin)
         {
             const double lower = edges_[bin];
             const double upper = edges_[bin + 1];
@@ -250,13 +404,17 @@ public:
             // -- widen to the three bins around its centre. That is a real
             // resolution limit, not a bug to code around: several display bins
             // necessarily share one transform bin down there, and a tone reads
-            // as a short plateau rather than a spike.
+            // as a short plateau rather than a spike. (The bass transform
+            // exists precisely to push this limit down: at 16384 points the
+            // limit moves from 23 Hz to 2.9, below the display grid itself.)
             //
             // Widening rather than picking one bin is what keeps the *level*
             // right. Snapping to the nearest bin read a 100 Hz tone 2.0 dB low,
             // and interpolating between neighbours cannot do better than the
             // neighbours themselves -- both endpoints sit below a peak that
             // falls between them, so it still read 1.8 dB low.
+            bool widened = false;
+
             if (first > last)
             {
                 const auto centre = static_cast<std::ptrdiff_t> (
@@ -266,6 +424,8 @@ public:
                     centre - 1, 1, static_cast<std::ptrdiff_t> (usable) - 1));
                 last = static_cast<std::size_t> (std::clamp<std::ptrdiff_t> (
                     centre + 1, 1, static_cast<std::ptrdiff_t> (usable) - 1));
+
+                widened = true;
             }
 
             // Overlap each display bin into its neighbours by one transform bin.
@@ -278,8 +438,14 @@ public:
             // one bin of overlap is enough to keep it whole, and the cost is
             // that broadband content is counted twice at the seams -- invisible
             // on a display, unlike a 3 dB notch that moves with the note.
-            first = first > 1 ? first - 1 : 1;
-            last  = std::min (last + 1, usable - 1);
+            //
+            // After the widen branch the extension is the caller's
+            // `widenOverlap` -- see the declaration for why the two
+            // transforms want different margins there.
+            const std::size_t extend = widened ? widenOverlap : 1;
+
+            first = first > extend ? first - extend : 1;
+            last  = std::min (last + extend, usable - 1);
 
             // Summed as power, not taken as a maximum. A tone rarely lands on a
             // bin centre, and summing recovers the energy the window spread
@@ -296,24 +462,10 @@ public:
             // A Hann main lobe carries half again as much power as its peak bin,
             // so the sum has to be divided by the window's noise power bandwidth
             // or every reading is 1.76 dB high.
-            power /= noisePowerBandwidth_;
-
-            const auto db = static_cast<float> (gainToDb (std::sqrt (power),
-                                                          static_cast<double> (kFloorDb)));
-
-            // Instant rise, damped fall.
-            magnitudes_[bin] = db > magnitudes_[bin] ? db
-                                                     : std::max (db, magnitudes_[bin] - fallDb_);
-
-            peaks_[bin] = magnitudes_[bin] > peaks_[bin]
-                        ? magnitudes_[bin]
-                        : std::max (magnitudes_[bin], peaks_[bin] - peakFallDb_);
+            powers[bin] = power / windowNpb;
         }
-
-        return true;
     }
 
-private:
     double sampleRate_ { 44100.0 };
     double lowHz_      { 20.0 };
     double highHz_     { 20000.0 };
@@ -327,8 +479,20 @@ private:
 
     std::vector<float> magnitudes_;
     std::vector<float> peaks_;
+    std::vector<double> powerScratch_;
 
     double noisePowerBandwidth_ { 1.0 };
+
+    // The optional bass transform -- see setBassTransform().
+    std::size_t bassSize_ { 0 };
+    double bassSplitHz_ { 500.0 };
+    double bassNoisePowerBandwidth_ { 1.0 };
+    std::size_t bassLastBin_ { 0 };
+    bool bassUsed_ { false };
+    std::vector<double> bassWindow_;
+    std::vector<double> bassScratch_;
+    std::vector<double> bassPower_;
+    std::vector<double> bassWeight_;
 
     float fallDb_     { 1.6f };
     float peakFallDb_ { 0.35f };

@@ -1,0 +1,797 @@
+% !TeX program = pdflatex
+% !BIB program = bibtex
+% Template LaTeX file for DAFx-19 papers
+%
+% To generate the correct references using BibTeX, run
+%     latex, bibtex, latex, latex
+% modified...
+% - from DAFx-00 to DAFx-02 by Florian Keiler, 2002-07-08
+% - from DAFx-02 to DAFx-03 by Gianpaolo Evangelista
+% - from DAFx-05 to DAFx-06 by Vincent Verfaille, 2006-02-05
+% - from DAFx-06 to DAFx-07 by Vincent Verfaille, 2007-01-05
+%                          and Sylvain Marchand, 2007-01-31
+% - from DAFx-07 to DAFx-08 by Henri Penttinen, 2007-12-12
+%                          and Jyri Pakarinen 2008-01-28
+% - from DAFx-08 to DAFx-09 by Giorgio Prandi, Fabio Antonacci 2008-10-03
+% - from DAFx-09 to DAFx-10 by Hannes Pomberger 2010-02-01
+% - from DAFx-10 to DAFx-12 by Jez Wells 2011
+% - from DAFx-12 to DAFx-14 by Sascha Disch 2013
+% - from DAFx-15 to DAFx-16 by Pavel Rajmic 2015
+% - from DAFx-16 to DAFx-17 by Brian Hamilton 2016
+% - from DAFx-18 to DAFx-19 by Dave Moffat 2019
+%
+% Template with hyper-references (links) active after conversion to pdf
+% (with the distiller) or if compiled with pdflatex.
+%
+% 20060205: added package 'hypcap' to correct hyperlinks to figures and tables
+%                      use of \papertitle and \paperauthorA, etc for same title in PDF and Metadata
+%
+% 1) Please compile using latex or pdflatex.
+% 2) If using pdflatex, you need your figures in a file format other than eps! e.g. png or jpg is working
+% 3) Please use "paperftitle" and "pdfauthor" definitions below
+
+%------------------------------------------------------------------------------------------
+%  !  !  !  !  !  !  !  !  !  !  !  ! user defined variables  !  !  !  !  !  !  !  !  !  !  !  !  !  !
+% Please use these commands to define title and author(s) of the paper:
+\def\papertitle{Real-time Physical Modelling for Analog Tape Machines}
+\def\paperauthorA{Jatin Chowdhury}
+
+% Authors' affiliations have to be set below
+
+%------------------------------------------------------------------------------------------
+\documentclass[twoside,a4paper]{article}
+\usepackage{dafx_19}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{euscript}
+\usepackage[latin1]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{ifpdf}
+
+\usepackage[english]{babel}
+\usepackage{caption}
+\usepackage{subfig} % or can use subcaption package
+\usepackage{color}
+
+\setcounter{page}{1}
+\ninept
+
+\usepackage{times}
+% Saves a lot of ouptut space in PDF... after conversion with the distiller
+% Delete if you cannot get PS fonts working on your system.
+
+% pdf-tex settings: detect automatically if run by latex or pdflatex
+\newif\ifpdf
+\ifx\pdfoutput\relax
+\else
+   \ifcase\pdfoutput
+      \pdffalse
+   \else
+      \pdftrue
+\fi
+
+\ifpdf % compiling with pdflatex
+  \usepackage[pdftex,
+    pdftitle={\papertitle},
+    pdfauthor={\paperauthorA},
+    colorlinks=false, % links are activated as colror boxes instead of color text
+    bookmarksnumbered, % use section numbers with bookmarks
+    pdfstartview=XYZ % start with zoom=100% instead of full screen; especially useful if working with a big screen :-)
+  ]{hyperref}
+  \pdfcompresslevel=9
+  \usepackage[pdftex]{graphicx}
+%  \usepackage[figure,table,hypcap=true]{caption}
+\else % compiling with latex
+  \usepackage[dvips]{epsfig,graphicx}
+  \usepackage[dvips,
+    colorlinks=false, % no color links
+    bookmarksnumbered, % use section numbers with bookmarks
+    pdfstartview=XYZ % start with zoom=100% instead of full screen
+  ]{hyperref}
+  % hyperrefs are active in the pdf file after conversion
+%  \usepackage[figure,table,hypcap=true]{caption}
+\fi
+  \usepackage[hypcap=true]{caption}
+\usepackage{cleveref}
+\usepackage{tikz}
+\usetikzlibrary{dsp,chains}
+
+\DeclareMathAlphabet{\mathpzc}{OT1}{pzc}{m}{it}
+\newcommand{\z}{\mathpzc{z}}
+
+\title{\papertitle}
+
+\affiliation{
+\paperauthorA \,}
+{\href{http://ccrma.stanford.edu}{Center for Computer Research in Music and Acoustics} \\ Stanford University \\ Palo Alto, CA \\ {\tt \href{mailto:jatin@ccrma.stanford.edu}{jatin@ccrma.stanford.edu}}}
+
+\begin{document}
+% more pdf-tex settings:
+\ifpdf % used graphic file format for pdflatex
+  \DeclareGraphicsExtensions{.png,.jpg,.pdf}
+\else  % used graphic file format for latex
+  \DeclareGraphicsExtensions{.eps}
+\fi
+
+\maketitle
+
+\begin{abstract}
+For decades, analog magnetic tape recording was the most popular
+method for recording music, but has been replaced over the past 30 years first by
+DAT tape, then by DAWs and audio interfaces \cite{Kadis}. Despite being replaced
+by higher quality technology, many have sought to recreate a "tape" sound
+through digital effects, despite the distortion, tape ``hiss'', and other
+oddities analog tape produced. The following paper describes the general process
+of creating a physical model of an analog tape machine starting from basic
+physical principles, then discusses in-depth a real-time implementation
+of a physical model of a Sony TC-260 tape machine.
+\newline\newline
+"Whatever you now find weird, ugly, uncomfortable, and nasty
+about a new medium will surely become its signature. CD distortion, the jitteriness
+of digital video, the crap sound of 8-bit - all of these will be cherished
+and emulated as soon as they can be avoided." -Brian Eno \cite{Eno}.
+\end{abstract}
+
+\section{Introduction}
+While analog magnetic tape recording (see \cref{TapeMachine}) is rarely used in modern recording
+studios, the sound of analog tape is still often sought after by mixing
+and mastering engineers. To that end, several prominent audio
+plugin manufacturers including Waves\footnote{\url{https://www.waves.com/plugins/j37-tape}},
+Universal Audio\footnote{\url{https://www.uaudio.com/uad-plugins/plug-in-bundles/magnetic-tape-bundle.html}},
+and U-He\footnote{\url{https://u-he.com/products/satin/}} have created
+tape emulating plugins. Unfortunately,
+the existing literature on analog tape emulation is somewhat lacking.
+While Arnadottir et at. \cite{tapeDelay} and Valimaki et al. \cite{DAFX_book}
+describe the emulation of tape echo/delay devices, and Valimaki et al
+\cite{disks} describe the emulation of disk-based audio recording media,
+we were unable to locate any existing research directly discussing digital
+emulation of the magnetisation process, a gap in research that this 
+publication intends to fill. That said, Kadis \cite{Kadis} and Camras
+\cite{Camras:1987:MRH:27189} discuss musical use of analog tape recorders
+in a useful technical manner, and Bertram \cite{1994tmr..book.....B}
+gives a in-depth technical description of the physical underpinnings of
+analog magnetic recording; this work intends to build on their foundations.
+While tape machines also contain electronic circuits that contribute to the 
+machine's characteristic sound, this publication only considers processes
+that relate directly to tape magnetisation. For readers
+wishing to emulate tape machine circuits, a good overview of circuit
+modelling techniques can be found in \cite{Yeh}.
+
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=2.5in]{../Refs/Pictures/sony_tc-260.jpg}
+    \caption{\label{TapeMachine}{\it An analog tape recorder (Sony TC 260)}}
+\end{figure}
+%
+
+\section{Continuous Time System}
+Audio recorded to and played back from a tape machine can be thought of as going
+through three distinct processors: the record head, tape magnetisation, and the play
+head.
+
+\subsection{The Record Head}
+For an instantaneous input current $I(t)$, the magnetic field output of the record 
+head is given as a function of distance along the tape ($x$), and depth into 
+the tape ($y$). Using the Karlqvist medium field approximation, we find
+\cite{1994tmr..book.....B}:
+
+\begin{multline}
+    H_x(x,y) = \frac{1}{\pi} H_0 \Big(\tan^{-1} \Big(\frac{(g/2) + x}{y} \Big) \\
+    + \tan^{-1} \Big(\frac{(g/2) - x}{y} \Big) \Big)
+    \label{eq:H_x}
+\end{multline}
+\begin{equation}
+    H_y(x,y) = \frac{1}{2 \pi} H_0 \ln \Big(\frac{((g/2) - x)^2 + y^2}{((g/2) + x)^2 + y^2} \Big)
+    \label{eq:H_y}
+\end{equation}
+%
+where $H_x$ and $H_y$ are components of the magnetic field $\vec{H}$,
+$g$ is the head gap, and $H_0$ is the deep gap field, given by:
+
+\begin{equation}
+    H_0 = \frac{NEI}{g}
+\end{equation}
+%
+where $N$ is the number of turns of wire around the head, and $E$ is the head 
+efficiency which can be calculated by:
+
+\begin{equation}
+    E = \frac{1}{1 + \frac{l  A_g}{\mu_r g} \int_{core} \frac {d \vec{l}}{A(l)}}
+\end{equation}
+%
+where $A_g$ is the gap area, $\mu_r$ is the core permeability relative to 
+free space ($\mu_0$), and $A(l)$ is the cross-sectional 
+area at a point $l$ along its circumferential length.
+
+\subsection{Tape Magnetisation}
+The magnetisation recorded to tape from a magnetic field can be described
+using a hysteresis loop, as follows \cite{1994tmr..book.....B}:
+
+\begin{equation}
+    \vec{M}(x,y) = F_{Loop}(\vec{H}(x,y))
+\end{equation}
+%
+where $F_{Loop}$ is a generalized hysteresis function.
+\newline\newline
+Using the Jiles-Atherton magnetisation model, the following
+differential equation describes magnetisation in some direction ($M$)
+as a function of the magnetic field in that direction ($H$) \cite{Hysteresis}:
+
+\begin{equation}
+    \frac{dM}{dH} = \frac{(1-c) \delta_M (M_{an} - M)}{(1-c) \delta_S k - \alpha (M_{an} - M)} + c \frac{dM_{an}}{dH}
+    \label{eq5}
+\end{equation}
+%
+where $c$ is the ratio of normal and anhysteric initial susceptibilities,
+$k$ is a measure of the width of the hysteresis
+loop, $\alpha$ is a mean field parameter, representing inter-domain
+coupling, and $\delta_S$ and $\delta_M$ are given by:
+
+\begin{equation}
+    \delta_S = \begin{cases}
+        1 & \text{if H is increasing} \\
+        -1 & \text{if H is decreasing}
+    \end{cases}
+\end{equation}
+\begin{equation}
+    \delta_M = \begin{cases}
+        1 & \text{if $\delta_S$ and $M_{an} - M$ have the same sign} \\
+        0 & \text{otherwise}
+    \end{cases}
+\end{equation}
+%
+$M_{an}$ is the anisotropic magnetisation given by:
+
+\begin{equation}
+    M_{an} = M_s L \Big( \frac{H + \alpha M}{a} \Big)
+\end{equation}
+%
+where $M_s$ is the magnetisation saturation, $a$ characterizes the shape
+of the anhysteric magnetisation and $L$ is the Langevin function:
+
+\begin{equation}
+    L(x) = \coth (x) - \frac{1}{x}
+\end{equation}
+
+\subsection{Play Head}
+\subsubsection{Ideal Playback Voltage}
+The ideal playback voltage as a function of tape magnetisation at a point
+$x$ along the tape is given by
+\cite{1994tmr..book.....B}:
+
+\begin{equation}
+    V(x) =  NWEv \mu_0 \int_{-\infty}^{\infty} dx' \int_{-\delta/2}^{\delta/2} dy' \vec{h}(x' + x, y') \cdot \frac{\vec{M}(x', y')}{dx}
+    \label{eq:Vx}
+\end{equation}
+%
+where $N$ is the number of turns of wire, $W$ is the width of the playhead, $E$ is the playhead
+efficiency, $v$ is the tape speed, $\delta$ is the thickness of the tape,
+and $\mu_0$ is the permeability of free space.
+Note that $V(x) = V(vt)$ for constant $v$. $\vec{h}(x, y)$ is defined as:
+
+\begin{equation}
+    \vec{h} (x, y) \equiv \frac{\vec{H} (x, y)}{NIE}
+    \label{eq12}
+\end{equation}
+%
+where $\vec{H} (x, y)$ can be calculated by \cref{eq:H_x,eq:H_y}.
+
+\subsubsection{Loss Effects}
+There are several frequency-dependent loss effects associated with playback,
+described as follows \cite{Kadis}:
+
+\begin{equation}
+    V(t) = V_0(t) [e^{-kd}] \Big[\frac{1 - e^{-k \delta}}{k \delta} \Big] \Big[\frac{\sin (kg /2)}{kg/2} \Big]
+    \label{eq:lossEffects}
+\end{equation}
+%
+for sinusoidal input $V_0(t)$, where $k$ is the wave number, $d$ is the distance between the tape and the playhead,
+$g$ is the gap width of the play head, and again $\delta$ is the thickness of the tape. The wave number
+is given by:
+
+\begin{equation}
+    k = \frac {2 \pi f}{v}
+    \label{eq:wavenumber}
+\end{equation}
+%
+where $f$ is the frequency and $v$ is the tape speed.
+
+\section{Digitizing the System}
+\subsection{Record Head}
+For simplicity, let us assume,
+\begin{equation}
+    \vec{H}(x,y,t) = \vec{H}(0,0,t)
+    \label{eq:spatialApprox}
+\end{equation}
+%
+In this case $H_y \equiv 0$, and $H_x \equiv H_0$. Thus,
+\begin{equation}
+    H(t) = \frac{NEI(t)}{g}
+    \label{eq15}
+\end{equation}
+%
+or,
+\begin{equation}
+    \hat{H}(n) = \frac{NE\hat{I}(n)}{g}
+    \label{eq:Hin}
+\end{equation}
+
+\subsection{Hysteresis}
+Beginning from \cref{eq5}, we can find the derivative of $M$ w.r.t. time,
+as in \cite{Hysteresis}:
+\begin{equation}
+    \frac{dM}{dt} = \frac{\frac{(1-c) \delta_M (M_sL(Q) - M)}{(1-c) \delta_S k - \alpha (M_sL(Q) - M)} \dot{H} + c \frac{M_s}{a} \dot{H} L'(Q)}{1 - c \alpha \frac{M_s}{a} L'(Q)}
+    \label{eq:dmdt}
+\end{equation}
+%
+where $Q = \frac{H + \alpha M}{a}$, and
+
+\begin{equation}
+    L'(x) = \frac{1}{x^2} - \coth^2(x) + 1
+\end{equation}
+%
+Note that \cref{eq:dmdt} can also be written in the general form for non-linear
+Ordinary Differential Equations:
+\begin{equation}
+    \frac{dM}{dt} = f(t,M,\vec{u})
+\end{equation}
+where $\vec{u} = \begin{bmatrix}
+    H \\
+    \dot{H}
+    \end{bmatrix}$.
+\newline\newline
+Using the trapezoidal rule for derivative approximation, we find:
+
+\begin{equation}
+    \dot{\hat{H}}(n) = 2\frac{\hat{H}(n) - \hat{H}(n-1)}{T} - \dot{\hat{H}}(n-1)
+    \label{eq:hDeriv}
+\end{equation}
+%
+We can use the Runge-Kutta 4th-order method \cite{Yeh} to find an explicit solution
+for $\hat{M}(n)$:
+\begin{align}
+\begin{split}
+    k_1 &= T f \Big(n-1, \hat{M}(n-1), \hat{\vec{u}}(n-1) \Big)\\
+    k_2 &= T f \Big(n - \frac{1}{2}, \hat{M}(n-1) + \frac{k_1}{2}, \hat{\vec{u}}  \Big(n-\frac{1}{2} \Big) \Big)\\
+    k_3 &= T f \Big(n- \frac{1}{2}, \hat{M}(n-1) + \frac{k_2}{2}, \hat{\vec{u}} \Big(n-\frac{1}{2} \Big) \Big)\\
+    k_4 &= T f \Big(n, \hat{M}(n-1) + k_3, \hat{\vec{u}}(n) \Big)\\
+    \hat{M}(n) &= \hat{M}(n-1) + \frac{k_1}{6} + \frac{k_2}{3} + \frac{k_3}{3} + \frac{k_4}{6}
+    \label{eq:Mn}
+\end{split}
+\end{align}
+%
+We use linear interpolation to find the half-sample values used to calculate $k_2$ and $k_3$.
+Note that many audio DSP systems prefer
+lower-order implicit methods such as the trapezoidal rule to solve
+differential equations rather than a higher-order method like the
+Runge-Kutta method \cite{Yeh}. However in this case, it was found that
+the lower-order methods quickly became unstable for high-frequency input,
+particularly when the input is modulated by a bias signal (see \Cref{bias}).
+
+\subsubsection{Numerical Considerations} \label{numerical}
+To account for rounding errors in the Langevin function for values close to 
+zero, we use the following approximation about zero, as in \cite{Hysteresis}:
+\begin{equation}
+    L(x) = \begin{cases}
+        \coth(x) - \frac{1}{x} & \text{for $|x| > 10^{-4}$} \\
+        \frac{x}{3} & \text{otherwise}
+    \end{cases}
+\end{equation}
+\begin{equation}
+    L'(x) = \begin{cases}
+        \frac{1}{x^2} - \coth^{2}(x) + 1 & \text{for $|x| > 10^{-4}$} \\
+        \frac{1}{3} & \text{otherwise}
+    \end{cases}
+\end{equation}
+%
+Additionally, $\tanh(x)$, and by extension $\coth(x)$ is a
+rather computationally expensive operation. With this in mind,
+for real-time implementation, we approximate $\coth(x)$ as the
+reciprocal of a Gaussian continued fraction for $\tanh(x)$
+\cite{MATH}, namely
+\begin{equation}
+    \tanh(x) = \frac{x}{1 + \frac{x^2}{3 + \frac{x^2}{5 + \frac{x^2}{7}}}}
+    \label{eq:continuedFrac}
+\end{equation}
+
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=3in]{../Simulations/Hysteresis/Sim2-M_H.png}
+    \caption{\label{HysteresisSim}{\it Digitized Hysteresis Loop Simulation}}
+\end{figure}
+%
+\subsubsection{Simulation}
+The digitized hysteresis loop was implemented and tested offline
+in \texttt{Python}, using the constants $M_s$, $a$, $\alpha$, $k$,
+and $c$ from \cite{JilesAtherton1986}. For a sinusoidal input signal
+with frequency 2kHz, and varying amplitude from 800 - 2000 Amperes per
+meter, \cref{HysteresisSim} shows the Magnetisation output.
+
+\subsection{Play Head}
+By combining \cref{eq:Vx} with \cref{eq12,eq15}, we get:
+\begin{equation}
+    V(t) =  NWEv \mu_0  g M(t)
+\end{equation}
+%
+or,
+\begin{equation}
+    \hat{V}(n) =  NWEv \mu_0  g \hat{M}(n)
+    \label{eq:Vout}
+\end{equation}
+%
+\subsubsection{Loss Effects} \label{Loss_Effects}
+In the real-time system, we model the playhead
+loss effects with an FIR filter, derived by
+taking the inverse DFT of the
+loss effects described in \cref{eq:lossEffects}.
+It is worth noting that as in \cref{eq:wavenumber},
+the loss effects, and therefore the FIR filter
+are dependent on the tape speed.
+\newline\newline
+The loss effects filter was implemented and
+tested offline in \texttt{Python} with tape-head 
+spacing of 20 microns, head gap width of 5 microns, 
+tape thickness of 35 microns, and tape speed of 15 ips.
+The following plot shows the results of the simulation,
+with a filter order of 100.
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=3in]{../Simulations/LossEffects/Loss_Effects.png}
+    \caption{\label{lossEffectsSim}{\it Frequency Response of Playhead Loss Effects}}
+\end{figure}
+%
+
+\section{Tape and Tape Machine Parameters}
+In the following sections, we describe the implementation of
+a real-time model of a Sony TC-260 tape machine, while attempting
+to preserve generality so that the process can be repeated for any
+similar reel-to-reel tape machine.
+
+\subsection {Tape Parameters}
+A typical reel-to-reel tape machine such as the Sony TC-260 uses 
+Ferric Oxide ($\gamma F_2O_3$) magnetic tape. The following
+properties of the tape are necessary for the tape hysteresis
+process \cref{eq:dmdt}:
+\begin{itemize}
+\item Magnetic Saturation ($M_s$): For Ferric Oxide tape
+the magnetic saturation is $3.5e5$ (A/m) \cite{jilesBook}.
+\item Hysteresis Loop Width ($k$): For soft materials, $k$ can be approximated
+as the coercivity, $H_c$ \cite{Jiles1992}. For Ferric Oxide, $H_c$ is approximately
+$27$ kA/m \cite{jilesBook}.
+\item Anhysteric magnetisataion ($a$): Knowing the coercivity and remnance magnetism of Ferric Oxide
+\cite{jilesBook}, we can calculate $a$ = 22  kA/m by the method described in
+\cite{Jiles1992}.
+\item Ratio of normal and hysteris initial susceptibilities ($c$): From \cite{Jiles1992}, $c$ = 1.7e-1.
+\item Mean field parameter ($\alpha$): From \cite{Jiles1992}, $\alpha$ = 1.6e-3.
+\end{itemize}
+
+\subsection{Tape Machine Parameters}
+\subsubsection {Record Head}
+To determine the magnetic field output of the
+record head using \cref{eq:Hin}, the following parameters 
+are necessary:
+\begin{itemize}
+\item Input Current ($\hat{I} (n)$): For the Sony TC-260
+the input current to the record head is approximately
+0.1 mA peak-to-peak \cite{RefManual}.
+\item Gap Width ($g$): The gap width for recording heads
+can range from 2.5 to 12 microns \cite{Kadis}.
+\item Turns of wire ($N$): The number of turns of wire
+is typically on the order of 100 \cite{1994tmr..book.....B}.
+\item Head Efficiency ($E$): The head efficiency is typically
+on the order of 0.1 \cite{1994tmr..book.....B}.
+\end{itemize}
+%
+These values result in a peak-to-peak magnetic field
+of approximately 5e5 A/m.
+
+\subsubsection{Play Head}
+Similar to the record head, the following parameters
+are needed to calculate the output voltage using
+\cref{eq:Vout,eq:lossEffects} (note that values are only included
+here if notably different from the record head):
+\begin{itemize}
+\item Gap Width ($g$): The play head gap width ranges from
+1.5 to 6 microns\cite{Kadis}.
+\item Head Width ($W$): For the Sony TC-260, the play head
+width is 0.125 inches (note that this is the same as the
+width of one track on the quarter-inch tape used by the 
+machine) \cite{RefManual}.
+\item Tape Speed ($v$): The Sony TC-260 can run at 3.75 inches
+per second (ips), or 7.5 ips \cite{RefManual}. Note that many
+ tape machines can run at 15 or 32 ips \cite{Kadis}.
+\item Tape Thickness ($\delta$): Typical tape that would be used
+with the TC-260 is on the order of 35 microns thick \cite{RefManual}.
+\item Spacing ($d$): The spacing between the tape and the play
+head is highly variable between tape machines. For a typical
+tape machine spacing can be as high as 20 microns \cite{Kadis}.
+\end{itemize}
+
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=3in]{../Simulations/Bias/BiasEx.png}
+    \caption{\label{Bias}{\it Example of a biased signal}}
+\end{figure}
+%
+\subsection{Tape Bias}
+\label{bias}
+A typical analog recorder adds a high-frequency "bias"
+current to the signal to avoid the "deadzone" effect when the input signal
+crosses zero, as well as to linearize the output. The input
+current to the record head can be given by
+\cite{Camras:1987:MRH:27189}:
+\begin{equation}
+    \hat{I}_{head}(n) = \hat{I}_{in}(n) + B \cos(2 \pi f_{bias} n T)
+    \label{eq:bias}
+\end{equation}
+%
+Where the amplitude of the bias current $B$ is usually
+about one order of magnitude larger than the input,
+and the bias frequency $f_{bias}$ is well above the
+audible range. \Cref{Bias} shows a unit-amplitude,
+2 kHz sine wave biased by a 50 kHz sine wave with amplitude 5.
+To recover the correct output signal, tape machines use a
+lowpass filter, with a cutoff frequency well below the bias
+frequency, though still above the audible range \cite{Kadis}.
+\newline\newline
+For the Sony TC-260, the bias frequency is 55 kHz, with a gain
+of 5 relative to the input signal. The lowpass filter used to recover
+the audible signal has a cutoff at 24 kHz, though note that due to
+the frequency response of the playhead loss effects, the effects
+of this filter may be essentially neglible to the real time system.
+\cite{RefManual}
+
+\subsection{Wow and Flutter} \label{flutter}
+Each tape machine has characteristic timing imperfections
+known as ``wow'' and/or ``flutter.'' These imperfections
+are caused by minor changes in speed from the motors
+driving the tape reels, and can cause fluctuations in
+the pitch of the output signal. To characterize these
+timing imperfections, we use a method similar to \cite{tapeDelay}:
+We recorded a pulse train of 1000 pulses through a TC-260,
+then recorded the pulses back from the tape. \Cref{timingSim}
+shows a section of a superimposed plot of the original
+pulse train against the pulse train recorded from the tape
+machine. From this data, we were able to generate a periodic
+function that accurately models the timing imperfections of
+the TC-260. The process was performed at both 7.5 ips and 3.75
+ips. In the real-time system, the timing imperfection model
+is used to inform a modulating delay line, to achieve the
+signature "wow" effect of an analog tape machine.
+
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=3in]{../Simulations/TimingEffects/timing_diff_7-5.png}
+    \caption{\label{timingSim}{\it Input pulse train superimposed with pulse train recorded from TC-260}}
+\end{figure}
+%
+\begin{figure}[ht]
+    \begin{center}
+        \begin{tabular}{|| c | c ||}
+            \hline
+            Record Head Constants & \\
+            \hline
+            Turns of wire (N) & 100 \\
+            Head Efficiency (E) & 0.1 \\
+            Record Head Gap (g) & 6 (microns) \\
+            \hline
+            \hline
+            \hline
+            Tape Constants & \\
+            \hline
+            Magnetic Saturation ($M_s$) & 3.5e5 (A/m) \\
+            Hysteresis Loop Width (k) & 27 (kA/m) \\
+            Anhysteric Magnetisation (a) & 22 (kA/m) \\
+            Ratio of magnetic susceptibilities (c) & 1.7e-1 \\
+            \hline
+            \hline
+            \hline
+            Play Head Constants & \\
+            \hline
+            Play Head Width (W) & 0.125 (in) \\
+            \hline
+        \end{tabular}
+    \end{center}
+    \caption{\label{constants}{\it Constant values for model implementation}}
+\end{figure}
+%
+\begin{figure*}[ht]
+    \center
+    \begin{tikzpicture}
+        \matrix (m1) [row sep=10mm, column sep=8mm]
+        {
+                                                                                &
+                                                                                &
+            \node[dspnodeopen,dsp/label=above]   (b0) {Bias Signal};            &
+                                                                                &
+                                                                                &
+                                                                                &
+            \node[dspnodeopen,dsp/label=above]   (b1) {Flutter ($\tau$)};       &
+            \node[dspnodeopen,dsp/label=above]   (b2) {Tape Speed ($v$)};       \\
+            %---------------------------------------------------------------
+            \node[dspnodeopen,dsp/label=left]    (x0) {$x[n]$};              &
+            \node[dspsquare]                     (x1) {\upsamplertext{M}};   &
+            \node[dspadder]                      (x2) {};                    &
+            \node[dspfilter]                     (x3) {$H_{record}$};        &
+            \node[dspfilter]                     (x4) {Hysteresis};          &
+            \node[dspsquare]                     (x5) {\downsamplertext{M}}; &
+            \node[dspsquare]                     (x6) {$z^{-\tau}$};         &
+            \node[dspfilter]                     (x7) {$H_{play}(v)$};       &
+            \node[dspnodeopen,dsp/label=right]   (x8) {$y[n]$};              \\
+        };
+        \draw[dspconn] (b0) -- (x2);
+        \draw[dspconn] (b1) -- (x6);
+        \draw[dspconn] (b2) -- (x7);
+        \foreach \i [evaluate = \i as \j using int(\i+1)] in {0,1,...,7}
+            \draw[dspconn] (x\i) -- (x\j);
+    \end{tikzpicture}
+    \caption{\label{flowchart}{\it Flowchart of realtime system: 
+                                   M is the oversampling factor,
+                                   $H_{record}$
+                                   is the transfer function of the record
+                                   head, and
+                                   $H_{play}$ is the play head transfer
+                                   function including loss effects, and a 
+                                   de-biasing filter.}}
+\end{figure*}
+%
+\section{Real-Time Implementation}
+We implemented our physical model of the Sony TC-260 as a
+VST audio plugin using the JUCE framework. \Cref{flowchart}
+shows the signal flow of the system in detail. We allow the user
+to control parameters in real-time including the tape speed, bias gain, gap
+width, tape thickness, tape spacing, and flutter depth.
+\newline\newline
+Bias modulation is implemeted using \cref{eq:bias}, where bias gain
+$B$ and bias frequency $f_{bias}$ are controlled by the user.
+\newline\newline
+The record head transfer function calculates the record head magnetic
+field $H$ from the input current $I$, and is implemented using \cref{eq:Hin},
+with constant values shown in \cref{constants}.
+\newline\newline
+The hysteresis process calculates the tape magnetisation $M$ from the
+record head magnetic field $H$, and is implementated using the Runge-Kutta
+method described in \cref{eq:Mn}, with constant value defined in \cref{constants}.
+\newline\newline
+The flutter process is implemented using a modulated delay line as described in
+\cref{flutter}, with user controlled modulation depth.
+\newline\newline
+The play head transfer calculates the play head voltage $V$ from the
+tape magnetisation $M$, using \cref{eq:Vout} and the loss effects filter
+described in \cref{Loss_Effects}. The gap width $g$, tape speed $v$, tape
+thickness $\delta$, and spacing $d$ are controlled by the user, and
+other constant values are shown in \cref{constants}.
+\newline\newline
+C/C++ code for the full real-time implementation is open-source
+and is available on GitHub.\footnote{\url{https://github.com/jatinchowdhury18/AnalogTapeModel}}
+
+%
+\subsection{Oversampling}
+If no oversampling is used, the system will be unstable
+for input signal at the Nyquist frequency, due to limitations
+of the trapezoid rule derivate approximation used in \cref{eq:hDeriv}.
+To avoid this instability, early versions of the real-time
+implementation used a lowpass filter with cutoff frequency
+just below Nyquist. However, due to aliasing caused by the
+nonlinearity of the tape hysteresis model, oversampling is
+necessary to mitigate aliasing artifacts \cite{Yeh}. Further,
+the system must be able to faithfully recreate not only the
+frequencies in the audible range but the bias frequency as
+well. Since the TC-260 uses a bias frequency of 55 kHz \cite{RefManual}
+and the minimum standard audio sampling rate is 44.1 kHz,
+a minimum oversampling factor of 3x is required. However,
+since the biased signal is then fed into the hystersis model,
+even more oversampling is required to avoid aliasing. With these
+considerations in mind, our system uses an oversampling
+factor of 16x.
+
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=2.8in]{../Testing/DeadzoneTest.png}
+    \includegraphics[width=2.8in]{../Testing/FlutterTest.png}
+    \caption{\label{tests}{\it Testing results for real-time system:
+                            sine wave output with no biasing (above),
+                            input vs. output pulse train comparison (below).}}
+\end{figure}
+%
+\begin{figure}[ht]
+    \center
+    \includegraphics[width=2.8in]{../Testing/HysteresisTest.png}
+    \includegraphics[width=2.8in]{../Testing/HysteresisTest_Tape.png}
+    \caption{\label{tests2}{\it Test results comparing real-time system
+                                to Sony TC-260 physical unit:
+                                hysteresis loop for real-time system (above),
+                                hysteresis loop for TC-260 (below).}}
+\end{figure}
+%
+
+\subsection{Results}
+In subjective testing, our physical model sounds quite convincing,
+with warm, tape-like distortion, and realistic sounding
+flutter. The high-frequency loss and low-frequency
+``head bump'' change correctly at different tape speeds,
+and are approximately within the frequency response
+specifications of the TC-260 service manual \cite{RefManual}.
+When the input to the plugin is silent, the hysteresis processing
+of the bias signal produces a very accurate ``tape hiss'' sound.
+The distortion and frequency response characteristics
+of our model are subjectively very close when compared to
+the output of an actual TC-260, though not nearly close enough to 
+``fool'' the listener. Additionally, as the bias
+gain is lowered, the ``deadzone'' effect appears exactly
+as expected \cite{Camras:1987:MRH:27189}.
+The largest difference between the model and the physical
+machine is the subtle electrical and mechanical noises
+and dropouts present in the physical machine, presumably
+caused by the age and wear-and-tear of the machine, which
+we did not attempt to characterize in our model.
+\Cref{tests} shows the results
+of tests performed on the real-time system, including
+an example of the ``deadzone'' effect, and the timing
+irregularities or ``flutter''. \Cref{tests2} shows
+a comparison of hysteresis characteristics between
+the real-time software model and a physical Sony TC-260
+tape machine. Note that some
+differences between the two hysteresis loops may be due
+to the circuitry of the tape machine that we did not
+attempt to model in the real-time system.
+Audio examples from the real-time system can be found
+online.\footnote{\url{https://ccrma.stanford.edu/~jatin/420/tape/}}
+
+\subsection{Evaluation}
+While there is an audible difference between the
+real-time software model and a physical Sony
+TC-260, the most fundamental aspects of the tape
+machine sound including tape saturation, tape hiss, flutter/wow,
+and frequency response, are clearly audible and sound
+very accurate. The main distinctions between the two
+systems can be attributed to the tape machine circuitry
+(in particular the TC-260 contains two shelving filters),
+as well as mechanical wear of the system, both elements
+that were not considered in our model.
+\newline\newline
+In our opinion, the
+strongest proof of the efficacy of our model is that the
+model responds accurately to the adjustement of model parameters.
+In particular, the hysteresis process
+reacted correctly to changes in input gain (saturating for
+overdriven input, or fading into tape hiss for underdriven
+input), as well as bias gain (saturation for overbiasing, or
+``deadzone'' effect for underbiasing).
+Additionally, adjusting the loss effect parameters
+correctly demonstrated known tape machine phenomena including
+head ``bump'' (a resonance at the wavelength of the play
+head gap width), and spacing loss (filtering due to the
+spacing between the the play head and tape). The reader is
+invited to download the plugin (available with the source code)
+and evaluate the model for themselves. In conclusion, we believe
+that our model successfully approximates the physical tape
+recording process, however for those wishing to model a full
+tape machine, we suggest using this model in combination with
+a model of the tape machine's circuits.
+
+\section{Future Improvements}
+\subsection{Spatial Magnetic Effects}
+The most obvious improvement to be made for the physical model
+is the inclusion of spatial effects of the tape. In particular,
+the approximations made in \cref{eq:spatialApprox}, negate any
+effects caused by magnetisation along the longitudinal length
+of the tape, and into the depth of the tape. Including spatial
+effects would involve deriving digital analogues for
+\cref{eq:H_x,eq:H_y,eq:Vx}, and re-deriving \cref{eq:Mn}
+to take an 2-dimensional magnetic field input at every timestep,
+rather than the zero-dimensional input it currently takes. This change
+would greatly increase the computational complexity of the system.
+At an oversampling rate of 16x,
+using just 100 spatial samples would be 1600x more
+computationally complex than the current system.
+
+\section{Acknowledgements}
+Many thanks to Julius Smith for guidance and support, and
+thanks to Irene Abosch for kindly donating her Sony TC-260.
+
+%\newpage
+\nocite{*}
+\bibliographystyle{IEEEbib}
+\bibliography{references}
+
+\end{document}

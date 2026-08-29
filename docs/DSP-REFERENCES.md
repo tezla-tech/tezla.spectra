@@ -595,6 +595,46 @@ structure and measured (CLAUDE.md section 9's rule, both halves).
 
 ---
 
+## Tape machines -- Ferrite
+
+| Source | Licence | Access | Used for |
+|---|---|---|---|
+| Jatin Chowdhury, "Real-time Physical Modelling for Analog Tape Machines", DAFx-19 | paper (LaTeX source ships in the GPLv3 repo below) | **read first-hand, in full** -- dafx.de and arxiv.org are proxy-blocked, but the author includes the paper's LaTeX in the repository; copy in `technical references/ferrite/` | the whole model: Karlqvist record head collapsing to H = NEI/g, the Jiles-Atherton dM/dt form with Langevin guards, trapezoidal H-dot recursion, tanh continued fraction, physical tape constants (Ms 3.5e5 A/m, k 27 kA/m, a 22 kA/m, c 0.17, alpha 1.6e-3), the playback loss product e^(-kd)(1-e^(-k delta))/(k delta) sinc(kg/2), TC-260 bias practice, the pulse-train flutter characterization |
+| AnalogTapeModel (CHOW Tape Model), jatinchowdhury18 | GPL-3.0 (compatible with AGPL-3.0-only via GPLv3 s13) | full source read; key files copied to `technical references/ferrite/` with the repo LICENSE | the production decisions the paper predates: normalized J-A (Ms ~ 1, k 0.47875), the musical mapping drive->a, sat->Ms, bias->c (taken with attribution), Newton-Raphson with analytic dM/dt-prime and Talpha = T/1.9, per-solver input clamps and blow-up guards, bias-as-parameter (no carrier) in the default mode, loss FIR by frequency sampling with its 20 Hz wavenumber floor, the head-bump peak rule f = v*0.0254/(gap*500), TC-260 flutter partials (f, 2f, 3f at -230/-80/-99 us, phases 0, 13pi/4, -pi/10, centre +350 us), wow's Ornstein-Uhlenbeck amplitude process |
+| Jiles & Atherton 1986; Jiles 1992; Bertram, *Theory of Magnetic Recording*; Camras, *Magnetic Recording Handbook* | papers/books | **not read** -- cited through the DAFx paper only | the provenance of the physical constants; every number used here is quoted from the DAFx paper's own citations of them |
+
+What Ferrite copies is confined to knowledge measurement cannot verify --
+the equation, the fitted constants, the flutter partial set, the mapping
+structure -- each attributed at the point of use. Everything with observable
+behaviour (the solver, parameter ranges, the minimum-phase loss design, the
+generators, the engine) is derived and pinned by measurement, per section 9.
+
+---
+
+## Physical modelling -- Malleus
+
+The modal percussion instrument. The rule of section 9 applied here: the mode
+mathematics is derived and pinned by test; the two things measurement cannot
+check -- an empirical partial recipe and a published component behaviour --
+are taken from the literature and say so.
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| Free-free bar mode equation, cos x cosh x = 1 (Euler-Bernoulli beam theory) | mathematics, no licence | Bar mode ratios 1 : 2.756 : 5.404 : 8.933, root-found in-house at design time and pinned against the classic figures in `tests/test_ModeShapes.cpp` |
+| Circular membrane modes = zeros of Bessel J_m (classical acoustics) | mathematics, no licence | Membrane ratio table, computed in-house via `std::cyl_bessel_j` bisection at design time, pinned against 2.405 / 3.832 / 5.136 / 5.520 |
+| Stiff string f_n = n sqrt(1 + B n^2) (piano inharmonicity, standard result) | mathematics, no licence | The String end of the Material morph and the Stretch control's physical anchor |
+| Julius O. Smith, *Physical Audio Signal Processing* (online book, ccrma.stanford.edu) | freely readable; **not fetched from this container** -- the two-pole resonator formulation used is standard textbook DSP and is derived and measured here rather than transcribed | `ModalResonator`'s per-mode resonator and the modal-synthesis framing |
+| N. H. Fletcher & T. D. Rossing, *The Physics of Musical Instruments* (Springer) | book; **not read first-hand from this container** | The church bell's minor-third partial series (hum 1/2, prime 1, tierce 1.2, quint 1.5, nominal 2, ...) -- an empirical founders' profile with no closed form, trusted through the standard organology literature and marked as such at the point of use. Everything else those chapters cover is derived instead |
+| McIntyre & Woodhouse's bow-friction family (hyperbolic stick-slip curve; DAFx/JASA literature) | papers; **not fetched from this container** (dafx.de refused at the network layer) | The Bow exciter's friction curve *shape*, and the rosin coefficients mu_s = 0.8 / mu_d = 0.3 -- the standard figures quoted throughout the bowed-string literature, attributed again at the point of use in `plugins/Malleus/Dsp/Bow.hpp`. The implementation is built from the standard curve form and then measured -- onset map vs pressure and speed, mode-lock spectrum, boundedness sweep, rate independence -- rather than transcribed; if the papers become available the curve constants should be revisited against them. The hair-compliance one-poles that stabilise the discrete loop are a stated engineering construction (the compliance is real physics, the corner is a tuned voicing constant), not a transcription |
+| Vactrol (LED + LDR) behaviour: fast light-on, slow nonlinear dark-decay | physics of a component, modelled from the mechanism per section 2.1 | `LowpassGate` -- the west-coast low-pass gate |
+
+The membrane, bar and plate tables, the morph, and the Overtone Lock quantise
+are all checkable by measurement, so per section 9 they are **built, not
+taken**: the tests pin the low-mode values every acoustics text agrees on,
+which is the copy-proof kind of citation.
+
+---
+
 ## Products referenced as sonic targets only
 
 Named in this repository to describe a *sound* or a *workflow*. No binary has

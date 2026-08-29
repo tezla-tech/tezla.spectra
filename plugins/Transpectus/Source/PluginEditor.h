@@ -63,6 +63,12 @@ public:
         warning_ = warn;
     }
 
+    /// The worst correlation seen since the last reset, drawn as a held tick
+    /// in the hold colour -- the single worst moment for mono compatibility,
+    /// which is the actionable number. Feed it anything above 0.995 to hide
+    /// the tick (nothing bad has happened yet).
+    void setHeldMinimum (float minimum) noexcept { heldMinimum_ = minimum; }
+
     void setCaption (juce::String caption) { caption_ = std::move (caption); }
 
     void paint (juce::Graphics&) override;
@@ -71,6 +77,7 @@ private:
     ui::Palette palette_;
     juce::String caption_;
     float correlation_ { 1.0f };
+    float heldMinimum_ { 1.0f };
     bool warning_ { false };
 };
 
@@ -91,6 +98,14 @@ public:
     /// Folds the latest capture onto the display bins. Returns true if there
     /// was anything new to draw.
     bool update (const dsp::SpectrumCapture& capture);
+
+    /// Rebuilds the analyser when the host rate or the Resolution choice has
+    /// actually changed; a no-op otherwise, so the timer can call it every
+    /// tick. This is ALSO the fix for a shipped bug: the analyser used to be
+    /// prepared at 48 kHz once in the constructor and never again, so at a
+    /// 96 kHz session every frequency on the spectrum read at half its true
+    /// value -- the crosshair's note names included.
+    void applyConfiguration (double sampleRate, int resolutionChoice);
 
     void setShowPinkSlope (bool shouldShow);
     void setShowDifference (bool shouldShow);
@@ -149,6 +164,12 @@ private:
     std::vector<float>& peakHold_;
 
     dsp::SpectrumAnalyser analyser_;
+
+    /// What the analyser is currently built for, so applyConfiguration can
+    /// tell a real change from a timer tick. Rate held as integer hertz --
+    /// host rates are whole numbers, and it spares a float comparison.
+    int configuredRateHz_ { 0 };
+    int configuredResolution_ { -1 };
 
     std::vector<double> difference_;
 
@@ -263,6 +284,7 @@ private:
 
     juce::TextButton spectrumMaxButton_, spectrumPopButton_;
     juce::TextButton goniometerMaxButton_, goniometerPopButton_;
+    juce::TextButton resetImageButton_ { "RESET IMAGE" };
 
     /// Declared after the components they hold, so ordinary member destruction
     /// tears the windows down first -- tidy rather than required; see the
@@ -280,6 +302,9 @@ private:
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::ToggleButton pinkButton_ { "Pink slope" };
     juce::ToggleButton differenceButton_ { "Difference" };
+
+    juce::ComboBox resolutionBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> resolutionAttachment_;
     juce::ToggleButton peakHoldButton_ { "Peak hold" };
     juce::TextButton resetPeaksButton_ { "RESET PEAKS" };
 

@@ -187,6 +187,28 @@ It holds **50 ms at every sample rate**, sized in seconds rather than samples,
 and strides to keep its point count — so the picture spans the same slice of
 time at 192 kHz as at 44.1.
 
+### The image hold
+
+Fifty milliseconds answers *what is the image doing*; two held readings answer
+*what is the worst it has done*, which is the question a mono-compatibility
+decision actually asks:
+
+- **The excursion outline** — a violet ghost tracing the furthest the image
+  has reached in each of 72 directions since the last **RESET IMAGE**. The
+  same interaction as the spectrum's violet hold: make a width move, clear,
+  play the section back, and see what the new worst case is. It lives on the
+  processor, so it survives closing the window.
+- **The worst-correlation ticks** — a violet tick on each correlation bar at
+  the *minimum* it has seen, overall and in the low band, with the figure
+  printed under it. Held in the **engine** against its 400 ms sliding window,
+  so it keeps accumulating with the editor closed and nothing audible can slip
+  between screen redraws. The test drives correlation from +1 to −1 and back
+  and asserts the live reading recovers while the held one does not, until
+  cleared.
+
+**RESET IMAGE** clears both; **RESET MEASUREMENT** clears them along with
+everything else held.
+
 ---
 
 ## The spectrum, and the two honest references
@@ -217,6 +239,32 @@ decorative:
 
 **Difference** then draws live-minus-reference, which states the EQ move
 directly instead of leaving it to be eyeballed.
+
+### Resolution: two transforms, each where it is good
+
+The **Resolution** control (default **Fine**) decides what the transform can
+actually separate, and the numbers are the argument:
+
+| mode | transform | resolution at 48 kHz | window |
+|---|---|---|---|
+| Fast | one 2048-point | 23.4 Hz | 43 ms |
+| Balanced | one 4096-point | 11.7 Hz | 85 ms |
+| **Fine** | 2048 above 500 Hz, **16384 below** | 23.4 / **2.9 Hz** | 43 / 341 ms |
+
+23.4 Hz is wider than a whole tone anywhere below 770 Hz, so in Fast mode the
+sub octave reads as one plateau — measured, a 45 Hz and a 60 Hz tone (a bass
+line moving a fourth) drew a flat line from 31 to 98 Hz. In Fine they draw two
+peaks with a valley 15 dB deep between them, and the region above 500 Hz keeps
+the fast window, so the top still moves at transient speed. The two transforms
+are identically calibrated and crossfaded as power over the octave around
+500 Hz, so a tone inside the seam keeps its level (asserted within 0.3 dB).
+The honest limit: a Hann mainlobe is four transform bins, 11.7 Hz — so Fine
+resolves fourths at the bottom of the sub octave, whole tones from about
+G2, and semitones from about 200 Hz. The long window is a third of a second
+of audio; the bass region breathes at bass-note speed, which is the price of
+seeing pitch down there and the reason the top does not pay it.
+
+Fast is the original single-transform display, kept for anyone who wants it.
 
 ### The permanent peak hold
 

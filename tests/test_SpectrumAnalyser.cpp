@@ -324,3 +324,197 @@ TEZLA_TEST (spectrum_falls_gradually_and_rises_at_once)
     // The peak hold falls more slowly, so it is still above the trace.
     CHECK (analyser.getPeaksDb()[loud.first] >= afterEight);
 }
+
+// ---------------------------------------------------------------------------
+// The bass transform (B1): two resolutions, each where it is good
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Two steady tones through a capture large enough for the long window,
+/// with or without the bass transform configured.
+SpectrumAnalyser analyseTwoTones (double hzA, double hzB, double rate, bool bass)
+{
+    SpectrumCapture capture;
+    capture.prepare (1 << 15);
+
+    SpectrumAnalyser analyser;
+    analyser.prepare (rate, 11, 128);
+
+    if (bass)
+        analyser.setBassTransform (14, 500.0);
+
+    const int blockSize = 1024;
+    std::vector<double> block (static_cast<std::size_t> (blockSize));
+    std::size_t n = 0;
+
+    for (int frame = 0; frame < 48; ++frame)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const auto t = static_cast<double> (n++) / rate;
+            block[static_cast<std::size_t> (i)] =
+                0.5 * std::sin (2.0 * std::numbers::pi * hzA * t)
+              + 0.5 * std::sin (2.0 * std::numbers::pi * hzB * t);
+        }
+
+        capture.push (block.data(), blockSize);
+        analyser.update (capture);
+    }
+
+    return analyser;
+}
+
+/// How deeply the display separates two tones: the lower of the two local
+/// peaks minus the deepest bin between them. A smear reads ~0.
+float toneSeparation (const SpectrumAnalyser& analyser, double hzA, double hzB)
+{
+    const auto& bins = analyser.getMagnitudesDb();
+
+    const auto binNear = [&] (double hz)
+    {
+        std::size_t best = 0;
+        double bestError = 1.0e9;
+
+        for (std::size_t i = 0; i < bins.size(); ++i)
+        {
+            const double error = std::abs (std::log (analyser.getBinFrequency (i) / hz));
+            if (error < bestError)
+            {
+                bestError = error;
+                best = i;
+            }
+        }
+
+        return best;
+    };
+
+    // The peak may sit a bin or two off the nominal spot; search locally.
+    const auto peakAround = [&] (std::size_t centre)
+    {
+        std::size_t best = centre;
+
+        for (std::size_t i = centre >= 2 ? centre - 2 : 0;
+             i <= centre + 2 && i < bins.size(); ++i)
+            if (bins[i] > bins[best])
+                best = i;
+
+        return best;
+    };
+
+    const std::size_t peakA = peakAround (binNear (hzA));
+    const std::size_t peakB = peakAround (binNear (hzB));
+
+    if (peakA >= peakB)
+        return 0.0f;
+
+    float valley = 1.0e9f;
+
+    for (std::size_t i = peakA + 1; i < peakB; ++i)
+        valley = std::min (valley, bins[i]);
+
+    return std::min (bins[peakA], bins[peakB]) - valley;
+}
+
+} // namespace
+
+TEZLA_TEST (the_bass_transform_resolves_what_the_short_one_smears)
+{
+    // 45 and 60 Hz -- a bass line moving a fourth at the bottom of the sub
+    // octave, the interval that carries most of this music. The short
+    // window's 23.4 Hz bins smear the whole region into one plateau (the
+    // probe read a flat -0.18 dB from 31 Hz to 98); the 16384-point bass
+    // transform resolves 2.9 Hz and pulls them apart.
+    //
+    // The limit is the window, not wishfulness: a Hann mainlobe is four
+    // transform bins wide, 11.7 Hz here, so a whole tone at A1 (10 Hz of
+    // separation) can never valley deeply at this order -- and doubling the
+    // order again would mean two thirds of a second of audio, half a bar of
+    // jungle. A fourth resolves; state the capability honestly.
+    const auto smeared = analyseTwoTones (45.0, 60.0, 48000.0, false);
+    const auto resolved = analyseTwoTones (45.0, 60.0, 48000.0, true);
+
+    CHECK (resolved.wasBassUsed());
+
+    const float without = toneSeparation (smeared, 45.0, 60.0);
+    const float with = toneSeparation (resolved, 45.0, 60.0);
+
+    // Measured: 0.0 dB of separation without the bass transform; 15.0 dB
+    // with it (peaks -6.1, the valley between them -21.2).
+    CHECK (without < 1.0f);
+    CHECK (with > 10.0f);
+}
+
+TEZLA_TEST (the_seam_keeps_its_level)
+{
+    // A full-scale sine must read 0 dBFS on both sides of the split AND
+    // anywhere inside the crossfade octave -- the blend is done as power on
+    // two identically calibrated transforms, so any blend of agreeing
+    // readings has to agree. A weight error (anything where the two halves
+    // do not sum to one) dips exactly here and nowhere else.
+    for (const double frequency : { 260.0, 355.0, 430.0, 500.0, 580.0, 700.0, 900.0 })
+    {
+        SpectrumCapture capture;
+        capture.prepare (1 << 15);
+
+        SpectrumAnalyser analyser;
+        analyser.prepare (48000.0, 11, 128);
+        analyser.setBassTransform (14, 500.0);
+
+        const int blockSize = 1024;
+        std::vector<double> block (static_cast<std::size_t> (blockSize));
+        std::size_t n = 0;
+
+        for (int frame = 0; frame < 48; ++frame)
+        {
+            for (int i = 0; i < blockSize; ++i)
+                block[static_cast<std::size_t> (i)] =
+                    std::sin (2.0 * std::numbers::pi * frequency
+                              * static_cast<double> (n++) / 48000.0);
+
+            capture.push (block.data(), blockSize);
+            analyser.update (capture);
+        }
+
+        CHECK_NEAR (loudestBin (analyser).second, 0.0f, 0.3f);
+    }
+}
+
+TEZLA_TEST (the_top_is_untouched_by_the_bass_transform)
+{
+    // Above the crossfade the long transform has no say at all: identical
+    // input with and without it must produce bit-identical readings there.
+    const auto plain = analyseTwoTones (2000.0, 5000.0, 48000.0, false);
+    const auto twoBand = analyseTwoTones (2000.0, 5000.0, 48000.0, true);
+
+    const auto& a = plain.getMagnitudesDb();
+    const auto& b = twoBand.getMagnitudesDb();
+
+    bool identical = true;
+
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (plain.getBinFrequency (i) > 500.0 * std::numbers::sqrt2 * 1.05)
+            identical = identical && a[i] == b[i];
+
+    CHECK (identical);
+}
+
+TEZLA_TEST (a_capture_too_short_for_the_long_window_degrades_visibly)
+{
+    // The long transform needs 16384 samples; a capture holding 4096 cannot
+    // feed it. The short path must carry on -- and wasBassUsed() must say
+    // what happened, because a silent fallback is an invisible lie about
+    // the resolution on screen.
+    SpectrumCapture capture;
+    capture.prepare (4096);
+
+    SpectrumAnalyser analyser;
+    analyser.prepare (48000.0, 11, 128);
+    analyser.setBassTransform (14, 500.0);
+
+    std::vector<double> block (4096, 0.25);
+    capture.push (block.data(), 4096);
+
+    CHECK (analyser.update (capture));
+    CHECK (! analyser.wasBassUsed());
+}

@@ -62,6 +62,7 @@ void Engine::reset()
 
     truePeakDb_.store (kFloorDb, std::memory_order_relaxed);
     shortTruePeakDb_.store (kFloorDb, std::memory_order_relaxed);
+    resetCorrelationHold();
 }
 
 void Engine::setParameters (const Parameters& parameters)
@@ -82,6 +83,7 @@ void Engine::resetMeasurement() noexcept
     loudness_.resetIntegration();
     truePeakDb_.store (kFloorDb, std::memory_order_relaxed);
     shortTruePeakDb_.store (kFloorDb, std::memory_order_relaxed);
+    resetCorrelationHold();
 }
 
 void Engine::process (const double* const* channels, int numChannels, int numSamples) noexcept
@@ -98,7 +100,20 @@ void Engine::process (const double* const* channels, int numChannels, int numSam
     loudness_.process (channels, active, numSamples);
 
     if (active >= 2)
+    {
         stereo_.process (channels, active, numSamples);
+
+        // The worst moment, held. Plain loads and stores: the audio thread
+        // is the only writer, and a display race costs one stale frame.
+        const double correlation = stereo_.getCorrelation();
+        const double low = stereo_.getBandCorrelation (dsp::StereoAnalyser::low);
+
+        if (correlation < minCorrelation_.load (std::memory_order_relaxed))
+            minCorrelation_.store (correlation, std::memory_order_relaxed);
+
+        if (low < minLowCorrelation_.load (std::memory_order_relaxed))
+            minLowCorrelation_.store (low, std::memory_order_relaxed);
+    }
 
     // The scope takes whatever it is given: a mono input draws the 45-degree
     // line a mono signal is, rather than nothing.

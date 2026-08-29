@@ -117,6 +117,20 @@ whole engine costs about 3% of a core at all 64 voices. Sanskrit
 *svara-yantra*, "the note-machine", स्वरयन्त्र in its own header. See
 [its README](plugins/Svarayantra/README.md).
 
+**[Ferrite](plugins/Ferrite/)** is the tape machine: Jiles–Atherton hysteresis
+solved per sample inside the oversampler, the closed-form wavelength losses
+(spacing, thickness, gap) turned into a minimum-phase filter at the actual tape
+speed, the head-contact bump, and a transport whose flutter is a published fit
+of a real machine and whose wow drifts through a mean-reverting random walk —
+motion, not vibrato. Its thesis is that **the level is the drive**: there is no
+distortion knob on a tape machine, and measured, THD climbs from −49 dB at
+−20 dBFS on the tape to −21.5 dB at 0 dBFS while the measured auto-trim holds
+the output within 0.03 dB. The hiss control is calibrated so its number *is*
+the noise floor in dBFS, off is bit-exact absence, both channels wobble as one
+tape while their hiss stays per-track, and the mix's dry path and the bypass
+are both latency-matched to the sample. See
+[its README](plugins/Ferrite/README.md).
+
 ---
 
 ## Status
@@ -130,8 +144,9 @@ whole engine costs about 3% of a core at all 64 voices. Sanskrit
 | **[Anvil](plugins/Anvil/)** | Valve amplifier, speaker load and cabinet, from the mechanisms | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Sonitus](plugins/Sonitus/)** | **Instrument** — growl and reese synthesiser: hard sync, unison, a controllable comb, Scala microtuning | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Svarayantra](plugins/Svarayantra/)** | **Instrument** — microtuned SoundFont player: the tuning engine applied to samples | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Ferrite](plugins/Ferrite/)** | Tape machine — hysteresis, wavelength losses, head bump, wow and flutter, calibrated hiss | v0.1.0 — 47/47 on Steinberg's validator |
 
-707 framework-free DSP tests pass on Linux x86-64, which is where development
+746 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS

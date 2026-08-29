@@ -92,8 +92,22 @@ void SpectrumDisplay::mouseExit (const juce::MouseEvent&)
 
 void SpectrumDisplay::prepare (double sampleRate, int fftOrder, int numBins)
 {
-    inputAnalyser_.prepare (sampleRate, fftOrder, numBins, lowHz_, highHz_);
-    outputAnalyser_.prepare (sampleRate, fftOrder, numBins, lowHz_, highHz_);
+    // Cheap when nothing changed, so the editor's timer can push the host's
+    // current rate every tick -- which is the fix for the display silently
+    // keeping its construction-time rate after the host switches: at 96 kHz
+    // that put every curve an octave out.
+    const int rateHz = juce::roundToInt (sampleRate > 0.0 ? sampleRate : 44100.0);
+
+    if (ready_ && rateHz == preparedRateHz_ && fftOrder == preparedOrder_
+        && numBins == preparedBins_)
+        return;
+
+    preparedRateHz_ = rateHz;
+    preparedOrder_ = fftOrder;
+    preparedBins_ = numBins;
+
+    inputAnalyser_.prepare (sampleRate, fftOrder, numBins, requestedLowHz_, requestedHighHz_);
+    outputAnalyser_.prepare (sampleRate, fftOrder, numBins, requestedLowHz_, requestedHighHz_);
 
     // The top of the display cannot exceed Nyquist, and at 44.1 kHz a 20 kHz
     // axis does. Take the range the analyser actually settled on rather than the

@@ -787,6 +787,12 @@ void HaloEditor::timerCallback()
                                       state.getRawParameterValue (ids::ceilingOn)->load() > 0.5f,
                                       state.getRawParameterValue (ids::ceilingHz)->load());
         spectrum_->setDimmed (state.getRawParameterValue (ids::bypass)->load() > 0.5f);
+
+        // Follows the host if it changes rate while the editor is open --
+        // prepare() is a no-op when nothing moved.
+        if (halo_.getSampleRate() > 0.0)
+            spectrum_->prepare (halo_.getSampleRate());
+
         spectrum_->update (halo_.getInputCapture(), halo_.getOutputCapture());
     }
 }
