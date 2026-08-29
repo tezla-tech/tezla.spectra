@@ -36,6 +36,7 @@ something else in the meantime:
 
 | Name | Code | Intended for |
 |------|------|--------------|
+| `Malleus` | `Tzml` | **Instrument** — the impossible-object percussion synthesiser: modal physical modelling (bar/membrane/plate/bell tables derived from the physics), morphable material, Overtone Lock (partials quantised onto the loaded tuning), mallet/pluck/bow/roll exciters, per-hit tension drop, sympathetic bank, vactrol LPG. Plan: [`Malleus/PLAN.md`](Malleus/PLAN.md) |
 | `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
 
 ---

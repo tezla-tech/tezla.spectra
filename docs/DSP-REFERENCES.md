@@ -611,6 +611,30 @@ generators, the engine) is derived and pinned by measurement, per section 9.
 
 ---
 
+## Physical modelling -- Malleus
+
+The modal percussion instrument. The rule of section 9 applied here: the mode
+mathematics is derived and pinned by test; the two things measurement cannot
+check -- an empirical partial recipe and a published component behaviour --
+are taken from the literature and say so.
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| Free-free bar mode equation, cos x cosh x = 1 (Euler-Bernoulli beam theory) | mathematics, no licence | Bar mode ratios 1 : 2.756 : 5.404 : 8.933, root-found in-house at design time and pinned against the classic figures in `tests/test_ModeShapes.cpp` |
+| Circular membrane modes = zeros of Bessel J_m (classical acoustics) | mathematics, no licence | Membrane ratio table, computed in-house via `std::cyl_bessel_j` bisection at design time, pinned against 2.405 / 3.832 / 5.136 / 5.520 |
+| Stiff string f_n = n sqrt(1 + B n^2) (piano inharmonicity, standard result) | mathematics, no licence | The String end of the Material morph and the Stretch control's physical anchor |
+| Julius O. Smith, *Physical Audio Signal Processing* (online book, ccrma.stanford.edu) | freely readable; **not fetched from this container** -- the two-pole resonator formulation used is standard textbook DSP and is derived and measured here rather than transcribed | `ModalResonator`'s per-mode resonator and the modal-synthesis framing |
+| N. H. Fletcher & T. D. Rossing, *The Physics of Musical Instruments* (Springer) | book; **not read first-hand from this container** | The church bell's minor-third partial series (hum 1/2, prime 1, tierce 1.2, quint 1.5, nominal 2, ...) -- an empirical founders' profile with no closed form, trusted through the standard organology literature and marked as such at the point of use. Everything else those chapters cover is derived instead |
+| McIntyre & Woodhouse's bow-friction family (hyperbolic stick-slip curve; DAFx/JASA literature) | papers; **not fetched from this container** (dafx.de refused at the network layer) | The Bow exciter's friction curve *shape*. The implementation is built from the standard curve form and then measured -- onset map, boundedness sweep -- rather than transcribed; if the papers become available the curve constants should be revisited against them |
+| Vactrol (LED + LDR) behaviour: fast light-on, slow nonlinear dark-decay | physics of a component, modelled from the mechanism per section 2.1 | `LowpassGate` -- the west-coast low-pass gate |
+
+The membrane, bar and plate tables, the morph, and the Overtone Lock quantise
+are all checkable by measurement, so per section 9 they are **built, not
+taken**: the tests pin the low-mode values every acoustics text agrees on,
+which is the copy-proof kind of citation.
+
+---
+
 ## Products referenced as sonic targets only
 
 Named in this repository to describe a *sound* or a *workflow*. No binary has
