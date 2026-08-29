@@ -405,6 +405,30 @@ void SpectrumView::paintCrosshair (juce::Graphics& g, juce::Rectangle<float> are
     }
 }
 
+void SpectrumView::applyConfiguration (double sampleRate, int resolutionChoice)
+{
+    const int rateHz = juce::roundToInt (sampleRate > 0.0 ? sampleRate : 48000.0);
+    const int resolution = juce::jlimit (0, 2, resolutionChoice);
+
+    if (rateHz == configuredRateHz_ && resolution == configuredResolution_)
+        return;
+
+    configuredRateHz_ = rateHz;
+    configuredResolution_ = resolution;
+
+    // Fast is the original single 2048-point transform; Balanced doubles it;
+    // Fine keeps the responsive short window for the top and adds a
+    // 16384-point transform below 500 Hz -- 2.9 Hz of resolution where the
+    // short window's 23.4 smeared the whole sub octave into one plateau.
+    analyser_.prepare (static_cast<double> (rateHz), resolution == 1 ? 12 : 11,
+                       TranspectusProcessor::kSpectrumBins, kLowHz, kHighHz);
+
+    if (resolution == 2)
+        analyser_.setBassTransform (14, 500.0);
+
+    analyser_.setBallistics (1.6f, 0.28f);
+}
+
 bool SpectrumView::update (const dsp::SpectrumCapture& capture)
 {
     if (! analyser_.update (capture))
@@ -1173,6 +1197,25 @@ void TranspectusEditor::buildControls()
     resetPeaksButton_.onClick = [this] { spectrum_->resetPeakHold(); };
     addAndMakeVisible (resetPeaksButton_);
 
+    resolutionBox_.addItemList (choices::resolution, 1);
+    resolutionBox_.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.15f));
+    resolutionBox_.setColour (juce::ComboBox::textColourId, palette_.text);
+    resolutionBox_.setColour (juce::ComboBox::outlineColourId, palette_.panel.brighter (0.3f));
+    resolutionBox_.setTooltip ("How finely the transform resolves, and what each setting costs "
+                               "in time. Fast is one 2048-point window: 43 ms of audio, 23 Hz "
+                               "of resolution at 48 kHz -- it cannot separate a whole tone "
+                               "below 770 Hz, and the sub octave reads as one plateau. "
+                               "Balanced doubles the window. Fine keeps the fast window for "
+                               "the top and adds a 16384-point one below 500 Hz: 2.9 Hz of "
+                               "resolution down there, so a bass line moving a fourth shows "
+                               "as two peaks 15 dB apart where Fast showed a flat line. The "
+                               "price is honesty about time -- the long window is a third of "
+                               "a second, so the bass region breathes at bass-note speed "
+                               "rather than transient speed.");
+    resolutionAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        transpectus_.getState(), ids::resolution, resolutionBox_);
+    addAndMakeVisible (resolutionBox_);
+
     statusLabel_.setJustificationType (juce::Justification::centred);
     statusLabel_.setColour (juce::Label::textColourId, palette_.dimText);
     statusLabel_.setFont (juce::FontOptions (11.5f));
@@ -1256,6 +1299,15 @@ void TranspectusEditor::timerCallback()
 
     goniometer_->update (engine.getStereoScope());
     goniometer_->repaint();
+
+    // Track the host rate and the Resolution choice every tick -- a no-op
+    // when nothing changed, a rebuild when it did. Before this, the analyser
+    // stayed at its construction-time 48 kHz forever, and a 96 kHz session
+    // read every frequency at half its true value.
+    spectrum_->applyConfiguration (
+        transpectus_.getSampleRate(),
+        juce::roundToInt (transpectus_.getState()
+                              .getRawParameterValue (ids::resolution)->load()));
 
     // Fold the latest window onto the display bins, then feed the capture if
     // one is running -- in that order, so the capture sees the same frame the
@@ -1614,6 +1666,8 @@ void TranspectusEditor::layOutSpectrumControls (juce::Rectangle<int> row)
         peakHoldButton_.setBounds (strip.removeFromLeft (98));
         strip.removeFromLeft (6);
         resetPeaksButton_.setBounds (strip.removeFromLeft (110).withSizeKeepingCentre (110, 22));
+        strip.removeFromLeft (6);
+        resolutionBox_.setBounds (strip.removeFromLeft (96).withSizeKeepingCentre (96, 22));
     };
 
     if (row.getHeight() >= 40)

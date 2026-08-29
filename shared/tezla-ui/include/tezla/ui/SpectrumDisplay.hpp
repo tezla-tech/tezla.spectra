@@ -104,6 +104,17 @@ private:
 
     double lowHz_    { 20.0 };
     double highHz_   { 20000.0 };
+
+    /// What the analysers were last built for, so prepare() can be called
+    /// from a timer and cost nothing when the host rate has not moved. The
+    /// requested axis is kept separately from the settled lowHz_/highHz_
+    /// above: rebuilding from the settled values would creep the axis by
+    /// half a bin per rebuild.
+    int    preparedRateHz_ { 0 };
+    int    preparedOrder_  { 0 };
+    int    preparedBins_   { 0 };
+    double requestedLowHz_  { 20.0 };
+    double requestedHighHz_ { 20000.0 };
     double focusHz_  { 3000.0 };
     bool   aboveMode_ { true };
 

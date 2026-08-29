@@ -28,6 +28,7 @@ inline constexpr auto target      = "target";
 inline constexpr auto truePeak    = "truePeak";
 inline constexpr auto monoCheckHz = "monoCheckHz";
 inline constexpr auto bypass      = "bypass";
+inline constexpr auto resolution  = "resolution";   // appended at schema v2
 } // namespace ids
 
 namespace choices
@@ -38,6 +39,11 @@ namespace choices
 [[nodiscard]] juce::StringArray targetNames();
 
 inline const juce::StringArray truePeak { "Off", "Standard", "Strict" };
+
+/// Spectrum resolution. Fast is one 2048-point transform (the original
+/// behaviour); Balanced one 4096; Fine adds a 16384-point transform below
+/// 500 Hz, crossfaded in -- sharp bass and a responsive top at once.
+inline const juce::StringArray resolution { "Fast", "Balanced", "Fine" };
 } // namespace choices
 
 class TranspectusProcessor final : public juce::AudioProcessor

@@ -92,6 +92,14 @@ public:
     /// was anything new to draw.
     bool update (const dsp::SpectrumCapture& capture);
 
+    /// Rebuilds the analyser when the host rate or the Resolution choice has
+    /// actually changed; a no-op otherwise, so the timer can call it every
+    /// tick. This is ALSO the fix for a shipped bug: the analyser used to be
+    /// prepared at 48 kHz once in the constructor and never again, so at a
+    /// 96 kHz session every frequency on the spectrum read at half its true
+    /// value -- the crosshair's note names included.
+    void applyConfiguration (double sampleRate, int resolutionChoice);
+
     void setShowPinkSlope (bool shouldShow);
     void setShowDifference (bool shouldShow);
     void setShowPeakHold (bool shouldShow);
@@ -149,6 +157,12 @@ private:
     std::vector<float>& peakHold_;
 
     dsp::SpectrumAnalyser analyser_;
+
+    /// What the analyser is currently built for, so applyConfiguration can
+    /// tell a real change from a timer tick. Rate held as integer hertz --
+    /// host rates are whole numbers, and it spares a float comparison.
+    int configuredRateHz_ { 0 };
+    int configuredResolution_ { -1 };
 
     std::vector<double> difference_;
 
@@ -280,6 +294,9 @@ private:
     std::unique_ptr<juce::FileChooser> chooser_;
     juce::ToggleButton pinkButton_ { "Pink slope" };
     juce::ToggleButton differenceButton_ { "Difference" };
+
+    juce::ComboBox resolutionBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> resolutionAttachment_;
     juce::ToggleButton peakHoldButton_ { "Peak hold" };
     juce::TextButton resetPeaksButton_ { "RESET PEAKS" };
 
