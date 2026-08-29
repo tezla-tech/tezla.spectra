@@ -595,6 +595,22 @@ structure and measured (CLAUDE.md section 9's rule, both halves).
 
 ---
 
+## Tape machines -- Ferrite
+
+| Source | Licence | Access | Used for |
+|---|---|---|---|
+| Jatin Chowdhury, "Real-time Physical Modelling for Analog Tape Machines", DAFx-19 | paper (LaTeX source ships in the GPLv3 repo below) | **read first-hand, in full** -- dafx.de and arxiv.org are proxy-blocked, but the author includes the paper's LaTeX in the repository; copy in `technical references/ferrite/` | the whole model: Karlqvist record head collapsing to H = NEI/g, the Jiles-Atherton dM/dt form with Langevin guards, trapezoidal H-dot recursion, tanh continued fraction, physical tape constants (Ms 3.5e5 A/m, k 27 kA/m, a 22 kA/m, c 0.17, alpha 1.6e-3), the playback loss product e^(-kd)(1-e^(-k delta))/(k delta) sinc(kg/2), TC-260 bias practice, the pulse-train flutter characterization |
+| AnalogTapeModel (CHOW Tape Model), jatinchowdhury18 | GPL-3.0 (compatible with AGPL-3.0-only via GPLv3 s13) | full source read; key files copied to `technical references/ferrite/` with the repo LICENSE | the production decisions the paper predates: normalized J-A (Ms ~ 1, k 0.47875), the musical mapping drive->a, sat->Ms, bias->c (taken with attribution), Newton-Raphson with analytic dM/dt-prime and Talpha = T/1.9, per-solver input clamps and blow-up guards, bias-as-parameter (no carrier) in the default mode, loss FIR by frequency sampling with its 20 Hz wavenumber floor, the head-bump peak rule f = v*0.0254/(gap*500), TC-260 flutter partials (f, 2f, 3f at -230/-80/-99 us, phases 0, 13pi/4, -pi/10, centre +350 us), wow's Ornstein-Uhlenbeck amplitude process |
+| Jiles & Atherton 1986; Jiles 1992; Bertram, *Theory of Magnetic Recording*; Camras, *Magnetic Recording Handbook* | papers/books | **not read** -- cited through the DAFx paper only | the provenance of the physical constants; every number used here is quoted from the DAFx paper's own citations of them |
+
+What Ferrite copies is confined to knowledge measurement cannot verify --
+the equation, the fitted constants, the flutter partial set, the mapping
+structure -- each attributed at the point of use. Everything with observable
+behaviour (the solver, parameter ranges, the minimum-phase loss design, the
+generators, the engine) is derived and pinned by measurement, per section 9.
+
+---
+
 ## Products referenced as sonic targets only
 
 Named in this repository to describe a *sound* or a *workflow*. No binary has
