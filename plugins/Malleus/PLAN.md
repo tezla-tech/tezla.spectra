@@ -132,20 +132,26 @@ CLAUDE.md.
 
 | phase | status |
 |---|---|
-| M0 plan + references + registry | done (this commit) |
+| M0 plan + references + registry | done |
 | M1 ModalResonator | done |
 | M2 ModeShapes + Overtone Lock | done |
 | M3 exciters | done |
 | M4 bow | done |
-| M5 LowpassGate | pending |
-| M6 Drop + SympatheticBank | pending |
-| M7 voice + engine | pending |
-| M8 JUCE layer + presets | pending |
-| M9 editor | pending |
-| M10 close-out | pending |
+| M5 LowpassGate | done |
+| M6 Drop + SympatheticBank | done |
+| M7 voice + engine | done |
+| M8 JUCE layer + presets | done |
+| M9 editor | done |
+| M10 close-out | done |
 
-**To resume**: read CLAUDE.md in full, then this file; take the first
-`pending` phase. The non-negotiables that every phase here has honoured, in
+**Every phase is done.** Malleus ships at v0.1.0: it builds, it passes
+Steinberg's validator 47/47, and `tezla-measure malleus` reports its numbers.
+What has *not* happened is the acceptance test — nobody has played it in FL
+Studio on the rig it was written for. Anything further starts from what the
+user's ears say there.
+
+**To resume** (if a phase is ever reopened): read CLAUDE.md in full, then this
+file; take the first `pending` phase. The non-negotiables that every phase here has honoured, in
 one place:
 
 - One phase = one commit. Tests written and RUN in that commit; every

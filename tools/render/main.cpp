@@ -153,6 +153,40 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
     {
         juce::String id { argv[i] };
 
+        // "<parameterId>=<value>" sets a parameter before anything is drawn,
+        // so an editor can be photographed in a STATE rather than only at its
+        // defaults. A display whose whole job is to show what a control does
+        // cannot be checked at one setting: the picture that matters is the
+        // difference between two.
+        if (id.contains ("=") && ! id.startsWith ("audio:"))
+        {
+            const auto name = id.upToFirstOccurrenceOf ("=", false, false);
+            const auto text = id.fromFirstOccurrenceOf ("=", false, false);
+
+            auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (
+                [&]() -> juce::AudioProcessorParameter*
+                {
+                    for (auto* candidate : processor.getParameters())
+                        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (candidate))
+                            if (ranged->paramID == name)
+                                return ranged;
+
+                    return nullptr;
+                }());
+
+            if (parameter == nullptr)
+            {
+                std::fprintf (stderr, "no parameter called '%s'\n", name.toRawUTF8());
+                return 2;
+            }
+
+            parameter->setValueNotifyingHost (
+                parameter->convertTo0to1 (text.getFloatValue()));
+
+            std::printf ("  %s = %s\n", name.toRawUTF8(), text.toRawUTF8());
+            continue;
+        }
+
         // "audio:<seconds>" runs the tool's own test signal through the
         // processor, so a display has something in it. Without this every
         // spectrum photographed here is a flat line at its floor, which is
@@ -525,7 +559,7 @@ int main (int argc, char** argv)
                      "       tezla-render params\n"
                      "       tezla-render editor [componentId | id@x,y | hit:id | shot:out.png\n"
                      "                            | audio:secs[@gain] | tick:n | size:WxH\n"
-                     "                            | reopen ...]\n");
+                     "                            | id=value | reopen ...]\n");
         return 2;
     }
 
