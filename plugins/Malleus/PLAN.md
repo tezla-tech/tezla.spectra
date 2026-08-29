@@ -135,7 +135,7 @@ CLAUDE.md.
 | M0 plan + references + registry | done (this commit) |
 | M1 ModalResonator | done |
 | M2 ModeShapes + Overtone Lock | done |
-| M3 exciters | pending |
+| M3 exciters | done |
 | M4 bow | pending |
 | M5 LowpassGate | pending |
 | M6 Drop + SympatheticBank | pending |
