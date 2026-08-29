@@ -187,6 +187,28 @@ It holds **50 ms at every sample rate**, sized in seconds rather than samples,
 and strides to keep its point count — so the picture spans the same slice of
 time at 192 kHz as at 44.1.
 
+### The image hold
+
+Fifty milliseconds answers *what is the image doing*; two held readings answer
+*what is the worst it has done*, which is the question a mono-compatibility
+decision actually asks:
+
+- **The excursion outline** — a violet ghost tracing the furthest the image
+  has reached in each of 72 directions since the last **RESET IMAGE**. The
+  same interaction as the spectrum's violet hold: make a width move, clear,
+  play the section back, and see what the new worst case is. It lives on the
+  processor, so it survives closing the window.
+- **The worst-correlation ticks** — a violet tick on each correlation bar at
+  the *minimum* it has seen, overall and in the low band, with the figure
+  printed under it. Held in the **engine** against its 400 ms sliding window,
+  so it keeps accumulating with the editor closed and nothing audible can slip
+  between screen redraws. The test drives correlation from +1 to −1 and back
+  and asserts the live reading recovers while the held one does not, until
+  cleared.
+
+**RESET IMAGE** clears both; **RESET MEASUREMENT** clears them along with
+everything else held.
+
 ---
 
 ## The spectrum, and the two honest references

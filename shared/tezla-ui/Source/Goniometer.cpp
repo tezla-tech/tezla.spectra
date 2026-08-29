@@ -48,6 +48,38 @@ void Goniometer::update (const dsp::StereoScope& scope)
     }
 
     filled_ = points;
+
+    // Fold the same points into the excursion hold, radius clamped to the
+    // drawn square exactly as the trail is, so the outline can never sit
+    // outside what the scatter could have shown.
+    if (excursionHold_ != nullptr
+        && excursionHold_->size() == static_cast<std::size_t> (kHoldSectors))
+    {
+        auto& hold = *excursionHold_;
+
+        for (int i = 0; i < points; ++i)
+        {
+            const auto index = static_cast<std::size_t> (i);
+            const float px = juce::jlimit (-1.0f, 1.0f, x_[index]);
+            const float py = juce::jlimit (-1.0f, 1.0f, y_[index]);
+            const float r = std::sqrt (px * px + py * py);
+
+            if (r < 1.0e-4f)
+                continue;
+
+            const double angle = std::atan2 (static_cast<double> (py),
+                                             static_cast<double> (px))
+                                   + juce::MathConstants<double>::pi;
+
+            const int sector = juce::jlimit (0, kHoldSectors - 1,
+                static_cast<int> (angle / juce::MathConstants<double>::twoPi
+                                  * kHoldSectors));
+
+            hold[static_cast<std::size_t> (sector)] =
+                juce::jmax (hold[static_cast<std::size_t> (sector)],
+                            juce::jmin (r, 1.0f));
+        }
+    }
 }
 
 void Goniometer::paint (juce::Graphics& g)
@@ -137,6 +169,52 @@ void Goniometer::paint (juce::Graphics& g)
         g.drawText ("S", square.withSizeKeepingCentre (16.0f, 12.0f)
                               .withY (square.getBottom() - 13.0f),
                     juce::Justification::centred);
+    }
+
+    // ---- the excursion hold --------------------------------------------------
+    //
+    // The widest the image has ever been, per direction, until cleared. Drawn
+    // before the trail so the live motion sits on top of its own history.
+    if (excursionHold_ != nullptr
+        && excursionHold_->size() == static_cast<std::size_t> (kHoldSectors))
+    {
+        const auto& hold = *excursionHold_;
+
+        juce::Path outline;
+        bool open = false;
+
+        // Segments rather than one closed polygon: sectors nothing has
+        // reached yet stay blank instead of snapping the outline to the
+        // centre, which matters in the first seconds after a reset.
+        for (int sector = 0; sector <= kHoldSectors; ++sector)
+        {
+            const auto wrapped = static_cast<std::size_t> (sector % kHoldSectors);
+            const float r = hold[wrapped];
+
+            if (r <= 0.02f)
+            {
+                open = false;
+                continue;
+            }
+
+            const double angle = (static_cast<double> (sector % kHoldSectors) + 0.5)
+                                   / kHoldSectors * juce::MathConstants<double>::twoPi
+                               - juce::MathConstants<double>::pi;
+
+            const juce::Point<float> at {
+                centre.x + static_cast<float> (std::cos (angle)) * r * radius,
+                centre.y + static_cast<float> (std::sin (angle)) * r * radius };
+
+            if (open)
+                outline.lineTo (at);
+            else
+                outline.startNewSubPath (at);
+
+            open = true;
+        }
+
+        g.setColour (palette_.hold.withAlpha (0.55f));
+        g.strokePath (outline, juce::PathStrokeType (1.2f));
     }
 
     if (filled_ < 2)

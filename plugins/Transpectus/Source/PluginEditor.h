@@ -63,6 +63,12 @@ public:
         warning_ = warn;
     }
 
+    /// The worst correlation seen since the last reset, drawn as a held tick
+    /// in the hold colour -- the single worst moment for mono compatibility,
+    /// which is the actionable number. Feed it anything above 0.995 to hide
+    /// the tick (nothing bad has happened yet).
+    void setHeldMinimum (float minimum) noexcept { heldMinimum_ = minimum; }
+
     void setCaption (juce::String caption) { caption_ = std::move (caption); }
 
     void paint (juce::Graphics&) override;
@@ -71,6 +77,7 @@ private:
     ui::Palette palette_;
     juce::String caption_;
     float correlation_ { 1.0f };
+    float heldMinimum_ { 1.0f };
     bool warning_ { false };
 };
 
@@ -277,6 +284,7 @@ private:
 
     juce::TextButton spectrumMaxButton_, spectrumPopButton_;
     juce::TextButton goniometerMaxButton_, goniometerPopButton_;
+    juce::TextButton resetImageButton_ { "RESET IMAGE" };
 
     /// Declared after the components they hold, so ordinary member destruction
     /// tears the windows down first -- tidy rather than required; see the

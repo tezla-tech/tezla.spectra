@@ -15,6 +15,7 @@
 // draws it.
 
 #include <array>
+#include <vector>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -52,11 +53,28 @@ public:
     /// moving image read as motion rather than as a smear.
     static constexpr int kChunks = 10;
 
+    /// How many angular sectors the excursion hold divides the circle into.
+    /// Five degrees each: fine enough that the outline follows the image,
+    /// coarse enough that a few seconds of music fills it.
+    static constexpr int kHoldSectors = 72;
+
     explicit Goniometer (ui::Palette palette) : palette_ (palette) {}
 
     /// Message thread. Pulls the most recent window from the scope, striding so
     /// the picture spans the same slice of time at every sample rate.
     void update (const dsp::StereoScope& scope);
+
+    /// Attaches the excursion hold: per angular sector, the furthest the
+    /// image has ever reached, held until cleared. The vector lives with the
+    /// owner -- the processor, so the reading survives the editor window,
+    /// exactly like the spectrum's permanent peak hold -- sized kHoldSectors
+    /// (zeroed to reset), or pass nullptr to detach. update() folds in the
+    /// same points the trail draws; paint() draws the outline in the
+    /// palette's hold colour, behind the live trail.
+    void attachExcursionHold (std::vector<float>* holdSectors) noexcept
+    {
+        excursionHold_ = holdSectors;
+    }
 
     /// Room to leave clear at the top right, for chrome whoever owns this
     /// component places over it. The caption shrinks to fit what is left, and
@@ -77,6 +95,8 @@ private:
     std::array<float, kPoints> x_ {}, y_ {};
     int filled_ { 0 };
     int topRightInset_ { 0 };
+
+    std::vector<float>* excursionHold_ { nullptr };
 };
 
 } // namespace tezla::ui

@@ -172,6 +172,23 @@ void CorrelationBar::paint (juce::Graphics& g)
     g.setColour (palette_.dimText.withAlpha (0.5f));
     g.drawVerticalLine (juce::roundToInt (track.getCentreX()), track.getY(), track.getBottom());
 
+    // The held worst moment, in the hold colour, behind the live needle. A
+    // correlation meter is watched for its dips and the dips are exactly what
+    // a glance misses; the tick is the dip that already happened.
+    if (heldMinimum_ < 0.995f)
+    {
+        const float held = track.getX()
+                         + track.getWidth() * (juce::jlimit (-1.0f, 1.0f, heldMinimum_) + 1.0f) * 0.5f;
+
+        g.setColour (palette_.hold);
+        g.fillRoundedRectangle (juce::Rectangle<float> { held - 1.5f, track.getY() - 3.0f,
+                                                         3.0f, track.getHeight() + 6.0f }, 1.5f);
+
+        g.setFont (juce::FontOptions (9.5f));
+        g.drawText ("worst " + juce::String (heldMinimum_, 2),
+                    track.translated (0.0f, 12.0f), juce::Justification::centred);
+    }
+
     // The needle.
     const float position = track.getX()
                          + track.getWidth() * (juce::jlimit (-1.0f, 1.0f, correlation_) + 1.0f) * 0.5f;
@@ -855,6 +872,7 @@ void TranspectusEditor::updatePanelChrome()
 
     spectrumMaxButton_.setVisible (spectrumHere);
     goniometerMaxButton_.setVisible (goniometerHere);
+    resetImageButton_.setVisible (goniometerHere);
     spectrumPopButton_.setVisible (spectrumHere || isDetached (Panel::spectrum));
     goniometerPopButton_.setVisible (goniometerHere || isDetached (Panel::goniometer));
 
@@ -868,7 +886,8 @@ void TranspectusEditor::updatePanelChrome()
     // been hidden. Only the panel that was re-added lost its chrome, and
     // reopening the editor "fixed" it by rebuilding in the original order.
     for (auto* button : { &spectrumMaxButton_, &spectrumPopButton_,
-                          &goniometerMaxButton_, &goniometerPopButton_ })
+                          &goniometerMaxButton_, &goniometerPopButton_,
+                          &resetImageButton_ })
         button->toFront (false);
 }
 
@@ -897,6 +916,19 @@ void TranspectusEditor::buildPanelChrome()
                                "on a second monitor while the meters stay here. Closing that "
                                "window puts it back.");
     style (goniometerMaxButton_, "Gives the goniometer the whole panel.");
+
+    style (resetImageButton_, "Clears the violet image hold -- the outline of the widest the "
+                              "stereo picture has been -- and the held worst-correlation ticks, "
+                              "and starts collecting again. Same idea as RESET PEAKS on the "
+                              "spectrum: make a width move, clear, play the section back, and "
+                              "see what the new worst case is.");
+    resetImageButton_.setColour (juce::TextButton::textColourOffId, palette_.hold);
+    resetImageButton_.setComponentID ("reset-image");
+    resetImageButton_.onClick = [this]
+    {
+        transpectus_.resetImageExcursionHold();
+        transpectus_.getEngine().resetCorrelationHold();
+    };
     style (goniometerPopButton_, "Opens the goniometer in its own resizable window.");
 
     spectrumMaxButton_.onClick = [this]
@@ -1039,11 +1071,26 @@ void TranspectusEditor::buildControls()
     addAndMakeVisible (*lowCorrelation_);
 
     goniometer_ = std::make_unique<ui::Goniometer> (palette_);
+
+    // The excursion hold lives on the processor so it survives this window;
+    // sized here because the sector count is the goniometer's business.
+    {
+        auto& hold = transpectus_.getImageExcursionHold();
+
+        if (hold.size() != static_cast<std::size_t> (ui::Goniometer::kHoldSectors))
+            hold.assign (static_cast<std::size_t> (ui::Goniometer::kHoldSectors), 0.0f);
+
+        goniometer_->attachExcursionHold (&hold);
+    }
     goniometer_->setTooltip ("The sample pairs the correlation numbers summarise, rotated so mono "
                              "is vertical. A tall narrow shape is a mono-ish mix; a wide one is a "
                              "wide mix; a horizontal one is out of phase. A shape leaning left or "
                              "right is a lopsided mix, which no correlation number will tell you. "
-                             "Fifty milliseconds of history at every sample rate.");
+                             "Fifty milliseconds of history at every sample rate. The violet "
+                             "outline is the widest the image has ever been since the last RESET "
+                             "IMAGE -- it survives closing the window, like every held reading "
+                             "here -- and the violet ticks on the correlation bars hold the worst "
+                             "moment each has seen.");
     addAndMakeVisible (*goniometer_);
 
     // ---- controls ------------------------------------------------------------
@@ -1091,9 +1138,11 @@ void TranspectusEditor::buildControls()
         transpectus_.resetMeasurement();
         inputMeter_->resetHold();
 
-        // Everything held, including the spectrum's. "Restart measurement" that
-        // left one held reading standing would be the surprising one.
+        // Everything held, including the spectrum's and the stereo image's.
+        // "Restart measurement" that left one held reading standing would be
+        // the surprising one.
         spectrum_->resetPeakHold();
+        transpectus_.resetImageExcursionHold();
     };
     addAndMakeVisible (resetButton_);
 
@@ -1290,9 +1339,11 @@ void TranspectusEditor::timerCallback()
     }
 
     fullCorrelation_->setValue (static_cast<float> (engine.getCorrelation()), false);
+    fullCorrelation_->setHeldMinimum (static_cast<float> (engine.getMinCorrelation()));
 
     const double low = engine.getBandCorrelation (dsp::StereoAnalyser::low);
     lowCorrelation_->setValue (static_cast<float> (low), ! engine.isLowBandMonoSafe());
+    lowCorrelation_->setHeldMinimum (static_cast<float> (engine.getMinLowCorrelation()));
 
     fullCorrelation_->repaint();
     lowCorrelation_->repaint();
@@ -1603,6 +1654,11 @@ void TranspectusEditor::resized()
             // window width.
             goniometer_->setBounds (position.removeFromLeft (position.getHeight()).reduced (4, 4));
             placeChrome (goniometer_->getBounds(), goniometerMaxButton_, goniometerPopButton_);
+
+            resetImageButton_.setBounds (goniometer_->getBounds()
+                                             .reduced (6, 5)
+                                             .removeFromBottom (16)
+                                             .removeFromLeft (86));
         }
         else
         {

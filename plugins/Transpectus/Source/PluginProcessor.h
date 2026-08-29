@@ -117,6 +117,20 @@ public:
 
     void resetSpectrumPeakHold() noexcept;
 
+    /// The goniometer's excursion hold: per angular sector, the widest the
+    /// image has been. Same contract as the spectrum hold above -- storage
+    /// that outlives the editor, written only by the message thread; the
+    /// editor sizes it to the goniometer's sector count on attach.
+    [[nodiscard]] std::vector<float>& getImageExcursionHold() noexcept
+    {
+        return imageExcursionHold_;
+    }
+
+    void resetImageExcursionHold() noexcept
+    {
+        std::fill (imageExcursionHold_.begin(), imageExcursionHold_.end(), 0.0f);
+    }
+
     /// Clears the integration, the true-peak hold and the peak-hold bars.
     void resetMeasurement() noexcept { engine_.resetMeasurement(); }
 
@@ -147,6 +161,7 @@ private:
     /// kSpectrumBins of it, every entry at the floor until something louder
     /// arrives.
     std::vector<float> spectrumPeakHold_;
+    std::vector<float> imageExcursionHold_;
 
     ui::AbCompare abCompare_ { state_, { ids::bypass } };
 
