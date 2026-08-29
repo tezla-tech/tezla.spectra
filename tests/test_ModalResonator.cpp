@@ -291,6 +291,71 @@ TEZLA_TEST (input_weights_scale_the_continuous_drive)
     CHECK (worst < 1.0e-12);
 }
 
+TEZLA_TEST (contact_velocity_reads_the_contact_points_derivative)
+{
+    // contactVelocity() claims to be d/dt of the contact-point signal, in
+    // output units per second. Checked against the centred finite
+    // difference of the actual output for one ringing mode with gain ==
+    // weight (so output and contact point are the same signal), and
+    // checked to be the SAME number at 192 kHz as at 48 kHz -- the
+    // angular-frequency scaling is physical, not per-sample, which is what
+    // the bow's rate independence stands on.
+    double rms48 = 0.0;
+
+    for (const double fs : { 48000.0, 192000.0 })
+    {
+        ModalResonator bank;
+        bank.prepare (fs);
+        bank.setModeCount (1);
+        bank.setMode (0, 100.0, 1.0, 0.7);
+        bank.setInputWeight (0, 0.7);
+        bank.excite (0, 1.0);
+
+        const int samples = static_cast<int> (0.1 * fs);
+
+        std::vector<double> output;
+        std::vector<double> velocity;
+
+        for (int n = 0; n < samples; ++n)
+        {
+            velocity.push_back (bank.contactVelocity());
+            output.push_back (bank.process());
+        }
+
+        // The readout at n sees the state process() is ABOUT to advance, and
+        // output[n] is taken after that advance -- so velocity[n] is the
+        // trajectory's slope at output index n - 1, and the centred
+        // difference must straddle that point.
+        double errorSq = 0.0;
+        double signalSq = 0.0;
+
+        for (int n = 2; n < samples; ++n)
+        {
+            const double slope = 0.5 * (output[static_cast<std::size_t> (n)]
+                                        - output[static_cast<std::size_t> (n - 2)]) * fs;
+            const double read = velocity[static_cast<std::size_t> (n)];
+
+            errorSq += (read - slope) * (read - slope);
+            signalSq += read * read;
+        }
+
+        CHECK (signalSq > 0.0);
+        CHECK (std::sqrt (errorSq / signalSq) < 0.02);
+
+        double sumSq = 0.0;
+
+        for (const double v : velocity)
+            sumSq += v * v;
+
+        const double rms = std::sqrt (sumSq / velocity.size());
+
+        if (fs < 96000.0)
+            rms48 = rms;
+        else
+            CHECK_NEAR (rms / rms48, 1.0, 0.02);   // same physical reading
+    }
+}
+
 TEZLA_TEST (sixty_four_modes_cost_what_the_plan_budgeted)
 {
     // The estimate the defaults will be chosen against: one voice's worth of

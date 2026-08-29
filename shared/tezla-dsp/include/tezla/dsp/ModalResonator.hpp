@@ -158,6 +158,26 @@ public:
         return sum;
     }
 
+    /// The object's velocity at the contact point, in output units per
+    /// SECOND -- the signal a bow's friction curve acts on.
+    ///
+    /// Read through the same input weights the excitation enters by, so the
+    /// bow is collocated: it feels the object exactly where it drives it.
+    /// Per mode the output is g * Im(s) and s rotates at omega, so the
+    /// velocity contribution is w * (2 pi f) * Re(s) -- the quadrature
+    /// component, scaled by the PHYSICAL angular frequency rather than the
+    /// per-sample one, which is what makes the reading identical at 48 and
+    /// 192 kHz (CLAUDE.md section 6) instead of shrinking with the rate.
+    [[nodiscard]] double contactVelocity() const noexcept
+    {
+        double velocity = 0.0;
+
+        for (int index = 0; index < modeCount_; ++index)
+            velocity += weight_[index] * angularHz_[index] * stateRe_[index];
+
+        return velocity;
+    }
+
     /// The audible energy of the ring: sum over active modes of
     /// (gain * |s|)^2. Monotone-decaying after the last excitation, and the
     /// number a voice's retirement compares against its threshold.
@@ -194,11 +214,12 @@ private:
         // r from T60: amplitude falls 60 dB over t60 seconds, so per sample
         // r = 10^(-3 / (t60 * fs)).
         const double r = std::pow (10.0, -3.0 / (t60_[index] * sampleRate_));
-        const double omega = 2.0 * std::numbers::pi
-                               * clampFrequency (frequencyHz_[index]) / sampleRate_;
+        const double frequency = clampFrequency (frequencyHz_[index]);
+        const double omega = 2.0 * std::numbers::pi * frequency / sampleRate_;
 
         poleRe_[index] = r * std::cos (omega);
         poleIm_[index] = r * std::sin (omega);
+        angularHz_[index] = 2.0 * std::numbers::pi * frequency;
     }
 
     double sampleRate_ { 44100.0 };
@@ -211,6 +232,7 @@ private:
 
     double poleRe_[kMaxModes] {};
     double poleIm_[kMaxModes] {};
+    double angularHz_[kMaxModes] {};
     double stateRe_[kMaxModes] {};
     double stateIm_[kMaxModes] {};
 };

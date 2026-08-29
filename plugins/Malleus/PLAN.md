@@ -136,7 +136,7 @@ CLAUDE.md.
 | M1 ModalResonator | done |
 | M2 ModeShapes + Overtone Lock | done |
 | M3 exciters | done |
-| M4 bow | pending |
+| M4 bow | done |
 | M5 LowpassGate | pending |
 | M6 Drop + SympatheticBank | pending |
 | M7 voice + engine | pending |
