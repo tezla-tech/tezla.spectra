@@ -9,7 +9,7 @@ otherwise.
 musical note, the term of Indian music theory that the twenty-two shruti are
 divisions of; *yantra* (यन्त्र), machine, instrument, device — as in the
 Jantar Mantar observatories, which are yantras the size of buildings. **The
-note-machine.** Product name "Tezla Svara-yantra"; folder, CMake target and
+note-machine.** Product name "Tezla Svarayantra" (one word, per the final naming decision); folder, CMake target and
 code identifiers use the unhyphenated `Svarayantra` (C++ names cannot carry a
 hyphen), with class prefixes kept short as `Svara*`. Code `Tzsv`, bundle
 `tech.tezla.Svarayantra`, vendor `Tzla` — registered in `plugins/README.md`.

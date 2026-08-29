@@ -571,6 +571,30 @@ what the addition is measured against.
 
 ---
 
+## SoundFont playback -- Svarayantra
+
+| Source | Licence | Access | Used for |
+|---|---|---|---|
+| tsf.h (TinySoundFont, schellingb) | MIT | full source read; copy in `technical references/svarayantra/` | RIFF/hydra layout cross-check, timecents pin (-11950), envelope segment walk, loop-mode semantics |
+| FluidSynth `fluid_gen.c` | LGPL-2.1-or-later | full source read; copy in `technical references/svarayantra/` | **the generator defaults/ranges table, taken verbatim** into `Sf2Generators.hpp` -- a defaults table is knowledge measurement cannot verify, so it is copied and attributed rather than derived |
+| FluidSynth `fluid_voice.c`, `fluid_adsr_env.h`, `fluid_mod.c`, `fluid_sffile.c` | LGPL-2.1-or-later | full source read; same folder | zone-resolution semantics (absolute vs relative generators, global zones), envelope section conversions, default-modulator shapes |
+| SoundFont 2.04 specification PDF | spec document | **NOT retrievable from this container** -- the URL is recorded in `technical references/svarayantra/readme.md` for the user to fetch | would settle: the exact concave-curve table, custom modulator transforms, sm24 details |
+| DLS Level 1 default articulation | spec (published) | recalled convention, not fetched | the velocity square law (attenuation = 20 log10(127^2/vel^2) dB) implemented as the stand-in for SF2's default concave velocity modulator; both reach 0 dB at full velocity |
+
+Two places the references *disagree* and this implementation follows the
+specification's own stated convention instead, with tests pinning the choice
+by measurement: the volume envelope's decay/release slope (tsf inherits
+LinuxSampler's ~80 dB exponential constant, FluidSynth ramps a linear value
+against a 960 cB table; ours traverses the conventional 100 dB range in the
+stated time -- `test_Sf2Envelope.cpp` pins -10 dB after 0.1 s of a 1 s
+decay), and ROM samples (carried by the parser, refused by the model).
+
+Nothing from either implementation was pasted except the defaults table;
+the parser, model, envelope, voice and engine are derived from the format's
+structure and measured (CLAUDE.md section 9's rule, both halves).
+
+---
+
 ## Products referenced as sonic targets only
 
 Named in this repository to describe a *sound* or a *workflow*. No binary has

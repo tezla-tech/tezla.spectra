@@ -12,6 +12,7 @@
 
 #include <tezla/dsp/VuMeter.hpp>
 #include <tezla/ui/AbCompare.hpp>
+#include <tezla/ui/TuningHost.hpp>
 
 #include "SonitusEngine.hpp"
 
@@ -350,7 +351,10 @@ static_assert (static_cast<int> (GlobalDestination::none)            == 0
                "the global destination list is indexed straight into GlobalDestination");
 } // namespace choices
 
-class SonitusProcessor final : public juce::AudioProcessor
+// ui::TuningHost so the shared tuning panel can drive it -- the methods
+// below already had exactly the interface's names and signatures.
+class SonitusProcessor final : public juce::AudioProcessor,
+                               public ui::TuningHost
 {
 public:
     SonitusProcessor();
