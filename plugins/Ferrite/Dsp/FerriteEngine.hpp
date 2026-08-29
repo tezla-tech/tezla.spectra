@@ -61,6 +61,7 @@
 
 #include <tezla/dsp/BypassMixer.hpp>
 #include <tezla/dsp/DcBlocker.hpp>
+#include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
 #include <tezla/dsp/VuMeter.hpp>
@@ -132,7 +133,7 @@ public:
             // same tape. The hiss seeds differ: separate track noise.
             wowFlutter_[c].setSeed (0x7E21A5F00D5EED01ULL);
             wowFlutter_[c].prepare (sampleRate);
-            hissState_[c] = 0x9E3779B97F4A7C15ULL
+            hissState_[c] = std::uint64_t { 0x9E3779B97F4A7C15 }
                               * static_cast<std::uint64_t> (c + 1);
             hissLp_[c] = 0.0;
 
@@ -182,7 +183,7 @@ public:
             blocker_[c].reset();
             loss_[c].reset();
             wowFlutter_[c].reset();
-            hissState_[c] = 0x9E3779B97F4A7C15ULL
+            hissState_[c] = std::uint64_t { 0x9E3779B97F4A7C15 }
                               * static_cast<std::uint64_t> (c + 1);
             hissLp_[c] = 0.0;
             inputVu_[c].reset();
@@ -327,10 +328,10 @@ private:
         const Parameters& p = pending_;
 
         const bool tapeChanged = force
-            || p.drive != parameters_.drive
-            || p.saturation != parameters_.saturation
-            || p.bias != parameters_.bias
-            || p.inputDb != parameters_.inputDb
+            || ! dsp::isExactly (p.drive, parameters_.drive)
+            || ! dsp::isExactly (p.saturation, parameters_.saturation)
+            || ! dsp::isExactly (p.bias, parameters_.bias)
+            || ! dsp::isExactly (p.inputDb, parameters_.inputDb)
             || p.autoTrim != parameters_.autoTrim
             || p.oversampling != parameters_.oversampling;
 

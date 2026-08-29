@@ -59,6 +59,8 @@
 
 #include <cmath>
 
+#include <tezla/dsp/Exact.hpp>
+
 namespace tezla::ferrite {
 
 class Hysteresis
@@ -84,7 +86,9 @@ public:
     /// state -- a parameter move lands on the running loop. No-op guarded.
     void setParameters (double drive, double saturation, double bias) noexcept
     {
-        if (drive == drive_ && saturation == saturation_ && bias == bias_)
+        if (tezla::dsp::isExactly (drive, drive_)
+            && tezla::dsp::isExactly (saturation, saturation_)
+            && tezla::dsp::isExactly (bias, bias_))
             return;
 
         drive_ = drive;
@@ -247,7 +251,8 @@ private:
         const double MDiff = Ms_ * L.value - M;
 
         const double delta = Hdot >= 0.0 ? 1.0 : -1.0;
-        const bool sameSign = (delta > 0.0) == (MDiff > 0.0) && MDiff != 0.0;
+        const bool sameSign = (delta > 0.0) == (MDiff > 0.0)
+                                && ! tezla::dsp::isExactlyZero (MDiff);
 
         const double f1Denominator = oneMinusC_ * delta * kK - kAlpha * MDiff;
         const double f1 = sameSign ? oneMinusC_ * MDiff / f1Denominator : 0.0;

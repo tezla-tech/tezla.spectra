@@ -62,6 +62,7 @@
 #include <cstddef>
 
 #include <tezla/dsp/Biquad.hpp>
+#include <tezla/dsp/Exact.hpp>
 
 namespace tezla::ferrite {
 
@@ -96,7 +97,7 @@ public:
     /// the spare state and crossfades to it -- click-free by construction.
     void setSpeedIps (double ips) noexcept
     {
-        if (ips == speedIps_)
+        if (tezla::dsp::isExactly (ips, speedIps_))
             return;
 
         speedIps_ = ips;
@@ -108,8 +109,9 @@ public:
     void setGeometry (double spacingMicrons, double thicknessMicrons,
                       double gapMicrons) noexcept
     {
-        if (spacingMicrons == spacingUm_ && thicknessMicrons == thicknessUm_
-            && gapMicrons == gapUm_)
+        if (tezla::dsp::isExactly (spacingMicrons, spacingUm_)
+            && tezla::dsp::isExactly (thicknessMicrons, thicknessUm_)
+            && tezla::dsp::isExactly (gapMicrons, gapUm_))
             return;
 
         spacingUm_ = spacingMicrons;
@@ -121,7 +123,7 @@ public:
     /// 0 removes the bump entirely, 1 is the tuned 2.5 dB, 2 doubles it.
     void setBumpAmount (double amount) noexcept
     {
-        if (amount == bumpAmount_)
+        if (tezla::dsp::isExactly (amount, bumpAmount_))
             return;
 
         bumpAmount_ = amount;

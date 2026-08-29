@@ -8,6 +8,7 @@
 #include "PluginProcessor.h"
 
 #include <tezla/ui/StateIds.hpp>
+#include "PluginEditor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -570,9 +571,7 @@ void FerriteProcessor::setCurrentProgram (int index)
 
 juce::AudioProcessorEditor* FerriteProcessor::createEditor()
 {
-    // The real panel lands in the next phase; the generic editor keeps every
-    // control reachable until then.
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new FerriteEditor (*this);
 }
 
 } // namespace tezla::ferrite
