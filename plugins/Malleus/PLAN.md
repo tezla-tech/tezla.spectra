@@ -140,7 +140,7 @@ CLAUDE.md.
 | M5 LowpassGate | done |
 | M6 Drop + SympatheticBank | done |
 | M7 voice + engine | done |
-| M8 JUCE layer + presets | pending |
+| M8 JUCE layer + presets | done |
 | M9 editor | pending |
 | M10 close-out | pending |
 

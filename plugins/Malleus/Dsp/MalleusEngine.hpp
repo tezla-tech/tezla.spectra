@@ -77,15 +77,27 @@ public:
 
     [[nodiscard]] VoiceSettings& settings() noexcept { return settings_; }
 
-    /// Installs a scale: keys, Overtone Lock and taraf all follow. Not for
-    /// the audio thread (Scale owns a vector) -- the processor swaps it
-    /// from the message thread, as every tuning plugin here does.
+    /// Installs a scale: keys, Overtone Lock and taraf all follow, because
+    /// all three read the ONE scale living inside `tuning_`. Copies, so it
+    /// allocates -- message thread only.
     bool setScale (const dsp::Scale& scale)
     {
         if (! tuning_.setScale (scale))
             return false;
 
-        lockScale_ = scale;
+        retuneSympathetic();
+        return true;
+    }
+
+    /// The audio thread's way in: exchanges the live scale with `other` and
+    /// allocates nothing (`dsp::Tuning::swapScale`). The caller walks away
+    /// holding the old scale and destroys it on whichever thread it likes.
+    /// Refuses an unusable scale and leaves `other` untouched when it does.
+    bool swapScale (dsp::Scale& other) noexcept
+    {
+        if (! tuning_.swapScale (other))
+            return false;
+
         retuneSympathetic();
         return true;
     }
@@ -155,8 +167,8 @@ public:
                                  + 0x9E3779B97F4A7C15ULL
                                      * static_cast<std::uint64_t> (noteOnCount_);
 
-        chosen->noteOn (note, hz, velocity, seed, settings_, lockScale_,
-                        noteOnCount_);
+        chosen->noteOn (note, hz, velocity, seed, settings_,
+                        tuning_.getScale(), noteOnCount_);
     }
 
     void noteOff (int note) noexcept
@@ -273,8 +285,11 @@ private:
     MalleusVoice voices_[kMaxVoices];
     VoiceSettings settings_;
 
+    // One scale, three readers: the keys, every voice's Overtone Lock, and
+    // the taraf. A second copy for the lock is a second thing to keep in
+    // step, and the day they disagree the object's partials would land on a
+    // scale the keyboard is not playing.
     dsp::Tuning tuning_;
-    dsp::Scale lockScale_ { dsp::Tuning::twelveToneEqual() };
 
     SympatheticBank sympathetic_;
     int sympatheticCount_ { 0 };

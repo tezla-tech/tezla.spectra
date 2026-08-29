@@ -13,6 +13,8 @@
 #include <numbers>
 #include <vector>
 
+#include <tezla/dsp/Scales.hpp>
+
 #include "MalleusEngine.hpp"
 
 using namespace tezla::malleus;
@@ -377,6 +379,90 @@ TEZLA_TEST (nothing_rings_between_the_modes_at_maximum_hardness)
                  tail48, tail96);
 
     CHECK_NEAR (tail96 / tail48, 1.0, 0.05);
+}
+
+TEZLA_TEST (the_loaded_scale_reaches_the_keys_the_lock_and_the_taraf)
+{
+    // The plugin's thesis, end to end: load Bohlen-Pierce and the object's
+    // own partials must land on the TRITAVE lattice -- not just the played
+    // pitch. One scale, three readers (keys, Overtone Lock, taraf), which
+    // is why the engine keeps no second copy of it.
+    MalleusEngine engine;
+    engine.prepare (48000.0);
+    engine.settings().material = 4.0;    // the bell: wildly inharmonic
+    engine.settings().partials = 24;
+    engine.settings().lockAmount = 1.0;
+
+    const auto bp = tezla::dsp::scales::bohlenPierce();
+
+    CHECK (engine.setScale (bp));
+
+    engine.noteOn (60, 0.9);
+
+    const double fundamental = engine.tuning().frequencyFor (60);
+
+    CHECK (fundamental > 0.0);
+
+    const auto& voice = engine.voiceForTest (0);
+
+    int checked = 0;
+    double worstCents = 0.0;
+
+    for (int mode = 0; mode < 24; ++mode)
+    {
+        if (voice.modeGain (mode) <= 0.0)
+            continue;
+
+        // Fold the partial into one repeat of the lattice and measure its
+        // distance to the nearest degree (the repeat's top counts as
+        // degree zero of the next repeat).
+        const double x = voice.modeFrequency (mode) / fundamental;
+        const double k = std::floor (std::log (x) / std::log (bp.repeat));
+        const double base = x / std::pow (bp.repeat, k);
+
+        double nearest = 1.0e9;
+
+        for (const double ratio : bp.ratios)
+            nearest = std::min (nearest, std::abs (1200.0 * std::log2 (base / ratio)));
+
+        nearest = std::min (nearest,
+                            std::abs (1200.0 * std::log2 (base / bp.repeat)));
+
+        worstCents = std::max (worstCents, nearest);
+        ++checked;
+    }
+
+    std::printf ("        [lock] %d bell partials, worst %.4f cents off a BP degree\n",
+                 checked, worstCents);
+
+    CHECK (checked > 12);
+    CHECK (worstCents < 0.5);
+
+    // Under BP the twelfth key up is NOT an octave -- the lattice repeats
+    // at 3/1 -- which is what makes the next assertion mean something.
+    CHECK (std::abs (engine.tuning().frequencyFor (72) / fundamental - 2.0) > 0.05);
+
+    // The swap path -- the one the audio thread uses -- installs the new
+    // tuning and hands the old scale back to its caller to destroy.
+    auto twelve = tezla::dsp::Tuning::twelveToneEqual();
+
+    CHECK (engine.swapScale (twelve));
+    CHECK (twelve.name == bp.name);   // the caller is now holding BP
+
+    CHECK_NEAR (engine.tuning().frequencyFor (72)
+                  / engine.tuning().frequencyFor (60), 2.0, 1.0e-9);
+
+    // An unusable scale is refused and the caller's object is left alone --
+    // a swap that took the garbage and gave nothing back would leave no way
+    // to tell.
+    tezla::dsp::Scale broken;
+    broken.ratios.clear();
+    broken.repeat = 1.0;
+
+    CHECK (! engine.swapScale (broken));
+    CHECK (broken.ratios.empty());
+    CHECK_NEAR (engine.tuning().frequencyFor (72)
+                  / engine.tuning().frequencyFor (60), 2.0, 1.0e-9);
 }
 
 TEZLA_TEST (sixteen_voices_cost_what_the_plan_budgeted_and_the_dead_cost_nothing)
