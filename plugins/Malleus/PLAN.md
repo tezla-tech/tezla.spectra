@@ -138,7 +138,7 @@ CLAUDE.md.
 | M3 exciters | done |
 | M4 bow | done |
 | M5 LowpassGate | done |
-| M6 Drop + SympatheticBank | pending |
+| M6 Drop + SympatheticBank | done |
 | M7 voice + engine | pending |
 | M8 JUCE layer + presets | pending |
 | M9 editor | pending |
