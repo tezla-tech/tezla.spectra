@@ -433,6 +433,87 @@ int renderGoniometer (const juce::File& destination)
     return writeSnapshot (holder, destination);
 }
 
+
+/// The excursion hold, demonstrated the way it is used: a wide passage, then
+/// a narrow one. The live trail collapses to the vertical mono line while the
+/// violet outline keeps the ellipse the image once reached -- through the real
+/// scope, the real fold and the real paint, because a ghost drawn by hand
+/// would be checking nothing.
+int renderImageHold (const juce::File& destination)
+{
+    tezla::ui::Palette palette;
+    palette.accent       = juce::Colour { 0xff5bb98c };
+    palette.accentBright = juce::Colour { 0xff8fe0b4 };
+
+    struct Holder : juce::Component
+    {
+        explicit Holder (juce::Colour c) : colour (c) {}
+        void paint (juce::Graphics& g) override { g.fillAll (colour); }
+        juce::Colour colour;
+    };
+
+    constexpr int size = 260;
+
+    Holder holder { palette.background };
+    holder.setSize (size + 20, size + 20);
+
+    tezla::dsp::StereoScope scope;
+    scope.prepare (kSampleRate);
+
+    tezla::ui::Goniometer view { palette };
+
+    std::vector<float> hold (static_cast<std::size_t> (tezla::ui::Goniometer::kHoldSectors), 0.0f);
+    view.attachExcursionHold (&hold);
+
+    // Phase one: a second of a wide mix. Update per block, the way the editor
+    // timer would, so the hold folds as it goes rather than from one frame.
+    const auto run = [&] (auto&& fill)
+    {
+        const auto length = static_cast<std::size_t> (kSampleRate);
+        std::vector<double> left (length), right (length);
+
+        for (std::size_t i = 0; i < length; ++i)
+            fill (i, left[i], right[i]);
+
+        for (std::size_t offset = 0; offset < length; offset += 512)
+        {
+            const auto span = std::min<std::size_t> (512, length - offset);
+            const double* pointers[2] { left.data() + offset, right.data() + offset };
+            scope.push (pointers, 2, static_cast<int> (span));
+            view.update (scope);
+        }
+    };
+
+    run ([] (std::size_t i, double& l, double& r)
+    {
+        const auto t = static_cast<double> (i) / kSampleRate;
+        const double mid  = 0.55 * std::sin (2.0 * std::numbers::pi * 220.0 * t);
+        const double side = 0.35 * std::sin (2.0 * std::numbers::pi * 331.0 * t);
+        l = mid + side;
+        r = mid - side;
+    });
+
+    // Phase two: the image narrows to mono. The trail follows; the hold must
+    // not.
+    run ([] (std::size_t i, double& l, double& r)
+    {
+        const double v = 0.4 * std::sin (2.0 * std::numbers::pi * 220.0
+                                         * static_cast<double> (i) / kSampleRate);
+        l = r = v;
+    });
+
+    view.setBounds (10, 10, size, size);
+    holder.addAndMakeVisible (view);
+
+    float widest = 0.0f;
+    for (const float r : hold)
+        widest = std::max (widest, r);
+
+    std::printf ("  hold: widest sector %.3f (the wide phase), trail now mono\n", widest);
+
+    return writeSnapshot (holder, destination);
+}
+
 /// Every state of the level meter, side by side.
 ///
 /// A standalone build in a container has no audio device, so its meters read
@@ -585,7 +666,7 @@ int main (int argc, char** argv)
 {
     if (argc < 3)
     {
-        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag|meters|goniometer> <out.png>\n");
+        std::printf ("usage: tezla-ui-preview <spectrum|focus-drag|meters|goniometer|image-hold> <out.png>\n");
         return 2;
     }
 
@@ -602,6 +683,9 @@ int main (int argc, char** argv)
 
     if (what == "meters")
         return renderMeters (destination);
+
+    if (what == "image-hold")
+        return renderImageHold (destination);
 
     if (what == "goniometer")
         return renderGoniometer (destination);
