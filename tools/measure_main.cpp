@@ -41,6 +41,7 @@
 #include <tezla/measure/Signals.hpp>
 
 #include "AnvilEngine.hpp"
+#include "FerriteEngine.hpp"
 #include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
@@ -2335,6 +2336,335 @@ int runSvarayantra (const Args& args)
     return 0;
 }
 
+
+// ---------------------------------------------------------------------------
+// ferrite
+// ---------------------------------------------------------------------------
+
+namespace ferriteMeasure
+{
+
+std::vector<double> renderFerrite (const tezla::ferrite::Parameters& parameters,
+                                   const std::vector<double>& input, double rate)
+{
+    tezla::ferrite::Engine engine;
+    engine.prepare (rate, 512, 2);
+    engine.setParameters (parameters);
+    engine.reset();
+
+    std::vector<double> left = input, right = input;
+
+    for (std::size_t at = 0; at < left.size(); at += 271)
+    {
+        const int n = static_cast<int> (std::min<std::size_t> (271, left.size() - at));
+        double* pointers[2] { left.data() + at, right.data() + at };
+        engine.process (pointers, 2, n);
+    }
+
+    return left;
+}
+
+/// A tape at rest: wobble and hiss off, so the analysis sees the loop alone.
+tezla::ferrite::Parameters still (double drive, double inputDb = 0.0)
+{
+    tezla::ferrite::Parameters p;
+    p.drive = drive;
+    p.inputDb = inputDb;
+    p.wowDepth = 0.0;
+    p.flutterDepth = 0.0;
+    p.hissDb = -200.0;
+    return p;
+}
+
+} // namespace ferriteMeasure
+
+int runFerrite (const Args& args)
+{
+    using namespace tezla::measure;
+    using namespace ferriteMeasure;
+
+    const double rate = args.sampleRate;
+    constexpr std::size_t fftSize = 1 << 14;
+
+    std::printf ("Ferrite: the tape machine, measured at %.0f Hz.\n\n", rate);
+
+    // ---- 1. the loop itself ---------------------------------------------------
+
+    // The plugin's identity as a picture: input field against magnetisation
+    // for one settled cycle, at three bias settings. Plot column 1 against
+    // 2, 3 and 4 -- high bias hugs the clean curve, low bias opens the loop.
+    {
+        const std::string path = args.outPath.empty() ? "ferrite-loop.csv" : args.outPath;
+
+        if (auto* csv = openForWriting (path))
+        {
+            constexpr int period = 512;
+            constexpr int cycles = 6;   // settle 5, keep the 6th
+
+            std::array<std::vector<double>, 3> loops;
+            const double biases[3] { 0.9, 0.5, 0.1 };
+
+            for (int b = 0; b < 3; ++b)
+            {
+                tezla::ferrite::Hysteresis stage;
+                stage.prepare (rate * 4.0);
+                stage.setParameters (0.7, 0.5, biases[b]);
+
+                loops[static_cast<std::size_t> (b)].resize (period);
+
+                for (int i = 0; i < cycles * period; ++i)
+                {
+                    const double x = 2.0 * std::sin (2.0 * std::numbers::pi * i / period);
+                    const double y = stage.process (x);
+
+                    if (i >= (cycles - 1) * period)
+                        loops[static_cast<std::size_t> (b)][static_cast<std::size_t> (i % period)] = y;
+                }
+            }
+
+            std::fprintf (csv, "input,bias_high_0.9,bias_mid_0.5,bias_low_0.1\n");
+
+            for (int i = 0; i < period; ++i)
+                std::fprintf (csv, "%.6f,%.6f,%.6f,%.6f\n",
+                              2.0 * std::sin (2.0 * std::numbers::pi * i / period),
+                              loops[0][static_cast<std::size_t> (i)],
+                              loops[1][static_cast<std::size_t> (i)],
+                              loops[2][static_cast<std::size_t> (i)]);
+
+            std::fclose (csv);
+            std::printf ("Hysteresis loops (drive 0.7, three bias settings) -> %s\n\n", path.c_str());
+        }
+    }
+
+    // ---- 2. drive against tone, with the trim holding loudness ----------------
+
+    std::printf ("Drive sweep at 315 Hz, -20 dBFS in, auto-trim on: the THD moves and\n");
+    std::printf ("the level does not, which is the whole point of measuring the trim.\n\n");
+    std::printf ("  drive     THD        2nd        3rd     out RMS\n");
+
+    double trimReference = 0.0;
+
+    for (const double drive : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        const double hz = binExactFrequency (315.0, rate, fftSize);
+        const auto out = renderFerrite (still (drive), sine (hz, 0.1, rate, 3 * fftSize), rate);
+        const std::vector<double> settled (out.begin() + 2 * static_cast<long> (fftSize), out.end());
+
+        const auto report = analyseHarmonics (settled, rate, hz);
+
+        double sum = 0.0;
+        for (const double v : settled)
+            sum += v * v;
+        const double rmsDb = 10.0 * std::log10 (sum / static_cast<double> (settled.size())) + 3.01;
+
+        if (trimReference == 0.0)
+            trimReference = rmsDb;
+
+        std::printf ("  %5.2f %8.1f dB %8.1f dB %8.1f dB %8.2f dB (%+.2f)\n",
+                     drive, report.thdDb,
+                     report.harmonicsDb.empty() ? -300.0 : report.harmonicsDb[0],
+                     report.harmonicsDb.size() < 2 ? -300.0 : report.harmonicsDb[1],
+                     rmsDb, rmsDb - trimReference);
+    }
+
+    // ---- 2b. level against tone: the input IS the drive ------------------------
+
+    // At -20 dBFS the loop sits in its Rayleigh region -- hysteresis
+    // distortion, third-first, nearly independent of the Drive control. The
+    // level-driven saturation is what pushing tape actually is, so this is
+    // the table that shows the machine.
+    std::printf ("\nLevel sweep at drive 0.7 (315 Hz, -20 dBFS source, Input raised):\n\n");
+    std::printf ("  onto tape     THD        3rd     out RMS\n");
+
+    trimReference = 0.0;
+
+    for (const double inputDb : { 0.0, 8.0, 14.0, 20.0 })
+    {
+        const double hz = binExactFrequency (315.0, rate, fftSize);
+        const auto out = renderFerrite (still (0.7, inputDb), sine (hz, 0.1, rate, 3 * fftSize), rate);
+        const std::vector<double> settled (out.begin() + 2 * static_cast<long> (fftSize), out.end());
+
+        const auto report = analyseHarmonics (settled, rate, hz);
+
+        double sum = 0.0;
+        for (const double v : settled)
+            sum += v * v;
+        const double rmsDb = 10.0 * std::log10 (sum / static_cast<double> (settled.size())) + 3.01;
+
+        if (trimReference == 0.0)
+            trimReference = rmsDb;
+
+        std::printf ("  %5.0f dBFS %8.1f dB %8.1f dB %8.2f dB (%+.2f)\n",
+                     -20.0 + inputDb, report.thdDb,
+                     report.harmonicsDb.size() < 2 ? -300.0 : report.harmonicsDb[1],
+                     rmsDb, rmsDb - trimReference);
+    }
+
+    // ---- 3. the loss curves ----------------------------------------------------
+
+    std::printf ("\nWavelength losses, designed filter against the analytic curve\n");
+    std::printf ("(spacing 5 um, thickness 35 um, gap 2.5 um):\n\n");
+    std::printf ("  speed        2 kHz     5 kHz    10 kHz    15 kHz   worst err\n");
+
+    for (const double ips : { 3.75, 7.5, 15.0, 30.0 })
+    {
+        tezla::ferrite::TapeLoss loss;
+        loss.prepare (rate);
+        loss.setSpeedIps (ips);
+        for (int i = 0; i < 8192; ++i)
+            (void) loss.process (0.0);
+
+        double worstErr = 0.0;
+
+        for (double hz = 100.0; hz < 0.42 * rate && hz <= 20000.0; hz *= 1.3)
+        {
+            const double analytic = tezla::ferrite::TapeLoss::analyticMagnitude (
+                hz, ips, 5.0, 35.0, 2.5);
+
+            if (analytic < 0.01)
+                continue;
+
+            worstErr = std::max (worstErr, std::abs (
+                20.0 * std::log10 (loss.designedMagnitudeAt (hz) / analytic)));
+        }
+
+        const auto at = [&] (double hz)
+        {
+            return 20.0 * std::log10 (std::max (loss.designedMagnitudeAt (hz), 1.0e-9));
+        };
+
+        std::printf ("  %5.2f ips %7.2f dB %7.2f dB %7.2f dB %7.2f dB %8.3f dB\n",
+                     ips, at (2000.0), at (5000.0), at (10000.0), at (15000.0), worstErr);
+    }
+
+    // ---- 4. aliasing against the oversampling factor ---------------------------
+
+    std::printf ("\nAliasing at maximum drive (drive 1, saturation 1, bias 0, +24 dB in),\n");
+    std::printf ("worst of bin-exact non-divisor probes at 1 and 4.4 kHz, absolute dBFS\n");
+    std::printf ("of the audible-band inharmonic energy (gate: -60):\n\n");
+
+    for (const auto mode : { tezla::dsp::OversamplingMode::Off,
+                             tezla::dsp::OversamplingMode::X2,
+                             tezla::dsp::OversamplingMode::X4 })
+    {
+        auto p = still (1.0, 24.0);
+        p.saturation = 1.0;
+        p.bias = 0.0;
+        p.oversampling = mode;
+
+        double worst = -300.0;
+
+        for (const double roughHz : { 1000.0, 4400.0 })
+        {
+            const double hz = binExactFrequency (roughHz, rate, fftSize);
+            const auto out = renderFerrite (p, sine (hz, 0.5, rate, 3 * fftSize), rate);
+            const std::vector<double> settled (out.begin() + 2 * static_cast<long> (fftSize), out.end());
+
+            const auto report = analyseHarmonics (settled, rate, hz);
+            worst = std::max (worst, report.fundamentalDbFs + report.audibleAliasingDb);
+        }
+
+        std::printf ("  x%d: %7.1f dBFS\n",
+                     tezla::dsp::oversamplingFactor (mode, rate), worst);
+    }
+
+    // ---- 5. the wobble ---------------------------------------------------------
+
+    std::printf ("\nWow and flutter: short-window pitch spread of a 1 kHz tone.\n\n");
+
+    for (const double depth : { 0.15, 1.0 })
+    {
+        auto p = still (0.1);
+        p.wowDepth = depth;
+        p.flutterDepth = depth;
+        p.autoTrim = false;
+
+        std::vector<double> tone (1 << 17);
+        for (std::size_t i = 0; i < tone.size(); ++i)
+            tone[i] = 0.5 * std::sin (2.0 * std::numbers::pi * 1000.0
+                                      * static_cast<double> (i) / rate);
+
+        const auto out = renderFerrite (p, tone, rate);
+
+        const int window = static_cast<int> (rate / 10.0);
+        double lowest = 1.0e9, highest = 0.0;
+
+        for (int w = 4; w < 12; ++w)
+        {
+            double first = -1.0, last = -1.0;
+            int cycles = 0;
+
+            for (int i = w * window + 1; i < (w + 1) * window; ++i)
+            {
+                const double a = out[static_cast<std::size_t> (i - 1)];
+                const double b = out[static_cast<std::size_t> (i)];
+
+                if (! (a < 0.0 && b >= 0.0))
+                    continue;
+
+                const double at = static_cast<double> (i - 1) - a / (b - a);
+
+                if (first < 0.0)
+                    first = at;
+                else { last = at; ++cycles; }
+            }
+
+            const double hz = cycles < 1 ? 0.0 : cycles * rate / (last - first);
+            lowest = std::min (lowest, hz);
+            highest = std::max (highest, hz);
+        }
+
+        std::printf ("  depth %.2f: %.2f%% spread\n", depth, 100.0 * (highest - lowest) / 1000.0);
+    }
+
+    // ---- 6. CPU ----------------------------------------------------------------
+
+    std::printf ("\nCPU, one stereo instance, 110 Hz + 1.3 kHz programme:\n\n");
+
+    for (const auto mode : { tezla::dsp::OversamplingMode::X4,
+                             tezla::dsp::OversamplingMode::X8 })
+    {
+        auto p = still (0.6);
+        p.oversampling = mode;
+
+        tezla::ferrite::Engine engine;
+        engine.prepare (rate, 512, 2);
+        engine.setParameters (p);
+        engine.reset();
+
+        std::vector<double> left (512), right (512);
+        const auto start = std::chrono::steady_clock::now();
+
+        const int blocks = static_cast<int> (rate) / 512;
+
+        for (int n = 0; n < blocks; ++n)
+        {
+            for (std::size_t i = 0; i < left.size(); ++i)
+            {
+                const double t = static_cast<double> (n * 512 + static_cast<int> (i)) / rate;
+                left[i] = right[i] = 0.4 * std::sin (2.0 * std::numbers::pi * 110.0 * t)
+                                   + 0.2 * std::sin (2.0 * std::numbers::pi * 1300.0 * t);
+            }
+
+            double* pointers[2] { left.data(), right.data() };
+            engine.process (pointers, 2, 512);
+        }
+
+        const double seconds = std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - start).count();
+        const double audioSeconds = blocks * 512.0 / rate;
+
+        std::printf ("  x%d: %5.1f%% of one core\n",
+                     tezla::dsp::oversamplingFactor (mode, rate),
+                     100.0 * seconds / audioSeconds);
+    }
+
+    std::printf ("\nEvery figure is the whole engine: oversampled hysteresis, losses,\n");
+    std::printf ("bump, wobble, trims and the latency-matched dry paths.\n");
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -2352,6 +2682,7 @@ void printUsage()
     std::printf ("  anvil           [--fs]  amplifier aliasing, lane THD, transformer flux, CPU\n");
     std::printf ("  sonitus         [--fs]  instrument aliasing, comb notches, tuning, CPU\n");
     std::printf ("  svarayantra     [--fs]  soundfont engine aliasing and CPU per voice\n");
+    std::printf ("  ferrite         [--fs --out FILE]  tape loops, losses, aliasing, wobble, CPU\n");
 }
 
 } // namespace
@@ -2381,6 +2712,7 @@ int main (int argc, char** argv)
     if (command == "anvil")           return runAnvil (args);
     if (command == "sonitus")         return runSonitus (args);
     if (command == "svarayantra")     return runSvarayantra (args);
+    if (command == "ferrite")         return runFerrite (args);
 
     printUsage();
     return 1;

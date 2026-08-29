@@ -73,6 +73,18 @@ base rate — with an amount control, tuned in F2 against plotted responses.
 Each phase is one commit: tests written and run in the same commit, every
 mechanism seen red (or break-checked), numbers quoted, whole tree built.
 
+**All seven phases are done and committed** (F1 `135f9dc`, F2 `5aead51`,
+F3 `ce388bc`, F4 `3209bd9`, F5 `63c1b6a`, F6 `0e33879`, F7 is the commit
+carrying this line). Departures from the letter of the plan, argued in the
+commits: F1's solver ended as RK4 with adaptive sub-stepping after
+Newton–Raphson diverged at high slew (the full story is at the solve site in
+`Hysteresis.hpp`); F4's trim probes the exact loop rather than using a fitted
+law, and holds ±1.5 dB per the engine test; the cross-rate THD test planned
+for F4 was replaced by a cross-rate aliasing gate, because the quasi-static
+J-A recursion measures rate-identical THD even unoversampled and a test that
+cannot go red is a decoration. What remains open is the rig test: nothing
+here has been loaded into FL Studio from this container.
+
 - **F1 — `Hysteresis.hpp`**: the J-A core. dM/dt with Langevin guards and
   the tanh continued fraction (accuracy measured against std::tanh);
   Newton–Raphson solver with analytic derivative; normalized units;

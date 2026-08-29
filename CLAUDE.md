@@ -263,7 +263,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **707 on x86-64** (Svarayantra included); the
+  validator 47/47 on Linux. The count has since grown to **746 on x86-64** (Svarayantra and Ferrite included, all eight plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
