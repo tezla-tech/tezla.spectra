@@ -538,8 +538,11 @@ void MalleusEditor::buildPages()
         "nothing here aliases.");
 
     object->addKnob (ids::decay, "Decay",
-        "The prime partial's T60 -- how long the object rings. Everything else "
-        "follows from Damping tilt.");
+        "The prime partial's T60 -- how long the OBJECT rings; the other "
+        "partials follow from Damping tilt. The audible note is shorter, "
+        "measured at about half (0.47x), because the vactrol gate is an "
+        "amplitude envelope as well as a filter and its early fall is fast. "
+        "That shortening is the west-coast ping, not a loss.");
 
     object->addKnob (ids::tilt, "Damping tilt",
         "How much faster the upper partials die than the prime. 0 is a bell "

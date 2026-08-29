@@ -168,6 +168,23 @@ public:
         drop_.reset();
         drop_.trigger (settings_.dropSemitones, settings_.dropSeconds);
 
+        // The gate closes on the object's own timescale, so Decay stays
+        // live across its whole range. Without this the vactrol's fixed
+        // 1.5 s close dominated every longer setting -- a 4-second object
+        // rendered a 0.33-second note -- which the close-out measurement
+        // caught.
+        //
+        // Four times the object's decay, chosen by measurement: the
+        // audible note then lands at 0.47x the asked T60 (0.31x at two,
+        // 0.56x at six, saturating because the vactrol's early drop is
+        // fast whatever its full close time). It is always shorter than
+        // the object's own ring, and that is the instrument rather than a
+        // defect -- a low-pass gate IS an amplitude envelope. The Decay
+        // tooltip states the factor rather than implying the note lasts
+        // as long as the object does.
+        gate_.setDecayScale (4.0 * settings_.decaySeconds
+                               / dsp::LowpassGate::kNaturalCloseSeconds);
+
         rebuildModes (lockScale);
         applyDrop();
 
@@ -305,10 +322,15 @@ private:
                        * std::pow (ratio, -2.0 * settings_.tilt);
             gain_[mode] = audible ? 1.0 / partials : 0.0;
 
+            // The mode shape at the contact point, NOT divided by the
+            // partial count: this is how hard a force applied there drives
+            // each mode, and it is also the path the bow's own feedback
+            // travels. Dividing it by the count put a 64-partial object's
+            // bow 64x below its onset -- silent, while the same settings
+            // sang on the bare bank. Output loudness is the gain's job,
+            // just below.
             bank_.setInputWeight (mode,
-                audible ? positionWeight (mode + 1, settings_.position)
-                            / partials
-                        : 0.0);
+                audible ? positionWeight (mode + 1, settings_.position) : 0.0);
         }
     }
 

@@ -116,6 +116,26 @@ public:
         hold_ = level < 0.0 ? 0.0 : level > 1.0 ? 1.0 : level;
     }
 
+    /// How long the cell takes to go dark, relative to its natural
+    /// kNaturalCloseSeconds. Stretches the dark decay in TIME without
+    /// touching its SHAPE: both rates are divided by the same number, so
+    /// the lengthening half-life that is the vactrol's signature (measured
+    /// at x3.14) survives exactly.
+    ///
+    /// A gate is an amplitude envelope as well as a filter, so a voice
+    /// whose object rings for four seconds needs a gate that takes four
+    /// seconds to close -- otherwise the object's own decay control is
+    /// overridden by the gate and does almost nothing. Measured before
+    /// this existed: a 4-second decay rendered a 0.33-second note.
+    void setDecayScale (double scale) noexcept
+    {
+        decayScale_ = scale < 0.02 ? 0.02 : scale > 50.0 ? 50.0 : scale;
+    }
+
+    /// What `setDecayScale (1.0)` means, in seconds: how long a full ping
+    /// takes to reach exact darkness.
+    static constexpr double kNaturalCloseSeconds = 1.5;
+
     /// The cell's current conductance, 0..1 -- the number the tests and a
     /// voice's retirement logic read.
     [[nodiscard]] double conductance() const noexcept { return conductance_; }
@@ -142,7 +162,7 @@ public:
             // the conductance itself -- fast first drop, dragging tail.
             const double rate = conductance_ * (kDarkLinear
                                                 + kDarkQuadratic * conductance_);
-            conductance_ -= rate * timeStep_;
+            conductance_ -= rate * timeStep_ / decayScale_;
 
             if (conductance_ < light)
                 conductance_ = light;
@@ -171,6 +191,7 @@ private:
     double attackCoefficient_ { 0.03 };
     double flashDecay_ { 0.994 };
 
+    double decayScale_ { 1.0 };
     double conductance_ { 0.0 };
     double flash_ { 0.0 };
     double hold_ { 0.0 };

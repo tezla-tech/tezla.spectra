@@ -45,6 +45,7 @@
 #include "CapstoneEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
+#include "MalleusEngine.hpp"
 #include "SonitusEngine.hpp"
 #include "Sf2TestBuilder.hpp"
 #include "SvaraEngine.hpp"
@@ -2665,6 +2666,418 @@ int runFerrite (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// malleus
+// ---------------------------------------------------------------------------
+
+namespace malleusMeasure
+{
+using namespace tezla::malleus;
+
+/// Plays one note and returns the rendered audio.
+std::vector<double> playNote (const VoiceSettings& settings, double rate,
+                              int note, double heldSeconds, double tailSeconds,
+                              int sympathetic = 0)
+{
+    MalleusEngine engine;
+    engine.prepare (rate);
+    engine.settings() = settings;
+
+    if (sympathetic > 0)
+        engine.setSympathetic (sympathetic, 0.5, 0.7, 0.0, 8.0, 0.6);
+
+    const auto held = static_cast<int> (heldSeconds * rate);
+    const auto total = held + static_cast<int> (tailSeconds * rate);
+
+    std::vector<double> out (static_cast<std::size_t> (total), 0.0);
+
+    engine.noteOn (note, 1.0);
+    engine.process (out.data(), held);
+    engine.noteOff (note);
+    engine.process (out.data() + held, total - held);
+
+    return out;
+}
+
+/// Decay time to -60 dB, measured from the rendered envelope rather than
+/// from the coefficient that was asked for.
+double measuredT60 (const std::vector<double>& audio, double rate)
+{
+    // Peak-normalised envelope, sampled in 10 ms blocks.
+    const auto block = static_cast<std::size_t> (0.01 * rate);
+    double peak = 0.0;
+    std::vector<double> envelope;
+
+    for (std::size_t n = 0; n + block <= audio.size(); n += block)
+    {
+        double sum = 0.0;
+
+        for (std::size_t i = 0; i < block; ++i)
+            sum += audio[n + i] * audio[n + i];
+
+        const double rms = std::sqrt (sum / static_cast<double> (block));
+        envelope.push_back (rms);
+        peak = std::max (peak, rms);
+    }
+
+    if (peak <= 0.0)
+        return 0.0;
+
+    for (std::size_t n = 0; n < envelope.size(); ++n)
+        if (envelope[n] < peak * 0.001)
+            return static_cast<double> (n) * 0.01;
+
+    return static_cast<double> (envelope.size()) * 0.01;
+}
+/// Hann-windowed power at one frequency. A modal object's partials are
+/// deliberately NOT a harmonic series, so the harmonic analyser used
+/// everywhere else in this tool is the wrong instrument here: it counts
+/// every real partial of a bar as "inharmonic" and reports -4 dB of
+/// aliasing for a bank that cannot alias at all. (It did, the first time
+/// this ran. Section 10: check the instrument before trusting it.)
+double powerAt (const std::vector<double>& x, std::size_t from, std::size_t to,
+                double hz, double rate)
+{
+    double re = 0.0;
+    double im = 0.0;
+    const auto count = static_cast<double> (to - from);
+
+    for (std::size_t n = from; n < to && n < x.size(); ++n)
+    {
+        const double along = static_cast<double> (n - from) / count;
+        const double window = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * along);
+        const double phase = 2.0 * std::numbers::pi * hz
+                           * static_cast<double> (n - from) / rate;
+
+        re += window * x[n] * std::cos (phase);
+        im += window * x[n] * std::sin (phase);
+    }
+
+    return (re * re + im * im) / (count * count);
+}
+} // namespace malleusMeasure
+
+int runMalleus (const Args& args)
+{
+    using namespace tezla;
+    using namespace malleusMeasure;
+
+    const double rate = args.sampleRate;
+    constexpr std::size_t window = 1 << 15;
+
+    // ---- 1. the mode tables, which are the instrument ------------------------
+
+    std::printf ("The five mode-ratio tables, first eight partials. Bar and membrane are\n");
+    std::printf ("root-found here at design time; string and plate are closed form; the\n");
+    std::printf ("bell's canonical seven are the founders' empirical profile.\n\n");
+
+    std::printf ("  %-10s", "mode");
+
+    const char* materialNames[] { "String", "Bar", "Membrane", "Plate", "Bell" };
+
+    for (const char* name : materialNames)
+        std::printf (" %10s", name);
+
+    std::printf ("\n");
+
+    for (int mode = 0; mode < 8; ++mode)
+    {
+        std::printf ("  %-10d", mode + 1);
+
+        for (int material = 0; material < 5; ++material)
+            std::printf (" %10.4f",
+                         dsp::ModeShapes::ratioAt (static_cast<double> (material), mode, 0.0));
+
+        std::printf ("\n");
+    }
+
+    if (! args.outPath.empty())
+    {
+        std::FILE* file = std::fopen (args.outPath.c_str(), "w");
+
+        if (file != nullptr)
+        {
+            std::fprintf (file, "mode,string,bar,membrane,plate,bell\n");
+
+            for (int mode = 0; mode < dsp::ModeShapes::kMaxModes; ++mode)
+            {
+                std::fprintf (file, "%d", mode + 1);
+
+                for (int material = 0; material < 5; ++material)
+                    std::fprintf (file, ",%.10f",
+                                  dsp::ModeShapes::ratioAt (static_cast<double> (material),
+                                                            mode, 0.0));
+
+                std::fprintf (file, "\n");
+            }
+
+            std::fclose (file);
+            std::printf ("\n  full 64-mode tables written to %s\n", args.outPath.c_str());
+        }
+    }
+
+    // ---- 2. Overtone Lock, the flagship --------------------------------------
+
+    std::printf ("\nOvertone Lock: worst distance from a scale degree, in cents, over the\n");
+    std::printf ("first 32 partials of a stretched bell rooted at A2.\n\n");
+
+    std::printf ("  %-22s %10s %10s\n", "scale", "lock 0", "lock 1");
+
+    const auto worstCents = [] (const dsp::Scale& scale, double amount)
+    {
+        double worst = 0.0;
+        const double fundamental = 110.0;
+
+        for (int mode = 0; mode < 32; ++mode)
+        {
+            const double free = fundamental * dsp::ModeShapes::ratioAt (4.0, mode, 0.3);
+            const double locked = dsp::ModeShapes::lockToScale (free, fundamental,
+                                                               scale, amount);
+
+            const double x = locked / fundamental;
+            const double k = std::floor (std::log (x) / std::log (scale.repeat));
+            const double base = x / std::pow (scale.repeat, k);
+
+            double nearest = 1.0e9;
+
+            for (const double ratio : scale.ratios)
+                nearest = std::min (nearest, std::abs (1200.0 * std::log2 (base / ratio)));
+
+            nearest = std::min (nearest, std::abs (1200.0 * std::log2 (base / scale.repeat)));
+            worst = std::max (worst, nearest);
+        }
+
+        return worst;
+    };
+
+    for (const auto& scale : { dsp::Tuning::twelveToneEqual(), dsp::scales::bohlenPierce(),
+                               dsp::scales::fiveToneEqual() })
+        std::printf ("  %-22s %10.2f %10.4f\n", scale.name.c_str(),
+                     worstCents (scale, 0.0), worstCents (scale, 1.0));
+
+    std::printf ("\n  At full lock every partial sits on a degree -- including on\n");
+    std::printf ("  Bohlen-Pierce, which has no octave at all.\n");
+
+    // ---- 3. decay accuracy ---------------------------------------------------
+
+    std::printf ("\nDecay: the asked T60 against the rendered one, measured from the\n");
+    std::printf ("envelope of a struck bar (tilt 0, so every partial shares the decay).\n\n");
+
+    std::printf ("  %10s %12s\n", "asked", "measured");
+
+    for (const double decay : { 0.25, 0.5, 1.0, 2.0, 4.0 })
+    {
+        VoiceSettings settings;
+        settings.decaySeconds = decay;
+        settings.tilt = 0.0;
+        settings.partials = 16;
+
+        const auto audio = playNote (settings, rate, 45, 0.01, decay * 2.0 + 0.5);
+
+        std::printf ("  %8.2f s %10.2f s\n", decay, measuredT60 (audio, rate));
+    }
+
+    // ---- 4. strike spectra vs hardness ---------------------------------------
+
+    std::printf ("\nHardness: spectral centroid of the strike, on a 32-partial harmonic\n");
+    std::printf ("object at 100 Hz. Contact time runs 8 ms of felt to 0.15 ms of brass.\n\n");
+
+    std::printf ("  %10s %12s %14s\n", "hardness", "contact", "centroid");
+
+    for (const double hardness : { 0.0, 0.2, 0.5, 0.9, 1.0 })
+    {
+        double frequencies[32];
+        double weights[32];
+
+        for (int mode = 0; mode < 32; ++mode)
+            frequencies[mode] = 100.0 * (mode + 1);
+
+        malletWeights (weights, frequencies, 32, 0.29, hardness, 1.0);
+
+        double power = 0.0;
+        double weighted = 0.0;
+
+        for (int mode = 0; mode < 32; ++mode)
+        {
+            const double p = weights[mode] * weights[mode];
+            power += p;
+            weighted += frequencies[mode] * p;
+        }
+
+        std::printf ("  %10.2f %9.3f ms %11.1f Hz\n", hardness,
+                     1000.0 * contactSeconds (hardness),
+                     power > 0.0 ? weighted / power : 0.0);
+    }
+
+    // ---- 5. the bow's onset map ----------------------------------------------
+
+    std::printf ("\nBow onset: sustained RMS after 1.5 s, over the pressure x speed plane.\n");
+    std::printf ("Below the onset the object will not speak; above it, it sings.\n\n");
+
+    std::printf ("  %-10s", "P \\ S");
+
+    const double speeds[] { 0.1, 0.3, 0.5, 0.7, 1.0 };
+
+    for (const double speed : speeds)
+        std::printf (" %9.1f", speed);
+
+    std::printf ("\n");
+
+    for (const double pressure : { 0.01, 0.05, 0.2, 0.5, 1.0 })
+    {
+        std::printf ("  %-10.2f", pressure);
+
+        for (const double speed : speeds)
+        {
+            VoiceSettings settings;
+            settings.exciter = Exciter::Bow;
+            settings.bowPressure = pressure;
+            settings.bowSpeed = speed;
+            settings.partials = 16;
+            settings.decaySeconds = 2.0;
+
+            const auto audio = playNote (settings, rate, 45, 1.5, 0.0);
+
+            // The tail's RMS about its own mean: a bow statically deflects
+            // the object, and a standing offset is not oscillation.
+            const auto from = audio.size() - static_cast<std::size_t> (0.3 * rate);
+
+            double mean = 0.0;
+
+            for (std::size_t n = from; n < audio.size(); ++n)
+                mean += audio[n];
+
+            mean /= static_cast<double> (audio.size() - from);
+
+            double sum = 0.0;
+
+            for (std::size_t n = from; n < audio.size(); ++n)
+                sum += (audio[n] - mean) * (audio[n] - mean);
+
+            std::printf (" %9.4f",
+                         std::sqrt (sum / static_cast<double> (audio.size() - from)));
+        }
+
+        std::printf ("\n");
+    }
+
+    // ---- 6. what is between the modes -----------------------------------
+
+    std::printf ("\nWhat sits BETWEEN the modes, at maximum hardness with 64 partials of\n");
+    std::printf ("an inharmonic bar and no oversampling anywhere. Probes on each mode\n");
+    std::printf ("against probes at the geometric midpoints between them, in dB.\n\n");
+
+    std::printf ("  %-10s %10s %14s %12s\n", "note", "modes", "between", "gap");
+
+    for (const int note : { 33, 45, 57, 69, 81 })
+    {
+        VoiceSettings settings;
+        settings.material = 1.0;
+        settings.partials = 64;
+        settings.hardness = 1.0;
+        settings.decaySeconds = 3.0;
+
+        const auto audio = playNote (settings, rate, note, 1.6, 0.0);
+
+        // From 0.7 s on: before that the vactrol's fast early fall puts real
+        // sidebands around every mode -- that is the ping, not aliasing.
+        const auto from = static_cast<std::size_t> (0.7 * rate);
+        const auto to = static_cast<std::size_t> (1.5 * rate);
+
+        MalleusEngine probe;
+        probe.prepare (rate);
+
+        const double fundamental = probe.tuning().frequencyFor (note);
+
+        double modeFrequencies[dsp::ModalResonator::kMaxModes] {};
+        VoiceSettings shape = settings;
+
+        (void) buildModeFrequencies (modeFrequencies, shape, fundamental,
+                                     probe.tuning().getScale(), rate);
+
+        double onMode = 0.0;
+        double between = 0.0;
+
+        for (int mode = 0; mode + 1 < settings.partials; ++mode)
+        {
+            if (modeFrequencies[mode] >= 0.45 * rate)
+                break;
+
+            onMode = std::max (onMode, powerAt (audio, from, to,
+                                                modeFrequencies[mode], rate));
+
+            if (modeFrequencies[mode + 1] / modeFrequencies[mode] > 1.1
+                && modeFrequencies[mode + 1] < 0.45 * rate)
+                between = std::max (between,
+                    powerAt (audio, from, to,
+                             std::sqrt (modeFrequencies[mode] * modeFrequencies[mode + 1]),
+                             rate));
+        }
+
+        const double gap = 10.0 * std::log10 (between / onMode);
+
+        std::printf ("  %6.1f Hz %10.2f %14.2f %11.1f\n", fundamental,
+                     10.0 * std::log10 (onMode), 10.0 * std::log10 (between), gap);
+    }
+
+    std::printf ("\n  A modal bank cannot alias: every partial is computed, and one that\n");
+    std::printf ("  would land past 0.45 fs is dropped rather than folded. The strike is\n");
+    std::printf ("  injected in closed form, so it carries nothing that was never\n");
+    std::printf ("  computed -- which is why this instrument oversamples nowhere.\n");
+
+    // ---- 7. CPU --------------------------------------------------------------
+
+    std::printf ("\nCPU, as a percentage of one core, at %.0f Hz.\n\n", rate);
+
+    const auto costOf = [rate] (const char* label, const VoiceSettings& settings,
+                                int voices, int sympathetic)
+    {
+        MalleusEngine engine;
+        engine.prepare (rate);
+        engine.settings() = settings;
+
+        if (sympathetic > 0)
+            engine.setSympathetic (sympathetic, 0.5, 0.8, 0.3, 8.0, 0.6);
+
+        for (int voice = 0; voice < voices; ++voice)
+            engine.noteOn (36 + 3 * voice, 0.8);
+
+        std::vector<double> buffer (480, 0.0);
+
+        for (int block = 0; block < 10; ++block)
+            engine.process (buffer.data(), 480);   // let everything speak
+
+        const auto start = std::chrono::steady_clock::now();
+
+        for (int block = 0; block < 100; ++block)
+            engine.process (buffer.data(), 480);
+
+        const double seconds = std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - start).count();
+
+        std::printf ("  %-38s %7.2f%%\n", label, 100.0 * seconds);
+    };
+
+    VoiceSettings struck;
+    struck.partials = 64;
+    struck.decaySeconds = 2.0;
+
+    VoiceSettings bowed = struck;
+    bowed.exciter = Exciter::Bow;
+    bowed.bowPressure = 0.5;
+
+    costOf ("one struck voice, 64 partials", struck, 1, 0);
+    costOf ("16 struck voices, 64 partials", struck, 16, 0);
+    costOf ("16 bowed voices, 64 partials", bowed, 16, 0);
+    costOf ("16 bowed + 12 sympathetic strings", bowed, 16, 12);
+
+    std::printf ("\n  The plan budgeted 10-15%% of a core for the full instrument. A voice\n");
+    std::printf ("  whose key is up and whose vactrol has gone dark is retired and costs\n");
+    std::printf ("  nothing -- measured separately in tests/test_MalleusEngine.cpp.\n");
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -2683,6 +3096,7 @@ void printUsage()
     std::printf ("  sonitus         [--fs]  instrument aliasing, comb notches, tuning, CPU\n");
     std::printf ("  svarayantra     [--fs]  soundfont engine aliasing and CPU per voice\n");
     std::printf ("  ferrite         [--fs --out FILE]  tape loops, losses, aliasing, wobble, CPU\n");
+    std::printf ("  malleus         [--fs --out FILE]  mode tables, lock, decay, bow onset, CPU\n");
 }
 
 } // namespace
@@ -2713,6 +3127,7 @@ int main (int argc, char** argv)
     if (command == "sonitus")         return runSonitus (args);
     if (command == "svarayantra")     return runSvarayantra (args);
     if (command == "ferrite")         return runFerrite (args);
+    if (command == "malleus")         return runMalleus (args);
 
     printUsage();
     return 1;

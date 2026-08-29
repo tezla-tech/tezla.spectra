@@ -98,7 +98,7 @@ TEZLA_TEST (a_struck_note_rings_then_measurably_dies)
 
     double diedAt = -1.0;
 
-    for (int step = 0; step < 800; ++step)
+    for (int step = 0; step < 1500; ++step)
     {
         (void) renderSeconds (engine, 0.01, 480);
 
@@ -109,11 +109,21 @@ TEZLA_TEST (a_struck_note_rings_then_measurably_dies)
         }
     }
 
-    std::printf ("        [engine] voice measurably dead %.2f s after the strike\n",
-                 diedAt);
+    std::printf ("        [engine] voice measurably dead %.2f s after the strike"
+                 " (decay %.1f s)\n", diedAt, engine.settings().decaySeconds);
+
+    // The death time TRACKS the Decay setting rather than sitting at some
+    // fixed number: the vactrol's close is scaled to four times the
+    // object's decay, so a 1.5-second object is gone at about 6 s. Pinned
+    // as a window around that, which is a stronger claim than "eventually"
+    // -- it fails both if voices stop dying AND if the gate stops
+    // following the control (before it did, every setting died at 1.53 s
+    // and Decay was nearly inert, which the close-out measurement caught).
+    const double expected = 4.0 * engine.settings().decaySeconds;
 
     CHECK (diedAt > 0.0);
-    CHECK (diedAt < 5.0);
+    CHECK (diedAt > 0.7 * expected);
+    CHECK (diedAt < 1.3 * expected);
 
     const auto after = renderSeconds (engine, 0.1, 480);
 
