@@ -442,6 +442,7 @@ They were read from there rather than fetched.
 | Perttu Hämäläinen, "Smoothing of the Control Signal without Clipped Output in Digital Peak Limiters", **DAFx-02**, Hamburg, 2002 | Conference paper — cite, do not paste | The max-filter (order-statistics) construction that makes a smoothed limiter gain provably non-clipping. §3.5 describes the dual we actually use, and warns of its hazard. |
 | **ITU-R BS.1770-5** (11/2023), Annex 2 | ITU copyright; published for implementation | True-peak measurement: the 12.04 dB attenuation convention, the order-48 four-phase interpolating FIR, and the worst-case under-read table that decides our oversampling control. **The coefficient table is typed in verbatim** — the one thing in Capstone that is copied rather than derived. |
 | Geraint Luff / Signalsmith Audio, "Designing a straightforward limiter", 2022 | Article, © Signalsmith Audio Ltd — cite, do not paste | A modern treatment of the same structure. The hold refinement — widening the minimum window without widening the smoothing — comes from here. |
+| Dimitrios Giannoulis, Michael Massberg & Joshua D. Reiss, "Digital Dynamic Range Compressor Design — A Tutorial and Analysis", **JAES 60(6)**, 2012 | Journal paper — cite, do not paste; **not fetched from this container** | The quadratic soft-knee gain-computer form. `GainComputer` has named it in a comment since it was written; this row is the record that was missing. The infinite-ratio specialisation used by Capstone was derived and measured here rather than transcribed, and Syrinx V1 generalises it back to a finite ratio — a derivation checked by measuring the realised ratio, and pinned bit-exact against the limiter form at 1/ratio = 0. |
 
 ---
 
@@ -632,6 +633,32 @@ The membrane, bar and plate tables, the morph, and the Overtone Lock quantise
 are all checkable by measurement, so per section 9 they are **built, not
 taken**: the tests pin the low-mode values every acoustics text agrees on,
 which is the copy-proof kind of citation.
+
+---
+
+## Vocal dynamics -- Syrinx
+
+The rule of section 9 applied to a channel strip: the dynamics mathematics is
+textbook and is derived and measured here; the one thing worth taking is the
+knee form, recorded in the dynamics table above.
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| Giannoulis, Massberg & Reiss (above) | see the dynamics table | The soft-knee compressor curve, generalised to a finite ratio in `GainComputer` |
+| Linkwitz-Riley crossover (Linkwitz, JAES 1976; standard result) | mathematics, no licence | The de-esser's band split, through the existing `dsp::LinkwitzRiley4` |
+
+**Sibilance as a ratio rather than a level is our own construction**, not a
+transcription. The observation behind it -- that an /s/ is characterised by
+high-band energy being large *relative to* the voice's body, which is why a
+fixed high-band threshold both lisps and over-esses -- is ordinary phonetics
+(sibilant fricatives put their energy above about 4 kHz while vowels put it in
+the formants below 3 kHz), and the detector is built from that and then
+measured: the gate that decides whether it works is that a sung vowel swept
+across 40 dB produces no reduction while an /s/ at those same levels produces
+the same reduction at every one of them.
+
+Nothing here is taken from any commercial de-esser, compressor or channel
+strip. No binary has been inspected and no curve extracted.
 
 ---
 

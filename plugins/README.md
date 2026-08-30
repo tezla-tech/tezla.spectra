@@ -37,6 +37,7 @@ something else in the meantime:
 
 | Name | Code | Intended for |
 |------|------|--------------|
+| `Syrinx` | `Tzsy` | **Effect** — the vocal channel strip: gate, de-esser, two compressors and tone, in the order a vocal is actually mixed. The de-esser detects sibilance as a RATIO of high-band to body energy rather than an absolute level, so it neither lisps nor over-esses when the singer pushes. Saturation, air and limiting stay with Emberdrive, Halo and Capstone. Plan: [`Syrinx/PLAN.md`](Syrinx/PLAN.md) |
 | `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
 
 ---

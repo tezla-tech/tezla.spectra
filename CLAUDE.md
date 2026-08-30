@@ -731,10 +731,12 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
 - Keep `README.md`, `docs/BUILD.md` and `plugins/README.md` current in the
   same commit as the change that dated them.
 - **Work in progress is tracked in the active plugin's `PLAN.md`** — currently
-  `plugins/Malleus/PLAN.md`, whose Continuity section carries a per-phase
+  `plugins/Syrinx/PLAN.md`, whose Continuity section carries a per-phase
   status table and the resume checklist. Any session (whatever assistant or
   model is driving) resumes from the first `pending` phase there; the status
   row is flipped in the same commit as the phase it describes.
+  `plugins/Malleus/PLAN.md` is complete and stays as the worked example of the
+  shape.
 - Prefer a working, measurable, minimal version early over a large unproven
   one. Get it building on Windows, get it loading in FL Studio, then refine
   the sound with the user in the loop — the user's ears are the acceptance test.
