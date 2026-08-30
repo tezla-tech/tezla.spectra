@@ -646,6 +646,16 @@ knee form, recorded in the dynamics table above.
 |---|---|---|
 | Giannoulis, Massberg & Reiss (above) | see the dynamics table | The soft-knee compressor curve, generalised to a finite ratio in `GainComputer` |
 | Linkwitz-Riley crossover (Linkwitz, JAES 1976; standard result) | mathematics, no licence | The de-esser's band split, through the existing `dsp::LinkwitzRiley4` |
+| Feed-forward compressor topology (level -> static curve -> smoothing -> makeup), and hysteresis on a gate's two thresholds | standard engineering, no licence | `dsp::CompressorCore` and Syrinx's `Gate`. Both are built from the mechanism and then measured -- the ratio table, the attack and release times, the chatter counts -- rather than transcribed from anywhere |
+
+**The gate needs two mechanisms, not one, and measurement is what settled
+that.** The first draft of its test assumed hysteresis and hold were
+interchangeable ways of stopping chatter. They are not: on a 400 Hz tone
+sitting exactly on the threshold and wobbling +/-0.5 dB at 5 Hz, the gate flips
+1600 times in two seconds with neither, **20 times with a 40 ms hold and no
+hysteresis**, and once with 3 dB of hysteresis. Hold cannot bridge a 100 ms
+excursion; hysteresis cannot bridge a real gap between syllables. Two problems,
+two mechanisms, and the table is in `tests/test_Compressor.cpp`.
 
 **Sibilance as a ratio rather than a level is our own construction**, not a
 transcription. The observation behind it -- that an /s/ is characterised by
