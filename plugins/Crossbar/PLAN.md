@@ -170,7 +170,7 @@ CLAUDE.md.
 | D1 ToneTables | done |
 | D2 Companding + setBits | done |
 | D3 voice + engine + dialler + line | done |
-| D4 JUCE layer + presets | pending |
+| D4 JUCE layer + presets | done |
 | D5 editor — the keypad | pending |
 | D6 close-out | pending |
 

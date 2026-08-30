@@ -544,11 +544,26 @@ inline ToneProgram rotaryProgram() noexcept
         case Tone::col1477: return program (false, tones (kForever, kDialDb, kDtmfColHz[2]));
         case Tone::col1633: return program (false, tones (kForever, kDialDb, kDtmfColHz[3]));
 
-        default:
-            // Tone::dialNumber has no program of its own -- the engine plays
-            // the stored string -- and neither does Tone::count.
-            return ToneProgram {};
+        // The sixteen keypad tones returned above, before the switch. They
+        // are listed rather than swept up by a `default:` so that
+        // **-Wswitch-enum can check this switch covers the whole enum** --
+        // the plugin targets build with it, and a tone appended to the list
+        // and forgotten here would otherwise be a silent key that nothing
+        // caught.
+        case Tone::digit1: case Tone::digit2: case Tone::digit3:
+        case Tone::digit4: case Tone::digit5: case Tone::digit6:
+        case Tone::digit7: case Tone::digit8: case Tone::digit9:
+        case Tone::star:   case Tone::digit0: case Tone::hash:
+        case Tone::dtmfA:  case Tone::dtmfB:  case Tone::dtmfC: case Tone::dtmfD:
+
+        // No program of its own: the engine plays the stored dial string.
+        case Tone::dialNumber:
+
+        case Tone::count:
+            break;
     }
+
+    return ToneProgram {};
 }
 
 /// A tone's name, for the editor and for test failure messages.
