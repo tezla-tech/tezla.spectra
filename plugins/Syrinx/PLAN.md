@@ -163,7 +163,7 @@ CLAUDE.md.
 | phase | status |
 |---|---|
 | V0 plan + registry + references | done |
-| V1 GainComputer ratio | pending |
+| V1 GainComputer ratio | done |
 | V2 SibilanceDetector + DeEsser | pending |
 | V3 CompressorCore + Gate | pending |
 | V4 SyrinxEngine | pending |
