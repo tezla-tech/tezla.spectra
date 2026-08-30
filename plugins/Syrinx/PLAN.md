@@ -169,10 +169,26 @@ CLAUDE.md.
 | V4 SyrinxEngine | done |
 | V5 JUCE layer + presets | done |
 | V6 editor | done |
-| V7 close-out + VOCAL-CHAIN.md | pending |
+| V7 close-out + VOCAL-CHAIN.md | done |
 
-**To resume**: read CLAUDE.md in full, then this file; take the first
-`pending` phase. The non-negotiables that every phase here honours, in one
+**All seven phases are done; Syrinx v0.1.0 ships.** What remains is not a
+phase: it is the rig test. Nobody has loaded this into FL Studio, and no
+rapper has been through it. That is the acceptance test, and the numbers below
+do not substitute for it.
+
+Measured at close-out (`tezla-measure syrinx`, 48 kHz):
+
+| claim | figure |
+|---|---|
+| de-ess spread across 30 dB of input | **0.000 dB** |
+| de-ess reduction on a vowel | 0.40-0.42 dB (crossover skirt) |
+| gate transitions on the threshold, 3 dB hysteresis | **1** (1600 with none) |
+| measured ratio at 16:1 | 15.744:1 |
+| neutral identity | **40001 of 40001 samples bit-identical** |
+| CPU, every stage working, stereo | **1.28%** of a core |
+
+**To resume** (a later phase, or a fix): read CLAUDE.md in full, then this
+file; take the first `pending` phase. The non-negotiables that every phase here honours, in one
 place:
 
 - One phase = one commit. Tests written and RUN in that commit; every

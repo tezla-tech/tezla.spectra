@@ -28,6 +28,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | `Tzfe` | [`Ferrite`](Ferrite/) | Tezla Ferrite | Effect — the tape machine: Jiles–Atherton hysteresis, wavelength losses, head bump, wow and flutter, calibrated hiss. Plan: [`Ferrite/PLAN.md`](Ferrite/PLAN.md) | v0.1.0, builds and validates |
 | `Tzml` | [`Malleus`](Malleus/) | Tezla Malleus | **Instrument** — the impossible-object percussion synthesiser: modal physical modelling (bar/membrane/plate/bell tables derived from the physics), morphable material, **Overtone Lock** (the object's own partials quantised onto the loaded tuning), mallet/pluck/bow/roll exciters, per-hit tension drop, sympathetic bank, vactrol LPG. Plan: [`Malleus/PLAN.md`](Malleus/PLAN.md) | v0.1.0, builds and validates |
 | `Tzcb` | [`Crossbar`](Crossbar/) | Tezla Crossbar | **Instrument** — the telephone tone generator: every DTMF pair and call-progress tone to the published standards (ITU-T Q.23, the Bell Precise Tone Plan, the BT set), laid out drum-sampler style across the keyboard, with a dialler and a G.711 line — 300–3400 Hz, 8 kHz, 8-bit companded. Plan: [`Crossbar/PLAN.md`](Crossbar/PLAN.md) | v0.1.0, builds and validates |
+| `Tzsy` | [`Syrinx`](Syrinx/) | Tezla Syrinx | Effect — the vocal channel strip: gate, de-esser, two compressors and tone, in the order a vocal is actually mixed. The de-esser detects sibilance as a RATIO of high-band to body energy rather than an absolute level, so the same /s/ is reduced identically across 30 dB of input (0.000 dB of spread measured) and a bright vowel never triggers it. Saturation, air and limiting stay with Emberdrive, Halo and Capstone. Plan: [`Syrinx/PLAN.md`](Syrinx/PLAN.md) · Placement: [`docs/VOCAL-CHAIN.md`](../docs/VOCAL-CHAIN.md) | v0.1.0, builds and validates |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 
@@ -38,7 +39,6 @@ something else in the meantime:
 
 | Name | Code | Intended for |
 |------|------|--------------|
-| `Syrinx` | `Tzsy` | **Effect** — the vocal channel strip: gate, de-esser, two compressors and tone, in the order a vocal is actually mixed. The de-esser detects sibilance as a RATIO of high-band to body energy rather than an absolute level, so it neither lisps nor over-esses when the singer pushes. Saturation, air and limiting stay with Emberdrive, Halo and Capstone. Plan: [`Syrinx/PLAN.md`](Syrinx/PLAN.md) |
 | `Prism` | `Tzpr` | The multiband enhancer — four bands of harmonics plus per-band stereo width. Deliberately its own plugin rather than a mode of Halo: it costs considerably more CPU and signal complexity than belongs in a tool used on a single channel |
 
 ---
