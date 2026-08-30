@@ -167,7 +167,7 @@ CLAUDE.md.
 | V2 SibilanceDetector + DeEsser | done |
 | V3 CompressorCore + Gate | done |
 | V4 SyrinxEngine | done |
-| V5 JUCE layer + presets | pending |
+| V5 JUCE layer + presets | done |
 | V6 editor | pending |
 | V7 close-out + VOCAL-CHAIN.md | pending |
 
