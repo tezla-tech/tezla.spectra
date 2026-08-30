@@ -27,6 +27,7 @@ corrupt install. The build cannot detect this; this table is the only guard.
 | `Tzsv` | [`Svarayantra`](Svarayantra/) | Tezla Svarayantra | **Instrument** — SoundFont (.sf2) player with the full microtuning engine: the 44 built-in scales, `.scl`/`.kbm`, concert pitch. Sanskrit *svara-yantra*, "the note-machine". Plan: [`Svarayantra/PLAN.md`](Svarayantra/PLAN.md) | v0.1.0, builds and validates |
 | `Tzfe` | [`Ferrite`](Ferrite/) | Tezla Ferrite | Effect — the tape machine: Jiles–Atherton hysteresis, wavelength losses, head bump, wow and flutter, calibrated hiss. Plan: [`Ferrite/PLAN.md`](Ferrite/PLAN.md) | v0.1.0, builds and validates |
 | `Tzml` | [`Malleus`](Malleus/) | Tezla Malleus | **Instrument** — the impossible-object percussion synthesiser: modal physical modelling (bar/membrane/plate/bell tables derived from the physics), morphable material, **Overtone Lock** (the object's own partials quantised onto the loaded tuning), mallet/pluck/bow/roll exciters, per-hit tension drop, sympathetic bank, vactrol LPG. Plan: [`Malleus/PLAN.md`](Malleus/PLAN.md) | v0.1.0, builds and validates |
+| `Tzcb` | [`Crossbar`](Crossbar/) | Tezla Crossbar | **Instrument** — the telephone tone generator: every DTMF pair and call-progress tone to the published standards (ITU-T Q.23, the Bell Precise Tone Plan, the BT set), laid out drum-sampler style across the keyboard, with a dialler and a G.711 line — 300–3400 Hz, 8 kHz, 8-bit companded. Plan: [`Crossbar/PLAN.md`](Crossbar/PLAN.md) | in progress |
 
 Codes are case-sensitive and conventionally start with `Tz`.
 

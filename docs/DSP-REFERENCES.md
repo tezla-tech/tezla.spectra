@@ -662,6 +662,48 @@ strip. No binary has been inspected and no curve extracted.
 
 ---
 
+## Telephony -- Crossbar
+
+Section 9's exception, and the clearest example of it in the repository.
+Everywhere else here the rule is *derive and measure*; a telephone tone is the
+opposite case, because **measurement cannot tell you that 941 Hz should have
+been 940**. Every frequency, level and cadence below is a published standard
+figure, taken deliberately, attributed at the point of use in
+`plugins/Crossbar/Dsp/ToneTables.hpp` and pinned by a test in the commit that
+introduced it.
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| ITU-T Recommendation Q.23, *Technical features of push-button telephone sets* | ITU standard; **not fetched from this container** -- itu.int is refused by the egress proxy. The four low and four high group frequencies are quoted identically by every secondary source consulted, including ETSI ES 201 235-2 and the Q.24 abstract | The 4x4 DTMF matrix: rows 697 / 770 / 852 / 941 Hz, columns 1209 / 1336 / 1477 / 1633 Hz, and the 1.5-1.8% frequency tolerance the plugin's own accuracy is judged against |
+| ITU-T Recommendation Q.24 (national DTMF receiver requirements) | ITU standard; abstract only | Normal and reverse **twist** -- the receiver must accept 8 dB normal / 4 dB reverse, which is why Crossbar's Twist control is centred at the +2 dB transmitters actually use and swept over the range a decoder tolerates |
+| Bell System **Precise Tone Plan** (AT&T, 1976) | historic standard, published; secondary sources only -- **the original Bell practice was not obtained** | The North American call-progress set: dial 350+440 continuous; audible ringing 440+480 at 2 s on / 4 s off; busy 480+620 at 0.5/0.5; reorder ("fast busy") 480+620 at 0.25/0.25; and the reference levels -13 / -19 / -24 dBm those four are specified at |
+| Receiver-off-hook (howler / ROH) tone, North American Numbering Plan practice | published practice; secondary sources | 1400 + 2060 + 2450 + 2600 Hz at 0.1 s on / 0.1 s off, at a level deliberately far above every other in-band signal -- it is meant to be heard across a room |
+| AT&T / Bellcore **Special Information Tone** (SIT) | published standard; secondary sources | The three-tone intercept: first segment 913.8 Hz (short variant) or 985.2 Hz (long), second 1370.6 / 1428.5 Hz, third always 1776.7 Hz; segments of 274 ms or 380 ms with the third always 380 ms |
+| British Telecom / BT network tones (the UK set) | published practice; secondary sources | Dial 350+450 continuous (the 100 Hz beat is the point); engaged 400 Hz at 0.375/0.375; ringing 400+450 at 0.4 on / 0.2 off / 0.4 on / 2.0 off; number unobtainable 400 Hz continuous; congestion 400 Hz at 0.4/0.35/0.225/0.525 **with the second burst 6 dB louder** |
+| ITU-T Recommendation **G.711**, *Pulse code modulation (PCM) of voice frequencies* | ITU standard; **not fetched from this container**. The segment structure below is reconstructed from the standard's well-known form and then verified three ways by measurement | The two companding laws. mu-law: 14-bit input, bias 33, clip 8159, eight segments ending at `(64 << s) - 1`; A-law: 13-bit input, no bias, segments ending at `(32 << s) - 1` with the first two sharing a step. Both reconstruct at the interval midpoint, giving the maximum output magnitudes 8031/8192 and 4032/4096 that the plugin's ceiling test pins |
+| Sun Microsystems' `g711.c` (the CCITT reference implementation lineage; carried by SoX, MBROLA and many others) | "Users may copy or modify this source code without charge" -- permissive, and compatible | **Consulted for the constants only** -- BIAS 0x84, CLIP 8159, and the segment-end tables. No code taken: the segment ends are `(64 << s) - 1` and `(32 << s) - 1`, which is just where the octaves fall, so `Companding.hpp` derives them and the bit packing follows from the structure rather than from anyone's source file |
+| ITU-T Recommendation G.712 (transmission performance of PCM channels) | ITU standard; not fetched | The 300-3400 Hz toll band that the BAND control's default reproduces |
+| ITU-T Recommendation G.722 (7 kHz audio-coding within 64 kbit/s) | ITU standard; not fetched | The 50-7000 Hz wideband option and the 16 kHz rate the RATE list names |
+
+**What was not obtainable, and what that costs.** The ITU-T texts, the Bell
+practice documents and the BT specification are all refused by this container's
+egress proxy, so every figure above reached the plugin through search results
+and secondary technical sources rather than through the standard itself. The
+figures are consistent across the sources consulted and are not obscure -- they
+are quoted identically by ETSI documents, vendor application notes and
+telephony references -- but *"the standard says X"* and *"every secondary
+source says the standard says X"* are different claims and this row is the
+difference. If the primary documents become available, the numbers worth
+re-checking first are the SIT segment durations (274 vs 276 ms appears both
+ways in secondary sources) and the BT congestion tone's level step.
+
+Nothing here is taken from any commercial plugin, sample library or recording.
+No binary has been inspected. The tones are generated from their published
+frequencies, which is the only way this could have been done anyway: a
+telephone tone *is* its specification.
+
+---
+
 ## Products referenced as sonic targets only
 
 Named in this repository to describe a *sound* or a *workflow*. No binary has
