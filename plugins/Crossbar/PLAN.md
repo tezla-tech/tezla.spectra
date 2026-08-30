@@ -172,10 +172,21 @@ CLAUDE.md.
 | D3 voice + engine + dialler + line | done |
 | D4 JUCE layer + presets | done |
 | D5 editor — the keypad | done |
-| D6 close-out | pending |
+| D6 close-out | done |
 
-**To resume**: read CLAUDE.md in full, then this file; take the first `pending`
-phase. The non-negotiables, in one place:
+**Every phase is done.** Crossbar ships at v0.1.0: it builds, it passes
+Steinberg's validator 47/47, and `tezla-measure crossbar` reports its numbers --
+all sixteen DTMF pairs exact to 0.000 Hz, cadences identical to four decimal
+places at 44.1 / 48 / 96 / 192 kHz, the companded codec's SNR flat within
+4.27 dB across 40 dB where a linear one loses 38.91, and 1.87% of a core for
+sixteen tones through the full line. What has *not* happened is the acceptance
+test: nobody has played it in FL Studio on the rig it was written for. Anything
+further starts from what the user's ears say there.
+
+Syrinx resumes at V3.
+
+**To resume** (if a phase is ever reopened): read CLAUDE.md in full, then this
+file; take the first `pending` phase. The non-negotiables, in one place:
 
 - One phase = one commit. Tests written and RUN in that commit; every
   mechanism seen red first or break-checked (edit → red → revert), with the

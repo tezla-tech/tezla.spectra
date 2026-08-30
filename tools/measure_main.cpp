@@ -43,6 +43,7 @@
 #include "AnvilEngine.hpp"
 #include "FerriteEngine.hpp"
 #include "CapstoneEngine.hpp"
+#include "CrossbarEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
 #include "MalleusEngine.hpp"
@@ -3077,6 +3078,425 @@ int runMalleus (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Crossbar -- the telephone tone instrument
+// ---------------------------------------------------------------------------
+
+namespace crossbarMeasure {
+
+using namespace tezla::crossbar;
+
+/// Hann-windowed amplitude at a frequency, normalised so a pure sine of
+/// amplitude A reads A. RMS rather than peak, per CLAUDE.md section 10.
+double amplitudeAt (const std::vector<double>& x, std::size_t from, std::size_t to,
+                    double hz, double rate)
+{
+    double re = 0.0;
+    double im = 0.0;
+    double windowSum = 0.0;
+
+    const double span = static_cast<double> (to - from);
+
+    for (std::size_t n = from; n < to && n < x.size(); ++n)
+    {
+        const double along = static_cast<double> (n - from) / span;
+        const double window = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * along);
+        const double phase = 2.0 * std::numbers::pi * hz
+                               * static_cast<double> (n - from) / rate;
+
+        re += window * x[n] * std::cos (phase);
+        im -= window * x[n] * std::sin (phase);
+        windowSum += window;
+    }
+
+    return windowSum <= 0.0 ? 0.0 : 2.0 * std::hypot (re, im) / windowSum;
+}
+
+CrossbarEngine::Parameters plain()
+{
+    CrossbarEngine::Parameters p;
+    p.attackSeconds = 0.002;
+    p.decaySeconds = 0.1;
+    p.sustain = 1.0;
+    p.releaseSeconds = 0.02;
+    p.band = BandMode::off;
+    p.rateIndex = 0;
+    p.codec = tezla::dsp::CompandingLaw::off;
+    return p;
+}
+
+std::vector<double> render (CrossbarEngine& engine, int note, double seconds, double rate)
+{
+    const auto total = static_cast<std::size_t> (seconds * rate);
+    std::vector<double> out (total, 0.0);
+
+    engine.noteOn (note, 1.0);
+
+    for (std::size_t n = 0; n < total; n += 128)
+        engine.process (out.data() + n,
+                        nullptr,
+                        static_cast<int> (std::min<std::size_t> (128, total - n)));
+
+    return out;
+}
+
+/// A boxcar RMS envelope with a threshold at 1/sqrt(2) of the peak: the only
+/// shape whose crossings are unbiased on both edges, so a burst measures the
+/// length it actually is. See tests/test_Crossbar.cpp for what the two wrong
+/// shapes did.
+std::vector<double> crossings (const std::vector<double>& x, double rate)
+{
+    const auto window = static_cast<std::size_t> (0.040 * rate);
+    std::vector<double> envelope (x.size(), 0.0);
+    double sum = 0.0;
+
+    for (std::size_t n = 0; n < x.size(); ++n)
+    {
+        sum += x[n] * x[n];
+
+        if (n >= window)
+            sum -= x[n - window] * x[n - window];
+
+        envelope[n] = std::sqrt (sum / static_cast<double> (window));
+    }
+
+    const double threshold = *std::max_element (envelope.begin(), envelope.end())
+                               / std::numbers::sqrt2;
+
+    std::vector<double> found;
+    bool above = false;
+
+    for (std::size_t n = 0; n < envelope.size(); ++n)
+    {
+        const bool nowAbove = envelope[n] > threshold;
+
+        if (n > 0 && nowAbove != above)
+            found.push_back (static_cast<double> (n) / rate);
+
+        above = nowAbove;
+    }
+
+    return found;
+}
+
+double snrForSine (const tezla::dsp::Compander& compander, double levelDb, double rate)
+{
+    const auto length = static_cast<std::size_t> (10.0 * rate);
+    const double amplitude = tezla::dsp::dbToGain (levelDb);
+
+    double signalPower = 0.0;
+    double errorPower = 0.0;
+
+    for (std::size_t n = 0; n < length; ++n)
+    {
+        const double x = amplitude
+                           * std::sin (2.0 * std::numbers::pi * 997.0
+                                         * static_cast<double> (n) / rate);
+        const double y = compander.process (x);
+
+        signalPower += x * x;
+        errorPower += (y - x) * (y - x);
+    }
+
+    return errorPower <= 0.0 ? 999.0 : 10.0 * std::log10 (signalPower / errorPower);
+}
+
+} // namespace crossbarMeasure
+
+int runCrossbar (const Args& args)
+{
+    using namespace tezla;
+    using namespace crossbarMeasure;
+
+    const double rate = args.sampleRate;
+
+    // ---- 1. the DTMF matrix, against ITU-T Q.23 ------------------------------
+
+    std::printf ("The sixteen DTMF pairs, measured at the engine's output against the\n");
+    std::printf ("Q.23 figures. A real receiver accepts 1.5%%; the error here is the\n");
+    std::printf ("analysis window's, not the generator's.\n\n");
+
+    std::printf ("  %-4s %10s %10s %10s %10s %10s\n",
+                 "key", "low asked", "measured", "high asked", "measured", "twist dB");
+
+    double worstError = 0.0;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        const auto tone = static_cast<Tone> (i);
+
+        int row = 0, column = 0;
+        dtmfIndices (tone, row, column);
+
+        CrossbarEngine engine;
+        engine.prepare (rate);
+        engine.setParameters (plain());
+
+        const auto out = render (engine, noteForTone (tone), 0.45, rate);
+
+        const auto from = static_cast<std::size_t> (0.10 * rate);
+        const auto to = static_cast<std::size_t> (0.40 * rate);
+
+        // The peak of a windowed DFT swept either side of the asked frequency
+        // is where the tone actually is.
+        const auto peakNear = [&] (double asked)
+        {
+            double best = asked;
+            double bestAmplitude = 0.0;
+
+            for (double hz = asked - 6.0; hz <= asked + 6.0; hz += 0.05)
+            {
+                const double amplitude = amplitudeAt (out, from, to, hz, rate);
+
+                if (amplitude > bestAmplitude)
+                {
+                    bestAmplitude = amplitude;
+                    best = hz;
+                }
+            }
+
+            return std::pair { best, bestAmplitude };
+        };
+
+        const auto [lowHz, lowAmplitude] = peakNear (kDtmfRowHz[row]);
+        const auto [highHz, highAmplitude] = peakNear (kDtmfColHz[column]);
+
+        worstError = std::max ({ worstError,
+                                 std::abs (lowHz - kDtmfRowHz[row]),
+                                 std::abs (highHz - kDtmfColHz[column]) });
+
+        std::printf ("  %-4s %10.0f %10.2f %10.0f %10.2f %10.3f\n",
+                     nameFor (tone), kDtmfRowHz[row], lowHz,
+                     kDtmfColHz[column], highHz,
+                     20.0 * std::log10 (highAmplitude / lowAmplitude));
+    }
+
+    std::printf ("\n  Worst frequency error over all 32 tones: %.3f Hz, which is %.4f%% of\n",
+                 worstError, 100.0 * worstError / 697.0);
+    std::printf ("  the lowest one -- against the 1.5%% a receiver tolerates.\n");
+
+    // ---- 2. what else is in there -------------------------------------------
+
+    {
+        CrossbarEngine engine;
+        engine.prepare (rate);
+        engine.setParameters (plain());
+
+        const auto out = render (engine, noteForTone (Tone::digit5), 0.5, rate);
+        const auto from = static_cast<std::size_t> (0.10 * rate);
+        const auto to = static_cast<std::size_t> (0.40 * rate);
+
+        double worst = 0.0;
+        double worstHz = 0.0;
+
+        for (double hz = 100.0; hz <= 20000.0; hz += 25.0)
+        {
+            if (std::abs (hz - 770.0) < 150.0 || std::abs (hz - 1336.0) < 150.0)
+                continue;
+
+            const double amplitude = amplitudeAt (out, from, to, hz, rate);
+
+            if (amplitude > worst)
+            {
+                worst = amplitude;
+                worstHz = hz;
+            }
+        }
+
+        std::printf ("\n  Loudest component anywhere else, 100 Hz to 20 kHz: %.3e at %.0f Hz,\n",
+                     worst, worstHz);
+        std::printf ("  which is %.1f dB down. A sine has no harmonics to fold, which is why\n",
+                     20.0 * std::log10 (worst / 0.4427));
+        std::printf ("  this instrument oversamples nowhere.\n");
+    }
+
+    // ---- 3. cadences, at four sample rates ----------------------------------
+
+    std::printf ("\nCadence timing across sample rates. The tables state seconds and the\n");
+    std::printf ("coefficients come from the actual rate, so these must not move.\n\n");
+
+    std::printf ("  %-10s %12s %12s %12s\n", "rate", "burst (s)", "period (s)", "UK gap (s)");
+
+    for (double fs : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        CrossbarEngine bell;
+        bell.prepare (fs);
+        bell.setParameters (plain());
+
+        const auto busy = crossings (render (bell, noteForTone (Tone::busy), 2.6, fs), fs);
+
+        auto uk = plain();
+        uk.region = Region::unitedKingdom;
+
+        CrossbarEngine bt;
+        bt.prepare (fs);
+        bt.setParameters (uk);
+
+        const auto ring = crossings (render (bt, noteForTone (Tone::ringback), 3.5, fs), fs);
+
+        std::printf ("  %-10.0f %12.4f %12.4f %12.4f\n", fs,
+                     busy.size() >= 2 ? busy[1] - busy[0] : -1.0,
+                     busy.size() >= 3 ? busy[2] - busy[0] : -1.0,
+                     ring.size() >= 3 ? ring[2] - ring[1] : -1.0);
+    }
+
+    std::printf ("\n  Asked: 0.5 burst, 1.0 period, 0.2 UK gap.\n");
+
+    // ---- 4. G.711, which is where the sound comes from -----------------------
+
+    std::printf ("\nThe line's codec: signal-to-noise against level, on a 997 Hz sine.\n");
+    std::printf ("A companding law's noise follows the signal down; a linear quantiser's\n");
+    std::printf ("does not, and that difference IS the difference between a telephone and\n");
+    std::printf ("a sampler.\n\n");
+
+    std::printf ("  %-10s %10s %10s %10s\n", "level dB", "mu-law", "A-law", "linear 8");
+
+    dsp::Compander mu;
+    mu.setLaw (dsp::CompandingLaw::muLaw);
+
+    dsp::Compander a;
+    a.setLaw (dsp::CompandingLaw::aLaw);
+
+    dsp::Compander linear;
+    linear.setLaw (dsp::CompandingLaw::linear);
+    linear.setBits (8);
+
+    double muTop = -999.0, muBottom = 999.0;
+    double linearTop = -999.0, linearBottom = 999.0;
+
+    for (double levelDb = 0.0; levelDb >= -40.001; levelDb -= 10.0)
+    {
+        const double muSnr = snrForSine (mu, levelDb, rate);
+        const double aSnr = snrForSine (a, levelDb, rate);
+        const double linearSnr = snrForSine (linear, levelDb, rate);
+
+        muTop = std::max (muTop, muSnr);
+        muBottom = std::min (muBottom, muSnr);
+        linearTop = std::max (linearTop, linearSnr);
+        linearBottom = std::min (linearBottom, linearSnr);
+
+        std::printf ("  %-10.0f %10.2f %10.2f %10.2f\n", levelDb, muSnr, aSnr, linearSnr);
+    }
+
+    std::printf ("\n  Spread over the 40 dB: mu-law %.2f dB, linear %.2f dB.\n",
+                 muTop - muBottom, linearTop - linearBottom);
+    std::printf ("  Ceilings the structure implies: mu-law %.6f, A-law %.6f.\n",
+                 dsp::Compander::kMuPeak, dsp::Compander::kAPeak);
+
+    // ---- 5. the band, and the aliasing that is on purpose -------------------
+
+    std::printf ("\nThe band edges, measured on the DTMF constituent tones, and the image\n");
+    std::printf ("the rate reduction is SUPPOSED to make.\n\n");
+
+    {
+        const auto through = [&] (BandMode band, Tone tone, double hz)
+        {
+            CrossbarEngine engine;
+            engine.prepare (rate);
+
+            auto p = plain();
+            p.band = band;
+            engine.setParameters (p);
+
+            const auto out = render (engine, noteForTone (tone), 0.5, rate);
+
+            return amplitudeAt (out, static_cast<std::size_t> (0.15 * rate),
+                                static_cast<std::size_t> (0.45 * rate), hz, rate);
+        };
+
+        std::printf ("  %-10s %10s %10s %10s\n", "probe", "off", "toll dB", "wide dB");
+
+        const Tone probes[] { Tone::row697, Tone::row941, Tone::col1633,
+                              Tone::singleFrequency };
+        const double hz[] { 697.0, 941.0, 1633.0, 2600.0 };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            const double reference = through (BandMode::off, probes[i], hz[i]);
+
+            std::printf ("  %-10.0f %10.4f %10.3f %10.3f\n", hz[i], reference,
+                         20.0 * std::log10 (through (BandMode::toll, probes[i], hz[i])
+                                              / reference),
+                         20.0 * std::log10 (through (BandMode::wideband, probes[i], hz[i])
+                                              / reference));
+        }
+
+        const auto image = [&] (int rateIndex)
+        {
+            CrossbarEngine engine;
+            engine.prepare (rate);
+
+            auto p = plain();
+            p.rateIndex = rateIndex;
+            engine.setParameters (p);
+
+            const auto out = render (engine, noteForTone (Tone::col1477), 0.5, rate);
+
+            return amplitudeAt (out, static_cast<std::size_t> (0.10 * rate),
+                                static_cast<std::size_t> (0.40 * rate), 2523.0, rate);
+        };
+
+        std::printf ("\n  1477 Hz held and sampled at 4 kHz images at 2523 Hz:\n");
+        std::printf ("    rate off  %.3e (%.1f dB)\n", image (0),
+                     20.0 * std::log10 (std::max (image (0), 1.0e-12)));
+        std::printf ("    4 kHz     %.3e (%.1f dB)\n", image (7),
+                     20.0 * std::log10 (std::max (image (7), 1.0e-12)));
+        std::printf ("  That is CLAUDE.md section 7's documented exception, on purpose.\n");
+    }
+
+    // ---- 6. what it costs ---------------------------------------------------
+
+    std::printf ("\nCPU, as a percentage of one core at %.0f Hz.\n\n", rate);
+
+    {
+        const auto costOf = [&] (const char* label, int voices, bool line)
+        {
+            CrossbarEngine engine;
+            engine.prepare (rate);
+
+            auto p = plain();
+
+            if (line)
+            {
+                p.band = BandMode::toll;
+                p.rateIndex = kDefaultRateIndex;
+                p.codec = dsp::CompandingLaw::muLaw;
+                p.noise = 0.3;
+            }
+
+            engine.setParameters (p);
+
+            for (int i = 0; i < voices; ++i)
+                engine.noteOn (noteForTone (Tone::dialTone) + i, 1.0);
+
+            const auto total = static_cast<std::size_t> (4.0 * rate);
+            std::vector<double> buffer (512, 0.0);
+
+            const auto start = std::chrono::steady_clock::now();
+
+            for (std::size_t n = 0; n < total; n += 512)
+                engine.process (buffer.data(), nullptr, 512);
+
+            const auto elapsed = std::chrono::duration<double> (
+                std::chrono::steady_clock::now() - start).count();
+
+            std::printf ("  %-40s %6.2f%%\n", label,
+                         100.0 * elapsed / (static_cast<double> (total) / rate));
+        };
+
+        costOf ("one tone, line off", 1, false);
+        costOf ("16 tones, line off", 16, false);
+        costOf ("16 tones, full line (toll/8k/mu/hiss)", 16, true);
+        costOf ("idle, full line", 0, true);
+    }
+
+    if (! args.outPath.empty())
+        std::printf ("\n  (--out is accepted for consistency; this command prints tables "
+                     "rather than writing a CSV.)\n");
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -3096,6 +3516,7 @@ void printUsage()
     std::printf ("  svarayantra     [--fs]  soundfont engine aliasing and CPU per voice\n");
     std::printf ("  ferrite         [--fs --out FILE]  tape loops, losses, aliasing, wobble, CPU\n");
     std::printf ("  malleus         [--fs --out FILE]  mode tables, lock, decay, bow onset, CPU\n");
+    std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
 }
 
 } // namespace
@@ -3127,6 +3548,7 @@ int main (int argc, char** argv)
     if (command == "svarayantra")     return runSvarayantra (args);
     if (command == "ferrite")         return runFerrite (args);
     if (command == "malleus")         return runMalleus (args);
+    if (command == "crossbar")        return runCrossbar (args);
 
     printUsage();
     return 1;

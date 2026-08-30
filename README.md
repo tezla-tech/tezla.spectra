@@ -146,6 +146,7 @@ are both latency-matched to the sample. See
 | **[Svarayantra](plugins/Svarayantra/)** | **Instrument** — microtuned SoundFont player: the tuning engine applied to samples | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Ferrite](plugins/Ferrite/)** | Tape machine — hysteresis, wavelength losses, head bump, wow and flutter, calibrated hiss | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Malleus](plugins/Malleus/)** | **Instrument** — modal percussion: objects derived from the physics, with **Overtone Lock** quantising their own partials onto the loaded scale | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Crossbar](plugins/Crossbar/)** | **Instrument** — the telephone: every DTMF pair and call-progress tone to the published standards, a dialler, and a G.711 line — 300–3400 Hz, 8 kHz, eight *logarithmic* bits | v0.1.0 — 47/47 on Steinberg's validator |
 
 806 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it

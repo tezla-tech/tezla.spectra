@@ -263,7 +263,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **806 on x86-64** (Svarayantra, Ferrite and Malleus included, all nine plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **860 on x86-64** (Svarayantra, Ferrite, Malleus and Crossbar included, all ten plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -731,14 +731,13 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
 - Keep `README.md`, `docs/BUILD.md` and `plugins/README.md` current in the
   same commit as the change that dated them.
 - **Work in progress is tracked in the active plugin's `PLAN.md`** — currently
-  `plugins/Crossbar/PLAN.md`, whose Continuity section carries a per-phase
-  status table and the resume checklist. Any session (whatever assistant or
-  model is driving) resumes from the first `pending` phase there; the status
-  row is flipped in the same commit as the phase it describes.
-  `plugins/Syrinx/PLAN.md` is **paused at V2** — the user asked for Crossbar
-  first, in those words — and resumes from its own first `pending` phase once
-  Crossbar D6 lands. `plugins/Malleus/PLAN.md` is complete and stays as the
-  worked example of the shape.
+  `plugins/Syrinx/PLAN.md`, whose Continuity section carries a per-phase status
+  table and the resume checklist. Any session (whatever assistant or model is
+  driving) resumes from the first `pending` phase there; the status row is
+  flipped in the same commit as the phase it describes. Syrinx was **paused at
+  V2** while Crossbar was built, at the user's request, and resumes at V3.
+  `plugins/Malleus/PLAN.md` and `plugins/Crossbar/PLAN.md` are complete and
+  stay as the worked examples of the shape.
 - Prefer a working, measurable, minimal version early over a large unproven
   one. Get it building on Windows, get it loading in FL Studio, then refine
   the sound with the user in the loop — the user's ears are the acceptance test.
