@@ -529,9 +529,9 @@ void SyrinxProcessor::prepareToPlay (double sampleRate, int maximumExpectedSampl
 
     engine_.prepare (sampleRate);
 
-    const int blockSize = juce::jmax (16, maximumExpectedSamplesPerBlock);
-    scratch_.setSize (SyrinxEngine::kChannels, blockSize, false, false, true);
-    dry_.setSize (SyrinxEngine::kChannels, blockSize, false, false, true);
+    const int preparedBlock = juce::jmax (16, maximumExpectedSamplesPerBlock);
+    scratch_.setSize (SyrinxEngine::kChannels, preparedBlock, false, false, true);
+    dry_.setSize (SyrinxEngine::kChannels, preparedBlock, false, false, true);
 
     // Zero latency, and that is a design choice rather than an omission:
     // nothing here is oversampled and nothing looks ahead, so there is nothing
@@ -552,43 +552,60 @@ void SyrinxProcessor::prepareToPlay (double sampleRate, int maximumExpectedSampl
 
 void SyrinxProcessor::pullParameters()
 {
-    settings_.inputTrimDb = valueOf (state_, ids::inputTrim);
-    settings_.highpassHz = valueOf (state_, ids::highpass);
-    settings_.outputTrimDb = valueOf (state_, ids::outputTrim);
+    settings_ = settingsFromParameters();
+}
 
-    settings_.gate.thresholdDb = valueOf (state_, ids::gateThreshold);
-    settings_.gate.hysteresisDb = valueOf (state_, ids::gateHysteresis);
-    settings_.gate.attackMs = valueOf (state_, ids::gateAttack);
-    settings_.gate.holdMs = valueOf (state_, ids::gateHold);
-    settings_.gate.releaseMs = valueOf (state_, ids::gateRelease);
-    settings_.gate.sidechainHz = valueOf (state_, ids::gateSidechain);
+bool SyrinxProcessor::isIdentity() const
+{
+    // Built from the **parameters**, not from what the engine happens to be
+    // set to. Before the transport has ever run, the engine still holds its
+    // default-constructed settings -- which are neutral -- so asking it would
+    // have the panel claim bit-exact transparency for a strip whose controls
+    // say otherwise. Crossbar's chain readout had exactly this bug.
+    return SyrinxEngine::isIdentity (settingsFromParameters());
+}
 
-    settings_.deEss.cornerHz = valueOf (state_, ids::deEssCorner);
-    settings_.deEss.thresholdDb = valueOf (state_, ids::deEssThreshold);
-    settings_.deEss.ratio = valueOf (state_, ids::deEssRatio);
-    settings_.deEss.kneeDb = valueOf (state_, ids::deEssKnee);
-    settings_.deEss.attackMs = valueOf (state_, ids::deEssAttack);
-    settings_.deEss.releaseMs = valueOf (state_, ids::deEssRelease);
-    settings_.deEss.listen = flagOf (state_, ids::deEssListen);
+SyrinxEngine::Settings SyrinxProcessor::settingsFromParameters() const
+{
+    SyrinxEngine::Settings settings;
 
-    settings_.leveller.thresholdDb = valueOf (state_, ids::comp1Threshold);
-    settings_.leveller.kneeDb = valueOf (state_, ids::comp1Knee);
-    settings_.leveller.attackMs = valueOf (state_, ids::comp1Attack);
-    settings_.leveller.releaseMs = valueOf (state_, ids::comp1Release);
-    settings_.leveller.sidechainHz = valueOf (state_, ids::comp1Sidechain);
-    settings_.leveller.programDependent = flagOf (state_, ids::comp1Auto);
+    settings.inputTrimDb = valueOf (state_, ids::inputTrim);
+    settings.highpassHz = valueOf (state_, ids::highpass);
+    settings.outputTrimDb = valueOf (state_, ids::outputTrim);
 
-    settings_.peak.thresholdDb = valueOf (state_, ids::comp2Threshold);
-    settings_.peak.kneeDb = valueOf (state_, ids::comp2Knee);
-    settings_.peak.attackMs = valueOf (state_, ids::comp2Attack);
-    settings_.peak.releaseMs = valueOf (state_, ids::comp2Release);
-    settings_.peak.sidechainHz = valueOf (state_, ids::comp2Sidechain);
-    settings_.peak.programDependent = flagOf (state_, ids::comp2Auto);
+    settings.gate.thresholdDb = valueOf (state_, ids::gateThreshold);
+    settings.gate.hysteresisDb = valueOf (state_, ids::gateHysteresis);
+    settings.gate.attackMs = valueOf (state_, ids::gateAttack);
+    settings.gate.holdMs = valueOf (state_, ids::gateHold);
+    settings.gate.releaseMs = valueOf (state_, ids::gateRelease);
+    settings.gate.sidechainHz = valueOf (state_, ids::gateSidechain);
 
-    settings_.eq.lowShelfHz = valueOf (state_, ids::eqLowHz);
-    settings_.eq.midHz = valueOf (state_, ids::eqMidHz);
-    settings_.eq.midQ = valueOf (state_, ids::eqMidQ);
-    settings_.eq.highShelfHz = valueOf (state_, ids::eqHighHz);
+    settings.deEss.cornerHz = valueOf (state_, ids::deEssCorner);
+    settings.deEss.thresholdDb = valueOf (state_, ids::deEssThreshold);
+    settings.deEss.ratio = valueOf (state_, ids::deEssRatio);
+    settings.deEss.kneeDb = valueOf (state_, ids::deEssKnee);
+    settings.deEss.attackMs = valueOf (state_, ids::deEssAttack);
+    settings.deEss.releaseMs = valueOf (state_, ids::deEssRelease);
+    settings.deEss.listen = flagOf (state_, ids::deEssListen);
+
+    settings.leveller.thresholdDb = valueOf (state_, ids::comp1Threshold);
+    settings.leveller.kneeDb = valueOf (state_, ids::comp1Knee);
+    settings.leveller.attackMs = valueOf (state_, ids::comp1Attack);
+    settings.leveller.releaseMs = valueOf (state_, ids::comp1Release);
+    settings.leveller.sidechainHz = valueOf (state_, ids::comp1Sidechain);
+    settings.leveller.programDependent = flagOf (state_, ids::comp1Auto);
+
+    settings.peak.thresholdDb = valueOf (state_, ids::comp2Threshold);
+    settings.peak.kneeDb = valueOf (state_, ids::comp2Knee);
+    settings.peak.attackMs = valueOf (state_, ids::comp2Attack);
+    settings.peak.releaseMs = valueOf (state_, ids::comp2Release);
+    settings.peak.sidechainHz = valueOf (state_, ids::comp2Sidechain);
+    settings.peak.programDependent = flagOf (state_, ids::comp2Auto);
+
+    settings.eq.lowShelfHz = valueOf (state_, ids::eqLowHz);
+    settings.eq.midHz = valueOf (state_, ids::eqMidHz);
+    settings.eq.midQ = valueOf (state_, ids::eqMidQ);
+    settings.eq.highShelfHz = valueOf (state_, ids::eqHighHz);
 
     // The per-stage switches. Each forces the stage to the neutral value the
     // engine already proves is a bit-exact identity, rather than branching
@@ -601,20 +618,22 @@ void SyrinxProcessor::pullParameters()
     const bool comp2On = flagOf (state_, ids::comp2On);
     const bool eqOn = flagOf (state_, ids::eqOn);
 
-    settings_.gate.rangeDb = gateOn ? valueOf (state_, ids::gateRange) : 0.0;
-    settings_.deEss.rangeDb = deEssOn ? valueOf (state_, ids::deEssRange) : 0.0;
+    settings.gate.rangeDb = gateOn ? valueOf (state_, ids::gateRange) : 0.0;
+    settings.deEss.rangeDb = deEssOn ? valueOf (state_, ids::deEssRange) : 0.0;
 
-    settings_.leveller.ratio = comp1On ? valueOf (state_, ids::comp1Ratio) : 1.0;
-    settings_.leveller.makeupDb = comp1On ? valueOf (state_, ids::comp1Makeup) : 0.0;
-    settings_.leveller.mix = comp1On ? valueOf (state_, ids::comp1Mix) : 1.0;
+    settings.leveller.ratio = comp1On ? valueOf (state_, ids::comp1Ratio) : 1.0;
+    settings.leveller.makeupDb = comp1On ? valueOf (state_, ids::comp1Makeup) : 0.0;
+    settings.leveller.mix = comp1On ? valueOf (state_, ids::comp1Mix) : 1.0;
 
-    settings_.peak.ratio = comp2On ? valueOf (state_, ids::comp2Ratio) : 1.0;
-    settings_.peak.makeupDb = comp2On ? valueOf (state_, ids::comp2Makeup) : 0.0;
-    settings_.peak.mix = comp2On ? valueOf (state_, ids::comp2Mix) : 1.0;
+    settings.peak.ratio = comp2On ? valueOf (state_, ids::comp2Ratio) : 1.0;
+    settings.peak.makeupDb = comp2On ? valueOf (state_, ids::comp2Makeup) : 0.0;
+    settings.peak.mix = comp2On ? valueOf (state_, ids::comp2Mix) : 1.0;
 
-    settings_.eq.lowShelfDb = eqOn ? valueOf (state_, ids::eqLowDb) : 0.0;
-    settings_.eq.midDb = eqOn ? valueOf (state_, ids::eqMidDb) : 0.0;
-    settings_.eq.highShelfDb = eqOn ? valueOf (state_, ids::eqHighDb) : 0.0;
+    settings.eq.lowShelfDb = eqOn ? valueOf (state_, ids::eqLowDb) : 0.0;
+    settings.eq.midDb = eqOn ? valueOf (state_, ids::eqMidDb) : 0.0;
+    settings.eq.highShelfDb = eqOn ? valueOf (state_, ids::eqHighDb) : 0.0;
+
+    return settings;
 }
 
 template <typename FloatType>

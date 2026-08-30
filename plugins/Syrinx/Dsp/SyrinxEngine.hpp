@@ -307,21 +307,42 @@ public:
                  deEsser_.getSibilanceDb() };
     }
 
-    /// True when the whole strip is the identity, bit for bit -- which is what
-    /// the "everything off" preset has to be rather than merely sound like.
-    [[nodiscard]] bool isIdentity() const noexcept
+    /// True when a settings set makes the strip the identity, bit for bit --
+    /// which is what the "everything off" preset has to be rather than merely
+    /// sound like.
+    ///
+    /// **Static, and takes the settings rather than reading the engine**, so a
+    /// caller can ask about settings that have not been pushed yet. A panel
+    /// that asked the engine would answer from whatever the last audio
+    /// callback installed, and before the transport has ever run that is the
+    /// default-constructed neutral -- so the display would claim bit-exact
+    /// transparency for a strip whose controls plainly say otherwise. Crossbar
+    /// had this exact bug in its chain readout (CLAUDE.md section 7: what
+    /// `prepare` built must be checked against what it actually built, not
+    /// against whether anything has been set yet).
+    [[nodiscard]] static bool isIdentity (const Settings& s) noexcept
     {
-        return dsp::isExactly (inputGain_, 1.0)
-                 && dsp::isExactly (outputGain_, 1.0)
-                 && ! highpassOn_
-                 && gate_.isIdentity()
-                 && dsp::isExactlyZero (settings_.deEss.rangeDb)
-                 && leveller_.isIdentity()
-                 && peak_.isIdentity()
-                 && dsp::isExactlyZero (settings_.eq.lowShelfDb)
-                 && dsp::isExactlyZero (settings_.eq.midDb)
-                 && dsp::isExactlyZero (settings_.eq.highShelfDb);
+        const auto neutralCompressor = [] (const Settings::CompSettings& c)
+        {
+            return dsp::isExactly (c.ratio, 1.0)
+                     && dsp::isExactlyZero (c.makeupDb)
+                     && dsp::isExactly (c.mix, 1.0);
+        };
+
+        return dsp::isExactly (dsp::dbToGain (s.inputTrimDb), 1.0)
+                 && dsp::isExactly (dsp::dbToGain (s.outputTrimDb), 1.0)
+                 && s.highpassHz <= 0.0
+                 && dsp::isExactlyZero (s.gate.rangeDb)
+                 && dsp::isExactlyZero (s.deEss.rangeDb)
+                 && neutralCompressor (s.leveller)
+                 && neutralCompressor (s.peak)
+                 && dsp::isExactlyZero (s.eq.lowShelfDb)
+                 && dsp::isExactlyZero (s.eq.midDb)
+                 && dsp::isExactlyZero (s.eq.highShelfDb);
     }
+
+    /// The same question about what the engine is currently set to.
+    [[nodiscard]] bool isIdentity() const noexcept { return isIdentity (settings_); }
 
 private:
     /// What the detectors listen to: the larger of the two channels, so the

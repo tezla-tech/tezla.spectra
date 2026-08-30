@@ -168,7 +168,7 @@ CLAUDE.md.
 | V3 CompressorCore + Gate | done |
 | V4 SyrinxEngine | done |
 | V5 JUCE layer + presets | done |
-| V6 editor | pending |
+| V6 editor | done |
 | V7 close-out + VOCAL-CHAIN.md | pending |
 
 **To resume**: read CLAUDE.md in full, then this file; take the first

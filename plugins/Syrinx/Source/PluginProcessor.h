@@ -155,10 +155,11 @@ public:
     [[nodiscard]] bool getTooltipsEnabled() const noexcept { return tooltipsEnabled_; }
     void setTooltipsEnabled (bool enabled) noexcept { tooltipsEnabled_ = enabled; }
 
-    /// True when the current settings make the strip the identity, bit for
-    /// bit -- what the *Neutral* preset has to be rather than merely sound
-    /// like. The panel reads this to say so.
-    [[nodiscard]] bool isIdentity() const noexcept { return engine_.isIdentity(); }
+    /// True when the current **parameters** make the strip the identity, bit
+    /// for bit -- what the *Neutral* preset has to be rather than merely sound
+    /// like. The panel reads this to say so, which is why it must not be asked
+    /// of the engine: see the comment on the definition.
+    [[nodiscard]] bool isIdentity() const;
 
     /// The high-pass corner in words, including the fact that 0 is off rather
     /// than "very low". A control whose bottom end changes kind rather than
@@ -183,6 +184,11 @@ private:
     /// and changes nothing, and there is one definition of "off" instead of
     /// two.
     void pullParameters();
+
+    /// The same read, into a fresh value rather than into the member the audio
+    /// thread is using. What `isIdentity()` asks about, from the message
+    /// thread, without racing the audio thread's copy.
+    [[nodiscard]] SyrinxEngine::Settings settingsFromParameters() const;
 
     juce::AudioProcessorValueTreeState state_;
     juce::AudioParameterBool* bypassParameter_ { nullptr };
