@@ -164,7 +164,7 @@ CLAUDE.md.
 |---|---|
 | V0 plan + registry + references | done |
 | V1 GainComputer ratio | done |
-| V2 SibilanceDetector + DeEsser | pending |
+| V2 SibilanceDetector + DeEsser | done |
 | V3 CompressorCore + Gate | pending |
 | V4 SyrinxEngine | pending |
 | V5 JUCE layer + presets | pending |
