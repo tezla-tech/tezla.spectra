@@ -2763,7 +2763,6 @@ int runMalleus (const Args& args)
     using namespace malleusMeasure;
 
     const double rate = args.sampleRate;
-    constexpr std::size_t window = 1 << 15;
 
     // ---- 1. the mode tables, which are the instrument ------------------------
 

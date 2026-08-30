@@ -167,7 +167,7 @@ CLAUDE.md.
 | phase | status |
 |---|---|
 | D0 plan + registry + references | done |
-| D1 ToneTables | pending |
+| D1 ToneTables | done |
 | D2 Companding + setBits | pending |
 | D3 voice + engine + dialler + line | pending |
 | D4 JUCE layer + presets | pending |
