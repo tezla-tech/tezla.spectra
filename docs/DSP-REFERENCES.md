@@ -685,6 +685,24 @@ introduced it.
 | ITU-T Recommendation G.712 (transmission performance of PCM channels) | ITU standard; not fetched | The 300-3400 Hz toll band that the BAND control's default reproduces |
 | ITU-T Recommendation G.722 (7 kHz audio-coding within 64 kbit/s) | ITU standard; not fetched | The 50-7000 Hz wideband option and the 16 kHz rate the RATE list names |
 
+**What the companding laws were verified against, since the standard was not
+readable.** `shared/tezla-dsp/include/tezla/dsp/Companding.hpp` derives the
+segment structure rather than carrying a table, so the tests stand in for the
+standard's text. Four independent statements, in
+`tests/test_Companding.cpp`:
+
+| what is asserted | measured |
+|---|---|
+| every code word reconstructs at the **midpoint** of the range of inputs producing it | worst deviation 2.4e-07 over the 128 positive codes, which is the sweep's own resolution |
+| the SNR does not follow the level -- the defining property of companding | slope +0.067 dB/dB for mu-law and +0.062 for A-law against **+0.970 for a linear 8-bit quantiser**, over 0 to -40 dBFS |
+| encoding is monotone, and decoding then re-encoding lands on the same value | holds for all 256 codes of each law; mu-law's two zero codes (+0 and -0) are the one place a code-level round trip legitimately does not |
+| the ceilings the structure implies | 8031/8159 = 0.984312 and 4032/4095 = 0.984615, both 0.137 dB down |
+
+The few decibels of ripple on the companded SNR curves (4.3 dB for mu-law, 4.8
+for A-law) is the segment structure showing, not error: eight straight pieces
+approximating a log curve dip slightly wherever a peak sits just above a
+segment boundary. A smooth log law would not ripple, and would not be G.711.
+
 **What was not obtainable, and what that costs.** The ITU-T texts, the Bell
 practice documents and the BT specification are all refused by this container's
 egress proxy, so every figure above reached the plugin through search results

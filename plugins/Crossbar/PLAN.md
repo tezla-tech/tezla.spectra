@@ -168,7 +168,7 @@ CLAUDE.md.
 |---|---|
 | D0 plan + registry + references | done |
 | D1 ToneTables | done |
-| D2 Companding + setBits | pending |
+| D2 Companding + setBits | done |
 | D3 voice + engine + dialler + line | pending |
 | D4 JUCE layer + presets | pending |
 | D5 editor — the keypad | pending |
