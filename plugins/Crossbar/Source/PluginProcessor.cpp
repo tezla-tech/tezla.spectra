@@ -428,6 +428,8 @@ void CrossbarProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
     if (dialRequested_.exchange (false))
         engine_.noteOn (noteForTone (Tone::dialNumber, settings_.mapRoot), 1.0);
 
+    servicePanelKeys();
+
     if (scratch_.getNumSamples() < numSamples)
         scratch_.setSize (2, numSamples, false, false, true);
 
@@ -469,6 +471,33 @@ void CrossbarProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
         renderSpan (rendered, numSamples - rendered);
 
     activeVoices_.store (engine_.getActiveVoiceCount());
+    soundingTones_.store (engine_.getSoundingToneMask());
+}
+
+void CrossbarProcessor::servicePanelKeys()
+{
+    // `pressed` is OR'd in rather than replaced, so a key pressed and released
+    // between two blocks still gets a note-on: without it a quick click on the
+    // panel does nothing at all, which is the sort of thing that reads as a
+    // broken keypad rather than as a race.
+    const std::uint64_t pressed = panelPressed_.exchange (0);
+    const std::uint64_t held = panelHeld_.load();
+
+    const std::uint64_t starting = (pressed | held) & ~panelPrevious_;
+
+    for (int i = 0; i < kToneCount; ++i)
+        if ((starting & (std::uint64_t { 1 } << i)) != 0)
+            engine_.noteOn (noteForTone (static_cast<Tone> (i), settings_.mapRoot), 1.0);
+
+    panelPrevious_ |= starting;
+
+    const std::uint64_t stopping = panelPrevious_ & ~held;
+
+    for (int i = 0; i < kToneCount; ++i)
+        if ((stopping & (std::uint64_t { 1 } << i)) != 0)
+            engine_.noteOff (noteForTone (static_cast<Tone> (i), settings_.mapRoot));
+
+    panelPrevious_ &= held;
 }
 
 double CrossbarProcessor::getEffectiveRateHz() const
@@ -494,14 +523,22 @@ double CrossbarProcessor::getTailLengthSeconds() const
     return 5.0;   // the widest the range reaches
 }
 
-std::vector<double> CrossbarProcessor::snapshotSoundingFrequencies() const
+void CrossbarProcessor::setPanelKeyHeld (int toneIndex, bool held) noexcept
 {
-    double buffer[CrossbarEngine::kMaxVoices * kMaxPartials] {};
+    if (toneIndex < 0 || toneIndex >= kToneCount)
+        return;
 
-    const int count = engine_.getSoundingFrequencies (
-        buffer, CrossbarEngine::kMaxVoices * kMaxPartials);
+    const std::uint64_t bit = std::uint64_t { 1 } << toneIndex;
 
-    return { buffer, buffer + count };
+    if (held)
+    {
+        panelPressed_.fetch_or (bit);
+        panelHeld_.fetch_or (bit);
+    }
+    else
+    {
+        panelHeld_.fetch_and (~bit);
+    }
 }
 
 // ---------------------------------------------------------------------------

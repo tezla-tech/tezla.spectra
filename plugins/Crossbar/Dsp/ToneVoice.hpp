@@ -190,18 +190,6 @@ public:
         return sum * velocity_ * envelope_.process();
     }
 
-    /// The frequencies this voice is currently sounding, for the editor's
-    /// keypad lights. Returns how many were written.
-    int getSoundingFrequencies (double* out, int capacity) const noexcept
-    {
-        const int count = std::min (partials_, capacity);
-
-        for (int i = 0; i < count; ++i)
-            out[i] = increment_[i] * sampleRate_;
-
-        return count;
-    }
-
 private:
     /// How many samples a step lasts. Rounded rather than truncated, so a
     /// cadence stated in seconds lands on the same millisecond at every

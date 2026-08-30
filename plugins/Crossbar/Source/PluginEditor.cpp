@@ -35,6 +35,8 @@ constexpr int kNoteHeight = 58;
 
 constexpr int kHeaderHeight = 40;
 constexpr int kTabHeight = 28;
+constexpr int kKeypadHeight = 250;
+constexpr int kDialRowHeight = 30;
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -46,6 +48,338 @@ void WrappingLabel::paint (juce::Graphics& g)
     g.setColour (findColour (juce::Label::textColourId));
     g.setFont (getFont());
     g.drawFittedText (getText(), getLocalBounds(), getJustificationType(), 3, 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// KeypadView
+// ---------------------------------------------------------------------------
+
+KeypadView::KeypadView (ui::Palette palette, Region region)
+    : palette_ (palette), region_ (region)
+{
+    setInterceptsMouseClicks (true, false);
+}
+
+void KeypadView::setSounding (std::uint64_t mask)
+{
+    if (mask == sounding_)
+        return;
+
+    sounding_ = mask;
+    repaint();
+}
+
+void KeypadView::setRegion (Region region)
+{
+    if (region == region_)
+        return;
+
+    region_ = region;
+    resized();
+    repaint();
+}
+
+void KeypadView::setMapRoot (int root)
+{
+    mapRoot_ = root;
+}
+
+juce::String KeypadView::describe (Tone tone) const
+{
+    const int note = noteForTone (tone, mapRoot_);
+    const auto suffix = "  --  MIDI note " + juce::String (note) + " ("
+                          + juce::MidiMessage::getMidiNoteName (note, true, true, 4) + ").";
+
+    if (isDtmf (tone))
+    {
+        int row = 0, column = 0;
+        dtmfIndices (tone, row, column);
+
+        return "DTMF " + juce::String (nameFor (tone)) + ": "
+                 + juce::String (kDtmfRowHz[row], 0) + " Hz and "
+                 + juce::String (kDtmfColHz[column], 0) + " Hz together, to ITU-T Q.23."
+                 + suffix;
+    }
+
+    // The cadence is the thing worth saying about a call-progress tone -- the
+    // frequencies are on the key, the timing is what tells busy from reorder.
+    const ToneProgram program = programFor (tone, region_);
+    juce::String cadence;
+
+    if (program.stepCount == 1 && program.steps[0].seconds < 0.0)
+    {
+        cadence = "continuous";
+    }
+    else
+    {
+        for (int i = 0; i < program.stepCount; ++i)
+            cadence << (i > 0 ? " / " : "")
+                    << juce::String (program.steps[i].seconds, 3).trimCharactersAtEnd ("0")
+                    << (program.steps[i].partials > 0 || program.steps[i].click ? " on" : " off");
+
+        if (! program.loops)
+            cadence << ", once";
+    }
+
+    juce::String frequencies;
+
+    for (int i = 0; i < program.steps[0].partials; ++i)
+        frequencies << (i > 0 ? " + " : "") << juce::String (program.steps[0].frequency[i], 1)
+                    << " Hz";
+
+    if (frequencies.isEmpty())
+        frequencies = "loop-break clicks";
+
+    return juce::String (nameFor (tone)) + ": " + frequencies + ", " + cadence + "." + suffix;
+}
+
+juce::String KeypadView::getTooltip()
+{
+    const int index = padAt (getMouseXYRelative());
+
+    if (index < 0)
+        return "The keypad is the encoding: row frequencies down the left, column "
+               "frequencies along the top, and a key is where one of each crosses.";
+
+    return describe (pads_[static_cast<std::size_t> (index)].tone);
+}
+
+bool KeypadView::isSounding (Tone tone) const
+{
+    const auto index = static_cast<int> (tone);
+
+    return index >= 0 && index < kToneCount
+             && (sounding_ & (std::uint64_t { 1 } << index)) != 0;
+}
+
+int KeypadView::padAt (juce::Point<int> position) const
+{
+    for (std::size_t i = 0; i < pads_.size(); ++i)
+        if (pads_[i].bounds.contains (position))
+            return static_cast<int> (i);
+
+    return -1;
+}
+
+void KeypadView::press (int padIndex)
+{
+    if (padIndex == held_)
+        return;
+
+    releaseHeld();
+
+    if (padIndex < 0)
+        return;
+
+    held_ = padIndex;
+
+    if (onKey != nullptr)
+        onKey (static_cast<int> (pads_[static_cast<std::size_t> (padIndex)].tone), true);
+
+    repaint();
+}
+
+void KeypadView::releaseHeld()
+{
+    if (held_ < 0)
+        return;
+
+    if (onKey != nullptr)
+        onKey (static_cast<int> (pads_[static_cast<std::size_t> (held_)].tone), false);
+
+    held_ = -1;
+    repaint();
+}
+
+void KeypadView::mouseDown (const juce::MouseEvent& event)
+{
+    press (padAt (event.getPosition()));
+}
+
+void KeypadView::mouseDrag (const juce::MouseEvent& event)
+{
+    // Dragging across the pad slides from key to key, as a finger does on a
+    // touchscreen keypad and as nothing does on a real telephone. It is what
+    // makes a DTMF run playable by hand.
+    press (padAt (event.getPosition()));
+}
+
+void KeypadView::mouseUp (const juce::MouseEvent&)
+{
+    releaseHeld();
+}
+
+void KeypadView::resized()
+{
+    pads_.clear();
+
+    auto bounds = getLocalBounds().reduced (6, 4);
+
+    // The keypad and its two frequency rulers take the left; the call-progress
+    // tones take the rest.
+    //
+    // 54 rather than 40 for the ruler: "941 Hz" at ten point needs about 40,
+    // and at exactly 40 it touched both the panel edge and the keys. The
+    // screenshot showed the leading digit clipped.
+    constexpr int kRuler = 54;
+
+    auto left = bounds.removeFromLeft (juce::jmin (bounds.getWidth() * 3 / 5, 420));
+    bounds.removeFromLeft (10);
+
+    columnLabelArea_ = left.removeFromTop (18).withTrimmedLeft (kRuler);
+    rowLabelArea_ = left.removeFromLeft (kRuler);
+    keypadArea_ = left;
+
+    const int keyWidth = keypadArea_.getWidth() / 4;
+    const int keyHeight = keypadArea_.getHeight() / 4;
+
+    for (int row = 0; row < 4; ++row)
+        for (int column = 0; column < 4; ++column)
+        {
+            const Tone tone = toneForDtmf (row, column);
+
+            Pad pad;
+            pad.tone = tone;
+            pad.caption = nameFor (tone);
+            pad.detail = juce::String (kDtmfRowHz[row], 0) + " / "
+                           + juce::String (kDtmfColHz[column], 0);
+            pad.large = true;
+            pad.bounds = { keypadArea_.getX() + column * keyWidth,
+                           keypadArea_.getY() + row * keyHeight,
+                           keyWidth - 4, keyHeight - 4 };
+
+            pads_.push_back (pad);
+        }
+
+    // The call-progress tones, on the same grid. The captions follow the
+    // region: a UK line has an engaged tone and a number-unobtainable tone
+    // where a Bell one has busy and an intercept.
+    const bool uk = region_ == Region::unitedKingdom;
+
+    struct Entry { Tone tone; const char* bell; const char* bt; };
+
+    static const Entry entries[] {
+        { Tone::dialTone,        "DIAL",    "DIAL"     },
+        { Tone::busy,            "BUSY",    "ENGAGED"  },
+        { Tone::ringback,        "RING",    "RING"     },
+        { Tone::congestion,      "REORDER", "CONGEST"  },
+        { Tone::unobtainable,    "SIT LONG", "N.U."    },
+        { Tone::howler,          "HOWLER",  "HOWLER"   },
+        { Tone::callWaiting,     "WAITING", "WAITING"  },
+        { Tone::sit,             "SIT",     "SIT"      },
+        { Tone::faxCalling,      "FAX",     "FAX"      },
+        { Tone::modemAnswer,     "MODEM",   "MODEM"    },
+        { Tone::singleFrequency, "2600",    "2600"     },
+        { Tone::rotaryPulse,     "ROTARY",  "ROTARY"   },
+    };
+
+    constexpr int kProgressColumns = 4;
+    const int progressWidth = bounds.getWidth() / kProgressColumns;
+    const int progressHeight = bounds.getHeight() / 3;
+
+    for (int i = 0; i < 12; ++i)
+    {
+        Pad pad;
+        pad.tone = entries[i].tone;
+        pad.caption = uk ? entries[i].bt : entries[i].bell;
+        // Inset vertically as well as horizontally: a call-progress pad has
+        // one short word on it and does not need the whole row's height, and
+        // at full height they dwarfed the keypad they sit beside.
+        pad.bounds = juce::Rectangle<int> {
+            bounds.getX() + (i % kProgressColumns) * progressWidth,
+            bounds.getY() + (i / kProgressColumns) * progressHeight,
+            progressWidth - 4, progressHeight - 4 }.reduced (0, 8);
+
+        pads_.push_back (pad);
+    }
+}
+
+void KeypadView::drawPad (juce::Graphics& g, const Pad& pad) const
+{
+    const bool lit = isSounding (pad.tone);
+    const auto area = pad.bounds.toFloat();
+
+    g.setColour (lit ? palette_.accent.withAlpha (0.45f) : palette_.panel.brighter (0.10f));
+    g.fillRoundedRectangle (area, 4.0f);
+
+    g.setColour (lit ? palette_.accentBright : palette_.panel.brighter (0.30f));
+    g.drawRoundedRectangle (area, 4.0f, lit ? 1.6f : 1.0f);
+
+    g.setColour (lit ? palette_.accentBright : palette_.text);
+
+    if (pad.large)
+    {
+        auto text = pad.bounds;
+        auto detail = text.removeFromBottom (12);
+
+        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+        g.drawFittedText (pad.caption, text, juce::Justification::centred, 1);
+
+        g.setColour (lit ? palette_.accentBright.withAlpha (0.8f) : palette_.dimText);
+        g.setFont (juce::FontOptions (9.0f));
+        g.drawFittedText (pad.detail, detail, juce::Justification::centred, 1);
+    }
+    else
+    {
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawFittedText (pad.caption, pad.bounds, juce::Justification::centred, 1);
+    }
+}
+
+void KeypadView::paint (juce::Graphics& g)
+{
+    g.setColour (palette_.panel);
+    g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+
+    // The rulers. A row or a column lights when any key on it is sounding,
+    // which is the crossbar drawn: the key is where the two meet.
+    bool rowLit[4] {};
+    bool columnLit[4] {};
+
+    for (int row = 0; row < 4; ++row)
+        for (int column = 0; column < 4; ++column)
+            if (isSounding (toneForDtmf (row, column)))
+            {
+                rowLit[row] = true;
+                columnLit[column] = true;
+            }
+
+    // The eight constituent frequencies are keys of their own further up the
+    // map, and they light their own ruler entry too -- which is how somebody
+    // discovers that those keys exist.
+    for (int i = 0; i < 4; ++i)
+    {
+        rowLit[i] = rowLit[i]
+                      || isSounding (static_cast<Tone> (static_cast<int> (Tone::row697) + i));
+        columnLit[i] = columnLit[i]
+                         || isSounding (static_cast<Tone> (static_cast<int> (Tone::col1209) + i));
+    }
+
+    g.setFont (juce::FontOptions (10.0f));
+
+    const int keyHeight = keypadArea_.getHeight() / 4;
+    const int keyWidth = keypadArea_.getWidth() / 4;
+
+    for (int row = 0; row < 4; ++row)
+    {
+        g.setColour (rowLit[row] ? palette_.accentBright : palette_.dimText);
+        g.drawFittedText (juce::String (kDtmfRowHz[row], 0) + " Hz",
+                          { rowLabelArea_.getX(), keypadArea_.getY() + row * keyHeight,
+                            rowLabelArea_.getWidth() - 6, keyHeight - 4 },
+                          juce::Justification::centredRight, 1);
+    }
+
+    for (int column = 0; column < 4; ++column)
+    {
+        g.setColour (columnLit[column] ? palette_.accentBright : palette_.dimText);
+        g.drawFittedText (juce::String (kDtmfColHz[column], 0),
+                          { keypadArea_.getX() + column * keyWidth, columnLabelArea_.getY(),
+                            keyWidth - 4, columnLabelArea_.getHeight() },
+                          juce::Justification::centred, 1);
+    }
+
+    for (const auto& pad : pads_)
+        drawPad (g, pad);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +620,43 @@ CrossbarEditor::CrossbarEditor (CrossbarProcessor& processorToUse)
     };
     addAndMakeVisible (tooltipsButton_);
 
+    keypad_ = std::make_unique<KeypadView> (palette_, Region::northAmerica);
+    keypad_->setComponentID ("keypad");
+    keypad_->onKey = [this] (int toneIndex, bool held)
+    {
+        crossbar_.setPanelKeyHeld (toneIndex, held);
+    };
+    addAndMakeVisible (*keypad_);
+
+    dialCaption_.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    dialCaption_.setColour (juce::Label::textColourId, palette_.dimText);
+    dialCaption_.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (dialCaption_);
+
+    dialField_.setText (crossbar_.getDialNumber(), juce::dontSendNotification);
+    dialField_.setColour (juce::TextEditor::backgroundColourId, palette_.panel.brighter (0.15f));
+    dialField_.setColour (juce::TextEditor::textColourId, palette_.text);
+    dialField_.setColour (juce::TextEditor::outlineColourId, palette_.panel.brighter (0.3f));
+    dialField_.setColour (juce::TextEditor::focusedOutlineColourId, palette_.accent);
+    dialField_.setFont (juce::FontOptions (14.0f));
+    dialField_.setTooltip (
+        "The number the DIAL key plays. Write it however you like -- spaces, "
+        "dashes and brackets are skipped rather than dialled, so "
+        "'+1 (555) 010-4477' is seven... thirteen keys and no punctuation. It "
+        "is stored with the project but is NOT a parameter: a phone number is "
+        "text, and there is no honest way to automate one.");
+    dialField_.onTextChange = [this] { crossbar_.setDialNumber (dialField_.getText()); };
+    addAndMakeVisible (dialField_);
+
+    dialButton_.setColour (juce::TextButton::buttonColourId, palette_.accent.withAlpha (0.30f));
+    dialButton_.setColour (juce::TextButton::textColourOffId, palette_.text);
+    dialButton_.setTooltip (
+        "Dials the number now. The same thing the last key of the map does, so "
+        "it can be played from a clip as well as pressed here.");
+    dialButton_.setComponentID ("dial-button");
+    dialButton_.onClick = [this] { crossbar_.triggerDial(); };
+    addAndMakeVisible (dialButton_);
+
     buildPages();
 
     const char* tabNames[kNumPages] { "TONE", "LINE", "DIAL" };
@@ -305,8 +676,8 @@ CrossbarEditor::CrossbarEditor (CrossbarProcessor& processorToUse)
     showPage (0);
 
     setResizable (true, true);
-    setResizeLimits (720, 500, 1400, 1000);
-    setSize (860, 600);
+    setResizeLimits (820, 700, 1500, 1200);
+    setSize (940, 800);
 
     startTimerHz (15);
 }
@@ -468,6 +839,14 @@ void CrossbarEditor::timerCallback()
     voicesLabel_.setText (juce::String (crossbar_.getActiveVoiceCount()) + " / 16",
                           juce::dontSendNotification);
 
+    const auto sounding = crossbar_.getSoundingToneMask();
+
+    if (sounding != shownSounding_)
+    {
+        shownSounding_ = sounding;
+        keypad_->setSounding (sounding);
+    }
+
     updateForSwitches();
 }
 
@@ -488,10 +867,12 @@ void CrossbarEditor::updateForSwitches()
     const int band = indexOf (ids::band);
     const int dialMode = indexOf (ids::dialMode);
     const int cadence = indexOf (ids::cadence);
+    const int region = indexOf (ids::region);
     const double effective = crossbar_.getEffectiveRateHz();
 
     if (codec == shownCodec_ && rate == shownRate_ && band == shownBand_
           && dialMode == shownDialMode_ && cadence == shownCadence_
+          && region == shownRegion_
           && std::abs (effective - shownEffectiveRate_) < 1.0)
         return;
 
@@ -500,7 +881,11 @@ void CrossbarEditor::updateForSwitches()
     shownBand_ = band;
     shownDialMode_ = dialMode;
     shownCadence_ = cadence;
+    shownRegion_ = region;
     shownEffectiveRate_ = effective;
+
+    keypad_->setRegion (region == 1 ? Region::unitedKingdom : Region::northAmerica);
+    keypad_->setMapRoot (indexOf (ids::mapRoot));
 
     // Bits does nothing with the codec switched off, and a knob that moves and
     // does nothing reads as a broken plugin.
@@ -578,6 +963,15 @@ void CrossbarEditor::resized()
     subtitleLabel_.setBounds (header);
 
     bounds.reduce (8, 6);
+
+    keypad_->setBounds (bounds.removeFromTop (kKeypadHeight));
+
+    auto dialRow = bounds.removeFromTop (kDialRowHeight + 6).reduced (2, 3);
+    dialCaption_.setBounds (dialRow.removeFromLeft (70));
+    dialRow.removeFromLeft (6);
+    dialButton_.setBounds (dialRow.removeFromRight (80));
+    dialRow.removeFromRight (8);
+    dialField_.setBounds (dialRow);
 
     auto tabRow = bounds.removeFromTop (kTabHeight + 4).reduced (0, 2);
     const int tabWidth = tabRow.getWidth() / kNumPages;

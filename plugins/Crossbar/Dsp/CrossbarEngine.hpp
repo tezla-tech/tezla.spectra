@@ -340,6 +340,7 @@ public:
             voice.reset();
 
         dialler_.reset();
+        dialToneIndex_ = -1;
         line_.reset();
         fading_.reset();
 
@@ -512,25 +513,34 @@ public:
         return line_.getEffectiveRateHz();
     }
 
-    /// Every frequency currently sounding, for the keypad lights. Returns how
-    /// many were written.
-    int getSoundingFrequencies (double* out, int capacity) const noexcept
+    /// Which tones are sounding, one bit per `Tone`, for the keypad's lights.
+    ///
+    /// A mask rather than a list of frequencies, because the keypad wants to
+    /// know *which key* is lit -- and because the row and column lights fall
+    /// out of the key rather than the other way round, which is the whole
+    /// picture the panel is trying to draw.
+    ///
+    /// The dialler's voice carries a pseudo-note, so it is looked up by the
+    /// tone it was started with instead. That is what makes a dialled number
+    /// light the keypad as it goes.
+    [[nodiscard]] std::uint64_t getSoundingToneMask() const noexcept
     {
-        int written = 0;
+        std::uint64_t mask = 0;
 
         for (const auto& voice : voices_)
         {
-            if (! voice.isActive() || written >= capacity)
+            if (! voice.isActive())
                 continue;
 
-            double local[kMaxPartials];
-            const int count = voice.getSoundingFrequencies (local, kMaxPartials);
+            const int note = voice.getNote();
+            const int index = note == kDialVoiceNote ? dialToneIndex_
+                                                     : note - mapRoot_;
 
-            for (int i = 0; i < count && written < capacity; ++i)
-                out[written++] = local[i];
+            if (index >= 0 && index < kToneCount)
+                mask |= std::uint64_t { 1 } << index;
         }
 
-        return written;
+        return mask;
     }
 
 private:
@@ -587,6 +597,7 @@ private:
 
         if (dialler_.isPulseMode())
         {
+            dialToneIndex_ = static_cast<int> (Tone::rotaryPulse);
             startVoice (programFor (Tone::rotaryPulse, region_, twistDb_),
                         kDialVoiceNote, 1.0);
             return;
@@ -597,8 +608,10 @@ private:
         if (! dtmfForCharacter (digit, row, column))
             return;
 
-        startVoice (programFor (toneForDtmf (row, column), region_, twistDb_),
-                    kDialVoiceNote, 1.0);
+        const Tone tone = toneForDtmf (row, column);
+        dialToneIndex_ = static_cast<int> (tone);
+
+        startVoice (programFor (tone, region_, twistDb_), kDialVoiceNote, 1.0);
     }
 
     void releaseDialVoice() noexcept
@@ -661,6 +674,10 @@ private:
     CadenceMode cadence_ { CadenceMode::fromKey };
     double twistDb_ { 2.0 };
     int mapRoot_ { kDefaultMapRoot };
+
+    /// Which tone the dialler's voice is currently playing, so the keypad can
+    /// light the key a dialled number is on. -1 when nothing is dialling.
+    int dialToneIndex_ { -1 };
 
     std::int64_t exchangeSamples_ { 0 };
 };

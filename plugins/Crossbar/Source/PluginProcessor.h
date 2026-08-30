@@ -22,6 +22,7 @@
 // between two others, would silently repoint every saved project.
 
 #include <atomic>
+#include <cstdint>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -192,9 +193,25 @@ public:
     /// press play is worse than one that says nothing.
     [[nodiscard]] double getEffectiveRateHz() const;
 
-    /// Every frequency currently sounding, so the keypad can light the row and
-    /// column that are crossing. A torn read costs a repaint, not a click.
-    [[nodiscard]] std::vector<double> snapshotSoundingFrequencies() const;
+    /// Which tones are sounding, one bit per `Tone`, so the keypad can light
+    /// the key -- and with it the row and column that are crossing. Published
+    /// by the audio thread; a torn read costs a repaint, not a click.
+    [[nodiscard]] std::uint64_t getSoundingToneMask() const noexcept
+    {
+        return soundingTones_.load();
+    }
+
+    // ---- keys pressed on the panel ----------------------------------------
+
+    /// Presses or releases one of the map's tones from the editor.
+    ///
+    /// Two masks rather than one, and the reason is a fast click: `held_` is
+    /// the current state and `pressed_` accumulates presses that the audio
+    /// thread has not seen yet, so a key pressed and released between two
+    /// blocks still produces a note-on and a note-off instead of nothing at
+    /// all. Lock-free and allocation-free, which is what lets the audio thread
+    /// read it.
+    void setPanelKeyHeld (int toneIndex, bool held) noexcept;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -204,6 +221,7 @@ private:
 
     void pullParameters();
     void handleMidi (const juce::MidiMessage& message);
+    void servicePanelKeys();
 
     juce::AudioProcessorValueTreeState state_;
 
@@ -226,7 +244,14 @@ private:
 
     bool prepared_ { false };
     std::atomic<int> activeVoices_ { 0 };
+    std::atomic<std::uint64_t> soundingTones_ { 0 };
     double sampleRate_ { 48000.0 };
+
+    /// Keys held on the panel, and presses not yet consumed. See
+    /// `setPanelKeyHeld`.
+    std::atomic<std::uint64_t> panelHeld_ { 0 };
+    std::atomic<std::uint64_t> panelPressed_ { 0 };
+    std::uint64_t panelPrevious_ { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CrossbarProcessor)
 };

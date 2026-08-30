@@ -8,6 +8,8 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -25,6 +27,84 @@ class WrappingLabel final : public juce::Label
 {
 public:
     void paint (juce::Graphics& g) override;
+};
+
+/// The panel, and the picture of what the plugin is.
+///
+/// A DTMF keypad is literally a crossbar: four row frequencies down the left,
+/// four column frequencies along the top, and a key is the point where one of
+/// each crosses. So the frequencies are *drawn* on the edges rather than
+/// hidden in a manual, and pressing a key lights its row, its column and the
+/// two numbers -- which is the whole encoding explained without a sentence of
+/// prose.
+///
+/// The call-progress tones sit under the keypad on the same grid, because they
+/// are the other half of what a telephone makes and a key that only exists on
+/// the MIDI map is a key nobody finds.
+class KeypadView final : public juce::Component,
+                         public juce::TooltipClient
+{
+public:
+    KeypadView (ui::Palette palette, Region region);
+
+    /// The tooltip is **per pad**, from whatever the pointer is over: one
+    /// tooltip for a component this dense would have to say nothing in
+    /// particular, and every key here has a specific answer -- its two
+    /// frequencies, its cadence, and which MIDI note plays it.
+    [[nodiscard]] juce::String getTooltip() override;
+
+    /// Called on press and release, with the tone's index into the map.
+    std::function<void (int, bool)> onKey;
+
+    /// Which tones are sounding, one bit per `Tone`. Repaints only when it
+    /// changes.
+    void setSounding (std::uint64_t mask);
+
+    /// The call-progress row's captions follow the region, because a UK
+    /// engaged tone is not a North American busy one.
+    void setRegion (Region region);
+
+    /// Where the map starts, so a pad can say which key plays it.
+    void setMapRoot (int root);
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+
+private:
+    struct Pad
+    {
+        Tone tone {};
+        juce::Rectangle<int> bounds;
+        juce::String caption;
+        juce::String detail;
+        bool large { false };
+    };
+
+    void press (int padIndex);
+    void releaseHeld();
+    [[nodiscard]] int padAt (juce::Point<int> position) const;
+    [[nodiscard]] bool isSounding (Tone tone) const;
+
+    void drawPad (juce::Graphics& g, const Pad& pad) const;
+    [[nodiscard]] juce::String describe (Tone tone) const;
+
+    ui::Palette palette_;
+    Region region_;
+    int mapRoot_ { kDefaultMapRoot };
+
+    std::vector<Pad> pads_;
+    int held_ { -1 };
+    std::uint64_t sounding_ { 0 };
+
+    juce::Rectangle<int> keypadArea_;
+    juce::Rectangle<int> rowLabelArea_;
+    juce::Rectangle<int> columnLabelArea_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KeypadView)
 };
 
 /// One page of the control surface. The house grid, copied from Ferrite --
@@ -111,6 +191,14 @@ private:
     ui::TooltipHost tooltips_ { *this };
     ui::Palette palette_;
 
+    std::unique_ptr<KeypadView> keypad_;
+
+    /// The number, and the button that dials it. A text field rather than a
+    /// parameter, because a phone number is text -- see PluginProcessor.h.
+    juce::Label dialCaption_ { {}, "NUMBER" };
+    juce::TextEditor dialField_;
+    juce::TextButton dialButton_ { "DIAL" };
+
     juce::Label titleLabel_;
     juce::Label subtitleLabel_;
     juce::Label vendorLabel_;
@@ -130,7 +218,9 @@ private:
     int shownBand_ { -1 };
     int shownDialMode_ { -1 };
     int shownCadence_ { -1 };
+    int shownRegion_ { -1 };
     double shownEffectiveRate_ { -1.0 };
+    std::uint64_t shownSounding_ { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CrossbarEditor)
 };

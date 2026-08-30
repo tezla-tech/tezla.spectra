@@ -171,7 +171,7 @@ CLAUDE.md.
 | D2 Companding + setBits | done |
 | D3 voice + engine + dialler + line | done |
 | D4 JUCE layer + presets | done |
-| D5 editor — the keypad | pending |
+| D5 editor — the keypad | done |
 | D6 close-out | pending |
 
 **To resume**: read CLAUDE.md in full, then this file; take the first `pending`
