@@ -227,6 +227,25 @@ constexpr bool dtmfIndices (Tone tone, int& row, int& column) noexcept
     return false;
 }
 
+/// The inverse of `dtmfIndices`: which key sits at a place in the matrix.
+///
+/// The dialler needs it -- it reads characters, gets matrix coordinates, and
+/// has to come back to a tone -- and having both directions in one file is
+/// what keeps them from disagreeing.
+constexpr Tone toneForDtmf (int row, int column) noexcept
+{
+    if (row < 0 || row > 3 || column < 0 || column > 3)
+        return Tone::count;
+
+    if (column == 3)
+        return static_cast<Tone> (static_cast<int> (Tone::dtmfA) + row);
+
+    if (row == 3)
+        return static_cast<Tone> (static_cast<int> (Tone::star) + column);
+
+    return static_cast<Tone> (row * 3 + column);
+}
+
 /// The DTMF key a character stands for, for the dialler. Returns false for
 /// anything that is not a key -- spaces, dashes and brackets in a written
 /// phone number, which the dialler skips.

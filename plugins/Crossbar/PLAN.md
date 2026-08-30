@@ -169,7 +169,7 @@ CLAUDE.md.
 | D0 plan + registry + references | done |
 | D1 ToneTables | done |
 | D2 Companding + setBits | done |
-| D3 voice + engine + dialler + line | pending |
+| D3 voice + engine + dialler + line | done |
 | D4 JUCE layer + presets | pending |
 | D5 editor — the keypad | pending |
 | D6 close-out | pending |
