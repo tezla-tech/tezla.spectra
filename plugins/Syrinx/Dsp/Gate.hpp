@@ -190,9 +190,14 @@ public:
     // Processing
     // -----------------------------------------------------------------------
 
-    [[nodiscard]] double process (double input) noexcept { return process (input, input); }
-
-    [[nodiscard]] double process (double input, double sidechain) noexcept
+    /// Advances the detector and the state machine one sample and returns the
+    /// linear gain to apply.
+    ///
+    /// Split from the application so a stereo pair shares one gate. Two
+    /// independent gates on a stereo vocal open at different moments and the
+    /// image jumps sideways on every entry, which is exactly what CLAUDE.md
+    /// section 7's linked-stereo rule exists to prevent.
+    [[nodiscard]] double computeGain (double sidechain) noexcept
     {
         const double detected = sidechainHz_ > 0.0 ? sidechainFilter_.process (sidechain)
                                                    : sidechain;
@@ -215,7 +220,19 @@ public:
 
         gainDb_ = target + coefficient * (gainDb_ - target);
 
-        return input * dsp::dbToGain (gainDb_);
+        return dsp::dbToGain (gainDb_);
+    }
+
+    [[nodiscard]] static double applyTo (double input, double gain) noexcept
+    {
+        return input * gain;
+    }
+
+    [[nodiscard]] double process (double input) noexcept { return process (input, input); }
+
+    [[nodiscard]] double process (double input, double sidechain) noexcept
+    {
+        return applyTo (input, computeGain (sidechain));
     }
 
     /// How far down the gate is holding the signal right now, in dB (<= 0).

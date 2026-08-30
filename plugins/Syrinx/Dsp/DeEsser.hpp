@@ -69,7 +69,10 @@ public:
     {
         detector_.reset();
         envelope_.reset();
-        shelf_.reset();
+
+        for (auto& filter : shelf_)
+            filter.reset();
+
         reductionDb_ = 0.0;
     }
 
@@ -80,7 +83,11 @@ public:
     {
         detector_.setCornerHz (hz);
         cornerHz_ = detector_.getCornerHz();
-        shelf_.setCoefficients (dsp::design::lowpass (cornerHz_, 0.707, sampleRate_));
+
+        const auto coefficients = dsp::design::lowpass (cornerHz_, 0.707, sampleRate_);
+
+        for (auto& filter : shelf_)
+            filter.setCoefficients (coefficients);
     }
 
     /// How sibilant the voice has to be before anything happens, in dB of
@@ -111,9 +118,14 @@ public:
 
     void setListen (bool shouldListen) noexcept { listen_ = shouldListen; }
 
-    /// One sample through. `sidechain` is what the detector measures, which
-    /// is normally the same signal -- the strip passes the post-gate vocal.
-    [[nodiscard]] double process (double input, double sidechain) noexcept
+    /// Advances the detector one sample and returns the crossfade coefficient.
+    ///
+    /// **Split from `applyTo` so a stereo pair shares one detector**, which
+    /// CLAUDE.md section 7 requires: two independent de-essers duck the two
+    /// channels of a doubled vocal at different moments, and the top of the
+    /// image wanders on every /s/. The *filters* stay per channel because a
+    /// filter is state, not a decision.
+    [[nodiscard]] double computeGain (double sidechain) noexcept
     {
         const double sibilanceDb = detector_.process (sidechain);
         lastSibilanceDb_ = sibilanceDb;
@@ -127,14 +139,26 @@ public:
 
         reductionDb_ = envelope_.process (target);
 
-        const double low = shelf_.process (input);
-
         // Exactly 1.0 when nothing is being reduced -- and dbToGain of a
         // signed zero is exactly 1.0, so this really is the identity.
-        const double g = dsp::dbToGain (reductionDb_);
-        const double out = g * input + (1.0 - g) * low;
+        return dsp::dbToGain (reductionDb_);
+    }
+
+    /// Applies a coefficient from `computeGain` to one channel. The channel's
+    /// own low-pass runs here, so each keeps its own filter memory.
+    [[nodiscard]] double applyTo (int channel, double input, double gain) noexcept
+    {
+        const double low = shelf_[static_cast<std::size_t> (channel & 1)].process (input);
+        const double out = gain * input + (1.0 - gain) * low;
 
         return listen_ ? input - out : out;
+    }
+
+    /// One sample through. `sidechain` is what the detector measures, which
+    /// is normally the same signal -- the strip passes the post-gate vocal.
+    [[nodiscard]] double process (double input, double sidechain) noexcept
+    {
+        return applyTo (0, input, computeGain (sidechain));
     }
 
     /// How much the sibilance is being ducked right now, in dB (<= 0).
@@ -159,7 +183,7 @@ private:
     SibilanceDetector detector_;
     dsp::GainComputer computer_;
     dsp::EnvelopeFollower envelope_;
-    dsp::Biquad<double> shelf_;
+    dsp::Biquad<double> shelf_[2];
 
     double reductionDb_ { 0.0 };
     double lastSibilanceDb_ { SibilanceDetector::kSilentDb };

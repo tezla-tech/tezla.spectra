@@ -166,7 +166,7 @@ CLAUDE.md.
 | V1 GainComputer ratio | done |
 | V2 SibilanceDetector + DeEsser | done |
 | V3 CompressorCore + Gate | done |
-| V4 SyrinxEngine | pending |
+| V4 SyrinxEngine | done |
 | V5 JUCE layer + presets | pending |
 | V6 editor | pending |
 | V7 close-out + VOCAL-CHAIN.md | pending |

@@ -189,6 +189,36 @@ public:
     // Processing
     // -----------------------------------------------------------------------
 
+    /// Advances the detector one sample and returns the linear gain to apply.
+    ///
+    /// **Split from `applyTo` so a stereo pair can share one detector.**
+    /// CLAUDE.md section 7 requires linked stereo by default: running two
+    /// independent compressors on a stereo signal moves the image every time
+    /// one channel is louder than the other, which on a doubled vocal is
+    /// constantly. One detector fed the linked signal, one gain applied to
+    /// both channels, and the image cannot move.
+    [[nodiscard]] double computeGain (double sidechain) noexcept
+    {
+        const double detected = sidechainHz_ > 0.0 ? sidechainFilter_.process (sidechain)
+                                                   : sidechain;
+
+        const double magnitude = std::abs (detected);
+        const double levelDb = magnitude > 0.0 ? 20.0 * std::log10 (magnitude) : kSilentDb;
+
+        reductionDb_ = envelope_.process (computer_.computeGainReductionDb (levelDb));
+
+        return dbToGain (reductionDb_);
+    }
+
+    /// Applies a gain from `computeGain` to one channel, with the makeup and
+    /// the parallel mix. Stateless, so it can be called once per channel.
+    [[nodiscard]] double applyTo (double input, double gain) const noexcept
+    {
+        const double wet = input * gain * makeupGain_;
+
+        return mix_ * wet + (1.0 - mix_) * input;
+    }
+
     /// One sample, detecting from the signal itself.
     [[nodiscard]] double process (double input) noexcept
     {
@@ -203,17 +233,7 @@ public:
     /// to test a detector separately from what it acts on.
     [[nodiscard]] double process (double input, double sidechain) noexcept
     {
-        const double detected = sidechainHz_ > 0.0 ? sidechainFilter_.process (sidechain)
-                                                   : sidechain;
-
-        const double magnitude = std::abs (detected);
-        const double levelDb = magnitude > 0.0 ? 20.0 * std::log10 (magnitude) : kSilentDb;
-
-        reductionDb_ = envelope_.process (computer_.computeGainReductionDb (levelDb));
-
-        const double wet = input * dbToGain (reductionDb_) * makeupGain_;
-
-        return mix_ * wet + (1.0 - mix_) * input;
+        return applyTo (input, computeGain (sidechain));
     }
 
     /// How much this stage is pulling down right now, in dB (<= 0). What the
