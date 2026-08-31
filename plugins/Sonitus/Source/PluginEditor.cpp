@@ -131,7 +131,11 @@ const PageAccent kPageAccents[] {
     { juce::Colour { 0xff86a7fc }, juce::Colour { 0xffc7d7fe } },   // ENV     blue    H 267
     { juce::Colour { 0xfffc854d }, juce::Colour { 0xfffecbb5 } },   // MOD     orange  H  45
     { juce::Colour { 0xfffc75b7 }, juce::Colour { 0xfffec5dc } },   // MANGLE  pink    H 352
-    { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } }    // TUNING  lime    H 130
+    { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } },   // TUNING  lime    H 130
+
+    // DICEROLL has no fixed accent -- the tab cycles the whole wheel, and
+    // this is only what a still frame falls back to.
+    { juce::Colour { 0xffd8d5cf }, juce::Colour { 0xffffffff } }
 };
 
 /// The base palette with one page's accent swapped in.
@@ -633,6 +637,162 @@ void ToggleCell::resized()
 // ---------------------------------------------------------------------------
 // ControlPage
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// DICEROLL
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// One shared clock for every rainbow on the panel, so the tab and the button
+/// are the same colour at the same instant rather than two drifting cycles.
+/// Six seconds a lap: alive without strobing.
+[[nodiscard]] float rainbowPhase()
+{
+    return static_cast<float> (juce::Time::getMillisecondCounter() % 6000) / 6000.0f;
+}
+} // namespace
+
+void DicePage::RainbowButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+
+    if (down)
+        bounds = bounds.reduced (1.5f);
+
+    const float phase = rainbowPhase();
+    const float saturation = down ? 1.0f : highlighted ? 0.95f : 0.85f;
+
+    // A sweep across the whole wheel rather than one hue: the tab is a single
+    // colour because it is small, and this is the opposite -- it is the only
+    // control on the page and it should look like all six tabs at once.
+    juce::ColourGradient sweep { juce::Colour::fromHSV (phase, saturation, 1.0f, 1.0f),
+                                 bounds.getTopLeft(),
+                                 juce::Colour::fromHSV (std::fmod (phase + 0.85f, 1.0f),
+                                                        saturation, 1.0f, 1.0f),
+                                 bounds.getTopRight(), false };
+
+    for (int stop = 1; stop < 6; ++stop)
+    {
+        const auto along = static_cast<double> (stop) / 6.0;
+
+        sweep.addColour (along,
+                         juce::Colour::fromHSV (
+                             std::fmod (phase + static_cast<float> (along) * 0.85f, 1.0f),
+                             saturation, 1.0f, 1.0f));
+    }
+
+    g.setGradientFill (sweep);
+    g.fillRoundedRectangle (bounds, 10.0f);
+
+    // The text in black, because every hue behind it is at full value and
+    // white would vanish over the yellows.
+    g.setColour (juce::Colours::black.withAlpha (down ? 1.0f : 0.85f));
+    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.drawText (getButtonText(), bounds, juce::Justification::centred);
+}
+
+float DicePage::hueNow()
+{
+    return rainbowPhase();
+}
+
+DicePage::DicePage (SonitusProcessor& processorToUse, ui::Palette palette)
+    : processor_ (processorToUse), palette_ (palette)
+{
+    roll_.setComponentID ("randomize");
+    roll_.setTooltip (
+        "Sets EVERY sound parameter to a random value across its whole range "
+        "-- both extremes, no restraint. Most rolls are unusable; the point is "
+        "finding the one in twenty that is not, faster than a hundred and "
+        "forty knobs can be turned by hand.\n\n"
+        "It cannot touch the tuning: the scale and concert pitch were never "
+        "parameters, so nothing here reaches them.\n\n"
+        "There is no undo, and a roll can land the output at +12 dB with "
+        "everything else at maximum. COPY the patch to the other A/B slot "
+        "first if it is worth keeping, and mind the monitors.");
+
+    roll_.onClick = [this]
+    {
+        processor_.randomizeAllParameters();
+        ++rolls_;
+        count_.setText (rolls_ == 1 ? juce::String ("1 roll")
+                                    : juce::String (rolls_) + " rolls",
+                        juce::dontSendNotification);
+    };
+
+    addAndMakeVisible (roll_);
+
+    caption_.setText ("Every parameter, both extremes. No undo.",
+                      juce::dontSendNotification);
+    caption_.setJustificationType (juce::Justification::centred);
+    caption_.setColour (juce::Label::textColourId, palette_.dimText);
+    caption_.setFont (juce::FontOptions (13.0f));
+    addAndMakeVisible (caption_);
+
+    count_.setText ("no rolls yet", juce::dontSendNotification);
+    count_.setJustificationType (juce::Justification::centred);
+    count_.setColour (juce::Label::textColourId, palette_.dimText);
+    count_.setFont (juce::FontOptions (11.0f));
+    addAndMakeVisible (count_);
+
+    startTimerHz (30);
+}
+
+DicePage::~DicePage()
+{
+    stopTimer();
+}
+
+void DicePage::timerCallback()
+{
+    // The button and its halo, not the whole page: repainting the brushed
+    // metal thirty times a second to animate one control would be the most
+    // expensive thing on the panel.
+    repaint (roll_.getBounds().expanded (36));
+}
+
+void DicePage::paint (juce::Graphics& g)
+{
+    const auto bounds = roll_.getBounds().toFloat();
+
+    if (bounds.isEmpty())
+        return;
+
+    const float phase = rainbowPhase();
+
+    // The halo: rings stepping outward, each a different point on the wheel,
+    // so it is itself a spectrum rather than one colour blurred.
+    for (int ring = 11; ring >= 1; --ring)
+    {
+        const float grow = static_cast<float> (ring) * 3.0f;
+        const float hue = std::fmod (phase + static_cast<float> (ring) * 0.045f, 1.0f);
+        const float alpha = 0.20f * (1.0f - static_cast<float> (ring) / 12.0f);
+
+        g.setColour (juce::Colour::fromHSV (hue, 0.9f, 1.0f, alpha));
+        g.drawRoundedRectangle (bounds.expanded (grow), 10.0f + grow, 2.2f);
+    }
+
+    // The face is the button's own business -- see RainbowButton::paintButton.
+    // This is only what glows around it.
+}
+
+void DicePage::resized()
+{
+    auto bounds = getLocalBounds().reduced (24, 22);
+
+    caption_.setBounds (bounds.removeFromTop (20));
+    bounds.removeFromTop (22);
+
+    // Big, because it is the only control here and a dice you have to aim at
+    // is a dice you roll less.
+    const int width = juce::jmin (bounds.getWidth() - 60, 420);
+
+    roll_.setBounds (bounds.removeFromTop (86).withSizeKeepingCentre (width, 86));
+
+    bounds.removeFromTop (16);
+    count_.setBounds (bounds.removeFromTop (18));
+}
 
 void ControlPage::addHeading (const juce::String& text, int columns, bool sameRow)
 {
@@ -2073,7 +2233,8 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     addAndMakeVisible (*steps_);
 
-    static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE", "TUNING" };
+    static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE",
+                                             "TUNING", "DICEROLL" };
 
     for (int i = 0; i < kNumPages; ++i)
     {
@@ -2632,6 +2793,7 @@ void SonitusEditor::buildPages()
     // neither before: it was a component the editor parented by hand, and the
     // hand-parenting is what got forgotten.
     pages_[kTuningPage] = std::make_unique<TuningPage> (sonitus_, paletteForPage (kTuningPage));
+    pages_[kDicePage] = std::make_unique<DicePage> (sonitus_, paletteForPage (kDicePage));
 
     // Each page wears its own accent, and the look and feel is how that reaches
     // the knobs: JUCE resolves one by walking up the tree, so a page holding
@@ -2668,6 +2830,10 @@ void SonitusEditor::showPage (int index)
         tab.setColour (juce::TextButton::textColourOffId,
                        active ? kGroupPanel.darker (0.4f) : accent);
     }
+
+    // DICEROLL's colours are re-decided every frame, so whatever the loop
+    // above just wrote for it is about to be overwritten -- see refreshDiceTab.
+    refreshDiceTab();
 
     // `false`: the viewport must not take ownership -- the pages outlive the
     // page changes and are owned by the array.
@@ -2820,8 +2986,31 @@ void SonitusEditor::updateForSwitches()
     noteLabel_.setText (notes_[static_cast<std::size_t> (currentPage_)], juce::dontSendNotification);
 }
 
+void SonitusEditor::refreshDiceTab()
+{
+    auto& tab = tabs_[static_cast<std::size_t> (kDicePage)];
+
+    const float phase = DicePage::hueNow();
+    const bool active = currentPage_ == kDicePage;
+
+    // Every other tab is one hue because it does one coherent thing. This one
+    // does all of them at once, so it gets all of them at once. The active and
+    // inactive states differ in saturation and in which of the pair is the
+    // plate, exactly as the others do -- it is the same tab, wearing the whole
+    // wheel instead of a page's accent.
+    const auto colour = juce::Colour::fromHSV (phase, active ? 0.85f : 0.75f, 1.0f, 1.0f);
+
+    tab.setColour (juce::TextButton::buttonColourId,
+                   active ? colour : kGroupPanel.darker (0.10f));
+    tab.setColour (juce::TextButton::textColourOffId,
+                   active ? kGroupPanel.darker (0.4f) : colour);
+    tab.repaint();
+}
+
 void SonitusEditor::timerCallback()
 {
+    refreshDiceTab();
+
     auto& meters = sonitus_.getMeterValues();
 
     outputMeter_->setValues (meters.outputVuDb.load (std::memory_order_relaxed),

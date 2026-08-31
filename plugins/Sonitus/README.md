@@ -901,6 +901,40 @@ These lean on every bound in the instrument at once -- the feedback cap, the
 folder's ADAA, the comb's limit, the safety limiter -- and that is deliberate.
 A preset that exercises every guard simultaneously is the honest stress test.
 
+### DICEROLL
+
+A seventh tab, rainbow, and one button on it: **RANDOMIZE** sets every sound
+parameter to a uniform random value across its whole range. Both extremes, no
+restraint. Most rolls are unusable — the point is finding the one in twenty
+that is not, faster than a hundred and forty knobs can be turned by hand.
+
+Rolling is uniform on each parameter's **normalised** range, which is what "0
+to MAX" has to mean for a control whose own range is skewed: a skewed knob
+spends most of its travel at the fine end, so rolling in its own units would
+land in the coarse end nearly every time. Choices and switches come out
+uniform over their entries for the same reason.
+
+**Nothing is excluded, and there is nothing to exclude** — which is worth
+saying because it is a property rather than an oversight:
+
+- Sonitus is an instrument, so it has **no bypass parameter** to silence.
+- The **tuning is unreachable**. The scale and the concert pitch were
+  deliberately never made parameters, because a scale is a rig decision that
+  presets must not reset — so the same property that keeps presets off them
+  keeps the dice off them too. No list to maintain, nothing to forget.
+
+Two things to know before using it:
+
+- **There is no undo.** COPY the patch to the other A/B slot in the header
+  first if it is worth keeping.
+- **A roll can land the output at +12 dB with everything else at maximum.**
+  Sonitus has no safety limiter, so that reaches the DAW as sustained
+  full-scale clipping. Bounded at 0 dBFS by the interface, but sudden. Mind the
+  monitors.
+
+Later revisions are planned to randomise by a percentage of the current values,
+and to roll one section at a time — envelopes only, oscillators only.
+
 ### v0.1.0
 
 First version. Oscillators with hard sync and PM, unison, ZDF filter, three

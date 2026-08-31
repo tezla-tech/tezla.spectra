@@ -196,6 +196,52 @@ public:
 /// genuinely differ: an oscillator is ten controls that want five across, and a
 /// modulation slot is three that want six so two slots share a row. Forcing
 /// both onto one grid leaves a ragged edge on every page.
+/// The DICEROLL page: one button, and it is not a subtle one.
+///
+/// Rainbow rather than a page accent, and that is the point rather than a
+/// decoration: every other tab on this panel is one hue because it does one
+/// coherent thing. This one does all of them at once, so it gets all of them
+/// at once, and it is the only control on the panel that can throw away work.
+/// Being unmissable is a feature.
+class DicePage final : public Page,
+                       private juce::Timer
+{
+public:
+    /// The button paints itself, because a `TextButton` covers whatever is
+    /// behind it -- the first draft drew the spectrum onto the page and the
+    /// button sat on top of it as a grey plate, with only the halo showing.
+    class RainbowButton final : public juce::Button
+    {
+    public:
+        RainbowButton() : juce::Button ("R A N D O M I Z E") {}
+
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
+
+    DicePage (SonitusProcessor& processorToUse, ui::Palette palette);
+    ~DicePage() override;
+
+    [[nodiscard]] int getPreferredHeight() const override { return 320; }
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    /// The rolling hue, so the tab can glow in step with the page.
+    [[nodiscard]] static float hueNow();
+
+private:
+    void timerCallback() override;
+
+    SonitusProcessor& processor_;
+    ui::Palette palette_;
+
+    RainbowButton roll_;
+    juce::Label caption_;
+    juce::Label count_;
+
+    int rolls_ { 0 };
+};
+
 class ControlPage final : public Page
 {
 public:
@@ -553,6 +599,10 @@ public:
 
 private:
     void timerCallback() override;
+
+    /// Repaints the DICEROLL tab in whatever colour the shared rainbow clock
+    /// is at. Called every tick, which is what makes it glow.
+    void refreshDiceTab();
     void buildPages();
     void showPage (int index);
 
@@ -578,7 +628,6 @@ private:
     /// inside it -- there is nothing to pass down by hand and nothing to forget
     /// to pass. They are declared after the editor's own so they are destroyed
     /// before it, and cleared from their pages in the destructor either way.
-    std::array<std::unique_ptr<ui::KnobLookAndFeel>, 6> pageLookAndFeels_;
 
     /// Held by pointer so it can be *destroyed*, which is the only reliable way
     /// to turn tooltips off: JUCE has no "disabled" state for one, and setting
@@ -591,7 +640,7 @@ private:
 
     std::unique_ptr<ui::HeaderBar> header_;
 
-    static constexpr int kNumPages = 6;
+    static constexpr int kNumPages = 7;
 
     /// The MOD page is the one with the step strip under its grid, and the ENV
     /// page is the bespoke one, so both are named rather than numbered where
@@ -602,6 +651,17 @@ private:
     static constexpr int kModPage    = 3;
     static constexpr int kManglePage = 4;
     static constexpr int kTuningPage = 5;
+    static constexpr int kDicePage   = 6;
+
+    /// One look and feel per page, so each wears its own accent. JUCE resolves
+    /// one by walking *up* the tree, so setting it on a page colours every
+    /// control inside it.
+    ///
+    /// **Sized by kNumPages rather than by a literal**, and it was a literal 6:
+    /// adding a seventh page wrote one past the end and segfaulted inside a
+    /// LookAndFeel destructor, which points nowhere near the cause. Declared
+    /// here rather than beside the tooltip host so the constant is in scope.
+    std::array<std::unique_ptr<ui::KnobLookAndFeel>, kNumPages> pageLookAndFeels_;
 
     std::array<std::unique_ptr<Page>, kNumPages> pages_;
     std::array<juce::TextButton, kNumPages> tabs_;

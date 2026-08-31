@@ -9,6 +9,7 @@
 #include "PluginEditor.h"
 
 #include <algorithm>
+#include <random>
 #include <cmath>
 #include <vector>
 
@@ -2770,6 +2771,40 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     if (map.isNotEmpty())
         loadKeyboardMapText (map);
+}
+
+void SonitusProcessor::randomizeAllParameters()
+{
+    // A fresh seed per roll rather than one member generator: two rolls a
+    // second apart must not be able to produce the same patch, and a member
+    // seeded once at construction would make every session's first roll the
+    // same one.
+    std::mt19937 generator { std::random_device {} () };
+    std::uniform_real_distribution<float> uniform { 0.0f, 1.0f };
+
+    // Every parameter, with no exclusion list -- and there is nothing to
+    // exclude, which is worth stating because it is not an oversight.
+    //
+    // Sonitus is an instrument, so it has no bypass parameter to silence (the
+    // header leaves that button out; muting the track is what a player reaches
+    // for). And the tuning was deliberately never made a parameter, because a
+    // scale is a rig decision presets must not reset -- so the scale and the
+    // concert pitch are unreachable from here by construction rather than by a
+    // list somebody has to remember to maintain.
+    for (auto* parameter : getParameters())
+    {
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter);
+
+        if (ranged == nullptr)
+            continue;
+
+        // Uniform on the NORMALISED range, which is what "0 to MAX" means for
+        // a control whose own range is skewed: a skewed knob spends more of
+        // its travel at the fine end, and rolling in its own units would land
+        // in the coarse end nearly every time. Choices and switches come out
+        // uniform over their entries for the same reason.
+        ranged->setValueNotifyingHost (uniform (generator));
+    }
 }
 
 juce::AudioProcessorEditor* SonitusProcessor::createEditor()

@@ -405,6 +405,29 @@ public:
 
     [[nodiscard]] juce::AudioProcessorValueTreeState& getState() noexcept { return state_; }
 
+    /// **DICEROLL.** Sets every sound parameter to a uniform random value over
+    /// its whole range.
+    ///
+    /// Every one, at both extremes -- this is not a nudge and is not meant to
+    /// be usable most of the time. The interesting rolls are the one in twenty
+    /// that are, and the point of the control is to find them faster than a
+    /// person can turn a hundred and forty knobs.
+    ///
+    /// Two things it does **not** touch, for different reasons:
+    ///
+    ///  - **Bypass**, because it is a transport control rather than a sound. A
+    ///    dice that silenced the plugin half the time would read as broken
+    ///    rather than as random.
+    ///  - **The tuning** -- the scale and the concert pitch -- and that one
+    ///    needed no code at all: they were deliberately never made parameters
+    ///    (see `setConcertPitch`), because a scale is a rig decision that
+    ///    presets must not reset. A parameter randomiser cannot reach them by
+    ///    construction, which is the same property that keeps presets off them.
+    ///
+    /// There is no undo. The A/B slots in the header are how a patch worth
+    /// keeping survives a roll: COPY it across first.
+    void randomizeAllParameters();
+
     [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
 
     /// What the output is doing, for the panel's meter.
