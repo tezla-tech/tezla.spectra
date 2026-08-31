@@ -97,6 +97,8 @@ public:
         hold_ = 0.0;
         stage1_ = 0.0;
         stage2_ = 0.0;
+        stage1Right_ = 0.0;
+        stage2Right_ = 0.0;
     }
 
     /// Strikes the gate: a light flash at this level (0..1). A new flash
@@ -183,6 +185,35 @@ public:
         return conductance_ * stage2_;
     }
 
+    /// Two signals through **one** vactrol.
+    ///
+    /// A gate is a physical part: one lamp, one cell, one conductance. Two
+    /// listening points on the same object share it, so calling `process`
+    /// twice would be wrong rather than merely wasteful -- it advances the
+    /// cell twice per sample and the note decays at double speed.
+    ///
+    /// The filter is the part that is per-signal, so the right channel gets
+    /// its own two poles and nothing else. `process` above is untouched by
+    /// this and stays bit for bit what it was.
+    void processStereo (double& left, double& right) noexcept
+    {
+        left = process (left);
+
+        // Exactly the coefficient `process` just used: read back from the
+        // conductance it left behind, rather than recomputed from a copy of
+        // the expression, so the two channels cannot drift apart if the
+        // coupling law is ever retuned.
+        const double cutoff = kCutoffFloorHz
+                            + kCutoffSpanHz * std::pow (conductance_, kCutoffShape);
+        const double coefficient = 1.0 - std::exp (-2.0 * std::numbers::pi
+                                                   * cutoff / sampleRate_);
+
+        stage1Right_ += coefficient * (right - stage1Right_);
+        stage2Right_ += coefficient * (stage1Right_ - stage2Right_);
+
+        right = conductance_ * stage2Right_;
+    }
+
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate_; }
 
 private:
@@ -197,6 +228,8 @@ private:
     double hold_ { 0.0 };
     double stage1_ { 0.0 };
     double stage2_ { 0.0 };
+    double stage1Right_ { 0.0 };
+    double stage2Right_ { 0.0 };
 };
 
 } // namespace tezla::dsp

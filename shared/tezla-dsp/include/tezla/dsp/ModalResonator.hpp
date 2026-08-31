@@ -399,6 +399,25 @@ public:
         return index >= 0 && index < kMaxModes ? frequencyHz_[index] : 0.0;
     }
 
+    /// One mode's contribution to the last `process`, gain included -- the
+    /// term that `process` summed for this index.
+    ///
+    /// **Why this exists rather than a second output tap inside the loop.**
+    /// A second listening point on the object is the same sum with different
+    /// per-mode weights, and the obvious place to put it is beside the first
+    /// one in `process`. Then it costs a multiply-add per mode per sample
+    /// whether or not anything is listening twice, or the loop grows a branch,
+    /// or it grows into four variants once bloom is included. Reading the
+    /// terms back out costs the same arithmetic only when a caller actually
+    /// wants a second tap, and leaves the hot loop -- and its bit-exactness --
+    /// untouched by the feature entirely.
+    ///
+    /// Valid after any `process` and until the next one.
+    [[nodiscard]] double modeOutput (int index) const noexcept
+    {
+        return index >= 0 && index < kMaxModes ? gain_[index] * stateIm_[index] : 0.0;
+    }
+
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate_; }
 
 private:

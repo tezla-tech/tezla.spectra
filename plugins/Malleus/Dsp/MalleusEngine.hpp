@@ -31,6 +31,7 @@
 // bit-exactly.
 
 #include <cstdint>
+#include <vector>
 
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Tuning.hpp>
@@ -186,10 +187,13 @@ public:
 
     // -- rendering -------------------------------------------------------
 
-    void process (double* out, int numSamples) noexcept
+    void process (double* left, double* right, int numSamples) noexcept
     {
         for (int n = 0; n < numSamples; ++n)
-            out[n] = 0.0;
+        {
+            left[n] = 0.0;
+            right[n] = 0.0;
+        }
 
         int done = 0;
 
@@ -210,15 +214,53 @@ public:
                                : sinceControl_;
 
             for (auto& voice : voices_)
-                voice.render (out + done, take);
+                voice.render (left + done, right + done, take);
 
+            // **One sympathetic bank, fed the mono sum.** It is a set of
+            // strings sitting near the object, not a pair of them: it hears
+            // what the room hears and rings into both ears. With the two taps
+            // equal -- the default -- `0.5 * (l + r)` is exactly `l`, and
+            // adding the same return to both channels reproduces the mono
+            // engine sample for sample.
             if (sympatheticCount_ > 0)
                 for (int n = done; n < done + take; ++n)
-                    out[n] += sympatheticLevel_ * sympathetic_.process (out[n]);
+                {
+                    const double ring = sympatheticLevel_
+                                          * sympathetic_.process (0.5 * (left[n] + right[n]));
+
+                    left[n] += ring;
+                    right[n] += ring;
+                }
 
             done += take;
             sinceControl_ -= take;
         }
+    }
+
+    /// What a mono host hears: the two listening points summed.
+    ///
+    /// **Not real-time safe** -- it owns a scratch buffer and will allocate if
+    /// handed a block longer than any it has seen. Deliberately so: the plugin
+    /// calls the stereo overload above, and this exists for the tests and the
+    /// measurement tool, where a mono fold is a *measurement* rather than an
+    /// output. Marked rather than made safe, because making it safe would mean
+    /// a maximum block size the offline callers do not have.
+    ///
+    /// Not a convenience -- it is the measurement the stereo feature has to
+    /// answer for. Two taps either side of a mode's node hear it in opposite
+    /// phase, so the sum removes it, and a control that sounds wide and
+    /// disappears in mono is a trap rather than a feature. The mono fold is
+    /// therefore a first-class output with its own tests, and the positions
+    /// that cancel are named in the tooltip rather than quietly avoided.
+    void process (double* out, int numSamples) noexcept
+    {
+        if (monoRight_.size() < static_cast<std::size_t> (numSamples))
+            monoRight_.assign (static_cast<std::size_t> (numSamples), 0.0);
+
+        process (out, monoRight_.data(), numSamples);
+
+        for (int n = 0; n < numSamples; ++n)
+            out[n] = 0.5 * (out[n] + monoRight_[static_cast<std::size_t> (n)]);
     }
 
     // -- what the tests and meters read ----------------------------------
@@ -299,6 +341,9 @@ private:
     double sympatheticBrightness_ { 0.6 };
 
     int sinceControl_ { 0 };
+
+    /// Scratch for the mono fold; see the mono `process` overload.
+    std::vector<double> monoRight_;
     long long noteOnCount_ { 0 };
 };
 

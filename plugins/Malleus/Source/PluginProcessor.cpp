@@ -446,7 +446,7 @@ void MalleusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     sampleRate_ = sampleRate;
 
     engine_.prepare (sampleRate);
-    scratch_.setSize (1, juce::jmax (16, maximumExpectedSamplesPerBlock), false, false, true);
+    scratch_.setSize (2, juce::jmax (16, maximumExpectedSamplesPerBlock), false, false, true);
 
     // The tuning survives a prepare; publish it again so the freshly reset
     // engine picks it up at the first block (the Emberdrive lesson: what
@@ -537,9 +537,10 @@ void MalleusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
     collectTuning();
 
     if (scratch_.getNumSamples() < numSamples)
-        scratch_.setSize (1, numSamples, false, false, true);
+        scratch_.setSize (2, numSamples, false, false, true);
 
-    double* const mono = scratch_.getWritePointer (0);
+    double* const engineLeft = scratch_.getWritePointer (0);
+    double* const engineRight = scratch_.getWritePointer (1);
 
     // Sample-accurate MIDI: the render is cut at every event, so a hit
     // lands where it was played rather than at the start of the next block.
@@ -550,18 +551,20 @@ void MalleusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
 
     auto renderSpan = [&] (int from, int count)
     {
-        engine_.process (mono, count);
+        // **Two listening points on the object, not a widener.** Section 7
+        // rules out independent per-channel nonlinearity, and this is not
+        // that: there is one object, struck once, run through one mode bank
+        // and one vactrol, and the two channels are two places to stand in
+        // front of it. With Listen at 0 -- the default -- both taps are the
+        // same number and this is the mono engine that shipped, byte for byte.
+        engine_.process (engineLeft, engineRight, count);
 
-        // Mono into both channels: one object struck once is one sound in
-        // one place, and independent per-channel nonlinearity would destroy
-        // the centre image (section 7). A stereo image belongs to the room,
-        // not the object.
         for (int i = 0; i < count; ++i)
         {
-            const auto sample = static_cast<FloatType> (mono[i] * outputGain_);
-
-            buffer.setSample (0, from + i, sample);
-            buffer.setSample (1, from + i, sample);
+            buffer.setSample (0, from + i,
+                              static_cast<FloatType> (engineLeft[i] * outputGain_));
+            buffer.setSample (1, from + i,
+                              static_cast<FloatType> (engineRight[i] * outputGain_));
         }
     };
 

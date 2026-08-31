@@ -44,13 +44,14 @@ std::vector<double> playNote (const VoiceSettings& settings, double velocity,
                   tezla::dsp::scales::twelveToneEqual(), 0);
 
     std::vector<double> out (static_cast<std::size_t> (samples), 0.0);
+    std::vector<double> right (static_cast<std::size_t> (samples), 0.0);
 
     for (int done = 0; done < samples; done += blockSize)
     {
         const int take = std::min (blockSize, samples - done);
 
         voice.controlTick (take);
-        voice.render (out.data() + done, take);
+        voice.render (out.data() + done, right.data() + done, take);
     }
 
     return out;

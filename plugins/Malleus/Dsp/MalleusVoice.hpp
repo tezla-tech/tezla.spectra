@@ -101,6 +101,30 @@ struct VoiceSettings
     /// hardness the note was struck with.
     double hardnessVelocity { 0.0 };
 
+    /// **Where you listen from.** Two output taps at two points on the
+    /// object, left and right.
+    ///
+    /// The strike is already combed by `sin(k pi p)`: where you *hit* it
+    /// decides which modes you excite, and a mode with a node under the mallet
+    /// gets exactly nothing. Where you *listen* decides which modes you hear,
+    /// by the same expression, and until now there was one listening point and
+    /// it was implicit -- every mode weighted equally, which is not any real
+    /// point on a real object but is what a plain modal sum is.
+    ///
+    /// So `listenAmount` is a blend between that convention and a real point:
+    /// `(1 - a) * 1 + a * sin(k pi q)`. At 0 both taps are the sum that
+    /// shipped, bit for bit, and the plugin is mono exactly as before. At 1
+    /// both are real listening points, and the stereo image is the geometry
+    /// rather than a widener.
+    ///
+    /// **The mono sum can cancel**, and that is physics rather than a bug: two
+    /// taps either side of a mode's node hear it in opposite phase, so summing
+    /// them removes it. Measured across the position grid rather than assumed;
+    /// the numbers are in the README and the tooltip.
+    double listenLeft { 0.5 };
+    double listenRight { 0.5 };
+    double listenAmount { 0.0 };
+
     double noiseAmount { 0.0 };         ///< scrape mixed into the strike
     double dropSemitones { 0.0 };       ///< signed per-hit tension drop
     double dropSeconds { 0.08 };
@@ -172,6 +196,7 @@ public:
         roll_.prepare (sampleRate_);
         bow_.prepare (sampleRate_);
         dcBlocker_.prepare (sampleRate_, 10.0);
+        dcBlockerRight_.prepare (sampleRate_, 10.0);
         held_ = false;
         note_ = -1;
         age_ = 0;
@@ -192,6 +217,7 @@ public:
         // belong to the new object.
         bank_.reset();
         dcBlocker_.reset();
+        dcBlockerRight_.reset();
         gate_.reset();
 
         noise_.setSeed (seed);
@@ -219,6 +245,7 @@ public:
 
         rebuildModes (lockScale);
         applyDrop();
+        buildListeningWeights();
 
         // Hardness resolved once, here, so a roll's re-strikes stay the
         // hardness the note was struck with rather than drifting if the knob
@@ -301,8 +328,12 @@ public:
         }
     }
 
-    /// Renders and ADDS `count` samples into `out`.
-    void render (double* out, int count) noexcept
+    /// Renders and ADDS `count` samples into `left` and `right`.
+    ///
+    /// With `listenAmount` at zero the two taps are the same number, computed
+    /// once -- the mono path that shipped, unchanged and unbranched inside the
+    /// sample loop.
+    void render (double* left, double* right, int count) noexcept
     {
         if (! isActive())
             return;
@@ -331,7 +362,41 @@ public:
                 input += bow_.force (bank_.contactVelocity());
 
             const double rung = bank_.process (input);
-            out[n] += gate_.process (dcBlocker_.process (rung));
+
+            if (! listening_)
+            {
+                const double sample = gate_.process (dcBlocker_.process (rung));
+
+                left[n] += sample;
+                right[n] += sample;
+                continue;
+            }
+
+            // The two taps, from the terms `process` just summed.
+            double tapLeft = 0.0;
+            double tapRight = 0.0;
+
+            const int partials = bank_.getModeCount();
+
+            for (int mode = 0; mode < partials; ++mode)
+            {
+                const double term = bank_.modeOutput (mode);
+
+                tapLeft += listenLeft_[mode] * term;
+                tapRight += listenRight_[mode] * term;
+            }
+
+            // A DC blocker per tap, because it is a filter and filters are
+            // per-signal -- but **one** gate, because a vactrol is a physical
+            // part and there is one of it. Running `gate_.process` twice would
+            // advance the cell twice a sample and halve the note's length.
+            double l = dcBlocker_.process (tapLeft);
+            double r = dcBlockerRight_.process (tapRight);
+
+            gate_.processStereo (l, r);
+
+            left[n] += l;
+            right[n] += r;
         }
     }
 
@@ -409,6 +474,39 @@ private:
 
         for (int mode = 0; mode < partials; ++mode)
             bank_.setMode (mode, base_[mode] * multiplier, t60_[mode], gain_[mode]);
+    }
+
+    /// The two listening taps' per-mode weights, from the positions and the
+    /// amount. Built once at note-on: they depend on the mode *index* and the
+    /// positions, neither of which moves during a note, so the sample loop is
+    /// two dot products and nothing else.
+    ///
+    /// `(1 - a) * 1 + a * sin(k pi q)` -- the lerp form, exact at both ends,
+    /// so at amount 0 every weight is exactly 1.0 and the taps are exactly the
+    /// sum `process` computed. The render skips them entirely there anyway;
+    /// this is what makes the two paths agree rather than merely nearly agree.
+    void buildListeningWeights() noexcept
+    {
+        const double amount = settings_.listenAmount < 0.0 ? 0.0
+                            : settings_.listenAmount > 1.0 ? 1.0
+                            : settings_.listenAmount;
+
+        listening_ = ! dsp::isExactlyZero (amount);
+
+        if (! listening_)
+            return;
+
+        const int partials = bank_.getModeCount();
+
+        for (int mode = 0; mode < partials; ++mode)
+        {
+            const int k = mode + 1;
+
+            listenLeft_[mode] = (1.0 - amount)
+                                  + amount * positionWeight (k, settings_.listenLeft);
+            listenRight_[mode] = (1.0 - amount)
+                                   + amount * positionWeight (k, settings_.listenRight);
+        }
     }
 
     /// One slot's contribution, at `weight`. Zero does nothing at all, which
@@ -535,6 +633,7 @@ private:
     RollClock roll_;
     Bow bow_;
     dsp::DcBlocker<double> dcBlocker_;
+    dsp::DcBlocker<double> dcBlockerRight_;
 
     VoiceSettings settings_;
 
@@ -550,6 +649,11 @@ private:
     double contactWeight_ { 0.0 };
     bool bowing_ { false };
     bool rolling_ { false };
+
+    /// False at amount 0, which is the mono path that shipped.
+    bool listening_ { false };
+    double listenLeft_[dsp::ModalResonator::kMaxModes] {};
+    double listenRight_[dsp::ModalResonator::kMaxModes] {};
 
     double base_[dsp::ModalResonator::kMaxModes] {};
     double t60_[dsp::ModalResonator::kMaxModes] {};
