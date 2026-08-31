@@ -767,6 +767,44 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+### Phase 4, measured
+
+`tezla-measure sonitus` grew a phase-4 section. The three tables it prints:
+
+**The filter morph trades low for high** — response three octaves either side of
+an 800 Hz corner, no resonance, through the running filter at 48 kHz:
+
+| morph | 100 Hz | 6400 Hz | |
+|---|---|---|---|
+| +0.00 | −0.13 dB | −37.29 dB | lowpass |
+| +0.25 | −6.09 dB | −24.66 dB | |
+| +0.50 | −18.20 dB | −18.70 dB | bandpass |
+| +0.75 | −24.16 dB | −6.08 dB | |
+| +1.00 | −36.27 dB | −0.12 dB | highpass |
+
+A crossfade between two static filters would move both ends together; a morph
+trades them, and the bandpass row sitting symmetrically at −18 dB on both sides
+is what that looks like.
+
+**The FM ratio readout**, for a set of B pitches with A at unity: `1:1`, `2:1`,
+`3:2 −2 c` (a tempered fifth — this is why 12-TET fifths beat), `3:2 +0 c` for a
+pure one, `2.030  26 c off 2:1` for a beating pair, `8:1` at four octaves, and
+`32.000  far apart` at five.
+
+**The scale lock's correction**, as cents, sweeping a comb across four decades:
+
+| tuning | degrees | worst | mean |
+|---|---|---|---|
+| 12-TET | 12 | 49.98 | 25.00 |
+| Just major (5-limit) | 7 | 101.95 | 44.94 |
+| Pythagorean | 12 | 56.83 | 25.29 |
+| Bohlen-Pierce | 13 | 73.12 | 36.56 |
+| Partch 43 | 43 | 19.42 | 7.40 |
+
+The finer the scale, the smaller the correction — which is the right shape, and
+it says the lock is a nudge rather than a retune everywhere but the seven-note
+just scale, where half a step really is 102 cents.
+
 **Four macros, sources in both matrices.** A macro is one knob wired to as many
 destinations as you point it at — the one control shape a matrix structurally
 cannot give, because a row has one source and one destination, so "open the
@@ -993,6 +1031,9 @@ do not hold back. Measured at A1 and A3: every one is finite, peaks between
 | **Neural collapse -- the loop, re-decided per step** | The *sequencer* drives the reverse PM depth, so the loop's character is re-decided sixteen times a bar -- and a loop through two nonlinearities does not respond linearly to its own depth, so each step lands somewhere unrelated to the last. Deterministic, so it prints. |
 | **Tearout larynx -- a throat that screams** | Formant filter locked to the note's own harmonics, kargyraa doubling the period the way a real kargyraa singer's false folds do, both operators feeding back hard enough to give the vowel something to filter. The vowel walks on a synced LFO. |
 | **Gravel storm -- noise with a pitch bolted on** | No oscillator plays the note at all: the pitch is the comb's resonance tracking the key, and the note number chooses a delay length. A feedback sine ring-modulates the noise for teeth. Brightness centroid **11.91**, the brightest thing the instrument makes. |
+| **One knob reese -- MACRO 1 does all of it** | One control wired to five destinations at once: cutoff, filter *morph*, operator feedback, detune, and comb time — in both matrices. At 0 a dull close reese; at full a screaming one. Measured across the knob: 360 → 601 → 1038 → 1561 → 1373 zero crossings per 0.5 s, peaks 0.376 to 0.851 |
+| **Morphing pluck -- the filter changes type, not just cutoff** | ADV 2 drawing the filter along lowpass → bandpass under the note, so it starts as a thud and arrives as a whistle. No cutoff sweep does that |
+| **Scale drone -- the comb belongs to the tuning** | The one preset that needs a microtuning loaded to show what it does. Comb scale lock on, key tracking high: on 12-TET a pleasant resonant drone, on Partch 43 or a Persian scale a comb that stops sitting between the notes |
 
 These lean on every bound in the instrument at once -- the feedback cap, the
 folder's ADAA, the comb's limit, the safety limiter -- and that is deliberate.
