@@ -312,6 +312,15 @@ struct EngineParameters
     double combMix { 0.0 };
     bool combInverted { false };
 
+    /// Snaps the comb's resonant pitch onto the loaded scale.
+    ///
+    /// The comb key-tracks, but its delay is a *continuous* frequency, so on a
+    /// microtuned patch -- which is half of why Sonitus exists -- it resonates
+    /// between the scale's notes and fights the tuning it is meant to serve.
+    /// Off by default, and off is bit-exact: the ratio it applies is exactly
+    /// 1.0 and the comb multiplies by it unconditionally.
+    bool combScaleLock { false };
+
     double phaseFrequencyHz { 800.0 };
     int phaseStages { 4 };
 

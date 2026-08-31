@@ -3498,6 +3498,17 @@ void SonitusEditor::buildPages()
         "into notches. On a feedforward comb it also halves the spacing -- the first notch moves "
         "from 1/(2T) to 1/T.");
 
+    mangle->addToggle (ids::combScale, "Scale lock",
+        "**Snaps the comb's resonance onto the loaded scale.** The comb key-tracks, but its "
+        "delay is a continuous frequency, so on a microtuned patch it resonates *between* the "
+        "scale's notes and fights the tuning it is meant to serve.\n\n"
+        "On 12-TET this is a small convenience. On Partch's 43-tone or a Persian dastgah it is "
+        "the difference between a comb that belongs to the tuning and one that does not -- and "
+        "it holds while Time, key tracking and any modulation move it, because the snap is "
+        "applied to where the comb actually ended up rather than to where the knob is.\n\n"
+        "Off is bit-exactly the comb that shipped: the ratio it applies is 1.0 and the comb "
+        "multiplies by it either way.");
+
     mangle->addKnob (ids::phaseFreq, "Phase centre",
         "Where the allpass cascade's notches are bunched. Only in Phase mode.");
 

@@ -189,6 +189,7 @@ inline constexpr auto combDamp    = "combDamp";
 inline constexpr auto combSpread  = "combSpread";
 inline constexpr auto combMix     = "combMix";
 inline constexpr auto combInvert  = "combInvert";
+inline constexpr auto combScale   = "combScale";
 inline constexpr auto phaseFreq   = "phaseFreq";
 inline constexpr auto phaseStages = "phaseStages";
 inline constexpr auto formantMorph = "formantMorph";

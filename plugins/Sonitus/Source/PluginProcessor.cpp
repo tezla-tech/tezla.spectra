@@ -874,6 +874,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::combInvert, kSchemaV1 }, "Invert wet", false));
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::combScale, kSchemaV5 }, "Comb scale lock", false));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::phaseFreq, kSchemaV1 }, "Phase centre",
         skewedRange (20.0f, 18000.0f, 800.0f), 800.0f, hertzAttributes()));
@@ -1289,6 +1292,7 @@ void SonitusProcessor::pullParameters()
     p.combSpread = valueOf (state_, ids::combSpread);
     p.combMix = valueOf (state_, ids::combMix);
     p.combInverted = valueOf (state_, ids::combInvert) > 0.5f;
+    p.combScaleLock = valueOf (state_, ids::combScale) > 0.5f;
     p.phaseFrequencyHz = valueOf (state_, ids::phaseFreq);
     p.phaseStages = indexOf (state_, ids::phaseStages);
 

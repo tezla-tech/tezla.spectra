@@ -417,6 +417,78 @@ public:
         return (concertHz_ / 440.0) * hz * here / reference;
     }
 
+    /// The nearest frequency **in this tuning** to an arbitrary one, across
+    /// every repeat of the scale.
+    ///
+    /// For anything that resonates at a pitch without being played one: the
+    /// comb, whose delay is a continuous frequency and therefore sits between
+    /// the scale's notes on a microtuned patch, fighting the tuning it is
+    /// supposed to serve. On 12-TET this is a small convenience; on Partch's
+    /// 43-tone or a Persian dastgah it is the difference between a comb that
+    /// belongs and one that does not.
+    ///
+    /// Nearest in **cents**, not in Hz -- the same argument that shape every
+    /// other nearness in this repository. And found by arithmetic rather than
+    /// by a search: the scale is a repeating pattern, so reducing into one
+    /// repeat and scanning that repeat's degrees is exact and costs the
+    /// scale's own size however far the frequency is from the reference.
+    ///
+    /// Returns `hz` unchanged if the scale is unusable or `hz` is not positive
+    /// -- a caller asking for a snap on a broken tuning wants its own value
+    /// back, not a zero.
+    [[nodiscard]] double nearestScaleHz (double hz) const noexcept
+    {
+        if (! (hz > 0.0) || ! scale_.isUsable())
+            return hz;
+
+        // Everything is measured from the root's own frequency, because that
+        // is where the scale's pattern starts. Degree 0 of the scale is 1/1
+        // there, not at the reference note.
+        const double root = frequencyFor (rootNote_);
+
+        if (! (root > 0.0))
+            return hz;
+
+        const double repeat = scale_.repeat;
+
+        if (! (repeat > 1.0))
+            return hz;
+
+        // Which repeat of the pattern the frequency falls in, and where in it.
+        const double repeats = std::log (hz / root) / std::log (repeat);
+        const double whole = std::floor (repeats);
+        const double base = root * std::pow (repeat, whole);
+
+        double best = hz;
+        double bestCents = 1.0e300;
+
+        // The degrees of this repeat and of the one above, because a frequency
+        // just under a repeat boundary is nearer the next repeat's 1/1 than
+        // this one's last degree -- the wrap is where a naive scan is wrong.
+        for (int step = 0; step <= 1; ++step)
+        {
+            const double octave = base * std::pow (repeat, static_cast<double> (step));
+
+            for (int degree = 0; degree < scale_.size(); ++degree)
+            {
+                const double candidate = octave * scale_.ratios[static_cast<std::size_t> (degree)];
+
+                if (! (candidate > 0.0))
+                    continue;
+
+                const double cents = std::abs (1200.0 * std::log2 (candidate / hz));
+
+                if (cents < bestCents)
+                {
+                    bestCents = cents;
+                    best = candidate;
+                }
+            }
+        }
+
+        return best;
+    }
+
     /// The same thing in cents above the reference. For a display, and for
     /// tests that want to talk about intervals rather than frequencies.
     [[nodiscard]] double centsFor (int note) const noexcept

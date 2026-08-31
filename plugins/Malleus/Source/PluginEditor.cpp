@@ -415,14 +415,14 @@ void ModeStackView::paint (juce::Graphics& g)
 // MalleusEditor
 // ---------------------------------------------------------------------------
 
-MalleusEditor::MalleusEditor (MalleusProcessor& processor)
-    : juce::AudioProcessorEditor (&processor),
-      malleus_ (processor),
+MalleusEditor::MalleusEditor (MalleusProcessor& owner)
+    : juce::AudioProcessorEditor (&owner),
+      malleus_ (owner),
       palette_ (kPalette),
       // Three lines is what the panel gives this, and a fourth is silently
       // cut mid-word -- which is how the first draft of it shipped into a
       // screenshot reading "travels with the proje...".
-      tuningPanel_ (processor, kPalette,
+      tuningPanel_ (owner, kPalette,
                     "Here the tuning also decides where the OBJECT'S OWN PARTIALS land, "
                     "through Overtone Lock on the OBJECT page, and how the sympathetic "
                     "strings are tuned. Load Bohlen-Pierce and a bell moves onto the "

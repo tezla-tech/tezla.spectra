@@ -767,6 +767,22 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+**The comb locks to the scale.** It already key-tracks, but its delay is a
+*continuous* frequency, so on a microtuned patch — which is half of why Sonitus
+exists — it resonates between the scale's notes and fights the tuning it is
+meant to serve. **Scale lock** on the MANGLE page snaps the comb's resonance
+onto the loaded tuning. On 12-TET it is a small convenience; on Partch's
+43-tone or a Persian dastgah it is the difference between a comb that belongs
+and one that does not.
+
+The snap is applied to where the comb *actually* ended up — key tracking,
+modulation and all — rather than to the knob, because the knob is wrong
+whenever anything is sweeping it. `Tuning::nearestScaleHz` does the arithmetic
+(nearest in cents, checked by brute force against every degree within six
+repeats); `Comb::setTuningRatio` applies it as one multiplication, so the comb
+stays framework-free and knows nothing about scales. Off is exactly 1.0 and
+therefore bit-exact, byte-proven through the plugin.
+
 **The filter morphs.** Mode is a *choice*, and a choice cannot be a modulation
 destination (a switch reconfigures rather than adjusts), so the filter's
 character was the one thing in a voice no envelope could sweep. **Morph** is a

@@ -50,6 +50,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 
 #include "SamplePlayer.hpp"
@@ -105,7 +106,8 @@ public:
                                soundingKey, hostRate_);
 
         // The modulation envelope only runs when something consumes it.
-        useModEnv_ = zone.modEnvToPitchCents != 0.0 || zone.modEnvToFilterCents != 0.0;
+        useModEnv_ = ! dsp::isExactlyZero (zone.modEnvToPitchCents)
+                  || ! dsp::isExactlyZero (zone.modEnvToFilterCents);
 
         if (useModEnv_)
             modulationEnvelope_.start (zone.modulationEnvelope,
@@ -124,7 +126,7 @@ public:
 
         // The filter only exists when the font asked for one.
         useFilter_ = zone.filterCutoffCents < 13499.0
-                  || zone.modEnvToFilterCents != 0.0;
+                  || ! dsp::isExactlyZero (zone.modEnvToFilterCents);
 
         if (useFilter_)
         {
@@ -237,7 +239,7 @@ private:
         double vibratoCents = 0.0;
         const double vibratoDepth = zone_->vibLfoToPitchCents + 50.0 * modWheel;
 
-        if (age_ >= vibratoDelaySamples_ && vibratoDepth != 0.0)
+        if (age_ >= vibratoDelaySamples_ && ! dsp::isExactlyZero (vibratoDepth))
         {
             const double turns =
                 static_cast<double> (age_ - vibratoDelaySamples_) * vibratoIncrement_;

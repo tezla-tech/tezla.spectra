@@ -361,6 +361,39 @@ void Engine::aimComb() noexcept
     comb_.setDelaySeconds (combDelaySeconds());
     comb_.setNoteHz (voices_.trackedFrequency());
 
+    // **Scale lock**, applied here because this is the only place that knows
+    // both numbers: the comb knows where it resonates and the tuning knows
+    // what pitches exist. The comb stays framework-free and is handed a plain
+    // ratio (`setTuningRatio`), which at exactly 1.0 costs one multiplication
+    // and changes nothing.
+    //
+    // The ratio is worked out from the delay the comb has *already* settled
+    // on -- key tracking, modulation and all -- rather than from the knob,
+    // because the knob is wrong whenever anything is sweeping it, which in
+    // this instrument is most of the time. Same argument as the notch readout
+    // two lines down.
+    if (active_.combScaleLock)
+    {
+        comb_.setTuningRatio (1.0);
+
+        const double samples = comb_.currentDelaySamples();
+
+        if (samples > 0.0)
+        {
+            const double resonant = internalRate_ / samples;
+            const double snapped = voices_.tuning().nearestScaleHz (resonant);
+
+            // Delay and frequency are reciprocals, so the ratio between the
+            // two pitches is the reciprocal of the ratio between the delays.
+            if (snapped > 0.0)
+                comb_.setTuningRatio (resonant / snapped);
+        }
+    }
+    else
+    {
+        comb_.setTuningRatio (1.0);
+    }
+
     // The same tracked note the comb uses. The two lock to the same thing by
     // construction -- the comb onto the note's period, the formant onto its
     // harmonics -- which is what makes them agree rather than beat.
