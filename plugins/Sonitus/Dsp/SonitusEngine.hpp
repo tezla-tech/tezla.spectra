@@ -403,11 +403,16 @@ public:
     /// inside it or a 512-sample block would be one step long however fast the
     /// pattern is set. Without a running transport the sources free-run from
     /// their own clocks.
-    void setTransport (double ppqPosition, double beatsPerMinute, bool playing) noexcept
+    void setTransport (double ppqPosition, double beatsPerMinute, bool playing,
+                       int beatsPerBar = 4) noexcept
     {
         ppq_ = ppqPosition;
         bpm_ = beatsPerMinute > 0.0 ? beatsPerMinute : 120.0;
         transportRunning_ = playing && ppqPosition >= 0.0;
+
+        readouts_.bpm.store (bpm_, std::memory_order_relaxed);
+        readouts_.beatsPerBar.store (beatsPerBar > 0 ? beatsPerBar : 4,
+                                     std::memory_order_relaxed);
     }
 
     /// Renders `numSamples` into `output`, which must have two channels.
@@ -461,6 +466,17 @@ public:
         /// has one value per voice, and averaging eight of them describes none
         /// of them. Index 0 is the amplitude envelope, 1 and 2 the mod ones.
         std::atomic<double> envelopeLevels[3] { { 0.0 }, { 0.0 }, { 0.0 } };
+
+        /// The tempo and bar length the engine is actually snapping against,
+        /// so the envelope rulers draw the grid the sound is on rather than a
+        /// tempo the panel guessed. Published from `setTransport`, which is
+        /// where the host's own numbers arrive.
+        ///
+        /// 120 and 4 are the fallbacks, not a default anybody chose: a host
+        /// with no transport reports nothing, and an envelope still has to
+        /// draw something.
+        std::atomic<double> bpm { 120.0 };
+        std::atomic<int> beatsPerBar { 4 };
     };
 
     [[nodiscard]] const Readouts& readouts() const noexcept { return readouts_; }

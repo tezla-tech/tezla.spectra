@@ -1345,8 +1345,18 @@ void SonitusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
             const auto ppq = position->getPpqPosition();
             const auto bpm = position->getBpm();
 
+            // The bar length as well as the tempo, so the envelope rulers draw
+            // the player's bar rather than assuming four. A 7/8 session gets a
+            // 7/8 ruler; the beat is still the denominator's note, which is
+            // what "beats per bar" has to mean for a grid.
+            int beatsPerBar = 4;
+
+            if (const auto signature = position->getTimeSignature())
+                if (signature->numerator > 0)
+                    beatsPerBar = signature->numerator;
+
             engine_.setTransport (ppq.orFallback (-1.0), bpm.orFallback (120.0),
-                                  position->getIsPlaying());
+                                  position->getIsPlaying(), beatsPerBar);
         }
     }
 

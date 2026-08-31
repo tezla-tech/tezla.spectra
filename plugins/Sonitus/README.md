@@ -767,6 +767,25 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+**The envelopes have a ruler.** With Snap on, an ADV graph draws the grid it is
+snapping to: bar lines in the accent colour, beats and subdivisions behind them,
+numbered bars along a strip at the bottom, and the note each leg landed on
+written over the leg — so a 1/8 triplet reads as `1/8 T` rather than as 167 ms.
+A point arriving exactly on a beat drops a stem to the ruler and one that does
+not, does not; that is the useful part, because Snap quantises each leg's
+*length*, so a chain of legal note values can still land between beats. With
+Loop on, the readout is the loop's length in bars. Snap off, the same strip is a
+plain seconds ruler — the graph has a time axis either way now, where before it
+had none.
+
+Two things came out of building it. The ADV graph was drawing the **raw**
+parameter times while the engine played snapped ones, so a synced envelope
+showed a shape the synthesiser was not running; it now draws through the same
+`dsp::snapSeconds` the audio thread calls. And the AHDSR graphs, whose axis is
+the knobs' own travel rather than seconds — deliberately, so a 5 ms attack is
+visible beside a 5 s release — cannot carry a ruler honestly, so their stage
+marks name the note instead: `A 1/16  D 1/8  S  R 1/4`.
+
 **Tempo sync, in two places.** Each LFO gains a Sync toggle and a note-division
 choice — synced with Retrig off and the transport running, the *phase* is
 assigned from the song position, so the same bar is the same wobble on every

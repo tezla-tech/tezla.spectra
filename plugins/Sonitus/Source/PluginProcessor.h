@@ -482,6 +482,19 @@ public:
         return engine_.readouts().envelopeLevels[index].load (std::memory_order_relaxed);
     }
 
+    /// The tempo and bar length the engine is snapping against. The envelope
+    /// rulers draw from these rather than from a tempo of their own, so the
+    /// grid on screen is the grid in the sound.
+    [[nodiscard]] double getTempoBpm() const noexcept
+    {
+        return engine_.readouts().bpm.load (std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] int getBeatsPerBar() const noexcept
+    {
+        return engine_.readouts().beatsPerBar.load (std::memory_order_relaxed);
+    }
+
     // ---- tuning ------------------------------------------------------------
 
     /// Loads a Scala scale file's **text**. Returns an empty string on success

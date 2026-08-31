@@ -24,6 +24,7 @@
 // triplet fits three in the space of two, hence 1.5x; a dotted note lasts one
 // and a half times as long, hence 2/3.
 
+#include <cmath>
 #include <cstddef>
 #include <iterator>
 
@@ -69,7 +70,14 @@ inline constexpr int defaultDivision = 3;
     return 1.0 / divisionSeconds (index, bpm);
 }
 
-/// Snaps a time to the nearest note length at a tempo. For envelope stages.
+/// **Which** note length a time snaps to, or -1 when it passes through.
+///
+/// The half of `snapSeconds` that a panel needs and the audio thread does not:
+/// the name of the thing, so a synced envelope can say "1/8 T" instead of
+/// leaving the player to work it out from 250 ms and a tempo. Split out rather
+/// than duplicated, so the label and the sound can never disagree --
+/// `snapSeconds` is now written in terms of this and returns exactly what it
+/// always did.
 ///
 /// Nearest in **log time**, because musical nearness is a ratio: 90 ms is
 /// "about a 1/16" at 120 bpm (125 ms) rather than "about a 1/32" (62.5 ms),
@@ -79,14 +87,14 @@ inline constexpr int defaultDivision = 3;
 /// instant attack must stay instant, and quantising 4 ms up to a 1/32 would
 /// turn every pluck into a swell. Values past the longest division snap to
 /// it, which is what snapping means.
-[[nodiscard]] inline double snapSeconds (double seconds, double bpm) noexcept
+[[nodiscard]] inline int snapDivisionIndex (double seconds, double bpm) noexcept
 {
     const double shortest = divisionSeconds (8, bpm);   // "1/32"
 
     if (! (seconds > 0.5 * shortest))
-        return seconds;
+        return -1;
 
-    double bestSeconds = seconds;
+    int best = -1;
     double bestDistance = 1.0e300;
 
     for (int index = 0; index < numDivisions; ++index)
@@ -99,11 +107,45 @@ inline constexpr int defaultDivision = 3;
         if (distance < bestDistance)
         {
             bestDistance = distance;
-            bestSeconds = candidate;
+            best = index;
         }
     }
 
-    return bestSeconds;
+    return best;
+}
+
+/// Snaps a time to the nearest note length at a tempo. For envelope stages.
+/// See `snapDivisionIndex` for the rule; this is the same choice, in seconds.
+[[nodiscard]] inline double snapSeconds (double seconds, double bpm) noexcept
+{
+    const int index = snapDivisionIndex (seconds, bpm);
+
+    return index < 0 ? seconds : divisionSeconds (index, bpm);
+}
+
+/// A division's name, or "free" for the -1 that means "passed through".
+[[nodiscard]] constexpr const char* divisionName (int index) noexcept
+{
+    if (index < 0 || index >= numDivisions)
+        return "free";
+
+    return divisions[static_cast<std::size_t> (index)].name;
+}
+
+/// How far a time sits from the nearest multiple of a grid, as a fraction of
+/// that grid: 0 exactly on a line, 0.5 exactly between two.
+///
+/// For drawing, not for sound -- it is what lets a panel say "this point lands
+/// on the beat" without guessing a pixel tolerance that changes with the zoom.
+[[nodiscard]] inline double gridOffset (double seconds, double gridSeconds) noexcept
+{
+    if (! (gridSeconds > 0.0))
+        return 0.0;
+
+    const double laps = seconds / gridSeconds;
+    const double fraction = laps - std::floor (laps);
+
+    return fraction > 0.5 ? 1.0 - fraction : fraction;
 }
 
 } // namespace tezla::dsp

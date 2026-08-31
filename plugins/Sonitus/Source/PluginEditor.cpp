@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Divisions.hpp>
 #include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/Scales.hpp>
 
@@ -1045,6 +1046,15 @@ constexpr float kLevelColumn = 7.0f;
 
 /// The strip along the bottom that carries the A / H / D / S / R marks.
 constexpr float kAxisHeight = 11.0f;
+
+/// The ADV graph's ruler strip: bar numbers, or seconds when Snap is off.
+/// Deep enough for a 9 pt digit and the beat ticks above it.
+constexpr float kRulerHeight = 12.0f;
+
+/// The right-hand end of the ruler strip belongs to the length readout, and a
+/// tick label that runs under it prints one number on top of another -- which
+/// the first seconds-ruler screenshot did, "2.20 s" under "2.29 s total".
+constexpr float kRulerReadout = 126.0f;
 } // namespace
 
 EnvelopeEditor::EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
@@ -1173,6 +1183,33 @@ EnvelopeEditor::Handle EnvelopeEditor::handleAt (juce::Point<float> position) co
     }
 
     return best;
+}
+
+void EnvelopeEditor::setTempo (double bpm, int beatsPerBar) noexcept
+{
+    bpm_ = bpm > 0.0 ? bpm : 120.0;
+    beatsPerBar_ = beatsPerBar > 0 ? beatsPerBar : 4;
+}
+
+juce::String EnvelopeEditor::stageLabel (const char* letter, const juce::String& timeId) const
+{
+    if (snapId_.isEmpty())
+        return letter;
+
+    const auto* snap = state_.getRawParameterValue (snapId_);
+
+    if (snap == nullptr || snap->load() <= 0.5f)
+        return letter;
+
+    const int division = dsp::snapDivisionIndex (static_cast<double> (plain (timeId)), bpm_);
+
+    // Below half a 1/32 the snapper passes the time through, and there is no
+    // note to name -- an instant attack stays an instant attack, and calling
+    // it a 1/32 would be a lie the panel told to look tidy.
+    if (division < 0)
+        return letter;
+
+    return juce::String (letter) + " " + dsp::divisionName (division);
 }
 
 void EnvelopeEditor::refresh (double level)
@@ -1324,18 +1361,36 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
                                g.sustainEndX, g.releaseX };
         static const char* names[5] { "A", "H", "D", "S", "R" };
 
+        // With Snap on the timed stages name the note they snapped to. This
+        // graph's axis is the knobs' travel rather than seconds, so a ruler
+        // across it would be measuring nothing -- but "A 1/16" is exactly the
+        // fact Snap creates, in the place the eye is already looking.
+        const juce::String labels[5] {
+            stageLabel (names[0], ids_.attack),
+            stageLabel (names[1], ids_.hold),
+            stageLabel (names[2], ids_.decay),
+            names[3],                              // sustain is a level, not a time
+            stageLabel (names[4], ids_.release),
+        };
+
         for (int i = 0; i < 5; ++i)
         {
             const float width = edges[i + 1] - edges[i];
 
             // A segment too narrow to hold its own letter is left unlabelled --
             // a zero hold has nothing to point at, and a letter squeezed
-            // between two others reads as belonging to neither.
+            // between two others reads as belonging to neither. A named stage
+            // needs more room than a bare letter, and falls back to the letter
+            // rather than to nothing.
             if (width < 11.0f)
                 continue;
 
-            graphics.setColour (palette_.dimText.withAlpha (0.65f));
-            graphics.drawText (names[i], axis.withX (edges[i]).withWidth (width),
+            const bool named = labels[i].length() > 1;
+
+            graphics.setColour (named ? palette_.secondary.withAlpha (0.80f)
+                                      : palette_.dimText.withAlpha (0.65f));
+            graphics.drawText (named && width < 34.0f ? juce::String (names[i]) : labels[i],
+                               axis.withX (edges[i]).withWidth (width),
                                juce::Justification::centred, false);
         }
     }
@@ -1528,9 +1583,24 @@ void MultiEnvelopeEditor::setPlain (const juce::String& field, float value, bool
         parameter->endChangeGesture();
 }
 
+void MultiEnvelopeEditor::setTempo (double bpm, int beatsPerBar) noexcept
+{
+    bpm_ = bpm > 0.0 ? bpm : 120.0;
+    beatsPerBar_ = beatsPerBar > 0 ? beatsPerBar : 4;
+}
+
+/// The ruler's strip along the bottom, and the curve's area above it.
 juce::Rectangle<float> MultiEnvelopeEditor::plotArea() const
 {
-    return getLocalBounds().toFloat().reduced (8.0f, 7.0f);
+    return getLocalBounds().toFloat().reduced (8.0f, 7.0f)
+             .withTrimmedBottom (kRulerHeight);
+}
+
+juce::Rectangle<float> MultiEnvelopeEditor::rulerArea() const
+{
+    const auto full = getLocalBounds().toFloat().reduced (8.0f, 7.0f);
+
+    return full.withTop (full.getBottom() - kRulerHeight);
 }
 
 MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
@@ -1544,10 +1614,26 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     layout.loopStart = juce::jlimit (0, layout.sustain,
                                      static_cast<int> (std::lround (plain ("LoopStart"))) - 1);
     layout.loop = state_.getRawParameterValue (ids::adv (envelope_, "Loop"))->load() > 0.5f;
+    layout.snap = state_.getRawParameterValue (ids::adv (envelope_, "Snap"))->load() > 0.5f;
 
+    // **The times as they will be played.** With Snap on the engine quantises
+    // every leg (`Engine::snappedVoice`), so drawing the raw parameters drew a
+    // shape the synthesiser was not running -- and the difference is a whole
+    // note value wide, not a rounding. The same `dsp::snapSeconds` the audio
+    // thread calls, so the picture cannot drift from the sound.
     layout.total = 0.0;
+
     for (int i = 0; i < layout.points; ++i)
-        layout.total += plain ("T" + juce::String (i + 1));
+    {
+        const double raw = plain ("T" + juce::String (i + 1));
+        const auto slot = static_cast<std::size_t> (i);
+
+        layout.division[slot] = layout.snap ? dsp::snapDivisionIndex (raw, bpm_) : -1;
+        layout.seconds[slot] = layout.snap ? dsp::snapSeconds (raw, bpm_) : raw;
+
+        layout.total += layout.seconds[slot];
+    }
+
     layout.total = std::max (layout.total, 1.0e-3);
 
     const auto area = plotArea();
@@ -1558,7 +1644,7 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     double elapsed = 0.0;
     for (int i = 0; i < layout.points; ++i)
     {
-        elapsed += plain ("T" + juce::String (i + 1));
+        elapsed += layout.seconds[static_cast<std::size_t> (i)];
 
         layout.x[static_cast<std::size_t> (i + 1)] =
             area.getX() + area.getWidth() * static_cast<float> (elapsed / layout.total);
@@ -1567,6 +1653,257 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     }
 
     return layout;
+}
+
+juce::String MultiEnvelopeEditor::musicalLength (double seconds) const
+{
+    const double beats = seconds * bpm_ / 60.0;
+    const double bars = beats / static_cast<double> (beatsPerBar_);
+
+    const auto nearlyWhole = [] (double value)
+    {
+        return value >= 0.999 && std::abs (value - std::round (value)) < 0.01 * value;
+    };
+
+    if (nearlyWhole (bars))
+    {
+        const int whole = static_cast<int> (std::round (bars));
+        return juce::String (whole) + (whole == 1 ? " bar" : " bars");
+    }
+
+    if (nearlyWhole (beats))
+    {
+        const int whole = static_cast<int> (std::round (beats));
+        return juce::String (whole) + (whole == 1 ? " beat" : " beats");
+    }
+
+    // Off the grid, and saying so is the useful answer: a pattern built from
+    // note lengths that do not add up to a bar is a pattern that will drift
+    // against the song, and no amount of rounding the label makes it not.
+    return juce::String (beats, beats < 10.0 ? 2 : 1) + " beats";
+}
+
+/// The musical grid and its numbered strip, drawn when Snap is on.
+///
+/// Three tiers at most, chosen by how much room each one gets: bars, beats,
+/// then the finest subdivision that still leaves its lines apart. Drawing all
+/// of them always turns a 16-point envelope into a grey wall, and a grid you
+/// cannot see past is worse than no grid.
+///
+/// **Straight divisions only.** A triplet grid is a different ruler -- three
+/// in the space of two -- and overlaying the two produces lines every sixth of
+/// a beat, which reads as noise. Triplets are named instead, per leg, by
+/// `paintLegLabels`: "1/8 T" under the segment that is one, which is the
+/// question actually being asked.
+void MultiEnvelopeEditor::paintMusicalRuler (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+    const auto ruler = rulerArea();
+
+    const double beatSeconds = 60.0 / bpm_;
+    const double barSeconds = beatSeconds * static_cast<double> (beatsPerBar_);
+    const double perSecond = area.getWidth() / layout.total;
+
+    const GridTier tiers[] {
+        { barSeconds,          0.34f, 1.4f },
+        { beatSeconds,         0.22f, 1.0f },
+        { beatSeconds * 0.5,   0.11f, 1.0f },
+        { beatSeconds * 0.25,  0.06f, 1.0f },
+    };
+
+    for (const auto& tier : tiers)
+    {
+        const double spacing = tier.seconds * perSecond;
+
+        // Below this the lines merge into a wash. 9 px is where a 1.0 px line
+        // and its gap are still two things rather than one.
+        if (spacing < 9.0)
+            continue;
+
+        g.setColour ((&tier == &tiers[0] ? palette_.accent : palette_.dimText)
+                       .withAlpha (tier.alpha));
+
+        for (double t = tier.seconds; t < layout.total - 1.0e-9; t += tier.seconds)
+        {
+            const auto x = area.getX() + static_cast<float> (t * perSecond);
+
+            g.fillRect (juce::Rectangle<float> (x - 0.5f * tier.thickness, area.getY(),
+                                                tier.thickness, area.getHeight()));
+        }
+    }
+
+    // The strip: bar numbers where they fit, beat ticks under everything.
+    const double beatSpacing = beatSeconds * perSecond;
+    const double barSpacing = barSeconds * perSecond;
+
+    if (beatSpacing >= 5.0)
+    {
+        g.setColour (palette_.dimText.withAlpha (0.35f));
+
+        for (double t = 0.0; t < layout.total - 1.0e-9; t += beatSeconds)
+        {
+            const auto x = area.getX() + static_cast<float> (t * perSecond);
+            g.fillRect (juce::Rectangle<float> (x, ruler.getY(), 1.0f, 3.0f));
+        }
+    }
+
+    if (barSpacing >= 22.0)
+    {
+        // Every bar, or every second or fourth when they crowd -- the numbers
+        // stay legible instead of overprinting.
+        const int step = barSpacing >= 26.0 ? 1 : (barSpacing >= 13.0 ? 2 : 4);
+
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+
+        int bar = 1;
+        for (double t = 0.0; t < layout.total - 1.0e-9; t += barSeconds, ++bar)
+        {
+            if ((bar - 1) % step != 0)
+                continue;
+
+            const auto x = area.getX() + static_cast<float> (t * perSecond);
+
+            if (x + 24.0f > area.getRight() - kRulerReadout)
+                continue;
+
+            g.setColour (palette_.accent.withAlpha (0.75f));
+            g.drawText (juce::String (bar),
+                        juce::Rectangle<float> (x + 2.0f, ruler.getY() + 2.0f, 22.0f,
+                                                ruler.getHeight() - 2.0f),
+                        juce::Justification::centredLeft, false);
+        }
+    }
+
+}
+
+/// With Snap off there is no grid to draw, but there was never a time axis
+/// either -- the graph has always been a shape with no idea how long it lasts.
+/// A plain seconds ruler is the same information in the unit that applies.
+void MultiEnvelopeEditor::paintSecondsRuler (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+    const auto ruler = rulerArea();
+    const double perSecond = area.getWidth() / layout.total;
+
+    // The coarsest step that still gives at least three labelled marks, from a
+    // 1-2-5 ladder so the numbers read as round.
+    static constexpr double ladder[] { 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+                                       1.0, 2.0, 5.0, 10.0 };
+    double step = ladder[std::size (ladder) - 1];
+
+    for (const double candidate : ladder)
+        if (candidate * perSecond >= 38.0)
+        {
+            step = candidate;
+            break;
+        }
+
+    g.setFont (juce::FontOptions (9.0f));
+
+    for (double t = step; t < layout.total - 1.0e-9; t += step)
+    {
+        const auto x = area.getX() + static_cast<float> (t * perSecond);
+
+        g.setColour (palette_.dimText.withAlpha (0.09f));
+        g.fillRect (juce::Rectangle<float> (x, area.getY(), 1.0f, area.getHeight()));
+
+        if (x + 48.0f > area.getRight() - kRulerReadout)
+            continue;
+
+        g.setColour (palette_.dimText.withAlpha (0.55f));
+        g.drawText (t < 1.0 ? juce::String (juce::roundToInt (t * 1000.0)) + " ms"
+                            : juce::String (t, t < 10.0 ? 2 : 1) + " s",
+                    juce::Rectangle<float> (x + 2.0f, ruler.getY() + 2.0f, 46.0f,
+                                            ruler.getHeight() - 2.0f),
+                    juce::Justification::centredLeft, false);
+    }
+
+}
+
+/// What the whole thing measures, right-aligned in the ruler strip: the loop's
+/// length when there is a loop, because that is the number a rhythmic patch is
+/// actually setting, and the total otherwise.
+///
+/// **Drawn last, over the handles.** A point at level 0 sits on the plot's
+/// bottom edge and its handle -- 7 px, or 12 with the sustain ring -- reaches
+/// into the strip. Painted with the rest of the ruler it came out with the
+/// last letter under a circle, which is how the first screenshot read
+/// "LOOP 1 ba".
+void MultiEnvelopeEditor::paintLengthReadout (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+    const auto ruler = rulerArea();
+
+    juce::String text;
+
+    if (! layout.snap)
+    {
+        text = layout.total < 1.0
+                 ? juce::String (juce::roundToInt (layout.total * 1000.0)) + " ms total"
+                 : juce::String (layout.total, 2) + " s total";
+    }
+    else if (layout.loop)
+    {
+        double loopSeconds = layout.seconds[static_cast<std::size_t> (layout.loopStart)];
+
+        for (int i = layout.loopStart + 1; i <= layout.sustain; ++i)
+            loopSeconds += layout.seconds[static_cast<std::size_t> (i)];
+
+        text = "LOOP " + musicalLength (loopSeconds);
+    }
+    else
+    {
+        text = musicalLength (layout.total);
+    }
+
+    const auto box = juce::Rectangle<float> (area.getRight() - kRulerReadout + 3.0f,
+                                             ruler.getY() + 1.0f, kRulerReadout - 6.0f,
+                                             ruler.getHeight() - 1.0f);
+
+    // A wash of the panel's own background under it, so the text wins wherever
+    // a handle happens to land rather than being partly erased by one.
+    g.setColour (palette_.background.darker (0.2f).withAlpha (0.85f));
+    g.fillRoundedRectangle (box.expanded (2.0f, 0.0f), 3.0f);
+
+    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+    g.setColour (palette_.secondary.withAlpha (0.85f));
+    g.drawText (text, box, juce::Justification::centredRight, false);
+}
+
+/// The note value each leg snapped to, written over the leg it belongs to.
+///
+/// This is where triplets and dotted notes become visible, and it is the half
+/// of the answer a grid cannot give: the grid says *where* a point landed, the
+/// label says *what* the leg is.
+void MultiEnvelopeEditor::paintLegLabels (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+
+    g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+
+    for (int i = 0; i < layout.points; ++i)
+    {
+        const auto slot = static_cast<std::size_t> (i);
+        const float x0 = layout.x[slot];
+        const float x1 = layout.x[slot + 1];
+        const float width = x1 - x0;
+
+        // Too narrow to hold a name is left blank rather than overprinted, the
+        // same rule the AHDSR's stage letters follow.
+        if (width < 26.0f)
+            continue;
+
+        const int division = layout.division[slot];
+
+        // A leg below half a 1/32 passes through the snapper untouched, and
+        // saying "free" is the truth rather than naming a note it is not.
+        g.setColour (division < 0 ? palette_.dimText.withAlpha (0.40f)
+                                  : palette_.secondary.withAlpha (0.70f));
+
+        g.drawText (dsp::divisionName (division),
+                    juce::Rectangle<float> (x0, area.getY() + 1.0f, width, 10.0f),
+                    juce::Justification::centred, false);
+    }
 }
 
 void MultiEnvelopeEditor::paint (juce::Graphics& g)
@@ -1587,6 +1924,14 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
         g.fillRect (juce::Rectangle<float> (from, area.getY(),
                                             std::max (2.0f, to - from), area.getHeight()));
     }
+
+    // The ruler, under the curve rather than over it: it is the paper this is
+    // drawn on, and a grid line across a handle would read as part of the
+    // shape.
+    if (layout.snap)
+        paintMusicalRuler (g, layout);
+    else
+        paintSecondsRuler (g, layout);
 
     // The curve, in the DSP's own arithmetic -- EnvelopeEditor::segment.
     juce::Path path;
@@ -1614,7 +1959,19 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
     g.setColour (palette_.accent);
     g.strokePath (path, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved));
 
-    // Handles. The sustain point wears a ring; the release chain draws dim.
+    // Handles. The sustain point wears a ring; the release chain draws dim; and
+    // a point that lands **on** a beat or a bar gets a stem down to the ruler.
+    //
+    // The stem is the whole point of the exercise. Snap quantises each leg's
+    // *duration*, not its position, so a chain of legitimate note lengths can
+    // still add up to an arrival between two beats -- 1/8 + 1/8 T lands
+    // nowhere. Nothing in the panel said so before; the stem says it by being
+    // absent.
+    const double beatSeconds = 60.0 / bpm_;
+    const double barSeconds = beatSeconds * static_cast<double> (beatsPerBar_);
+
+    double elapsed = 0.0;
+
     for (int i = 0; i < layout.points; ++i)
     {
         const auto centre = juce::Point<float> (layout.x[static_cast<std::size_t> (i + 1)],
@@ -1622,6 +1979,25 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
 
         const bool isSustain = i == layout.sustain;
         const bool isRelease = i > layout.sustain;
+
+        elapsed += layout.seconds[static_cast<std::size_t> (i)];
+
+        if (layout.snap)
+        {
+            // A twentieth of a beat of slack, which at 120 bpm is 25 ms -- wide
+            // enough for the arithmetic of summing sixteen legs, far narrower
+            // than the smallest division in the table.
+            const bool onBar = dsp::gridOffset (elapsed, barSeconds) < 0.02;
+            const bool onBeat = dsp::gridOffset (elapsed, beatSeconds) < 0.05;
+
+            if (onBeat || onBar)
+            {
+                g.setColour ((onBar ? palette_.accent : palette_.secondary)
+                               .withAlpha (onBar ? 0.55f : 0.35f));
+                g.fillRect (juce::Rectangle<float> (centre.x - 0.5f, centre.y,
+                                                    1.0f, area.getBottom() - centre.y));
+            }
+        }
 
         g.setColour (isRelease ? palette_.dimText : palette_.accentBright);
         g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (centre));
@@ -1632,6 +2008,11 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
             g.drawEllipse (juce::Rectangle<float> (12.0f, 12.0f).withCentre (centre), 1.4f);
         }
     }
+
+    if (layout.snap)
+        paintLegLabels (g, layout);
+
+    paintLengthReadout (g, layout);
 }
 
 void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
@@ -1817,7 +2198,16 @@ void EnvelopePage::addAdvRow (juce::AudioProcessorValueTreeState& state, int ind
 
     cell (std::make_unique<ToggleCell> (state, ids::adv (index, "Snap"), "Snap",
         "Quantises every point's time to note lengths at the host tempo, exactly as the "
-        "AHDSR Snap does.", palette_), true);
+        "AHDSR Snap does.\n\n"
+        "With this on the graph becomes a **ruler**: bar lines in the accent colour, beats "
+        "and subdivisions behind them, numbered bars along the bottom, and the note each leg "
+        "landed on written over it -- so a 1/8 T reads as a 1/8 T rather than as 167 ms. A "
+        "point that arrives exactly on a beat drops a stem to the ruler, and one that does "
+        "not, does not: snapping fixes each leg's *length*, so a chain of legal note values "
+        "can still land between beats. With Loop on, the readout on the right is the loop's "
+        "length in bars.\n\n"
+        "Off, the same strip is a plain seconds ruler -- the graph has a time axis either "
+        "way now.", palette_), true);
 }
 
 void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
@@ -1878,11 +2268,18 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
     // The tempo grid. A toggle rather than a knob, in the same cell grid.
     if (snapId != nullptr)
     {
+        // And the graph is told about it, so the stage marks under the curve
+        // can name the note each stage snapped to instead of a bare letter.
+        block.graph->setSnapSource (snapId);
+
         auto cell = std::make_unique<ToggleCell> (state, snapId, "Snap",
             "Quantises Attack, Hold, Decay and Release to note lengths at the host tempo -- "
             "nearest in musical distance, from 1/32 up to 8 bars. Times under half a 1/32 pass "
             "through untouched, so an instant attack stays instant. The knobs keep their "
-            "positions; the sound follows the grid, live, when the tempo changes.",
+            "positions; the sound follows the grid, live, when the tempo changes.\n\n"
+            "With this on, the marks under the curve name the note each stage landed on -- "
+            "\"A 1/16\" rather than \"A\". The axis stays the knobs' own travel, because "
+            "that is what makes a 5 ms attack visible beside a 5 s release.",
             palette_);
         addAndMakeVisible (*cell);
         block.knobs.push_back (std::move (cell));
@@ -1893,8 +2290,16 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
 
 void EnvelopePage::refresh (const SonitusProcessor& processor)
 {
+    // The tempo the *engine* is snapping against, not one the panel worked out
+    // for itself: the two agreeing is the whole claim the ruler makes.
+    const double bpm = processor.getTempoBpm();
+    const int beatsPerBar = processor.getBeatsPerBar();
+
     for (std::size_t i = 0; i < blocks_.size(); ++i)
+    {
+        blocks_[i].graph->setTempo (bpm, beatsPerBar);
         blocks_[i].graph->refresh (processor.getEnvelopeLevel (static_cast<int> (i)));
+    }
 
     bool heightChanged = false;
 
@@ -1915,8 +2320,12 @@ void EnvelopePage::refresh (const SonitusProcessor& processor)
                 row.cells[i]->setVisible (enabled);
         }
 
+        row.graph->setTempo (bpm, beatsPerBar);
+
         if (enabled)
-            row.graph->repaint();   // external parameter changes redraw
+            row.graph->repaint();   // external parameter changes redraw, and so
+                                    // does a tempo change: the ruler moves
+                                    // under a shape that did not.
     }
 
     if (heightChanged)

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <numbers>
+#include <string>
 #include <vector>
 
 #include <tezla/measure/Fft.hpp>
@@ -2643,6 +2644,75 @@ TEZLA_TEST (snap_seconds_lands_on_note_lengths_and_leaves_attacks_alone)
 
     // And the grid moves with the tempo.
     CHECK_NEAR (snapSeconds (0.30, 174.0), 60.0 / 174.0, 1.0e-12);   // a 1/4 at 174
+}
+
+TEZLA_TEST (the_division_a_time_snaps_to_is_the_one_it_snaps_onto)
+{
+    // The panel names the note; the engine plays the seconds. They come from
+    // the same chooser now, and this is the assertion that they agree -- for
+    // every division in the table at three tempos, not for a handful of
+    // hand-picked times.
+    for (const double bpm : { 84.0, 120.0, 174.0 })
+        for (int index = 0; index < numDivisions; ++index)
+        {
+            const double exact = divisionSeconds (index, bpm);
+
+            // Its own length, and a nudge either side that is still nearer to
+            // it than to a neighbour.
+            for (const double nudge : { 1.0, 0.97, 1.03 })
+            {
+                const double seconds = exact * nudge;
+
+                if (! (seconds > 0.5 * divisionSeconds (8, bpm)))
+                    continue;   // under the pluck guard, which is its own case
+
+                const int chosen = snapDivisionIndex (seconds, bpm);
+
+                CHECK (chosen >= 0);
+                CHECK_NEAR (divisionSeconds (chosen, bpm), snapSeconds (seconds, bpm), 1.0e-12);
+                CHECK_NEAR (divisionSeconds (chosen, bpm), exact, 1.0e-9);
+            }
+        }
+
+    // The pluck guard reports "no note", which is what the label has to say
+    // rather than naming the 1/32 it did not become.
+    CHECK (snapDivisionIndex (0.004, 120.0) == -1);
+
+    const auto named = [] (double seconds, double bpm)
+    {
+        return std::string (divisionName (snapDivisionIndex (seconds, bpm)));
+    };
+
+    CHECK (named (0.004, 120.0) == "free");
+
+    // And the names are the table's own, in the table's own order -- including
+    // the two shapes a straight grid cannot draw, which is exactly why the
+    // panel writes them out per leg instead.
+    CHECK (named (0.5, 120.0) == "1/4");
+    CHECK (named (2.0, 120.0) == "1 bar");
+    CHECK (named (60.0 / 120.0 / 1.5, 120.0) == "1/4 T");
+    CHECK (named (60.0 / 120.0 * 1.5, 120.0) == "1/4 D");   // 0.75 s: a dotted quarter
+}
+
+TEZLA_TEST (grid_offset_says_how_far_off_the_beat_a_time_lands)
+{
+    // 120 bpm: a beat is 0.5 s, a 4/4 bar 2.0 s.
+    CHECK (gridOffset (0.0, 0.5) == 0.0);
+    CHECK (gridOffset (1.5, 0.5) == 0.0);
+    CHECK_NEAR (gridOffset (0.25, 0.5), 0.5, 1.0e-12);    // exactly between
+    CHECK_NEAR (gridOffset (0.55, 0.5), 0.1, 1.0e-12);    // 10% of a beat late
+    CHECK_NEAR (gridOffset (0.45, 0.5), 0.1, 1.0e-12);    // and 10% early reads the same
+
+    // The case the panel exists to show: two legal note lengths that do not
+    // add up to a beat. A 1/8 (0.25 s) and a 1/8 triplet (1/6 s) arrive at
+    // 0.41667 s -- 1/6 of a beat off, so no stem is drawn there.
+    const double eighth = 0.25;
+    const double eighthTriplet = (60.0 / 120.0) / 3.0;
+
+    CHECK_NEAR (gridOffset (eighth + eighthTriplet, 0.5), 1.0 / 6.0, 1.0e-12);
+
+    // A degenerate grid is 0 rather than a division by zero.
+    CHECK (gridOffset (1.0, 0.0) == 0.0);
 }
 
 TEZLA_TEST (a_snapped_amp_decay_is_the_division_and_unsnapped_is_the_knob)
