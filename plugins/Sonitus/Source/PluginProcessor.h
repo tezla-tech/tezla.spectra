@@ -76,6 +76,7 @@ inline constexpr auto filterMode  = "filterMode";
 inline constexpr auto cutoff      = "cutoff";
 inline constexpr auto resonance   = "resonance";
 inline constexpr auto filterDrive = "filterDrive";
+inline constexpr auto filterMorph = "filterMorph";
 inline constexpr auto filterTrack = "filterTrack";
 inline constexpr auto filterFm    = "filterFm";
 inline constexpr auto filterVel   = "filterVel";
@@ -255,7 +256,8 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "Sub level", "Ring", "Fold",
                                          "Pitch", "Pitch B", "Level",
                                          "Kargyraa", "Morph A", "Morph B",
-                                         "Feedback A", "Feedback B", "PM reverse" };
+                                         "Feedback A", "Feedback B", "PM reverse",
+                                         "Filter morph" };
 
 /// How many oscillator cycles one kargyraa modulator cycle spans.
 ///
@@ -343,7 +345,8 @@ static_assert (static_cast<int> (ModDestination::none)     == 0
             && static_cast<int> (ModDestination::feedbackA) == 19
             && static_cast<int> (ModDestination::feedbackB) == 20
             && static_cast<int> (ModDestination::pmReverse) == 21
-            && static_cast<int> (ModDestination::count)     == 22,
+            && static_cast<int> (ModDestination::filterMorph) == 22
+            && static_cast<int> (ModDestination::count)       == 23,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0

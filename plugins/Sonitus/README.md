@@ -767,6 +767,30 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+**The filter morphs.** Mode is a *choice*, and a choice cannot be a modulation
+destination (a switch reconfigures rather than adjusts), so the filter's
+character was the one thing in a voice no envelope could sweep. **Morph** is a
+continuous, bipolar control along lowpass → bandpass → highpass, and it is a
+destination in both matrices.
+
+Bipolar and **centred on whatever Mode says**, which is the part that matters
+for compatibility: an absolute 0–1 "position" control would default to lowpass
+and silently convert every bandpass patch ever saved. Zero is the chosen mode
+bit for bit — verified against a filter that never had `setMorph` called at
+all, for all four modes, over a 20 Hz–20 kHz sweep. From a lowpass, +50% is
+exactly the bandpass and +100% exactly the highpass; from a highpass, −100% is
+exactly the lowpass.
+
+It genuinely sweeps rather than crossfading between two static filters: the
+three outputs are summed *before* the measurement, so the bandpass's 90° lead
+at the corner is part of the result. `magnitudeAt` does that arithmetic in
+complex form and agrees with the running filter to **0.0102 dB** across 90
+combinations of mode, morph and frequency.
+
+**Notch is not on the axis and ignores Morph.** It is the sum of the two ends
+rather than a point between them; putting it on a slider between lowpass and
+highpass would be inventing a shape nothing makes.
+
 **The OSC page states the FM ratio.** Two oscillators tuned in octaves,
 semitones and cents is the right interface for detuning and the wrong one for
 FM, where the only question is the ratio and whether it is simple: 2:1 and 3:2

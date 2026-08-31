@@ -3245,6 +3245,20 @@ void SonitusEditor::buildPages()
         "The rail is fixed rather than falling with drive, so this adds harmonics instead of "
         "acting as a volume control -- with a matching trim behind it, the level barely moves.");
 
+    filter->addKnob (ids::filterMorph, "Morph",
+        "**Slides the filter along lowpass -> bandpass -> highpass**, and it is the control the "
+        "Mode switch could never be: a choice cannot be modulated, so until now the filter's "
+        "character was the one thing in a voice no envelope could sweep. This is continuous, so "
+        "point an ADV envelope at it and the filter changes type in time.\n\n"
+        "**Bipolar, and centred on whatever Mode says.** Zero is that mode exactly -- bit for bit, "
+        "so every patch you have keeps its filter -- and from a lowpass, +50% is the bandpass and "
+        "+100% the highpass. From a highpass, -100% is the lowpass. Half way between two shapes is "
+        "genuinely between them: the three outputs are summed before the measurement, so it sweeps "
+        "rather than crossfading between two static filters.\n\n"
+        "**Notch is not on this axis and ignores it.** Notch is the sum of the two ends rather "
+        "than a point between them, and putting it on a slider between lowpass and highpass would "
+        "be inventing a shape nothing makes.");
+
     filter->addKnob (ids::filterTrack, "Key track",
         "How far the cutoff follows the played note. At 100% a note two octaves up gets a cutoff "
         "two octaves up, so the timbre is constant across the keyboard. At 0 the filter is a fixed "

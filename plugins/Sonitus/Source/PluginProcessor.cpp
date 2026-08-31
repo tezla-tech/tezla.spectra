@@ -42,7 +42,12 @@ constexpr int kSchemaV3 = 3;
 /// always were and their hints must not move.
 constexpr int kSchemaV4 = 4;
 
-constexpr int kStateSchemaVersion = kSchemaV4;
+/// The rest of phase 4: the filter morph, and whatever P4-4 and P4-5 append.
+/// A version of its own rather than reusing V4, so each hint keeps meaning one
+/// piece of work.
+constexpr int kSchemaV5 = 5;
+
+constexpr int kStateSchemaVersion = kSchemaV5;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -422,6 +427,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::filterVel, kSchemaV1 }, "Velocity to cutoff",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    // Bipolar and centred on the mode switch, so its default of 0 is the mode
+    // the project saved -- an absolute 0..1 "position" control would default
+    // to lowpass and silently convert every bandpass patch that exists.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::filterMorph, kSchemaV5 }, "Filter morph",
+        juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f, percentAttributes()));
 
     // ---- envelopes ----------------------------------------------------------
 
@@ -1087,6 +1099,7 @@ void SonitusProcessor::pullParameters()
     v.cutoffHz = valueOf (state_, ids::cutoff);
     v.resonance = valueOf (state_, ids::resonance);
     v.filterDrive = valueOf (state_, ids::filterDrive);
+    v.filterMorph = valueOf (state_, ids::filterMorph);
     v.filterKeyTrack = valueOf (state_, ids::filterTrack);
     v.filterFm = valueOf (state_, ids::filterFm);
     v.filterVelocity = valueOf (state_, ids::filterVel);
@@ -1211,6 +1224,10 @@ void SonitusProcessor::pullParameters()
             // already spans the whole control.
             case ModDestination::feedbackA:
             case ModDestination::feedbackB:
+
+            // Bipolar already, and the voice clamps the sum to -1..+1, so full
+            // depth reaches either end of the axis from wherever the knob sits.
+            case ModDestination::filterMorph:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }

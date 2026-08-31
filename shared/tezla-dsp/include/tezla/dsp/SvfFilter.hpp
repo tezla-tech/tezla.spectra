@@ -188,6 +188,31 @@ public:
     }
 
     void setMode (SvfMode mode) noexcept { mode_ = mode; }
+
+    /// A **bipolar offset along the lowpass -> bandpass -> highpass axis**,
+    /// centred on whatever `setMode` chose. -1 .. +1, and 0 is the mode itself.
+    ///
+    /// The point of it is that the mode is a *choice* and a choice cannot be
+    /// modulated (CLAUDE.md section 8: destinations hold continuous controls
+    /// only), so the filter's character was the one thing in a voice that no
+    /// envelope could sweep. This is continuous, so it can be.
+    ///
+    /// **Why an offset rather than an absolute position.** A saved project has
+    /// a mode and no morph, so morph's default has to mean "the mode I chose"
+    /// -- an absolute 0..1 control would mean "lowpass" and would silently
+    /// convert every bandpass patch ever saved. Centring on the mode makes the
+    /// default bit-exact for all four modes and still lets one control sweep
+    /// the whole axis from a lowpass patch, which is the common case.
+    ///
+    /// **Notch is not on this axis**, so morph is inert there. It is not
+    /// between the other three -- it is the sum of the two ends -- and putting
+    /// it on a slider between them would be inventing a shape nothing makes.
+    void setMorph (double morph) noexcept
+    {
+        morph_ = std::clamp (morph, -1.0, 1.0);
+    }
+
+    [[nodiscard]] double getMorph() const noexcept { return morph_; }
     [[nodiscard]] SvfMode getMode() const noexcept { return mode_; }
 
     void setCutoffHz (double hz) noexcept
@@ -286,15 +311,31 @@ public:
         s1_ = railed (s1_);
         s2_ = railed (s2_);
 
-        switch (mode_)
+        // Morph off, or a mode with no place on the morph axis: the original
+        // switch, untouched.
+        //
+        // **Not what makes morph 0 bit-exact**, which is worth stating because
+        // the first version of this comment claimed it was and the break-check
+        // disproved it: removing the `isExactlyZero` half leaves every
+        // bit-exactness test green, because the blend really is exact at its
+        // three landmarks -- `a * 1 + b * 0` and `a * 0 + b * 1` both are, in
+        // IEEE arithmetic. So this is a **fast path** (a clamp, an add and four
+        // multiplies a sample saved in the overwhelmingly common case) plus the
+        // route notch has to take, and the exactness is the blend's own.
+        if (isExactlyZero (morph_) || mode_ == SvfMode::notch)
         {
-            case SvfMode::lowpass:  return lowpass * driveTrim_;
-            case SvfMode::bandpass: return bandpass * driveTrim_;
-            case SvfMode::highpass: return highpass * driveTrim_;
-            case SvfMode::notch:    return (highpass + lowpass) * driveTrim_;
-            case SvfMode::count:
-            default:                return lowpass * driveTrim_;
+            switch (mode_)
+            {
+                case SvfMode::lowpass:  return lowpass * driveTrim_;
+                case SvfMode::bandpass: return bandpass * driveTrim_;
+                case SvfMode::highpass: return highpass * driveTrim_;
+                case SvfMode::notch:    return (highpass + lowpass) * driveTrim_;
+                case SvfMode::count:
+                default:                return lowpass * driveTrim_;
+            }
         }
+
+        return blend (lowpass, bandpass, highpass) * driveTrim_;
     }
 
     /// The filter's own magnitude at one frequency. For tests and for drawing
@@ -332,18 +373,88 @@ public:
         // only the lowpass.
         const double denominator = std::sqrt ((1.0 - w2) * (1.0 - w2) + w2 * k_ * k_);
 
-        switch (mode_)
+        if (isExactlyZero (morph_) || mode_ == SvfMode::notch)
         {
-            case SvfMode::lowpass:  return 1.0 / denominator;
-            case SvfMode::bandpass: return w / denominator;
-            case SvfMode::highpass: return w2 / denominator;
-            case SvfMode::notch:    return std::abs (1.0 - w2) / denominator;
-            case SvfMode::count:
-            default:                return 1.0 / denominator;
+            switch (mode_)
+            {
+                case SvfMode::lowpass:  return 1.0 / denominator;
+                case SvfMode::bandpass: return w / denominator;
+                case SvfMode::highpass: return w2 / denominator;
+                case SvfMode::notch:    return std::abs (1.0 - w2) / denominator;
+                case SvfMode::count:
+                default:                return 1.0 / denominator;
+            }
         }
+
+        // The morphed response, worked out rather than approximated. The blend
+        // is a sum of the three outputs, so its transfer function is the same
+        // denominator over a numerator built from the same weights:
+        //
+        //     below the middle:  (1 - t) + t s
+        //     above it:          (1 - t) s + t s^2
+        //
+        // and at s = jw those have magnitudes sqrt((1-t)^2 + (t w)^2) and
+        // sqrt(((1-t) w)^2 + (t w^2)^2). Averaging the three *magnitudes*
+        // instead would be wrong by however much they are out of phase, which
+        // at the corner is a quarter turn -- the bandpass leads both others by
+        // 90 degrees, and that is the whole reason a morph sounds like a sweep
+        // rather than like a crossfade between two static filters.
+        const double position = std::clamp (positionOf (mode_) + morph_, 0.0, 1.0);
+
+        if (position <= 0.5)
+        {
+            const double t = position * 2.0;
+            const double real = 1.0 - t;
+            const double imaginary = t * w;
+
+            return std::sqrt (real * real + imaginary * imaginary) / denominator;
+        }
+
+        const double t = position * 2.0 - 1.0;
+        const double real = -t * w2;
+        const double imaginary = (1.0 - t) * w;
+
+        return std::sqrt (real * real + imaginary * imaginary) / denominator;
     }
 
 private:
+    /// Where a mode sits on the lowpass -> bandpass -> highpass axis. Notch is
+    /// not on it and never reaches here.
+    [[nodiscard]] static constexpr double positionOf (SvfMode mode) noexcept
+    {
+        switch (mode)
+        {
+            case SvfMode::bandpass: return 0.5;
+            case SvfMode::highpass: return 1.0;
+            case SvfMode::lowpass:
+            case SvfMode::notch:
+            case SvfMode::count:
+            default:                return 0.0;
+        }
+    }
+
+    /// The three outputs crossfaded at the morphed position.
+    ///
+    /// `a * (1 - t) + b * t` rather than `a + t * (b - a)`, because this form
+    /// is exact at **both** ends -- t = 0 gives `a * 1 + b * 0` and t = 1 gives
+    /// `a * 0 + b * 1` -- where the other is exact only at t = 0. The three
+    /// landmark positions 0, 0.5 and 1 therefore hand back the plain lowpass,
+    /// bandpass and highpass with no arithmetic between, which is what makes
+    /// "morph 0.5 is the bandpass" a fact rather than an approximation.
+    [[nodiscard]] double blend (double lowpass, double bandpass, double highpass) const noexcept
+    {
+        const double position = std::clamp (positionOf (mode_) + morph_, 0.0, 1.0);
+
+        if (position <= 0.5)
+        {
+            const double t = position * 2.0;
+            return lowpass * (1.0 - t) + bandpass * t;
+        }
+
+        const double t = position * 2.0 - 1.0;
+        return bandpass * (1.0 - t) + highpass * t;
+    }
+
     /// The integrator's supply rail.
     ///
     ///   |x| <= knee              the identity, bit for bit
@@ -412,6 +523,7 @@ private:
     double driveTrim_  { 1.0 };
 
     SvfMode mode_ { SvfMode::lowpass };
+    double morph_ { 0.0 };
 
     double g_ { 0.0 };
     double k_ { 2.0 };

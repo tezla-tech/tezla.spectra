@@ -157,6 +157,15 @@ enum class ModDestination
     feedbackB,
     pmReverse,         ///< B modulating A -- the other half of the FM pair
 
+    /// The filter's position on the lowpass -> bandpass -> highpass axis,
+    /// bipolar and centred on the mode switch. Appended, as every entry in
+    /// this list has been -- a stored slot is an index (CLAUDE.md section 8).
+    ///
+    /// It exists because the mode is a **choice** and a choice cannot be a
+    /// destination, which left the filter's character the one thing in a voice
+    /// no envelope could sweep.
+    filterMorph,
+
     count
 };
 
@@ -307,6 +316,10 @@ struct VoiceParameters
     double cutoffHz { 1000.0 };
     double resonance { 0.0 };
     double filterDrive { 0.0 };
+
+    /// -1 .. +1 along lowpass -> bandpass -> highpass, centred on
+    /// `filterMode`. 0 is the mode itself, bit-exactly.
+    double filterMorph { 0.0 };
 
     /// How much the played note moves the cutoff. 1 is one octave of cutoff per
     /// octave of note, which keeps the timbre constant across the keyboard.
@@ -737,6 +750,8 @@ public:
         for (auto& filter : filters_)
         {
             filter.setMode (parameters.filterMode);
+            filter.setMorph (std::clamp (parameters.filterMorph
+                                           + amount (ModDestination::filterMorph), -1.0, 1.0));
             filter.setResonance (std::clamp (parameters.resonance
                                                + amount (ModDestination::resonance), 0.0, 1.0));
             filter.setDrive (std::clamp (parameters.filterDrive
