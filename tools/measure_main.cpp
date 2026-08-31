@@ -3703,7 +3703,7 @@ int runSyrinx (const Args& args)
     std::printf ("  +/-0.5 dB at 5 Hz, centred exactly on -30 dB.\n\n");
     std::printf ("  %-14s %-12s %12s\n", "hysteresis", "hold", "transitions");
 
-    for (const auto [hysteresisDb, holdMs] : { std::pair { 0.0, 0.0 },
+    for (const auto& [hysteresisDb, holdMs] : { std::pair { 0.0, 0.0 },
                                                std::pair { 0.0, 40.0 },
                                                std::pair { 3.0, 0.0 },
                                                std::pair { 3.0, 40.0 } })

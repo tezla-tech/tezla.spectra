@@ -169,7 +169,7 @@ Updated **in the same commit as each phase**.
 | phase | status |
 |---|---|
 | M2-0 plan | done |
-| M2-1 Bloom | pending |
+| M2-1 Bloom | done |
 | M2-2 Damp | pending |
 | M2-3 two exciters + velocity hardness | pending |
 | M2-4 two listening positions | pending |

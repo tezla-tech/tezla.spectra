@@ -53,6 +53,12 @@ public:
     /// and r collapses toward zero anyway.
     static constexpr double kMinT60Seconds = 0.001;
 
+    /// The most coupling Bloom may ask for. Chosen from the sweep in
+    /// `tests/test_ModalResonator.cpp` rather than from a round number: it is
+    /// where a bounded injection into a decaying bank still cannot sustain
+    /// itself at any pitch, decay or mode count the instrument reaches.
+    static constexpr double kMaxBloom = 1.0;
+
     /// Arithmetic only -- no allocation, safe anywhere. Re-preparing keeps
     /// each mode's frequency/decay/gain request and rebuilds the poles for
     /// the new rate (the coefficients must never embed a stale rate,
@@ -74,6 +80,9 @@ public:
             stateRe_[index] = 0.0;
             stateIm_[index] = 0.0;
         }
+
+        previousOutput_ = 0.0;
+        stateScale_ = 0.0;
     }
 
     /// How many of the modes sound. Clamped to [1, kMaxModes]. Modes beyond
@@ -130,6 +139,74 @@ public:
             stateRe_[index] += amount;
     }
 
+    /// **Bloom -- the modes talk to each other.** Zero is off and is exact.
+    ///
+    /// Without this every mode here is independent: struck, it rings down,
+    /// and nothing it does reaches any other mode. Real objects are not like
+    /// that. A tam-tam hit hard *builds after the strike* -- a shimmer that
+    /// was not there at contact climbs out of the low modes over the next
+    /// second. That is energy migrating upward through the bank, and it is
+    /// why a gong sample never sounds like a gong played quietly.
+    ///
+    /// -----------------------------------------------------------------
+    /// The physics, and the one honest departure from it
+    /// -----------------------------------------------------------------
+    ///
+    /// When a plate's displacement approaches its thickness the restoring
+    /// force stops being linear, and the leading correction is **quadratic**
+    /// (the von Karman term). A quadratic couples mode *triads*: it generates
+    /// f1 + f2 and f1 - f2 from every pair, which for a bank dominated by its
+    /// low modes means a cascade upward. The rate goes as amplitude squared,
+    /// which is exactly the "only when you hit it hard" behaviour.
+    ///
+    /// The departure: a true x^2 also has a **DC term** -- the static
+    /// deflection of a plate pushed off centre. A mode bank has no
+    /// zero-frequency mode to hold it, so injecting it would leave every
+    /// resonator sitting at a constant offset and the output with real DC on
+    /// it. So the coupling is `x * |x|` instead: still quadratic in magnitude,
+    /// still amplitude-squared in rate, still generating sum and difference
+    /// content -- and odd, so its mean is zero. What is lost is the static
+    /// deflection, which is inaudible; what is kept is the cascade, which is
+    /// the whole point.
+    ///
+    /// -----------------------------------------------------------------
+    /// Why it cannot run away
+    /// -----------------------------------------------------------------
+    ///
+    /// CLAUDE.md section 7: a feedback loop around a nonlinearity needs a
+    /// bound that cannot be defeated. Two, here, and neither is optional:
+    ///
+    ///  1. The coupling passes through `q / (1 + |q|)`, whose magnitude is
+    ///     **below 1 for every finite input** -- including one already
+    ///     diverging. It is not a threshold that a big enough signal steps
+    ///     over; there is no input for which it exceeds unity.
+    ///  2. Each mode receives that term scaled by its **own bandwidth**,
+    ///     `(1 - r)`, and normalised by the total coupling weight.
+    ///
+    /// The second is not decoration, and the first draft did not have it. A
+    /// bounded term is not a bounded *result*: a resonator driven by a
+    /// constant of amplitude A settles at A / (1 - r), which for a two-second
+    /// decay at 48 kHz is about **28000 times** the drive. Sixty-four of them
+    /// summing made it worse again. The sweep found it immediately -- worst
+    /// sample 72.9 and the ring's energy *rising* by 4.48x over its second
+    /// half -- which is precisely why section 7 asks for a swept test rather
+    /// than a plausible argument.
+    ///
+    /// Scaling by (1 - r) turns the coupling from a **drive** into a **target
+    /// amplitude**: a mode that rings for eight seconds is no longer driven
+    /// eight times harder than one that rings for one, merely for being
+    /// longer. Dividing by the summed weight keeps the total added amplitude
+    /// near the coupling term itself however many modes are receiving it.
+    ///
+    /// The loop is broken by one sample -- the coupling reads the *previous*
+    /// output -- which is what makes it computable rather than algebraic.
+    void setBloom (double amount) noexcept
+    {
+        bloom_ = amount < 0.0 ? 0.0 : amount > kMaxBloom ? kMaxBloom : amount;
+    }
+
+    [[nodiscard]] double getBloom() const noexcept { return bloom_; }
+
     /// Advances every active mode one sample with no input and returns the
     /// bank's output.
     [[nodiscard]] double process() noexcept
@@ -141,19 +218,92 @@ public:
     /// input weight.
     [[nodiscard]] double process (double input) noexcept
     {
+        // The coupling term, from the PREVIOUS sample's output. One sample of
+        // delay is what makes the loop computable rather than algebraic; see
+        // setBloom() for the physics and for why it cannot run away.
+        //
+        // Guarded rather than always computed, so bloom at zero is the
+        // original bank by inspection and not by an argument about what
+        // adding 0.0 does -- and so it costs nothing when it is off.
+        if (isExactlyZero (bloom_))
+        {
+            double sum = 0.0;
+
+            for (int index = 0; index < modeCount_; ++index)
+            {
+                const double re = stateRe_[index];
+                const double im = stateIm_[index];
+
+                stateRe_[index] = poleRe_[index] * re - poleIm_[index] * im
+                                    + input * weight_[index];
+                stateIm_[index] = poleIm_[index] * re + poleRe_[index] * im;
+
+                sum += gain_[index] * stateIm_[index];
+            }
+
+            previousOutput_ = sum;
+
+            return sum;
+        }
+
+        const double coupling = couplingTerm();
+
         double sum = 0.0;
+        double uncoupledEnergy = 0.0;
+        double coupledEnergy = 0.0;
 
         for (int index = 0; index < modeCount_; ++index)
         {
             const double re = stateRe_[index];
             const double im = stateIm_[index];
 
-            stateRe_[index] = poleRe_[index] * re - poleIm_[index] * im
-                                + input * weight_[index];
-            stateIm_[index] = poleIm_[index] * re + poleRe_[index] * im;
+            // What this mode would have been with no coupling at all: the
+            // rotation, the decay, and the external input.
+            const double uncoupledRe = poleRe_[index] * re - poleIm_[index] * im
+                                         + input * weight_[index];
+            const double nextIm = poleIm_[index] * re + poleRe_[index] * im;
 
-            sum += gain_[index] * stateIm_[index];
+            const double coupled = uncoupledRe + coupling * couplingWeight_[index];
+
+            stateRe_[index] = coupled;
+            stateIm_[index] = nextIm;
+
+            uncoupledEnergy += uncoupledRe * uncoupledRe + nextIm * nextIm;
+
+            coupledEnergy += coupled * coupled + nextIm * nextIm;
+
+            sum += gain_[index] * nextIm;
         }
+
+        // **The coupling redistributes energy; it does not create any.** The
+        // whole bank is scaled back to the energy it would have had without
+        // the cascade, so what the high modes gained the low ones lost. This
+        // is the von Karman term's actual character -- it is conservative,
+        // and the losses live in the modal damping, which is already here.
+        //
+        // It is also the bound that cannot be defeated, and unlike the first
+        // two attempts it is not a constant anyone has to choose: the bank's
+        // energy after coupling can never exceed the energy the linear bank
+        // would have had, at any amount, on any object, so there is nothing
+        // for a large enough signal to overwhelm.
+        // The typical per-mode amplitude, for the next sample's coupling
+        // reference. One sample stale, like the output the coupling reads.
+        stateScale_ = std::sqrt (uncoupledEnergy / static_cast<double> (modeCount_));
+
+        if (coupledEnergy > uncoupledEnergy && uncoupledEnergy > 0.0)
+        {
+            const double scale = std::sqrt (uncoupledEnergy / coupledEnergy);
+
+            for (int index = 0; index < modeCount_; ++index)
+            {
+                stateRe_[index] *= scale;
+                stateIm_[index] *= scale;
+            }
+
+            sum *= scale;
+        }
+
+        previousOutput_ = sum;
 
         return sum;
     }
@@ -209,6 +359,56 @@ private:
         return hz < 1.0 ? 1.0 : hz > top ? top : hz;
     }
 
+    /// The coupling term, from the previous sample. See setBloom().
+    [[nodiscard]] double couplingTerm() const noexcept
+    {
+        const double x = previousOutput_;
+
+        // Quadratic in magnitude, odd in sign: the cascade without the DC.
+        const double quadratic = x * (x < 0.0 ? -x : x);
+
+        // Bounded below 1 for every finite input -- the bound that cannot be
+        // defeated. Not a clamp: a clamp is a threshold, and this has none.
+        const double magnitude = quadratic < 0.0 ? -quadratic : quadratic;
+
+        // Referenced to the bank's own typical per-mode amplitude, so Bloom
+        // is "how hard a nudge" rather than an absolute force. Without this
+        // the injection swamped the state instead of perturbing it: the bank
+        // was being overwritten every sample, which killed the ring and made
+        // the control read as a lowpass. Measured then: the late high-band
+        // fraction went DOWN with bloom (0.711 against 0.780 off) and did not
+        // vary with strike amplitude at all, because it was saturated.
+        return bloom_ * stateScale_ * quadratic / (1.0 + magnitude);
+    }
+
+    /// How much of the coupling each mode receives.
+    ///
+    /// **Directed upward**, because that is the direction the physical
+    /// cascade runs: a mode within an octave of the fundamental gets nothing,
+    /// and the weight reaches full three octaves above it. Feeding the low
+    /// modes back into themselves would be a resonator with positive
+    /// feedback, which is a different and much less interesting instrument.
+    ///
+    /// Computed against mode 0's frequency, so it follows the object rather
+    /// than the sample rate. Malleus pushes modes in index order, so mode 0 is
+    /// current by the time mode k is rebuilt; before anything is set at all
+    /// the fundamental reads its default and the weight is harmless.
+    void refreshCouplingWeight (int index) noexcept
+    {
+        const double fundamental = frequencyHz_[0];
+
+        if (fundamental <= 0.0)
+        {
+            couplingWeight_[index] = 0.0;
+            return;
+        }
+
+        const double octavesUp = std::log2 (frequencyHz_[index] / fundamental);
+        const double ramp = (octavesUp - 1.0) / 3.0;
+
+        couplingWeight_[index] = ramp < 0.0 ? 0.0 : ramp > 1.0 ? 1.0 : ramp;
+    }
+
     void rebuildPole (int index) noexcept
     {
         // r from T60: amplitude falls 60 dB over t60 seconds, so per sample
@@ -217,13 +417,22 @@ private:
         const double frequency = clampFrequency (frequencyHz_[index]);
         const double omega = 2.0 * std::numbers::pi * frequency / sampleRate_;
 
+        poleRadius_[index] = r;
         poleRe_[index] = r * std::cos (omega);
         poleIm_[index] = r * std::sin (omega);
         angularHz_[index] = 2.0 * std::numbers::pi * frequency;
+
+        refreshCouplingWeight (index);
     }
 
     double sampleRate_ { 44100.0 };
     int modeCount_ { 1 };
+
+    double bloom_ { 0.0 };
+    double previousOutput_ { 0.0 };
+    double couplingWeight_[kMaxModes] {};
+    double poleRadius_[kMaxModes] {};
+    double stateScale_ { 0.0 };
 
     double frequencyHz_[kMaxModes] {};
     double t60_[kMaxModes] { };
