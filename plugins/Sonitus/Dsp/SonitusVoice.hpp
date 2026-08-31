@@ -361,12 +361,20 @@ struct VoiceParameters
         int sustain { 2 };
         int loopStart { 0 };
 
+        // Sixteen of each. The first four are the ADSR-ish default the
+        // envelope opens with; the rest are parked flat so lengthening the
+        // envelope adds silent, level-0 legs rather than a shape nobody asked
+        // for. The trailing braces are left to zero-initialise on purpose --
+        // 0.1 s and level 0 is what `points` past four means.
         std::array<double, dsp::MultiEnvelope::kMaxPoints> seconds {
-            0.01, 0.25, 0.05, 0.2, 0.1, 0.1, 0.1, 0.1 };
+            0.01, 0.25, 0.05, 0.2, 0.1, 0.1, 0.1, 0.1,
+            0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1 };
         std::array<double, dsp::MultiEnvelope::kMaxPoints> level {
-            1.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0 };
+            1.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
         std::array<double, dsp::MultiEnvelope::kMaxPoints> tension {
-            0.35, 0.35, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0 };
+            0.35, 0.35, 0.0, 0.35, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     };
 
     Envelope amp { 0.005, 0.0, 0.200, 0.8, 0.150, 0.35, 0.35, 0.35 };

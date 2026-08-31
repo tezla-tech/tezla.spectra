@@ -336,7 +336,8 @@ void MetalBackground::render (int width, int height, float highlightAt)
         for (int y = 0; y < height; y += step)
         {
             const double noise = hashed (static_cast<std::uint64_t> (y)
-                                           + static_cast<std::uint64_t> (pass) * 7919ull);
+                                           + static_cast<std::uint64_t> (pass)
+                                               * std::uint64_t { 7919 });
 
             // **Always subtractive.** The first version was centred on zero, so
             // the grain lightened as often as it darkened and the average
@@ -1641,8 +1642,23 @@ void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
     dragPoint_ = -1;
     dragSegment_ = -1;
 
-    // A point first: the nearest within reach.
-    float best = 12.0f * 12.0f;
+    // A point first: the nearest within reach. **Reach shrinks with density**,
+    // and that is not polish -- a point's time, level and tension have no
+    // knobs, so the graph is the only way to reach them. At sixteen points the
+    // fixed 12 px radius swallowed every segment midpoint, and a tension you
+    // cannot grab is a tension only host automation can set. Two fifths of the
+    // closest spacing keeps the midpoints clear at any point count, and the
+    // floor of 4 px stops it vanishing when two points sit on top of each
+    // other.
+    float closest = getWidth() > 0 ? static_cast<float> (getWidth()) : 12.0f;
+    for (int i = 0; i < layout.points; ++i)
+        closest = std::min (closest,
+                            std::abs (layout.x[static_cast<std::size_t> (i + 1)]
+                                        - layout.x[static_cast<std::size_t> (i)]));
+
+    const float reach = juce::jlimit (4.0f, 12.0f, 0.4f * closest);
+
+    float best = reach * reach;
     for (int i = 0; i < layout.points; ++i)
     {
         const auto centre = juce::Point<float> (layout.x[static_cast<std::size_t> (i + 1)],
@@ -1782,8 +1798,9 @@ void EnvelopePage::addAdvRow (juce::AudioProcessorValueTreeState& state, int ind
         palette_), false);
 
     cell (std::make_unique<KnobCell> (state, ids::adv (index, "Points"), "Points",
-        "How many points the envelope has, 2 to 8. The rest keep their values for when "
-        "you lengthen it again.", palette_), true);
+        "How many points the envelope has, 2 to 16. The rest keep their values for when "
+        "you lengthen it again -- and sixteen with Loop and Snap on is a bar of sixteenths, "
+        "which is the point of having that many.", palette_), true);
 
     cell (std::make_unique<KnobCell> (state, ids::adv (index, "Sustain"), "Sustain pt",
         "Which point the envelope parks at while the key is held -- the ringed one. The "
@@ -1996,9 +2013,9 @@ void EnvelopePage::resized()
 
     for (auto& row : advRows_)
     {
-        const int height = row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight;
+        const int rowHeight = row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight;
 
-        row.bounds = bounds.removeFromTop (height);
+        row.bounds = bounds.removeFromTop (rowHeight);
         bounds.removeFromTop (kGroupGap);
 
         auto inner = row.bounds.reduced (5, 3).withTrimmedTop (kHeadingHeight);
@@ -2800,12 +2817,12 @@ void SonitusEditor::buildPages()
     // its own colours every control inside it with nothing passed down by hand.
     for (int page = 0; page < kNumPages; ++page)
     {
-        auto& lookAndFeel = pageLookAndFeels_[static_cast<std::size_t> (page)];
+        auto& pageLookAndFeel = pageLookAndFeels_[static_cast<std::size_t> (page)];
 
-        lookAndFeel = std::make_unique<ui::KnobLookAndFeel> (paletteForPage (page));
+        pageLookAndFeel = std::make_unique<ui::KnobLookAndFeel> (paletteForPage (page));
 
         if (auto* component = pages_[static_cast<std::size_t> (page)].get())
-            component->setLookAndFeel (lookAndFeel.get());
+            component->setLookAndFeel (pageLookAndFeel.get());
     }
 }
 

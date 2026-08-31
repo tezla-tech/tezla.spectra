@@ -7,7 +7,7 @@
 
 #pragma once
 
-// A multi-stage breakpoint envelope: up to eight points, a sustain point, a
+// A multi-stage breakpoint envelope: up to sixteen points, a sustain point, a
 // loop region, per-segment bipolar tension.
 //
 // ---------------------------------------------------------------------------
@@ -73,7 +73,13 @@ namespace tezla::dsp
 class MultiEnvelope
 {
 public:
-    static constexpr int kMaxPoints = 8;
+    /// Sixteen, which is the length of a bar in sixteenths -- the number that
+    /// makes a looping ADV envelope a *pattern* rather than a shape. Eight was
+    /// the original ceiling and cost nothing to raise: the arithmetic is per
+    /// segment, so the run-time cost is the segments actually used, and the
+    /// only price is 3 x 8 more parameters per envelope and 192 bytes of
+    /// storage in each one.
+    static constexpr int kMaxPoints = 16;
     static constexpr double kMaximumSeconds = 20.0;
 
     struct Point

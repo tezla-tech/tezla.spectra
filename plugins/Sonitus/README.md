@@ -751,13 +751,21 @@ slider beneath it, greyed when the shape ignores it. Morph A/B are modulation
 destinations.
 
 **ADV envelopes 1–3: multi-stage breakpoint envelopes.** Off by default and
-free when off — byte-proven — each unfolds on the ENV page into up to eight
+free when off — byte-proven — each unfolds on the ENV page into up to **sixteen**
 draggable points (x a segment's time, y its level, a segment's *middle* dragged
 vertically for its curve), a ringed sustain point, a loop region that cycles
 between the loop point and the sustain while the key is held, and Snap. The
 curve arithmetic is the AHDSRs' own, shared rather than copied. They appear as
 sources in both matrices as ADV 1–3; loop + snap is a tempo-locked rhythmic
 modulator.
+
+Sixteen is the number that makes a *pattern*: with Loop and Snap on, sixteen
+points is a bar of sixteenths, so one ADV envelope is a step sequencer with
+curves between the steps rather than a gate. The ceiling was eight until it was
+raised; points 9–16 are appended parameters, so a patch saved against the
+eight-point build reopens bit for bit unchanged (verified by rendering it
+before and after), and the handles' grab radius shrinks with density so a
+sixteen-point envelope's segment curves stay draggable.
 
 **Tempo sync, in two places.** Each LFO gains a Sync toggle and a note-division
 choice — synced with Retrig off and the transport running, the *phase* is

@@ -343,9 +343,16 @@ public:
 private:
     struct Layout
     {
+        /// kMaxPoints + 1: x[0] is the gate's own start, x[i] is point i-1.
+        /// Sized by the constant rather than typed, because it moved from 8 to
+        /// 16 and a hard 9 here would have been an out-of-bounds write with
+        /// nothing to notice it -- exactly the shape of the DICEROLL crash.
+        static constexpr std::size_t kSlots =
+            static_cast<std::size_t> (dsp::MultiEnvelope::kMaxPoints) + 1;
+
         double total { 1.0 };
-        std::array<float, 9> x {};   ///< x[0] is the start, x[i] point i-1
-        std::array<float, 9> y {};
+        std::array<float, kSlots> x {};
+        std::array<float, kSlots> y {};
         int points { 2 };
         int sustain { 0 };
         int loopStart { 0 };

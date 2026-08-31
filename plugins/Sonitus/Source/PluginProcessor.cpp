@@ -9,6 +9,7 @@
 #include "PluginEditor.h"
 
 #include <algorithm>
+#include <iterator>
 #include <random>
 #include <cmath>
 #include <vector>
@@ -36,7 +37,12 @@ constexpr int kSchemaV2 = 2;
 /// one keeps the version it was born with.
 constexpr int kSchemaV3 = 3;
 
-constexpr int kStateSchemaVersion = kSchemaV3;
+/// The ADV envelopes' points 9..16, added when the ceiling went from eight
+/// points to sixteen. Points 1..8 keep V2 -- they are the same parameters they
+/// always were and their hints must not move.
+constexpr int kSchemaV4 = 4;
+
+constexpr int kStateSchemaVersion = kSchemaV4;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// Where the tuning is stashed inside the state tree.
@@ -526,10 +532,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     // ---- ADV envelopes ------------------------------------------------------
     //
-    // Three multi-stage breakpoint envelopes, ninety parameters built by
-    // ids::adv rather than typed. Everything defaults to a disabled, sensible
-    // four-point ADSR-ish curve, so switching one on does something audible
-    // before any editing and a project that never heard of them is untouched.
+    // Three multi-stage breakpoint envelopes, 162 parameters built by ids::adv
+    // rather than typed. Everything defaults to a disabled, sensible four-point
+    // ADSR-ish curve, so switching one on does something audible before any
+    // editing and a project that never heard of them is untouched.
+    //
+    // **Points 1..8 carry V2 and points 9..16 carry V4**, which is the whole
+    // of the append-only discipline here: the first eight are the parameters
+    // that shipped and their ids and version hints are frozen; the eight that
+    // raised the ceiling to sixteen are new names at a new hint, so a project
+    // saved against the eight-point build finds every id it stored exactly
+    // where it left it.
+    //
+    // The one thing that genuinely changed under an existing id is the *range*
+    // of Points, Sustain and LoopStart, 8 -> 16. The stored value is the plain
+    // integer, not a normalised fraction (that is what APVTS keeps in its
+    // tree), so a saved project reopens on the same numbers -- verified by
+    // rendering an eight-point-era patch before and after and comparing bit
+    // for bit. A *recorded automation curve* on one of those three is the
+    // exception, because automation is normalised: a lane drawn to 4 points on
+    // the old range reads 6 or 7 on the new one. They are structural controls
+    // that nobody automates, and saying so is cheaper than a second parameter.
     for (int envelope = 0; envelope < 3; ++envelope)
     {
         const auto prefix = "ADV " + juce::String (envelope + 1);
@@ -559,28 +582,41 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
             juce::ParameterID { ids::adv (envelope, "LoopStart"), kSchemaV2 },
             prefix + " loop start", 1, dsp::MultiEnvelope::kMaxPoints, 1));
 
-        constexpr float defaultSeconds[] { 0.01f, 0.25f, 0.05f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f };
-        constexpr float defaultLevel[]   { 1.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f, 0.0f, 0.0f, 0.0f, 0.0f };
+        // Sixteen of each; points past the fourth are flat, level-0 legs, so
+        // lengthening an envelope adds time rather than a shape.
+        constexpr float defaultSeconds[] { 0.01f, 0.25f, 0.05f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f,
+                                           0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f };
+        constexpr float defaultLevel[]   { 1.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+
+        static_assert (static_cast<int> (std::size (defaultSeconds)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultLevel)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultTension)) == dsp::MultiEnvelope::kMaxPoints);
 
         for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
         {
             const auto n = juce::String (point + 1);
 
+            // The first eight are frozen at V2; everything the sixteen-point
+            // ceiling added is V4. Never the other way round.
+            const int hint = point < 8 ? kSchemaV2 : kSchemaV4;
+
             layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::adv (envelope, "T" + n), kSchemaV2 },
+                juce::ParameterID { ids::adv (envelope, "T" + n), hint },
                 prefix + " time " + n,
                 skewedRange (0.0f, 20.0f, 0.12f),
                 defaultSeconds[point], timeAttributes()));
 
             layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::adv (envelope, "L" + n), kSchemaV2 },
+                juce::ParameterID { ids::adv (envelope, "L" + n), hint },
                 prefix + " level " + n,
                 juce::NormalisableRange<float> { 0.0f, 1.0f },
                 defaultLevel[point], percentAttributes()));
 
             layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::adv (envelope, "C" + n), kSchemaV2 },
+                juce::ParameterID { ids::adv (envelope, "C" + n), hint },
                 prefix + " tension " + n,
                 juce::NormalisableRange<float> { -1.0f, 1.0f },
                 defaultTension[point], percentAttributes()));
