@@ -201,6 +201,11 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::lfo2:      value = sources_.lfo2; break;
             case GlobalSource::sequencer: value = sources_.sequencer; break;
 
+            case GlobalSource::macro1:    value = sources_.macros[0]; break;
+            case GlobalSource::macro2:    value = sources_.macros[1]; break;
+            case GlobalSource::macro3:    value = sources_.macros[2]; break;
+            case GlobalSource::macro4:    value = sources_.macros[3]; break;
+
             // The tracked note -- the same one the comb and the formant
             // follow, so the whole mangle moves with one note rather than three
             // stages each picking their own. Nothing sounding reads zero, which
@@ -236,6 +241,10 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
                     case GlobalSource::lfo1:
                     case GlobalSource::lfo2:
                     case GlobalSource::sequencer:
+                    case GlobalSource::macro1:
+                    case GlobalSource::macro2:
+                    case GlobalSource::macro3:
+                    case GlobalSource::macro4:
                     case GlobalSource::count:
                     default: break;
                 }
@@ -566,6 +575,11 @@ void Engine::advanceGlobalSources (int samples) noexcept
                                      .cyclesPerBeat,
                                  samples)
         : lfo2_.advance (samples)) * lfo2Depth;
+
+    // The macros are knobs rather than generators -- nothing to tick, and
+    // copying them here rather than reading `active_` at each use is what makes
+    // both matrices see the same four numbers on the same control chunk.
+    sources_.macros = active_.macros;
 }
 
 void Engine::mangle (double& left, double& right) noexcept

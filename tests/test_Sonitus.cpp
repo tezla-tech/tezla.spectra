@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -3174,4 +3175,176 @@ TEZLA_TEST (reverse_pm_is_one_sample_late_and_forward_pm_is_not)
     // on changes the result. Both would be zero if the wiring were missing.
     CHECK (forwardAgainstReverse > 0.01);
     CHECK (forwardAgainstBoth > 0.01);
+}
+
+// ---------------------------------------------------------------------------
+// Macros
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (a_macro_at_its_default_changes_nothing_anywhere)
+{
+    // Four new sources in both matrices, and the claim that has to hold for
+    // every patch that already exists: assigned or not, a macro at 0 is silent.
+    // Bit for bit, and with the slot **assigned** rather than merely present --
+    // "nothing happens because nothing is pointed at it" would be a weaker
+    // claim than the one that matters.
+    const auto render = [] (bool assign, double macro)
+    {
+        EngineParameters parameters;
+
+        parameters.oversampling = OversamplingMode::Off;
+        parameters.voice.shapeA = OscShape::saw;
+        parameters.voice.cutoffHz = 900.0;
+        parameters.combMode = CombMode::flange;
+        parameters.combMix = 0.5;
+        parameters.macros[0] = macro;
+
+        if (assign)
+        {
+            parameters.voice.slots[0].source = ModSource::macro1;
+            parameters.voice.slots[0].destination = ModDestination::cutoff;
+            parameters.voice.slots[0].depth = 2.0;
+
+            parameters.globalSlots[0].source = GlobalSource::macro1;
+            parameters.globalSlots[0].destination = GlobalDestination::combTime;
+            parameters.globalSlots[0].depth = 0.8;
+        }
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (45, 0.9);
+
+        // **In blocks of the size `prepare` was given.** Handing the engine
+        // 24000 samples at once segfaults, and did: the internal scratch is
+        // sized by the prepared block, which is the contract every host keeps
+        // and a test has to keep too.
+        std::vector<double> out;
+        std::vector<double> left (256, 0.0);
+        std::vector<double> right (256, 0.0);
+        double* channels[2] { left.data(), right.data() };
+
+        for (int block = 0; block < 94; ++block)
+        {
+            engine.process (channels, 256);
+            out.insert (out.end(), left.begin(), left.end());
+        }
+
+        return out;
+    };
+
+    const auto unassigned = render (false, 0.0);
+    const auto assignedAtZero = render (true, 0.0);
+
+    for (std::size_t i = 0; i < unassigned.size(); ++i)
+        CHECK (unassigned[i] == assignedAtZero[i]);
+
+    // And it is not silent because the whole rig is: turning it up moves the
+    // sound. Without this the test above passes on a broken engine.
+    const auto assignedAtHalf = render (true, 0.5);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < unassigned.size(); ++i)
+        worst = std::max (worst, std::abs (unassigned[i] - assignedAtHalf[i]));
+
+    CHECK (worst > 0.01);
+}
+
+TEZLA_TEST (one_macro_drives_both_matrices_from_the_same_value)
+{
+    // The point of a macro: one control into several destinations at once,
+    // each by its own depth. Measured as three separate readouts rather than
+    // as one sound, so a macro that reached two of the three would be caught.
+    EngineParameters parameters;
+
+    parameters.oversampling = OversamplingMode::Off;
+
+    // **A saw, not a sine.** The first version used a sine and measured zero
+    // crossings, which is an instrument that cannot see a lowpass at all: a
+    // sine has two crossings a cycle however hard it is filtered, and the test
+    // duly read 56 against 56 and looked like a broken macro. CLAUDE.md
+    // section 10 -- check the instrument before trusting it.
+    parameters.voice.shapeA = OscShape::saw;
+    parameters.voice.cutoffHz = 400.0;
+    parameters.voice.resonance = 0.1;
+    parameters.combMode = CombMode::flange;
+    parameters.combTimeMs = 6.0;
+    parameters.combMix = 0.6;
+
+    // Voice matrix: cutoff and resonance. Global matrix: comb time.
+    parameters.voice.slots[0] = { ModSource::macro2, ModDestination::cutoff, 3.0 };
+    parameters.voice.slots[1] = { ModSource::macro2, ModDestination::resonance, 0.7 };
+    parameters.globalSlots[0] = { GlobalSource::macro2, GlobalDestination::combTime, -0.9 };
+
+    const auto readouts = [&parameters] (double macro)
+    {
+        parameters.macros[1] = macro;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (45, 1.0);
+
+        std::vector<double> left (256, 0.0);
+        std::vector<double> right (256, 0.0);
+        double* channels[2] { left.data(), right.data() };
+
+        for (int block = 0; block < 47; ++block)
+            engine.process (channels, 256);
+
+        return engine.readouts().combNotchHz.load (std::memory_order_relaxed);
+    };
+
+    const double closed = readouts (0.0);
+    const double open = readouts (1.0);
+
+    // The comb readout is the one figure the engine publishes for the mangle,
+    // and a negative depth on comb time raises the notch.
+    // Measured. A negative depth on comb time *lengthens* the delay -- the
+    // engine's own sign, `pow(2, -octaves * modulation)` -- so the notch falls
+    // rather than rises, which is the opposite of what this test first
+    // asserted and the engine was right.
+    CHECK (closed > 0.0);
+    CHECK_NEAR (closed, 83.33, 0.05);
+    CHECK_NEAR (open, 25.00, 0.05);
+
+    // The voice half, measured as brightness rather than as a readout: the
+    // cutoff has no published figure, so this counts zero crossings.
+    const auto crossings = [&parameters] (double macro)
+    {
+        parameters.macros[1] = macro;
+
+        Engine engine;
+        engine.setParameters (parameters);
+        engine.prepare (48000.0, 256);
+        engine.noteOn (45, 1.0);
+
+        std::vector<double> out;
+        std::vector<double> left (256, 0.0);
+        std::vector<double> right (256, 0.0);
+        double* channels[2] { left.data(), right.data() };
+
+        for (int block = 0; block < 94; ++block)
+        {
+            engine.process (channels, 256);
+            out.insert (out.end(), left.begin(), left.end());
+        }
+
+        int count = 0;
+
+        // The second half only, so the filter has settled at the macro's
+        // setting rather than sweeping towards it.
+        for (std::size_t i = out.size() / 2 + 1; i < out.size(); ++i)
+            if ((out[i - 1] < 0.0) != (out[i] < 0.0))
+                ++count;
+
+        return count;
+    };
+
+    // Measured: 111 crossings with the macro closed, 1487 with it open --
+    // three octaves of cutoff on a saw, which is the voice half of the same
+    // knob doing its work at the same time as the comb half.
+    CHECK (crossings (0.0) == 111);
+    CHECK (crossings (1.0) == 1487);
 }

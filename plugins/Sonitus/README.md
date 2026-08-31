@@ -767,6 +767,19 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+**Four macros, sources in both matrices.** A macro is one knob wired to as many
+destinations as you point it at — the one control shape a matrix structurally
+cannot give, because a row has one source and one destination, so "open the
+filter *and* add drive *and* widen the unison" costs three rows whose depths
+then have to be kept in step by hand. Assign the same macro in three rows, in
+either matrix or both, and one control moves all three, each by its own depth
+and in its own direction.
+
+They are plain values rather than generators — nothing to tick — and at their
+default of 0 they contribute exactly nothing wherever they are pointed, so an
+unassigned macro is free and a patch saved before they existed is untouched
+(byte-proven through the plugin with all four at full).
+
 **The comb locks to the scale.** It already key-tracks, but its delay is a
 *continuous* frequency, so on a microtuned patch — which is half of why Sonitus
 exists — it resonates between the scale's notes and fights the tuning it is

@@ -3373,6 +3373,20 @@ void SonitusEditor::buildPages()
     // The global matrix first: it is the one the user reaches for -- the comb,
     // the formant and the tube live there -- and the first thing on a page
     // should be the thing the page is opened for.
+    mod->addHeading ("MACROS -- one knob into as many places as you point it", 4);
+
+    for (int macro = 0; macro < 4; ++macro)
+        mod->addKnob (ids::macro (macro), "Macro " + juce::String (macro + 1),
+            "**One knob wired to as many destinations as you assign it**, which is the one "
+            "control shape a matrix cannot give: a row has one source and one destination, so "
+            "\"open the filter *and* add drive *and* widen the unison\" costs three rows whose "
+            "depths then have to be kept in step by hand.\n\n"
+            "Assign Macro " + juce::String (macro + 1) + " in three rows -- in **either** matrix, "
+            "or both -- and this one control moves all three, each by its own depth and in its "
+            "own direction. It is the control a performance needs and a matrix has no row for.\n\n"
+            "At 0 it contributes exactly nothing wherever it is pointed, so an unassigned macro "
+            "is free and a patch saved before they existed is untouched.");
+
     mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note", 6);
 
     for (int slot = 0; slot < EngineParameters::kGlobalSlots; ++slot)

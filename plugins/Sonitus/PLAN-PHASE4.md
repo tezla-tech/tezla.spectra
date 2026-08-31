@@ -179,7 +179,7 @@ beyond this file and CLAUDE.md.
 | P4-2 FM ratio readout | done |
 | P4-3 filter Morph | done |
 | P4-4 scale-locked comb | done |
-| P4-5 four macros | pending |
+| P4-5 four macros | done |
 | P4-6 close-out | pending |
 
 **Work done on Sonitus outside this list**, so a resuming session is not

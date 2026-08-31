@@ -877,6 +877,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::combScale, kSchemaV5 }, "Comb scale lock", false));
 
+    // ---- macros -------------------------------------------------------------
+    //
+    // Four knobs that are sources in **both** matrices. Default 0, which
+    // contributes exactly nothing wherever it is pointed -- so a project that
+    // never heard of them is untouched, and an unassigned macro costs one
+    // array copy per control chunk.
+    for (int macro = 0; macro < 4; ++macro)
+        layout.add (std::make_unique<Parameter> (
+            juce::ParameterID { ids::macro (macro), kSchemaV5 },
+            "Macro " + juce::String (macro + 1),
+            juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::phaseFreq, kSchemaV1 }, "Phase centre",
         skewedRange (20.0f, 18000.0f, 800.0f), 800.0f, hertzAttributes()));
@@ -1293,6 +1305,9 @@ void SonitusProcessor::pullParameters()
     p.combMix = valueOf (state_, ids::combMix);
     p.combInverted = valueOf (state_, ids::combInvert) > 0.5f;
     p.combScaleLock = valueOf (state_, ids::combScale) > 0.5f;
+
+    for (int macro = 0; macro < 4; ++macro)
+        p.macros[static_cast<std::size_t> (macro)] = valueOf (state_, ids::macro (macro));
     p.phaseFrequencyHz = valueOf (state_, ids::phaseFreq);
     p.phaseStages = indexOf (state_, ids::phaseStages);
 
