@@ -500,7 +500,7 @@ TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
     //
     //                    early     late    late/early
     //     bloom 0.00    0.1521   0.1187        0.780
-    //     bloom 1.00    0.0034   0.3916      115.082
+    //     bloom 1.00    0.0035   0.3883      111.395
     //
     // Without bloom the top loses a fifth of its share as the object rings
     // down, which is all a linear bank can do -- the high modes are damped
@@ -512,18 +512,17 @@ TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
     // because that is where it delivers. A tam-tam does exactly this and a
     // mode bank on its own cannot.
     //
-    // **The strike amplitude is 0.030, and that number is the finding.** It
-    // used to be 0.9, which drives this bank to an output peak of 1.88 -- and
-    // a Malleus voice at full velocity peaks at **0.046**, forty times lower.
-    // The coupling rate goes as amplitude squared, so this test was measuring
-    // the feature at some sixteen hundred times the rate the instrument ever
-    // sees it, and through the plugin the control measured as completely
-    // inert: late-window energy shares at 110/220/440 Hz read
-    // 0.1797/0.3642/0.4481 with Bloom off and 0.1917/0.3584/0.4434 at
-    // maximum, which is a knob that moves the fourth decimal place.
+    // **The strike amplitude is 0.30, and it used to be 0.9.** That mattered,
+    // because through the plugin the control measured as completely inert:
+    // late-window energy shares at 110/220/440 Hz read 0.1797/0.3642/0.4481
+    // with Bloom off and 0.1917/0.3584/0.4434 at maximum, which is a knob that
+    // moves the fourth decimal place. The von Karman term's rate goes as
+    // amplitude squared and "large displacement" was referenced to 1.0, where
+    // this test drives it; a Malleus voice at full velocity peaks at 0.046.
     //
-    // `kBloomDrive` fixes the operating point and 0.030 here (a bank peak of
-    // 0.063) is what makes this test measure the shipped thing.
+    // `kBloomDrive` fixes the operating point, calibrated on a voice against
+    // velocity (see `tezla-measure malleus`). 0.30 here is where this bar sits
+    // in the same window.
     const auto fractions = [] (double bloom)
     {
         ModalResonator bank;
@@ -531,7 +530,7 @@ TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
         buildBar (bank, 110.0, 2.0, 32);
         bank.setBloom (bloom);
 
-        const auto rendered = strikeAndRing (bank, 0.030, 48000);
+        const auto rendered = strikeAndRing (bank, 0.30, 48000);
 
         const double early = highFraction (rendered, 960, 9600, 48000.0, 440.0);
         const double late = highFraction (rendered, 14400, 9600, 48000.0, 440.0);
@@ -565,14 +564,14 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
     // a strike of 0.013 here drives the bank to 0.043:
     //
     //     strike   bank peak   bloom 1   bloom 0
-    //      0.004      0.0084     0.1062    0.1187
-    //      0.008      0.0167     0.0985    0.1187
-    //      0.013      0.0272     0.1708    0.1187
-    //      0.020      0.0418     0.3854    0.1187
-    //      0.030      0.0628     0.3916    0.1187
-    //      0.050      0.1046     0.4012    0.1187
-    //      0.090      0.1883     0.0113    0.1187
-    //      0.200      0.4185     0.0025    0.1187
+    //       0.05      0.1046     0.1058    0.1187
+    //       0.10      0.2092     0.0994    0.1187
+    //       0.20      0.4185     0.3812    0.1187
+    //       0.30      0.6277     0.3883    0.1187
+    //       0.40      0.8370     0.3924    0.1187
+    //       0.60      1.2554     0.4012    0.1187
+    //       0.90      1.8831     0.0235    0.1187
+    //       1.40      2.9293     0.0062    0.1187
     //
     // Three things in that table, and all three are the point.
     //
@@ -581,20 +580,22 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
     // property bloom exists to remove.
     //
     // The bloom column is **threshold-like, not a smooth ramp**: dormant at a
-    // soft hit, engaging through 0.013, on by 0.020, and falling away again
-    // past 0.09 as the injection swamps the state rather than perturbing it.
-    // That is more physical than a proportional law would be, and it is why
-    // the assertion below is written as "hard blooms, soft does not" rather
-    // than as a monotone chain.
+    // soft hit, engaging through 0.20, holding to 0.60, and falling away again
+    // as the injection swamps the state rather than perturbing it. That is
+    // more physical than a proportional law would be, and it is why the
+    // assertion below is written as "hard blooms, soft does not" rather than
+    // as a monotone chain.
     //
-    // And the **useful window is about 9 dB wide**, bank peaks 0.027 to 0.105,
-    // which is narrower than the range a velocity control covers. That is a
-    // real limitation of a coupling bounded by `q / (1 + |q|)`, and it is
-    // stated rather than tuned around: `kBloomDrive` centres the window on a
-    // hard hit (a full-velocity Malleus voice peaks at 0.046) so that Bloom is
-    // a "hit it hard" effect, which is what the physics says it is. Widening
-    // the window means changing the saturation, and that is a redesign of the
-    // bound rather than a constant.
+    // And the **useful window is about 10 dB wide**, which is narrower than
+    // the range a velocity control covers. That is a real limitation of a
+    // coupling bounded by `q / (1 + |q|)`; widening it means changing the
+    // saturation, which is a redesign of the bound rather than a constant.
+    // `kBloomDrive` places the window, and it is calibrated **on a voice**
+    // rather than here -- see `tezla-measure malleus`, which sweeps velocity
+    // and is the table that decided the constant. This bar is not the object
+    // the instrument plays and reaches a bank peak twenty times higher for the
+    // same coupling response, which is exactly why the calibration cannot be
+    // done from a unit test on a bare bank.
     const auto lateFraction = [] (double amplitude, double bloom)
     {
         ModalResonator bank;
@@ -606,8 +607,8 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
                              14400, 9600, 48000.0, 440.0);
     };
 
-    const double quiet = lateFraction (0.008, ModalResonator::kMaxBloom);
-    const double loud = lateFraction (0.030, ModalResonator::kMaxBloom);
+    const double quiet = lateFraction (0.10, ModalResonator::kMaxBloom);
+    const double loud = lateFraction (0.30, ModalResonator::kMaxBloom);
 
     std::printf ("        [bloom] late high fraction, quiet %.4f loud %.4f\n",
                  quiet, loud);
@@ -616,8 +617,8 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
     CHECK (loud > 3.0 * quiet);
 
     // And the linear bank is genuinely indifferent to level.
-    const double quietOff = lateFraction (0.008, 0.0);
-    const double loudOff = lateFraction (0.030, 0.0);
+    const double quietOff = lateFraction (0.10, 0.0);
+    const double loudOff = lateFraction (0.30, 0.0);
 
     CHECK (std::abs (loudOff - quietOff) < 1.0e-9);
 }

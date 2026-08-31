@@ -61,27 +61,37 @@ public:
 
     /// What counts as a large displacement, in output units.
     ///
-    /// Chosen by measurement, not by taste. A Malleus voice at full velocity
-    /// peaks near **0.046**, and the coupling's useful range has to bracket
-    /// that. The late high-band fraction of a 32-mode bar at bloom 1, against
-    /// a linear bank's 0.2213 at every level:
+    /// Chosen by measurement on a **voice**, not on a bare bank, and that is
+    /// the part that matters: a unit test's mode bank and a Malleus note reach
+    /// completely different amplitudes for the same coupling response, so a
+    /// constant calibrated on the first is wrong for the second. The first
+    /// attempt at this number was calibrated on a 32-mode bar and put the
+    /// window at velocities 0.1 to 0.3 -- the control was *off* at a hard hit
+    /// and reversed at full velocity, which is backwards.
     ///
-    ///     strike     drive 8   drive 12   drive 20
-    ///      0.004      0.1700     0.1236     0.2258
-    ///      0.008      0.1084     0.7092     0.7337
-    ///      0.013      0.7201     0.7329     0.7489
-    ///      0.020      0.7337     0.7464     0.7626
-    ///      0.050      0.7626     0.7683     0.5978
-    ///      0.090      0.7510     0.5436     0.1506
+    /// Late high-band share of a struck plate against the velocity it was
+    /// struck at, bloom 1 against bloom 0:
     ///
-    /// Twelve, because it engages below the instrument's level and does not
-    /// collapse above it. Twenty puts the reversal at 0.05 -- barely above a
-    /// hard strike -- and eight has not engaged until 0.013. The fall-off at
-    /// the top is the saturation regime the coupling has always had (the
-    /// injection swamping the state rather than perturbing it); the drive
-    /// decides where the instrument sits relative to it, and this puts a hard
-    /// hit in the middle of the curve rather than off either end.
-    static constexpr double kBloomDrive = 48.0;
+    ///     velocity   voice peak   drive 3   drive 4   drive 6   bloom 0
+    ///       0.10       0.0002      0.0006    0.0007    0.0009    0.0005
+    ///       0.25       0.0026      0.0085    0.0145    0.0355    0.0036
+    ///       0.40       0.0072      0.0520    0.0976    0.1209    0.0087
+    ///       0.55       0.0138      0.1505    0.1909    0.9068    0.0124
+    ///       0.70       0.0224      0.2315    0.1860    0.9779    0.0147
+    ///       0.85       0.0330      0.1623    0.9773    0.9853    0.0160
+    ///       1.00       0.0458      0.9077    0.9874    0.9900    0.0168
+    ///
+    /// Four, because it climbs across the whole velocity range without a dip
+    /// and without saturating early. Six is fully on by half velocity, which
+    /// throws away the dynamic; three dips at 0.85.
+    ///
+    /// The **useful window is about 10 dB wide** and that is a real limitation
+    /// of a coupling bounded by `q / (1 + |q|)`: past it the injection swamps
+    /// the state instead of perturbing it and the control reverses. Widening
+    /// it means changing the saturation, which is a redesign of the bound
+    /// rather than a constant, so the window is placed rather than widened.
+    /// `tezla-measure malleus` prints the velocity sweep.
+    static constexpr double kBloomDrive = 4.0;
 
     /// Arithmetic only -- no allocation, safe anywhere. Re-preparing keeps
     /// each mode's frequency/decay/gain request and rebuilds the poles for

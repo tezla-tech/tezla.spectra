@@ -104,11 +104,109 @@ Drone feeds them back into themselves — a feedback loop around a
 nonlinearity, so it carries the full §7 kit (soft clip inside the loop, a cap
 below unity, a swept test with teeth) and cannot start from silence.
 
+## Phase 2 — the object answers back, and you can hear it from somewhere
+
+Three things separated a *mode bank* from an *instrument*: everything in it
+was linear, undamped by the player, and heard from one point.
+
+**Bloom** couples the modes, so a hard strike **builds after contact** — the
+shimmer a tam-tam grows a second in is energy climbing out of the low modes,
+not reverb and not a filter. The physics is the geometric (von Kármán)
+nonlinearity, whose quadratic term couples mode triads and whose rate goes as
+amplitude squared. It is a feedback loop around a nonlinearity and carries the
+full §7 kit: the coupling passes through `q/(1+|q|)`, under 1 for every finite
+input, and the whole bank is renormalised to the energy the linear bank would
+have had — so the cascade *redistributes* energy and cannot create any. Swept
+across 1260 combinations, worst sample 4.39 and the ring's energy still
+falling.
+
+Late high-band share of a struck plate against the velocity it was hit at:
+
+| velocity | voice peak | Bloom 1 | Bloom 0 |
+|---|---|---|---|
+| 0.10 | 0.0002 | 0.0007 | 0.0005 |
+| 0.25 | 0.0026 | 0.0145 | 0.0036 |
+| 0.55 | 0.0138 | 0.1909 | 0.0124 |
+| 0.85 | 0.0330 | 0.9773 | 0.0160 |
+| 1.00 | 0.0458 | 0.9874 | 0.0168 |
+
+The linear column barely moves; the bloom column climbs sixty-fold. **This is
+a hit-it-hard control**, which is what a large-displacement nonlinearity is,
+and its useful window is about 10 dB wide — past it the injection swamps the
+state rather than perturbing it. That window is *placed* rather than widened,
+because widening it means redesigning the bound.
+
+It was also **inert until the knob went on the panel**. Calibrated against a
+unit test that strikes a bare bank at twenty times a voice's amplitude, the
+control moved the fourth decimal place of the plugin's output and nothing
+else. The constant that fixes it is now calibrated on a voice, against
+velocity, and `tezla-measure malleus` prints the sweep that decided it.
+
+**Damp** is a hand on the object, and it is *played* rather than set — pushed
+while a note rings, it changes the ring. The loss is proportional to
+**frequency**, because soft tissue is a constant-loss-factor absorber, so the
+object goes **dull before it goes quiet**. A flat decay multiplier would be a
+volume pedal. Measured T60 on modes with a 4 s natural decay:
+
+| Hz | damp 0 | 0.25 | 0.50 | 1.00 |
+|---|---|---|---|---|
+| 125 | 4.008 | 1.792 | 1.152 | 0.680 |
+| 250 | 4.004 | 1.148 | 0.672 | 0.368 |
+| 500 | 4.002 | 0.670 | 0.366 | 0.194 |
+| 1000 | 4.001 | 0.365 | 0.192 | 0.099 |
+| 2000 | 4.000 | 0.191 | 0.099 | 0.050 |
+
+Each doubling of pitch roughly halves the time, which is the whole claim.
+
+**Two exciters and a blend.** A real strike is a contact *and* a scrape: a
+mallet with a fingernail on it, a bow started with a pluck. The blend is a
+lerp on the excitation amounts, so either end is bit for bit the single
+exciter, and setting both slots the same is that exciter at every position.
+Measured on a mallet blended into a pluck at 220 Hz, the strike's spectral
+centroid walks **390 Hz to 227 Hz** across the control.
+
+**Velocity picks the hardness**, because on a real drum a soft hit is felt and
+a hard hit is stick — the same mallet compresses differently. At full amount
+velocity *is* the hardness: the strike's centroid runs **216 Hz at velocity
+0.1 to 542 Hz at 1.0**, agreeing exactly with the same note played with the
+knob set to the velocity.
+
+**Two listening positions.** The strike is combed by sin(kπp); so is the ear,
+by the same law. Two taps at two points on the object is stereo from the
+geometry rather than a widener — and the mono sum genuinely cancels, which is
+measured rather than avoided:
+
+| L / R | correlation | mono keeps |
+|---|---|---|
+| 0.05 / 0.95 | −0.359 | 0.566 |
+| 0.20 / 0.80 | −0.280 | 0.600 |
+| 0.29 / 0.71 | −0.059 | 0.686 |
+| 0.45 / 0.55 | +0.857 | 0.964 |
+
+**Width and mono compatibility trade off directly** and nothing escapes it. At
+*matched* width an asymmetric pair survives better: 0.10/0.75 and 0.20/0.80
+are equally wide and keep 0.641 against 0.600, which is why the tooltip says
+offset rather than mirror. Listening amount at 0 is the mono instrument that
+shipped, bit for bit.
+
 ## Presets
 
 *Init* · *Physical 808* · *Tabla Drop* · *Neuro Stab* · *Slendro Gongs* ·
 *BP Bell Choir* · *Bowed Bowl Drone* · *Sitar Cloud* · *Glass Marimba* ·
-*Dropped Mallet* · *Idle reference*
+*Dropped Mallet* · *Tam-tam Bloom* · *Choked Cymbal* · *Fingernail Marimba* ·
+*Plucked Bow* · *Idle reference*
+
+The last four are phase 2's, one per feature: *Tam-tam Bloom* wants to be hit
+hard, *Choked Cymbal* wants Damp under your left hand or on a pedal,
+*Fingernail Marimba* is a mallet with a pluck blended into it, and *Plucked
+Bow* is how a bowed string is actually begun. All four are genuinely stereo —
+channel correlations +0.76, +0.25, +0.68, +0.67 against +1.0000 for every
+phase-1 preset.
+
+Measuring them found **Bowed Bowl Drone at 1.945 of full scale**, nearly +6 dB
+over: a bow sustains and the taraf's drone adds to it for as long as the key
+is held. Trimmed to −12 dB, it reads 0.489. Every preset now peaks between
+0.43 and 0.83 on a single note.
 
 Two of them are named for scales you should load first: Slendro Gongs and BP
 Bell Choir are built around Overtone Lock, and a preset does not change your
@@ -144,7 +242,9 @@ tezla-measure malleus [--fs 48000] [--out modes.csv]
 
 Mode tables (all 64, to CSV), Overtone Lock accuracy per scale, decay
 accuracy, strike centroid against hardness, the bow's onset map across the
-pressure × speed plane, the between-modes floor, and CPU.
+pressure × speed plane, the between-modes floor, phase 2's three tables
+(Bloom against velocity, the damping law as T60, the listening pair's width
+against its mono fold), and CPU.
 
 ## What has not been verified
 

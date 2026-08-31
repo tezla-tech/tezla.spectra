@@ -299,11 +299,13 @@ const std::vector<Preset>& presets()
                 { ids::listenAmount, 0.8f },
                 { ids::listenLeft, 0.13f },
                 { ids::listenRight, 0.61f },
-                // +24 dB, the parameter's ceiling. Bloom redistributes energy
-                // upward and the vactrol gate then takes most of it away, so
-                // this patch is 10 dB quieter with Bloom up than with it down
-                // -- which is the trade the control makes, not a defect.
-                { ids::outputTrim, 24.0f },
+                // +22 dB. Bloom redistributes energy upward and the vactrol gate
+                // then takes some of it away, so this patch is quieter with
+                // Bloom up than with it down -- RMS 0.0279 against 0.0421,
+                // peak 0.543 against 0.706. That is the trade the control
+                // makes rather than a defect, and the trim is set from the
+                // *louder* of the two so turning Bloom off cannot clip.
+                { ids::outputTrim, 22.0f },
             }
         },
         // -------------------------------------------------------------------
