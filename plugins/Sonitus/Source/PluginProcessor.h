@@ -76,6 +76,7 @@ inline constexpr auto filterMode  = "filterMode";
 inline constexpr auto cutoff      = "cutoff";
 inline constexpr auto resonance   = "resonance";
 inline constexpr auto filterDrive = "filterDrive";
+inline constexpr auto filterMorph = "filterMorph";
 inline constexpr auto filterTrack = "filterTrack";
 inline constexpr auto filterFm    = "filterFm";
 inline constexpr auto filterVel   = "filterVel";
@@ -188,6 +189,10 @@ inline constexpr auto combDamp    = "combDamp";
 inline constexpr auto combSpread  = "combSpread";
 inline constexpr auto combMix     = "combMix";
 inline constexpr auto combInvert  = "combInvert";
+inline constexpr auto combScale   = "combScale";
+
+/// The four macros. `macro1` .. `macro4`.
+[[nodiscard]] inline juce::String macro (int index) { return "macro" + juce::String (index + 1); }
 inline constexpr auto phaseFreq   = "phaseFreq";
 inline constexpr auto phaseStages = "phaseStages";
 inline constexpr auto formantMorph = "formantMorph";
@@ -244,7 +249,8 @@ inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 inline const juce::StringArray modSource { "Off", "Amp env", "Mod env 1", "Mod env 2",
                                            "Velocity", "Key track", "Note random",
                                            "LFO 1", "LFO 2", "Sequencer",
-                                           "ADV 1", "ADV 2", "ADV 3" };
+                                           "ADV 1", "ADV 2", "ADV 3",
+                                           "Macro 1", "Macro 2", "Macro 3", "Macro 4" };
 
 /// The modulation destinations, likewise. **Continuous controls only** -- a
 /// choice or a switch reconfigures rather than adjusts, so modulating one would
@@ -255,7 +261,8 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "Sub level", "Ring", "Fold",
                                          "Pitch", "Pitch B", "Level",
                                          "Kargyraa", "Morph A", "Morph B",
-                                         "Feedback A", "Feedback B", "PM reverse" };
+                                         "Feedback A", "Feedback B", "PM reverse",
+                                         "Filter morph" };
 
 /// How many oscillator cycles one kargyraa modulator cycle spans.
 ///
@@ -268,7 +275,8 @@ inline const juce::StringArray kargyraaDivisor { "/2  true kargyraa", "/3", "/4"
 /// notes are down, which is why the voice's list is not reused here.
 inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer",
                                              "Amp env", "Mod env 1", "Mod env 2", "Velocity",
-                                             "ADV 1", "ADV 2", "ADV 3" };
+                                             "ADV 1", "ADV 2", "ADV 3",
+                                             "Macro 1", "Macro 2", "Macro 3", "Macro 4" };
 
 /// The global matrix's destinations: the mangle's continuous controls. **Comb
 /// time is the one this instrument exists for** -- the brief's flanger-at-rate-
@@ -332,7 +340,9 @@ static_assert (static_cast<int> (ModSource::none)      == 0
             && static_cast<int> (ModSource::sequencer) == 9
             && static_cast<int> (ModSource::advEnv1)   == 10
             && static_cast<int> (ModSource::advEnv3)   == 12
-            && static_cast<int> (ModSource::count)     == 13,
+            && static_cast<int> (ModSource::macro1)    == 13
+            && static_cast<int> (ModSource::macro4)    == 16
+            && static_cast<int> (ModSource::count)     == 17,
                "the modulation source list is indexed straight into ModSource");
 
 static_assert (static_cast<int> (ModDestination::none)     == 0
@@ -343,7 +353,8 @@ static_assert (static_cast<int> (ModDestination::none)     == 0
             && static_cast<int> (ModDestination::feedbackA) == 19
             && static_cast<int> (ModDestination::feedbackB) == 20
             && static_cast<int> (ModDestination::pmReverse) == 21
-            && static_cast<int> (ModDestination::count)     == 22,
+            && static_cast<int> (ModDestination::filterMorph) == 22
+            && static_cast<int> (ModDestination::count)       == 23,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0
@@ -352,7 +363,9 @@ static_assert (static_cast<int> (GlobalSource::none)         == 0
             && static_cast<int> (GlobalSource::velocity)     == 7
             && static_cast<int> (GlobalSource::advEnv1)      == 8
             && static_cast<int> (GlobalSource::advEnv3)      == 10
-            && static_cast<int> (GlobalSource::count)        == 11,
+            && static_cast<int> (GlobalSource::macro1)        == 11
+            && static_cast<int> (GlobalSource::macro4)        == 14
+            && static_cast<int> (GlobalSource::count)         == 15,
                "the global source list is indexed straight into GlobalSource");
 
 static_assert (static_cast<int> (GlobalDestination::none)            == 0

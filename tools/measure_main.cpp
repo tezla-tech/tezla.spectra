@@ -30,6 +30,8 @@
 #include <string>
 #include <vector>
 
+#include <tezla/dsp/Ratio.hpp>
+#include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Decibels.hpp>
@@ -2197,6 +2199,150 @@ int runSonitus (const Args& args)
         std::printf ("  Bohlen-Pierce repeat: %.3f cents (3/1 is 1901.955 -- a tritave, not an\n",
                      repeat);
         std::printf ("    octave, which is the point of having it)\n");
+    }
+
+    // ---- the phase-4 additions ------------------------------------------------
+
+    std::printf ("\n--- phase 4 -------------------------------------------------------\n\n");
+
+    // ---- the filter morph -----------------------------------------------------
+    //
+    // The whole point of the control is that it is *between* two shapes rather
+    // than crossfading two static ones, so the table below reads the response
+    // three octaves either side of the corner at each stop along the axis. A
+    // crossfade would show the low end and the high end moving together; a
+    // morph shows them trading.
+    {
+        std::printf ("Filter morph: response 3 octaves below and above an 800 Hz corner,\n");
+        std::printf ("no resonance, measured through the running filter at 48 kHz.\n\n");
+
+        std::printf ("  %-8s %12s %12s     %s\n", "morph", "100 Hz", "6400 Hz", "shape");
+
+        const struct { double morph; const char* name; } stops[] {
+            { 0.00, "lowpass" },
+            { 0.25, "" },
+            { 0.50, "bandpass" },
+            { 0.75, "" },
+            { 1.00, "highpass" },
+        };
+
+        for (const auto& stop : stops)
+        {
+            const auto measure = [&stop] (double hz)
+            {
+                dsp::SvfFilter filter;
+
+                filter.prepare (48000.0);
+                filter.setMode (dsp::SvfMode::lowpass);
+                filter.setCutoffHz (800.0);
+                filter.setResonance (0.0);
+                filter.setMorph (stop.morph);
+
+                double phase = 0.0;
+                double sum = 0.0;
+
+                const int settle = 12000;
+                const int measured = 12000;
+
+                for (int i = 0; i < settle + measured; ++i)
+                {
+                    phase += 2.0 * std::numbers::pi * hz / 48000.0;
+
+                    const double out = filter.process (std::sin (phase));
+
+                    if (i >= settle)
+                        sum += out * out;
+                }
+
+                return dsp::gainToDb (std::sqrt (2.0 * sum / static_cast<double> (measured)));
+            };
+
+            std::printf ("  %+6.2f   %10.2f dB %10.2f dB     %s\n",
+                         stop.morph, measure (100.0), measure (6400.0), stop.name);
+        }
+    }
+
+    // ---- the FM ratio readout -------------------------------------------------
+    {
+        std::printf ("\nFM ratio readout: what the OSC page says for a set of B pitches,\n");
+        std::printf ("with A at unity. The panel prints the third column.\n\n");
+
+        std::printf ("  %-24s %10s   %s\n", "B offset", "ratio", "reads");
+
+        const struct { double octaves; double semis; double cents; const char* label; } rows[] {
+            { 0.0,  0.0,   0.0,   "unison" },
+            { 1.0,  0.0,   0.0,   "an octave" },
+            { 0.0,  7.0,   0.0,   "a tempered fifth" },
+            { 0.0,  7.0,   1.955, "a pure fifth" },
+            { 1.0,  0.0,   26.0,  "an octave, 26 cents sharp" },
+            { 0.0,  19.0,  0.0,   "an octave and a fifth" },
+            { 3.0,  0.0,   0.0,   "four octaves" },
+            { 3.0,  24.0,  0.0,   "five octaves" },
+        };
+
+        for (const auto& row : rows)
+        {
+            const double ratio = dsp::ratioFromOffset (row.octaves, row.semis, row.cents);
+            const auto match = dsp::nearestRatio (ratio);
+
+            char reads[64] {};
+
+            if (match.numerator == 0)
+                std::snprintf (reads, sizeof (reads), "%.3f  far apart", ratio);
+            else if (match.simple)
+                std::snprintf (reads, sizeof (reads), "%d:%d  harmonic %+d c",
+                               match.numerator, match.denominator,
+                               static_cast<int> (std::lround (match.centsError)));
+            else
+                std::snprintf (reads, sizeof (reads), "%.3f  %d c off %d:%d", ratio,
+                               static_cast<int> (std::lround (std::abs (match.centsError))),
+                               match.numerator, match.denominator);
+
+            std::printf ("  %-24s %10.4f   %s\n", row.label, ratio, reads);
+        }
+    }
+
+    // ---- the scale-locked comb ------------------------------------------------
+    //
+    // The figure that matters is **how far the lock has to move the comb**,
+    // because that is what says whether it is a correction or a retune. On a
+    // fine scale it should be a few cents; on a coarse one, tens.
+    {
+        std::printf ("\nComb scale lock: how far it moves a comb swept across four decades,\n");
+        std::printf ("as cents, per tuning. Half the scale's widest step is the ceiling.\n\n");
+
+        std::printf ("  %-26s %8s %10s %10s\n", "tuning", "degrees", "worst c", "mean c");
+
+        const dsp::Scale tunings[] {
+            dsp::scales::twelveToneEqual(), dsp::scales::justMajor(),
+            dsp::scales::pythagorean(),     dsp::scales::bohlenPierce(),
+            dsp::scales::partch43(),
+        };
+
+        for (const auto& scale : tunings)
+        {
+            dsp::Tuning tuning;
+
+            if (! tuning.setScale (scale))
+                continue;
+
+            double worst = 0.0;
+            double total = 0.0;
+            int counted = 0;
+
+            for (int i = 0; i < 2000; ++i)
+            {
+                const double hz = 20.0 * std::pow (10.0, 3.0 * static_cast<double> (i) / 2000.0);
+                const double moved = std::abs (1200.0 * std::log2 (tuning.nearestScaleHz (hz) / hz));
+
+                worst = std::max (worst, moved);
+                total += moved;
+                ++counted;
+            }
+
+            std::printf ("  %-26s %8d %10.2f %10.2f\n", scale.name.c_str(), scale.size(),
+                         worst, total / static_cast<double> (counted));
+        }
     }
 
     return 0;

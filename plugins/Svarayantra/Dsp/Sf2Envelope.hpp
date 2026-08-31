@@ -46,6 +46,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include <tezla/dsp/Exact.hpp>
+
 #include "Sf2Model.hpp"
 
 namespace tezla::svarayantra {
@@ -137,7 +139,7 @@ public:
     [[nodiscard]] bool isEffectivelySilent() const noexcept
     {
         return phase_ == Phase::finished
-            || (phase_ == Phase::sustain && level_ == 0.0);
+            || (phase_ == Phase::sustain && dsp::isExactlyZero (level_));
     }
 
     /// One sample of gain (volume) or level (modulation).
@@ -288,7 +290,7 @@ private:
             level_ = sustain_;
             phase_ = Phase::sustain;
 
-            if (kind_ == Kind::volume && level_ == 0.0)
+            if (kind_ == Kind::volume && dsp::isExactlyZero (level_))
                 phase_ = Phase::finished;
 
             return;

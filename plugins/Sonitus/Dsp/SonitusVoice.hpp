@@ -111,6 +111,24 @@ enum class ModSource
     advEnv2,
     advEnv3,
 
+    /// The four macros. Appended for the same reason.
+    ///
+    /// A macro is one knob wired to several things at once, which is the thing
+    /// a matrix structurally cannot give: a matrix row has one source and one
+    /// destination, so "this knob opens the filter *and* adds drive *and*
+    /// widens the unison" costs three rows and three depths that then have to
+    /// be kept in step by hand. Assign the same macro in three rows and one
+    /// control moves all three, each by its own amount.
+    ///
+    /// They are plain values rather than generators -- there is nothing to
+    /// tick, and a macro at its default of 0 contributes exactly nothing, so
+    /// an unassigned macro is free and a project that never heard of them is
+    /// untouched.
+    macro1,
+    macro2,
+    macro3,
+    macro4,
+
     count
 };
 
@@ -157,6 +175,15 @@ enum class ModDestination
     feedbackB,
     pmReverse,         ///< B modulating A -- the other half of the FM pair
 
+    /// The filter's position on the lowpass -> bandpass -> highpass axis,
+    /// bipolar and centred on the mode switch. Appended, as every entry in
+    /// this list has been -- a stored slot is an index (CLAUDE.md section 8).
+    ///
+    /// It exists because the mode is a **choice** and a choice cannot be a
+    /// destination, which left the filter's character the one thing in a voice
+    /// no envelope could sweep.
+    filterMorph,
+
     count
 };
 
@@ -200,6 +227,12 @@ struct GlobalSources
     double lfo1 { 0.0 };
     double lfo2 { 0.0 };
     double sequencer { 0.0 };
+
+    /// The four macros, which are the same four numbers in both matrices --
+    /// one knob, one value, wherever it is pointed. Carried here rather than
+    /// in `VoiceParameters` so the voice and the mangle read the identical
+    /// figure rather than two copies that could drift by a control chunk.
+    std::array<double, 4> macros {};
 };
 
 /// Everything a voice is told, all of it shared across voices and set from the
@@ -307,6 +340,10 @@ struct VoiceParameters
     double cutoffHz { 1000.0 };
     double resonance { 0.0 };
     double filterDrive { 0.0 };
+
+    /// -1 .. +1 along lowpass -> bandpass -> highpass, centred on
+    /// `filterMode`. 0 is the mode itself, bit-exactly.
+    double filterMorph { 0.0 };
 
     /// How much the played note moves the cutoff. 1 is one octave of cutoff per
     /// octave of note, which keeps the timbre constant across the keyboard.
@@ -737,6 +774,8 @@ public:
         for (auto& filter : filters_)
         {
             filter.setMode (parameters.filterMode);
+            filter.setMorph (std::clamp (parameters.filterMorph
+                                           + amount (ModDestination::filterMorph), -1.0, 1.0));
             filter.setResonance (std::clamp (parameters.resonance
                                                + amount (ModDestination::resonance), 0.0, 1.0));
             filter.setDrive (std::clamp (parameters.filterDrive
@@ -930,6 +969,11 @@ private:
             case ModSource::lfo1:         return global.lfo1;
             case ModSource::lfo2:         return global.lfo2;
             case ModSource::sequencer:    return global.sequencer;
+
+            case ModSource::macro1:       return global.macros[0];
+            case ModSource::macro2:       return global.macros[1];
+            case ModSource::macro3:       return global.macros[2];
+            case ModSource::macro4:       return global.macros[3];
 
             case ModSource::none:
             case ModSource::count:

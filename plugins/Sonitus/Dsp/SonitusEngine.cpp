@@ -201,6 +201,11 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::lfo2:      value = sources_.lfo2; break;
             case GlobalSource::sequencer: value = sources_.sequencer; break;
 
+            case GlobalSource::macro1:    value = sources_.macros[0]; break;
+            case GlobalSource::macro2:    value = sources_.macros[1]; break;
+            case GlobalSource::macro3:    value = sources_.macros[2]; break;
+            case GlobalSource::macro4:    value = sources_.macros[3]; break;
+
             // The tracked note -- the same one the comb and the formant
             // follow, so the whole mangle moves with one note rather than three
             // stages each picking their own. Nothing sounding reads zero, which
@@ -236,6 +241,10 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
                     case GlobalSource::lfo1:
                     case GlobalSource::lfo2:
                     case GlobalSource::sequencer:
+                    case GlobalSource::macro1:
+                    case GlobalSource::macro2:
+                    case GlobalSource::macro3:
+                    case GlobalSource::macro4:
                     case GlobalSource::count:
                     default: break;
                 }
@@ -360,6 +369,39 @@ void Engine::aimComb() noexcept
     // go.
     comb_.setDelaySeconds (combDelaySeconds());
     comb_.setNoteHz (voices_.trackedFrequency());
+
+    // **Scale lock**, applied here because this is the only place that knows
+    // both numbers: the comb knows where it resonates and the tuning knows
+    // what pitches exist. The comb stays framework-free and is handed a plain
+    // ratio (`setTuningRatio`), which at exactly 1.0 costs one multiplication
+    // and changes nothing.
+    //
+    // The ratio is worked out from the delay the comb has *already* settled
+    // on -- key tracking, modulation and all -- rather than from the knob,
+    // because the knob is wrong whenever anything is sweeping it, which in
+    // this instrument is most of the time. Same argument as the notch readout
+    // two lines down.
+    if (active_.combScaleLock)
+    {
+        comb_.setTuningRatio (1.0);
+
+        const double samples = comb_.currentDelaySamples();
+
+        if (samples > 0.0)
+        {
+            const double resonant = internalRate_ / samples;
+            const double snapped = voices_.tuning().nearestScaleHz (resonant);
+
+            // Delay and frequency are reciprocals, so the ratio between the
+            // two pitches is the reciprocal of the ratio between the delays.
+            if (snapped > 0.0)
+                comb_.setTuningRatio (resonant / snapped);
+        }
+    }
+    else
+    {
+        comb_.setTuningRatio (1.0);
+    }
 
     // The same tracked note the comb uses. The two lock to the same thing by
     // construction -- the comb onto the note's period, the formant onto its
@@ -533,6 +575,11 @@ void Engine::advanceGlobalSources (int samples) noexcept
                                      .cyclesPerBeat,
                                  samples)
         : lfo2_.advance (samples)) * lfo2Depth;
+
+    // The macros are knobs rather than generators -- nothing to tick, and
+    // copying them here rather than reading `active_` at each use is what makes
+    // both matrices see the same four numbers on the same control chunk.
+    sources_.macros = active_.macros;
 }
 
 void Engine::mangle (double& left, double& right) noexcept

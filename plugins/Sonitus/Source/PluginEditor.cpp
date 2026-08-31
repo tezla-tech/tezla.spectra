@@ -14,6 +14,7 @@
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/Divisions.hpp>
 #include <tezla/dsp/Oscillator.hpp>
+#include <tezla/dsp/Ratio.hpp>
 #include <tezla/dsp/Scales.hpp>
 
 namespace tezla::sonitus
@@ -1120,6 +1121,27 @@ void ControlPage::add (std::unique_ptr<ParameterCell> cell)
     addAndMakeVisible (*raw);
     owned_.push_back (std::move (cell));
     currentGroup().cells.push_back (raw);
+}
+
+void ControlPage::setGroupDetail (const juce::String& headingName, const juce::String& detail)
+{
+    for (auto& group : groups_)
+    {
+        if (group.heading != headingName)
+            continue;
+
+        if (group.detail == detail)
+            return;   // called at 30 Hz; most ticks have nothing to say
+
+        group.detail = detail;
+
+        // The heading strip alone. Repainting the whole group would redraw
+        // every knob in it, which is the expensive half of the page.
+        if (! group.bounds.isEmpty())
+            repaint (group.bounds.withHeight (kHeadingHeight));
+
+        return;
+    }
 }
 
 void ControlPage::addKnob (const juce::String& parameterId, const juce::String& name,
@@ -3223,6 +3245,20 @@ void SonitusEditor::buildPages()
         "The rail is fixed rather than falling with drive, so this adds harmonics instead of "
         "acting as a volume control -- with a matching trim behind it, the level barely moves.");
 
+    filter->addKnob (ids::filterMorph, "Morph",
+        "**Slides the filter along lowpass -> bandpass -> highpass**, and it is the control the "
+        "Mode switch could never be: a choice cannot be modulated, so until now the filter's "
+        "character was the one thing in a voice no envelope could sweep. This is continuous, so "
+        "point an ADV envelope at it and the filter changes type in time.\n\n"
+        "**Bipolar, and centred on whatever Mode says.** Zero is that mode exactly -- bit for bit, "
+        "so every patch you have keeps its filter -- and from a lowpass, +50% is the bandpass and "
+        "+100% the highpass. From a highpass, -100% is the lowpass. Half way between two shapes is "
+        "genuinely between them: the three outputs are summed before the measurement, so it sweeps "
+        "rather than crossfading between two static filters.\n\n"
+        "**Notch is not on this axis and ignores it.** Notch is the sum of the two ends rather "
+        "than a point between them, and putting it on a slider between lowpass and highpass would "
+        "be inventing a shape nothing makes.");
+
     filter->addKnob (ids::filterTrack, "Key track",
         "How far the cutoff follows the played note. At 100% a note two octaves up gets a cutoff "
         "two octaves up, so the timbre is constant across the keyboard. At 0 the filter is a fixed "
@@ -3337,6 +3373,20 @@ void SonitusEditor::buildPages()
     // The global matrix first: it is the one the user reaches for -- the comb,
     // the formant and the tube live there -- and the first thing on a page
     // should be the thing the page is opened for.
+    mod->addHeading ("MACROS -- one knob into as many places as you point it", 4);
+
+    for (int macro = 0; macro < 4; ++macro)
+        mod->addKnob (ids::macro (macro), "Macro " + juce::String (macro + 1),
+            "**One knob wired to as many destinations as you assign it**, which is the one "
+            "control shape a matrix cannot give: a row has one source and one destination, so "
+            "\"open the filter *and* add drive *and* widen the unison\" costs three rows whose "
+            "depths then have to be kept in step by hand.\n\n"
+            "Assign Macro " + juce::String (macro + 1) + " in three rows -- in **either** matrix, "
+            "or both -- and this one control moves all three, each by its own depth and in its "
+            "own direction. It is the control a performance needs and a matrix has no row for.\n\n"
+            "At 0 it contributes exactly nothing wherever it is pointed, so an unassigned macro "
+            "is free and a patch saved before they existed is untouched.");
+
     mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note", 6);
 
     for (int slot = 0; slot < EngineParameters::kGlobalSlots; ++slot)
@@ -3461,6 +3511,17 @@ void SonitusEditor::buildPages()
         "Flips the combed signal's polarity, which turns the notches into peaks and the peaks "
         "into notches. On a feedforward comb it also halves the spacing -- the first notch moves "
         "from 1/(2T) to 1/T.");
+
+    mangle->addToggle (ids::combScale, "Scale lock",
+        "**Snaps the comb's resonance onto the loaded scale.** The comb key-tracks, but its "
+        "delay is a continuous frequency, so on a microtuned patch it resonates *between* the "
+        "scale's notes and fights the tuning it is meant to serve.\n\n"
+        "On 12-TET this is a small convenience. On Partch's 43-tone or a Persian dastgah it is "
+        "the difference between a comb that belongs to the tuning and one that does not -- and "
+        "it holds while Time, key tracking and any modulation move it, because the snap is "
+        "applied to where the comb actually ended up rather than to where the knob is.\n\n"
+        "Off is bit-exactly the comb that shipped: the ratio it applies is 1.0 and the comb "
+        "multiplies by it either way.");
 
     mangle->addKnob (ids::phaseFreq, "Phase centre",
         "Where the allpass cascade's notches are bunched. Only in Phase mode.");
@@ -3732,9 +3793,78 @@ void SonitusEditor::refreshDiceTab()
     tab.repaint();
 }
 
+/// The FM ratio the two oscillators are actually set to, as a line of text.
+///
+/// Not a parameter and not a control: a **readout**, computed from the six
+/// pitch knobs that were already there. Two oscillators tuned in octaves,
+/// semitones and cents is the right interface for detuning and the wrong one
+/// for FM, where the only question is the ratio and whether it is simple.
+/// 2:1 and 3:2 fuse into one instrument; 2.03:1 beats; 4.76:1 is a bell. The
+/// controls said none of that.
+juce::String SonitusEditor::ratioReadout() const
+{
+    const auto& state = sonitus_.getState();
+
+    const auto value = [&state] (const char* id)
+    {
+        const auto* raw = state.getRawParameterValue (id);
+
+        return raw != nullptr ? static_cast<double> (raw->load()) : 0.0;
+    };
+
+    // B against A, because A is the modulator and B the carrier -- the PM
+    // control is "phase modulation of B by A", so B:A is the pair an FM patch
+    // is thinking in.
+    const double a = dsp::ratioFromOffset (value (ids::octaveA), value (ids::semitonesA),
+                                           value (ids::centsA));
+    const double b = dsp::ratioFromOffset (value (ids::octaveB), value (ids::semitonesB),
+                                           value (ids::centsB));
+
+    if (! (a > 0.0))
+        return {};
+
+    const double ratio = b / a;
+    const auto match = dsp::nearestRatio (ratio);
+
+    if (match.numerator == 0)
+    {
+        // Nothing in range says it, which at four octaves and beyond is the
+        // truth rather than a failure. The decimal is what a player reads.
+        return "B:A " + juce::String (ratio, ratio < 10.0 ? 3 : 2) + "  far apart";
+    }
+
+    const auto named = juce::String (match.numerator) + ":" + juce::String (match.denominator);
+    const int cents = juce::roundToInt (match.centsError);
+
+    if (match.simple)
+    {
+        // Inside the tolerance the interval *is* that ratio; a couple of cents
+        // of detune is a fattening rather than a different interval, and is
+        // still worth printing because it is usually deliberate.
+        if (cents == 0)
+            return "B:A " + named + "  harmonic";
+
+        return "B:A " + named + (cents > 0 ? " +" : " ") + juce::String (cents)
+                 + "c  harmonic";
+    }
+
+    // Outside it, the ratio is a landmark rather than a description, and the
+    // distance is the whole point: 26 cents off 2:1 is what a beating FM pair
+    // sounds like and nothing on the panel said so before.
+    return "B:A " + juce::String (ratio, 3) + "   " + juce::String (std::abs (cents)) + "c "
+             + (cents > 0 ? "sharp of " : "flat of ") + named;
+}
+
 void SonitusEditor::timerCallback()
 {
     refreshDiceTab();
+
+    // The ratio readout, on the page that owns the pitch controls. Only while
+    // that page is on screen -- the string is cheap, but `setGroupDetail`
+    // repaints when it changes and a page nobody is looking at should not.
+    if (auto* osc = controlPage (kOscPage))
+        if (osc->isVisible())
+            osc->setGroupDetail ("SYNC AND PM", ratioReadout());
 
     auto& meters = sonitus_.getMeterValues();
 

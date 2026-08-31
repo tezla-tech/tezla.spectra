@@ -155,6 +155,14 @@ enum class GlobalSource
     advEnv2,
     advEnv3,
 
+    /// The four macros, appended, and the same four values the voice matrix
+    /// sees. A macro is the one control shape a matrix cannot express: one
+    /// knob into several destinations at once, each with its own depth.
+    macro1,
+    macro2,
+    macro3,
+    macro4,
+
     count
 };
 
@@ -311,6 +319,19 @@ struct EngineParameters
     double combSpread { 0.0 };
     double combMix { 0.0 };
     bool combInverted { false };
+
+    /// Snaps the comb's resonant pitch onto the loaded scale.
+    ///
+    /// The comb key-tracks, but its delay is a *continuous* frequency, so on a
+    /// microtuned patch -- which is half of why Sonitus exists -- it resonates
+    /// between the scale's notes and fights the tuning it is meant to serve.
+    /// Off by default, and off is bit-exact: the ratio it applies is exactly
+    /// 1.0 and the comb multiplies by it unconditionally.
+    bool combScaleLock { false };
+
+    /// The four macros, 0 .. 1, published into `GlobalSources` so both
+    /// matrices read the same number. Zero contributes nothing anywhere.
+    std::array<double, 4> macros {};
 
     double phaseFrequencyHz { 800.0 };
     int phaseStages { 4 };

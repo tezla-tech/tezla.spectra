@@ -42,7 +42,12 @@ constexpr int kSchemaV3 = 3;
 /// always were and their hints must not move.
 constexpr int kSchemaV4 = 4;
 
-constexpr int kStateSchemaVersion = kSchemaV4;
+/// The rest of phase 4: the filter morph, and whatever P4-4 and P4-5 append.
+/// A version of its own rather than reusing V4, so each hint keeps meaning one
+/// piece of work.
+constexpr int kSchemaV5 = 5;
+
+constexpr int kStateSchemaVersion = kSchemaV5;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -422,6 +427,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::filterVel, kSchemaV1 }, "Velocity to cutoff",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    // Bipolar and centred on the mode switch, so its default of 0 is the mode
+    // the project saved -- an absolute 0..1 "position" control would default
+    // to lowpass and silently convert every bandpass patch that exists.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::filterMorph, kSchemaV5 }, "Filter morph",
+        juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f, percentAttributes()));
 
     // ---- envelopes ----------------------------------------------------------
 
@@ -862,6 +874,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::combInvert, kSchemaV1 }, "Invert wet", false));
 
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::combScale, kSchemaV5 }, "Comb scale lock", false));
+
+    // ---- macros -------------------------------------------------------------
+    //
+    // Four knobs that are sources in **both** matrices. Default 0, which
+    // contributes exactly nothing wherever it is pointed -- so a project that
+    // never heard of them is untouched, and an unassigned macro costs one
+    // array copy per control chunk.
+    for (int macro = 0; macro < 4; ++macro)
+        layout.add (std::make_unique<Parameter> (
+            juce::ParameterID { ids::macro (macro), kSchemaV5 },
+            "Macro " + juce::String (macro + 1),
+            juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::phaseFreq, kSchemaV1 }, "Phase centre",
         skewedRange (20.0f, 18000.0f, 800.0f), 800.0f, hertzAttributes()));
@@ -1087,6 +1114,7 @@ void SonitusProcessor::pullParameters()
     v.cutoffHz = valueOf (state_, ids::cutoff);
     v.resonance = valueOf (state_, ids::resonance);
     v.filterDrive = valueOf (state_, ids::filterDrive);
+    v.filterMorph = valueOf (state_, ids::filterMorph);
     v.filterKeyTrack = valueOf (state_, ids::filterTrack);
     v.filterFm = valueOf (state_, ids::filterFm);
     v.filterVelocity = valueOf (state_, ids::filterVel);
@@ -1211,6 +1239,10 @@ void SonitusProcessor::pullParameters()
             // already spans the whole control.
             case ModDestination::feedbackA:
             case ModDestination::feedbackB:
+
+            // Bipolar already, and the voice clamps the sum to -1..+1, so full
+            // depth reaches either end of the axis from wherever the knob sits.
+            case ModDestination::filterMorph:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }
@@ -1272,6 +1304,10 @@ void SonitusProcessor::pullParameters()
     p.combSpread = valueOf (state_, ids::combSpread);
     p.combMix = valueOf (state_, ids::combMix);
     p.combInverted = valueOf (state_, ids::combInvert) > 0.5f;
+    p.combScaleLock = valueOf (state_, ids::combScale) > 0.5f;
+
+    for (int macro = 0; macro < 4; ++macro)
+        p.macros[static_cast<std::size_t> (macro)] = valueOf (state_, ids::macro (macro));
     p.phaseFrequencyHz = valueOf (state_, ids::phaseFreq);
     p.phaseStages = indexOf (state_, ids::phaseStages);
 
@@ -2708,6 +2744,140 @@ const std::vector<Preset>& presets()
                 { ids::polyphony, 4.0f },
                 { ids::tubeDrive, 5.0f },
                 { ids::output, -4.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The macro patch.** One knob, MACRO 1, wired to five things at
+            // once: it opens the filter, slides the filter's *type* from
+            // lowpass towards bandpass, adds operator feedback, widens the
+            // detune, and lengthens the comb. That is the shape a matrix has no
+            // row for -- five rows here, one control on the panel.
+            //
+            // Start it at zero and it is a dull, close reese. Take it to full
+            // and it is a screaming one. Nothing else needs to move.
+            "One knob reese -- MACRO 1 does all of it",
+            {
+                { ids::shapeA, 1.0f }, { ids::shapeB, 1.0f },
+                { ids::levelB, 1.0f }, { ids::centsB, -9.0f },
+                { ids::unisonA, 3.0f }, { ids::detuneA, 6.0f }, { ids::spreadA, 0.6f },
+                { ids::unisonB, 3.0f }, { ids::detuneB, 6.0f }, { ids::spreadB, 0.6f },
+
+                { ids::cutoff, 320.0f }, { ids::resonance, 0.35f },
+                { ids::filterDrive, 0.3f }, { ids::filterTrack, 0.4f },
+
+                { ids::combMode, 1.0f }, { ids::combTime, 9.0f },
+                { ids::combFeed, 0.78f }, { ids::combMix, 0.85f },
+                { ids::combDamp, 0.25f }, { ids::combSpread, 0.5f },
+
+                { ids::ampAttack, 0.004f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.35f },
+
+                // Five destinations, one source. The signs matter: the comb
+                // gets a negative depth because a longer delay is a lower
+                // resonance, which is the direction that reads as "bigger".
+                { ids::modSource (0), 13.0f },   // Macro 1
+                { ids::modDest (0), 1.0f },      // cutoff
+                { ids::modDepth (0), 0.85f },
+
+                { ids::modSource (1), 13.0f },
+                { ids::modDest (1), 22.0f },     // filter morph
+                { ids::modDepth (1), 0.4f },
+
+                { ids::modSource (2), 13.0f },
+                { ids::modDest (2), 19.0f },     // feedback A
+                { ids::modDepth (2), 0.35f },
+
+                { ids::modSource (3), 13.0f },
+                { ids::modDest (3), 7.0f },      // detune A
+                { ids::modDepth (3), 0.5f },
+
+                { ids::globalSource (0), 11.0f },   // Macro 1, global matrix
+                { ids::globalDest (0), 1.0f },      // comb time
+                { ids::globalDepth (0), -0.55f },
+
+                { ids::macro (0), 0.25f },
+
+                { ids::polyphony, 6.0f },
+                { ids::tubeDrive, 4.0f },
+
+                // -9 rather than -5, and measured rather than guessed: at -5
+                // the macro's own midpoint peaked at 1.341 of full scale, and
+                // an instrument has no limiter after it. A preset that clips
+                // at one setting of its own headline control is not finished.
+                { ids::output, -9.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The filter morph as the whole gesture.** One oscillator, one
+            // envelope, and the filter changing *type* under the note rather
+            // than merely opening: it starts as a lowpass thud and arrives as a
+            // bandpass whistle, which no cutoff sweep does.
+            //
+            // ADV 2 drives it, so the shape of the change is drawn rather than
+            // dialled -- fast up, hold, slow back down.
+            "Morphing pluck -- the filter changes type, not just cutoff",
+            {
+                { ids::shapeA, 1.0f }, { ids::morphA, 0.2f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 5.0f },
+                { ids::subLevel, 0.35f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 700.0f }, { ids::resonance, 0.5f },
+                { ids::filterTrack, 0.6f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampDecay, 0.5f },
+                { ids::ampSustain, 0.25f }, { ids::ampRelease, 0.4f },
+
+                { "adv2Enable", 1.0f },
+                { "adv2Points", 4.0f }, { "adv2Sustain", 3.0f },
+                { "adv2T1", 0.02f }, { "adv2L1", 1.0f },  { "adv2C1", 0.3f },
+                { "adv2T2", 0.18f }, { "adv2L2", 0.75f }, { "adv2C2", 0.4f },
+                { "adv2T3", 0.9f },  { "adv2L3", 0.2f },  { "adv2C3", -0.5f },
+                { "adv2T4", 1.2f },  { "adv2L4", 0.0f },  { "adv2C4", 0.3f },
+
+                { ids::modSource (0), 11.0f },   // ADV 2
+                { ids::modDest (0), 22.0f },     // filter morph
+                { ids::modDepth (0), 0.7f },
+
+                { ids::modSource (1), 11.0f },
+                { ids::modDest (1), 1.0f },      // cutoff, a little as well
+                { ids::modDepth (1), 0.4f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -4.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The scale-locked comb**, which is the one preset that needs a
+            // microtuning loaded to show what it does. On 12-TET it is a
+            // pleasant resonant drone; load Partch 43 or a Persian scale on the
+            // TUNING page and the comb stops sitting between the notes.
+            //
+            // Key tracking is high so the comb follows the played pitch, and
+            // the lock catches whatever the tracking and the Time knob leave
+            // between degrees.
+            "Scale drone -- the comb belongs to the tuning",
+            {
+                { ids::shapeA, 5.0f },           // dome
+                { ids::morphA, 0.4f },
+                { ids::levelB, 0.55f }, { ids::shapeB, 0.0f }, { ids::octaveB, 1.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 4.0f },
+
+                { ids::cutoff, 5200.0f }, { ids::resonance, 0.2f },
+
+                { ids::combMode, 1.0f },
+                { ids::combTime, 4.0f }, { ids::combTrack, 0.85f },
+                { ids::combFeed, 0.88f }, { ids::combMix, 0.75f },
+                { ids::combDamp, 0.15f }, { ids::combSpread, 0.35f },
+                { ids::combScale, 1.0f },
+
+                { ids::ampAttack, 0.25f }, { ids::ampSustain, 0.95f },
+                { ids::ampRelease, 1.6f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -6.0f },
             }
         },
 

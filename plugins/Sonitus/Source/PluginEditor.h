@@ -317,6 +317,15 @@ public:
     /// Leaves a hole, so the cell after it starts where it should.
     void addGap();
 
+    /// Replaces one group's explanation text, found by its heading.
+    ///
+    /// For a readout that has to be live -- the FM ratio the two oscillators
+    /// are actually running -- without giving the page a component whose only
+    /// job is to hold a string. Repaints just that heading, and only when the
+    /// text has actually changed: this is called thirty times a second and the
+    /// answer changes when a knob moves.
+    void setGroupDetail (const juce::String& headingName, const juce::String& detail);
+
     /// Greys a control out. Used for the ones a switch makes inert: a knob that
     /// moves and does nothing reads as a broken plugin rather than as a mode.
     void setControlEnabled (const juce::String& parameterId, bool enabled);
@@ -712,6 +721,10 @@ private:
     /// Repaints the DICEROLL tab in whatever colour the shared rainbow clock
     /// is at. Called every tick, which is what makes it glow.
     void refreshDiceTab();
+
+    /// The FM ratio line shown beside the SYNC AND PM heading. See the
+    /// implementation for why B:A rather than A:B.
+    [[nodiscard]] juce::String ratioReadout() const;
     void buildPages();
     void showPage (int index);
 

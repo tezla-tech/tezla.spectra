@@ -176,11 +176,11 @@ beyond this file and CLAUDE.md.
 |---|---|
 | P4-0 plan | done |
 | P4-1 operator feedback + cross PM | done |
-| P4-2 FM ratio readout | pending |
-| P4-3 filter Morph | pending |
-| P4-4 scale-locked comb | pending |
-| P4-5 four macros | pending |
-| P4-6 close-out | pending |
+| P4-2 FM ratio readout | done |
+| P4-3 filter Morph | done |
+| P4-4 scale-locked comb | done |
+| P4-5 four macros | done |
+| P4-6 close-out | done |
 
 **Work done on Sonitus outside this list**, so a resuming session is not
 surprised by it: the DICEROLL tab (a seventh page -- RANDOMIZE, roll history,
@@ -191,8 +191,20 @@ directly and neither belongs to a phase; both are finished and pushed. The
 point ceiling matters to anything here that touches the ADV parameters --
 points 1..8 carry schema V2 and 9..16 carry V4.
 
-**To resume**: read CLAUDE.md in full, then this file; take the first
-`pending` phase. The non-negotiables:
+**Phase 4 is complete.** Nothing here is pending. What a later phase would
+pick up, in the order it was cut rather than in any order of merit:
+
+- The macros are four knobs with no *page* of their own -- they sit on MOD.
+  Eight, or a macro that could be renamed, would want somewhere to live.
+- Morph covers lowpass -> bandpass -> highpass. Notch is deliberately off the
+  axis (see `SvfFilter::setMorph`), and a second axis for it is a design
+  question rather than a missing feature.
+- The scale lock snaps the comb. The formant's harmonic lock and the phaser's
+  centre are the two other continuous frequencies in the instrument that a
+  tuning could own.
+
+**To resume** (a later phase, or the parked work elsewhere): read CLAUDE.md in
+full, then this file. The non-negotiables:
 
 - One phase = one commit. Tests written and RUN in that commit; every
   mechanism seen red first or break-checked (edit -> red -> revert), with the

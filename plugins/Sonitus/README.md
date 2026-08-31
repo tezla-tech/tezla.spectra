@@ -767,6 +767,114 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+### Phase 4, measured
+
+`tezla-measure sonitus` grew a phase-4 section. The three tables it prints:
+
+**The filter morph trades low for high** — response three octaves either side of
+an 800 Hz corner, no resonance, through the running filter at 48 kHz:
+
+| morph | 100 Hz | 6400 Hz | |
+|---|---|---|---|
+| +0.00 | −0.13 dB | −37.29 dB | lowpass |
+| +0.25 | −6.09 dB | −24.66 dB | |
+| +0.50 | −18.20 dB | −18.70 dB | bandpass |
+| +0.75 | −24.16 dB | −6.08 dB | |
+| +1.00 | −36.27 dB | −0.12 dB | highpass |
+
+A crossfade between two static filters would move both ends together; a morph
+trades them, and the bandpass row sitting symmetrically at −18 dB on both sides
+is what that looks like.
+
+**The FM ratio readout**, for a set of B pitches with A at unity: `1:1`, `2:1`,
+`3:2 −2 c` (a tempered fifth — this is why 12-TET fifths beat), `3:2 +0 c` for a
+pure one, `2.030  26 c off 2:1` for a beating pair, `8:1` at four octaves, and
+`32.000  far apart` at five.
+
+**The scale lock's correction**, as cents, sweeping a comb across four decades:
+
+| tuning | degrees | worst | mean |
+|---|---|---|---|
+| 12-TET | 12 | 49.98 | 25.00 |
+| Just major (5-limit) | 7 | 101.95 | 44.94 |
+| Pythagorean | 12 | 56.83 | 25.29 |
+| Bohlen-Pierce | 13 | 73.12 | 36.56 |
+| Partch 43 | 43 | 19.42 | 7.40 |
+
+The finer the scale, the smaller the correction — which is the right shape, and
+it says the lock is a nudge rather than a retune everywhere but the seven-note
+just scale, where half a step really is 102 cents.
+
+**Four macros, sources in both matrices.** A macro is one knob wired to as many
+destinations as you point it at — the one control shape a matrix structurally
+cannot give, because a row has one source and one destination, so "open the
+filter *and* add drive *and* widen the unison" costs three rows whose depths
+then have to be kept in step by hand. Assign the same macro in three rows, in
+either matrix or both, and one control moves all three, each by its own depth
+and in its own direction.
+
+They are plain values rather than generators — nothing to tick — and at their
+default of 0 they contribute exactly nothing wherever they are pointed, so an
+unassigned macro is free and a patch saved before they existed is untouched
+(byte-proven through the plugin with all four at full).
+
+**The comb locks to the scale.** It already key-tracks, but its delay is a
+*continuous* frequency, so on a microtuned patch — which is half of why Sonitus
+exists — it resonates between the scale's notes and fights the tuning it is
+meant to serve. **Scale lock** on the MANGLE page snaps the comb's resonance
+onto the loaded tuning. On 12-TET it is a small convenience; on Partch's
+43-tone or a Persian dastgah it is the difference between a comb that belongs
+and one that does not.
+
+The snap is applied to where the comb *actually* ended up — key tracking,
+modulation and all — rather than to the knob, because the knob is wrong
+whenever anything is sweeping it. `Tuning::nearestScaleHz` does the arithmetic
+(nearest in cents, checked by brute force against every degree within six
+repeats); `Comb::setTuningRatio` applies it as one multiplication, so the comb
+stays framework-free and knows nothing about scales. Off is exactly 1.0 and
+therefore bit-exact, byte-proven through the plugin.
+
+**The filter morphs.** Mode is a *choice*, and a choice cannot be a modulation
+destination (a switch reconfigures rather than adjusts), so the filter's
+character was the one thing in a voice no envelope could sweep. **Morph** is a
+continuous, bipolar control along lowpass → bandpass → highpass, and it is a
+destination in both matrices.
+
+Bipolar and **centred on whatever Mode says**, which is the part that matters
+for compatibility: an absolute 0–1 "position" control would default to lowpass
+and silently convert every bandpass patch ever saved. Zero is the chosen mode
+bit for bit — verified against a filter that never had `setMorph` called at
+all, for all four modes, over a 20 Hz–20 kHz sweep. From a lowpass, +50% is
+exactly the bandpass and +100% exactly the highpass; from a highpass, −100% is
+exactly the lowpass.
+
+It genuinely sweeps rather than crossfading between two static filters: the
+three outputs are summed *before* the measurement, so the bandpass's 90° lead
+at the corner is part of the result. `magnitudeAt` does that arithmetic in
+complex form and agrees with the running filter to **0.0102 dB** across 90
+combinations of mode, morph and frequency.
+
+**Notch is not on the axis and ignores Morph.** It is the sum of the two ends
+rather than a point between them; putting it on a slider between lowpass and
+highpass would be inventing a shape nothing makes.
+
+**The OSC page states the FM ratio.** Two oscillators tuned in octaves,
+semitones and cents is the right interface for detuning and the wrong one for
+FM, where the only question is the ratio and whether it is simple: 2:1 and 3:2
+fuse into one instrument, 2.03:1 beats, 4.76:1 is a bell. The SYNC AND PM
+heading now says which you have — `B:A 3:2  harmonic`, or
+`B:A 2.030  26c sharp of 2:1` when it is not, or the plain decimal past four
+octaves where no small pair describes it. No new parameter; it is computed from
+the six pitch knobs that were already there.
+
+Nearness is measured in **cents**, not as a difference of ratios — a fixed
+ratio tolerance would be eight times as forgiving at 8:1 as at 1:1 and an ear
+is not. `shared/tezla-dsp/include/tezla/dsp/Ratio.hpp`, which is deliberately
+*not* `Tuning.hpp`'s `nearestFraction`: that one recovers p/q only when the
+double **is** p/q to within a few ulps and refuses tempered intervals, because
+a tuning table printing "442/295" for an equal-tempered degree would be a lie.
+Both are right; merging them would break one.
+
 **The envelopes have a ruler.** With Snap on, an ADV graph draws the grid it is
 snapping to: bar lines in the accent colour, beats and subdivisions behind them,
 numbered bars along a strip at the bottom, and the note each leg landed on
@@ -923,6 +1031,9 @@ do not hold back. Measured at A1 and A3: every one is finite, peaks between
 | **Neural collapse -- the loop, re-decided per step** | The *sequencer* drives the reverse PM depth, so the loop's character is re-decided sixteen times a bar -- and a loop through two nonlinearities does not respond linearly to its own depth, so each step lands somewhere unrelated to the last. Deterministic, so it prints. |
 | **Tearout larynx -- a throat that screams** | Formant filter locked to the note's own harmonics, kargyraa doubling the period the way a real kargyraa singer's false folds do, both operators feeding back hard enough to give the vowel something to filter. The vowel walks on a synced LFO. |
 | **Gravel storm -- noise with a pitch bolted on** | No oscillator plays the note at all: the pitch is the comb's resonance tracking the key, and the note number chooses a delay length. A feedback sine ring-modulates the noise for teeth. Brightness centroid **11.91**, the brightest thing the instrument makes. |
+| **One knob reese -- MACRO 1 does all of it** | One control wired to five destinations at once: cutoff, filter *morph*, operator feedback, detune, and comb time — in both matrices. At 0 a dull close reese; at full a screaming one. Measured across the knob: 360 → 601 → 1038 → 1561 → 1373 zero crossings per 0.5 s, peaks 0.376 to 0.851 |
+| **Morphing pluck -- the filter changes type, not just cutoff** | ADV 2 drawing the filter along lowpass → bandpass under the note, so it starts as a thud and arrives as a whistle. No cutoff sweep does that |
+| **Scale drone -- the comb belongs to the tuning** | The one preset that needs a microtuning loaded to show what it does. Comb scale lock on, key tracking high: on 12-TET a pleasant resonant drone, on Partch 43 or a Persian scale a comb that stops sitting between the notes |
 
 These lean on every bound in the instrument at once -- the feedback cap, the
 folder's ADAA, the comb's limit, the safety limiter -- and that is deliberate.

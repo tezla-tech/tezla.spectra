@@ -332,6 +332,26 @@ public:
     [[nodiscard]] double getMix() const noexcept { return mix_; }
 
     /// L/R delay offset, 0 to 1 of `kMaximumSpread`. This is what makes it wide.
+    /// Multiplies the delay after key tracking, for a caller that knows
+    /// something about pitch the comb does not.
+    ///
+    /// Sonitus's scale lock is the user: it works out where the comb currently
+    /// resonates, asks the loaded tuning for the nearest pitch *in the scale*,
+    /// and hands back the ratio between the two. The comb stays framework-free
+    /// and knows nothing about scales -- and it stays one multiplication,
+    /// which at exactly 1.0 (the default, and the off state) is bit-exact by
+    /// IEEE rather than by a branch.
+    ///
+    /// Applied after the key-track blend rather than to the manual delay,
+    /// which is the only place it can be: the blend is geometric, so undoing
+    /// it to pre-compensate would divide by zero at full tracking.
+    void setTuningRatio (double ratio) noexcept
+    {
+        tuningRatio_ = ratio > 0.0 ? ratio : 1.0;
+    }
+
+    [[nodiscard]] double getTuningRatio() const noexcept { return tuningRatio_; }
+
     void setSpread (double spread) noexcept { spread_ = std::clamp (spread, 0.0, 1.0); }
     [[nodiscard]] double getSpread() const noexcept { return spread_; }
 
@@ -356,7 +376,7 @@ public:
         const double manual = delaySeconds_ * sampleRate_;
 
         if (keyTrack_ <= 0.0 || noteHz_ <= 0.0)
-            return manual;
+            return manual * tuningRatio_;
 
         // Geometric blend: exp(lerp(log a, log b)) written as a power, which is
         // the same thing and one call cheaper.
@@ -364,7 +384,7 @@ public:
                                            kMinimumSeconds * sampleRate_,
                                            kMaximumTrackedSeconds * sampleRate_);
 
-        return manual * std::pow (tracked / manual, keyTrack_);
+        return manual * std::pow (tracked / manual, keyTrack_) * tuningRatio_;
     }
 
     /// Where the first notch of the feedforward comb currently sits, in Hz.
@@ -437,6 +457,7 @@ private:
     double damping_ { 0.0 };
     double mix_ { 0.0 };
     double spread_ { 0.0 };
+    double tuningRatio_ { 1.0 };
 
     bool wetInverted_ { false };
 
