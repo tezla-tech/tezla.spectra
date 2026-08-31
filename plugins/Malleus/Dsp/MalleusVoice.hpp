@@ -34,6 +34,7 @@
 #include <cstdint>
 
 #include <tezla/dsp/DcBlocker.hpp>
+#include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/LowpassGate.hpp>
 #include <tezla/dsp/ModalResonator.hpp>
 #include <tezla/dsp/ModeShapes.hpp>
@@ -68,7 +69,38 @@ struct VoiceSettings
     double tilt { 0.5 };                ///< 0..1: upper partials die faster
     double position { 0.29 };           ///< strike point comb
     Exciter exciter { Exciter::Mallet };
+
+    /// **The second exciter, and the blend between them.** A real strike is a
+    /// contact *and* a scrape: a mallet with a fingernail on it, a bow started
+    /// with a pluck. One choice cannot say that.
+    ///
+    /// `exciterBlend` is how much of slot B there is, and it is a **lerp on
+    /// the excitation amounts**, `a * (1 - t) + b * t`, which is exact at both
+    /// ends rather than only at zero. At 0 slot B is never touched at all and
+    /// the voice is bit for bit the one that shipped; at 1 slot A is not, and
+    /// the voice is exactly slot B played alone.
+    ///
+    /// Slot B's default is Pluck rather than Mallet so that turning the blend
+    /// up does something audible immediately. Neutrality lives in the blend,
+    /// not in the choice: at 0 what B is set to cannot be heard.
+    Exciter exciterB { Exciter::Pluck };
+    double exciterBlend { 0.0 };        ///< 0 = A alone, 1 = B alone
+
     double hardness { 0.5 };
+
+    /// **How much of Hardness comes from velocity instead of the knob.**
+    ///
+    /// On a real drum a soft hit is felt and a hard hit is stick, because the
+    /// same mallet compresses differently -- the contact gets *shorter* as it
+    /// gets harder, and a short contact is a bright one. `contactSeconds`
+    /// already models that; this is what connects it to the keyboard.
+    ///
+    /// `effective = hardness * (1 - amount) + velocity * amount`, so at 0 the
+    /// knob is the whole answer (exactly -- `h * 1.0 + 0.0` is `h`) and at 1
+    /// velocity is. Resolved once at note-on, so a roll's re-strikes stay the
+    /// hardness the note was struck with.
+    double hardnessVelocity { 0.0 };
+
     double noiseAmount { 0.0 };         ///< scrape mixed into the strike
     double dropSemitones { 0.0 };       ///< signed per-hit tension drop
     double dropSeconds { 0.08 };
@@ -188,34 +220,65 @@ public:
         rebuildModes (lockScale);
         applyDrop();
 
-        switch (settings_.exciter)
+        // Hardness resolved once, here, so a roll's re-strikes stay the
+        // hardness the note was struck with rather than drifting if the knob
+        // moves mid-ring. `h * 1.0 + v * 0.0` is exactly `h`, which is what
+        // makes the zero amount bit-exact rather than merely close.
+        const double amount = settings_.hardnessVelocity < 0.0 ? 0.0
+                            : settings_.hardnessVelocity > 1.0 ? 1.0
+                            : settings_.hardnessVelocity;
+
+        hardness_ = settings_.hardness * (1.0 - amount) + velocity_ * amount;
+
+        const double blend = settings_.exciterBlend < 0.0 ? 0.0
+                           : settings_.exciterBlend > 1.0 ? 1.0
+                           : settings_.exciterBlend;
+
+        // A lerp on the excitation amounts, `a * (1 - t) + b * t`, spelt as
+        // two weights. Exact at *both* ends -- the reason it is written this
+        // way rather than as `a + t * (b - a)`, which is only exact at zero --
+        // and a weight of exactly zero skips its slot entirely, so neither
+        // exciter can leave a trace at the end that belongs to the other.
+        weightA_ = 1.0 - blend;
+        weightB_ = blend;
+
+        bowing_ = false;
+        rolling_ = false;
+        contactWeight_ = 0.0;
+
+        applyExciter (settings_.exciter, weightA_);
+        applyExciter (settings_.exciterB, weightB_);
+
+        // One gate ping and one scrape burst for the whole contact, from the
+        // summed weight, because neither is linear in it -- see strikeModes.
+        // Two slots that both strike sum to exactly 1, so a single-exciter
+        // note is `velocity_ * 1.0`, which is `velocity_`.
+        if (! dsp::isExactlyZero (contactWeight_))
         {
-            case Exciter::Mallet:
-                strike (1.0);
-                break;
+            if (settings_.noiseAmount > 0.0)
+                noise_.trigger (hardness_,
+                                settings_.noiseAmount * velocity_ * contactWeight_);
 
-            case Exciter::Pluck:
-                pluck();
-                break;
+            gate_.ping (velocity_ * contactWeight_);
+        }
 
-            case Exciter::Roll:
-                roll_.trigger (settings_.rollStartSeconds, settings_.rollRatio,
-                               settings_.rollMinimumSeconds, settings_.rollHumanise);
-                strike (1.0);
-                break;
-
-            case Exciter::Bow:
-                bow_.reset();
-                bow_.resetClampExcess();
-                bow_.setPressure (settings_.bowPressure * velocity_);
-                bow_.setSpeed (settings_.bowSpeed);
-                gate_.setHold (velocity_);
-                break;
-
-            case Exciter::count:
-                break;
+        // The bow is continuous, so its hold has to be the *total* the two
+        // slots asked for rather than whichever ran last. Both slots being
+        // Bow is a legal setting and this is what makes it mean "bowed".
+        if (bowing_)
+        {
+            bow_.setPressure (settings_.bowPressure * velocity_ * bowWeight_);
+            bow_.setSpeed (settings_.bowSpeed);
+            gate_.setHold (velocity_ * bowWeight_);
         }
     }
+
+    /// The hardness this note was actually struck with, after the velocity
+    /// amount. Exposed because the law is the claim and a rendered note is a
+    /// blunt way to check it: the difference between the two spellings of a
+    /// lerp is one ulp, and one ulp of hardness is inaudible but is exactly
+    /// what the exactness rule is about.
+    [[nodiscard]] double getStrikeHardness() const noexcept { return hardness_; }
 
     void noteOff() noexcept
     {
@@ -244,8 +307,10 @@ public:
         if (! isActive())
             return;
 
-        const bool bowing = held_ && settings_.exciter == Exciter::Bow;
-        const bool rolling = held_ && settings_.exciter == Exciter::Roll;
+        // Either slot can be the bow or the roll, so these are the flags the
+        // note-on dispatch set rather than a second reading of the choice.
+        const bool bowing = held_ && bowing_;
+        const bool rolling = held_ && rolling_;
 
         for (int n = 0; n < count; ++n)
         {
@@ -253,8 +318,11 @@ public:
             {
                 const double restrike = roll_.next();
 
+                // Scaled by the roll slot's own weight, so a roll blended
+                // half-and-half with a pluck keeps rolling at half strength
+                // rather than at full.
                 if (restrike > 0.0)
-                    strike (restrike);
+                    strike (restrike * rollWeight_);
             }
 
             double input = noise_.next();
@@ -343,9 +411,78 @@ private:
             bank_.setMode (mode, base_[mode] * multiplier, t60_[mode], gain_[mode]);
     }
 
+    /// One slot's contribution, at `weight`. Zero does nothing at all, which
+    /// is what makes a blend at either end bit for bit the single exciter.
+    void applyExciter (Exciter which, double weight) noexcept
+    {
+        if (dsp::isExactlyZero (weight))
+            return;
+
+        switch (which)
+        {
+            case Exciter::Mallet:
+                strikeModes (weight);
+                contactWeight_ += weight;
+                break;
+
+            case Exciter::Pluck:
+                pluckModes (weight);
+                contactWeight_ += weight;
+                break;
+
+            case Exciter::Roll:
+                // The clock is started once however many slots roll, for the
+                // same reason the bow resets once: a second `trigger` restarts
+                // the bouncing-ball sequence and throws away the first slot's.
+                // The weight accumulates, so Roll in both slots rolls at full
+                // strength rather than at whatever the second slot asked for.
+                if (! rolling_)
+                {
+                    roll_.trigger (settings_.rollStartSeconds, settings_.rollRatio,
+                                   settings_.rollMinimumSeconds, settings_.rollHumanise);
+                    rollWeight_ = 0.0;
+                }
+
+                rolling_ = true;
+                rollWeight_ += weight;
+                strikeModes (weight);
+                contactWeight_ += weight;
+                break;
+
+            case Exciter::Bow:
+                // Reset once however many slots are bowing: a second reset
+                // would throw away the first slot's setup. The pressure is
+                // applied by the caller, from the summed weight.
+                if (! bowing_)
+                {
+                    bow_.reset();
+                    bow_.resetClampExcess();
+                    bowWeight_ = 0.0;
+                }
+
+                bowing_ = true;
+                bowWeight_ += weight;
+                break;
+
+            case Exciter::count:
+                break;
+        }
+    }
+
     /// One mallet contact at the CURRENT mode frequencies (mid-drop, a
-    /// re-strike excites the glided object, as a real hand would).
-    void strike (double amount) noexcept
+    /// re-strike excites the glided object, as a real hand would) -- the
+    /// modal excitation only.
+    ///
+    /// Split from the gate ping and the scrape burst because **neither of
+    /// those is linear in the amount**, so two slots each asking for half
+    /// cannot each call them. `LowpassGate::ping` takes the *maximum* of what
+    /// it is given, so two pings at 0.5 leave the gate at 0.5 where one at 1.0
+    /// leaves it at 1.0; `NoiseBurst::trigger` restarts the burst, so the
+    /// second slot's call discards the first's. Measured before the split: a
+    /// mallet blended half-and-half with a pluck rendered at RMS 0.0016
+    /// against 0.0038 and 0.0027 at its two ends -- a hole in the middle of
+    /// the control, from the gate rather than from anything acoustic.
+    void strikeModes (double amount) noexcept
     {
         double frequencies[dsp::ModalResonator::kMaxModes];
         double amounts[dsp::ModalResonator::kMaxModes];
@@ -355,34 +492,38 @@ private:
             frequencies[mode] = bank_.getModeFrequency (mode);
 
         malletWeights (amounts, frequencies, partials, settings_.position,
-                       settings_.hardness, velocity_ * amount);
+                       hardness_, velocity_ * amount);
 
         for (int mode = 0; mode < partials; ++mode)
             if (gain_[mode] > 0.0)
                 bank_.excite (mode, amounts[mode]);
 
+    }
+
+    /// The whole contact: modes, scrape and gate. What a re-strike is.
+    void strike (double amount) noexcept
+    {
+        strikeModes (amount);
+
         if (settings_.noiseAmount > 0.0)
-            noise_.trigger (settings_.hardness,
+            noise_.trigger (hardness_,
                             settings_.noiseAmount * velocity_ * amount);
 
         gate_.ping (velocity_ * amount);
     }
 
-    void pluck() noexcept
+    /// One pluck at `amount` of full strength -- the modal excitation only,
+    /// for the same reason `strikeModes` exists.
+    void pluckModes (double amount) noexcept
     {
         double amounts[dsp::ModalResonator::kMaxModes];
         const int partials = bank_.getModeCount();
 
-        pluckWeights (amounts, partials, settings_.position, velocity_);
+        pluckWeights (amounts, partials, settings_.position, velocity_ * amount);
 
         for (int mode = 0; mode < partials; ++mode)
             if (gain_[mode] > 0.0)
                 bank_.excite (mode, amounts[mode]);
-
-        if (settings_.noiseAmount > 0.0)
-            noise_.trigger (settings_.hardness, settings_.noiseAmount * velocity_);
-
-        gate_.ping (velocity_);
     }
 
     double sampleRate_ { 44100.0 };
@@ -396,6 +537,20 @@ private:
     dsp::DcBlocker<double> dcBlocker_;
 
     VoiceSettings settings_;
+
+    /// Resolved at note-on from Hardness and the velocity amount, so a roll's
+    /// re-strikes and the scrape burst all agree with the first contact.
+    double hardness_ { 0.5 };
+
+    /// The two slots' weights, and which continuous exciters are running.
+    double weightA_ { 1.0 };
+    double weightB_ { 0.0 };
+    double rollWeight_ { 0.0 };
+    double bowWeight_ { 0.0 };
+    double contactWeight_ { 0.0 };
+    bool bowing_ { false };
+    bool rolling_ { false };
+
     double base_[dsp::ModalResonator::kMaxModes] {};
     double t60_[dsp::ModalResonator::kMaxModes] {};
     double gain_[dsp::ModalResonator::kMaxModes] {};
