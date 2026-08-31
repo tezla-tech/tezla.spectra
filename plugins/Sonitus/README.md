@@ -751,13 +751,40 @@ slider beneath it, greyed when the shape ignores it. Morph A/B are modulation
 destinations.
 
 **ADV envelopes 1–3: multi-stage breakpoint envelopes.** Off by default and
-free when off — byte-proven — each unfolds on the ENV page into up to eight
+free when off — byte-proven — each unfolds on the ENV page into up to **sixteen**
 draggable points (x a segment's time, y its level, a segment's *middle* dragged
 vertically for its curve), a ringed sustain point, a loop region that cycles
 between the loop point and the sustain while the key is held, and Snap. The
 curve arithmetic is the AHDSRs' own, shared rather than copied. They appear as
 sources in both matrices as ADV 1–3; loop + snap is a tempo-locked rhythmic
 modulator.
+
+Sixteen is the number that makes a *pattern*: with Loop and Snap on, sixteen
+points is a bar of sixteenths, so one ADV envelope is a step sequencer with
+curves between the steps rather than a gate. The ceiling was eight until it was
+raised; points 9–16 are appended parameters, so a patch saved against the
+eight-point build reopens bit for bit unchanged (verified by rendering it
+before and after), and the handles' grab radius shrinks with density so a
+sixteen-point envelope's segment curves stay draggable.
+
+**The envelopes have a ruler.** With Snap on, an ADV graph draws the grid it is
+snapping to: bar lines in the accent colour, beats and subdivisions behind them,
+numbered bars along a strip at the bottom, and the note each leg landed on
+written over the leg — so a 1/8 triplet reads as `1/8 T` rather than as 167 ms.
+A point arriving exactly on a beat drops a stem to the ruler and one that does
+not, does not; that is the useful part, because Snap quantises each leg's
+*length*, so a chain of legal note values can still land between beats. With
+Loop on, the readout is the loop's length in bars. Snap off, the same strip is a
+plain seconds ruler — the graph has a time axis either way now, where before it
+had none.
+
+Two things came out of building it. The ADV graph was drawing the **raw**
+parameter times while the engine played snapped ones, so a synced envelope
+showed a shape the synthesiser was not running; it now draws through the same
+`dsp::snapSeconds` the audio thread calls. And the AHDSR graphs, whose axis is
+the knobs' own travel rather than seconds — deliberately, so a 5 ms attack is
+visible beside a 5 s release — cannot carry a ruler honestly, so their stage
+marks name the note instead: `A 1/16  D 1/8  S  R 1/4`.
 
 **Tempo sync, in two places.** Each LFO gains a Sync toggle and a note-division
 choice — synced with Retrig off and the transport running, the *phase* is
@@ -900,6 +927,61 @@ do not hold back. Measured at A1 and A3: every one is finite, peaks between
 These lean on every bound in the instrument at once -- the feedback cap, the
 folder's ADAA, the comb's limit, the safety limiter -- and that is deliberate.
 A preset that exercises every guard simultaneously is the honest stress test.
+
+### DICEROLL
+
+A seventh tab, rainbow, and **RANDOMIZE** on it: every unlocked control to a
+uniform random value across its whole range. Both extremes, no restraint. Most
+rolls are unusable — the point is finding the one in twenty that is not, faster
+than three hundred controls can be turned by hand.
+
+Around it, four things that make that usable rather than merely exciting:
+
+| | |
+|---|---|
+| **PREV / NEXT** | Steps through the last 32 rolls. The oldest entry is the patch you had before the first roll, so the dice can always be undone completely. Hand edits made between two rolls are recorded too, because what gets stored is the state going *into* a roll, whatever put it there. Rolling from a step back replaces everything ahead of it, as an undo history does. Session-only: it is a minute's worth of undo, not something worth writing 41 kB of snapshots into every project file for |
+| **LOCK**, per section | OSC · FILTER · ENV · MOD · MANGLE · PLAY · OUTPUT. A locked section is held still. **OUTPUT is locked by default**, and that is not caution for its own sake — `output` runs to +12 dB, an instrument has no limiter after it, and an unlocked roll on headphones is a hazard |
+| **SOLO**, per section | Rolls *only* that section, by locking the other six in one press. Pressing it again unlocks everything, so an exclusive target costs one click each way rather than six. A button rather than a modifier on the lock, deliberately: a modifier is a thing you have to know about |
+| **AMOUNT / SPREAD** | AMOUNT is how far each control moves — 100% is the full-strength roll, 15% is a variation on the sound you have. SPREAD is how *many* of them move at all. They do not sound alike: three hundred controls nudged 10% is a patch that drifts, five controls thrown anywhere is a patch that surprises you |
+
+The locks and the two strengths are **state, not parameters** — a lock that was
+a parameter would be randomised by the very button it restrains, and reset by
+every preset you load. They are saved with the project; the roll history is not.
+
+Which section a control belongs to is read from its parameter id
+(`plugins/Sonitus/Dsp/DiceSections.hpp`), and a test holds that function to the
+whole 324-id list: **every id lands in exactly one section and none in
+`unknown`**. An id that matched nothing would be treated as locked — the safe
+direction — and the sixteen-point ADV envelopes are why it is a function rather
+than a table: they would have needed 48 new rows in one, and forgetting them
+would have silently made an "envelopes locked" roll change the envelopes.
+
+Rolling is uniform on each parameter's **normalised** range, which is what "0
+to MAX" has to mean for a control whose own range is skewed: a skewed knob
+spends most of its travel at the fine end, so rolling in its own units would
+land in the coarse end nearly every time. Choices and switches come out
+uniform over their entries for the same reason.
+
+**Nothing is excluded, and there is nothing to exclude** — which is worth
+saying because it is a property rather than an oversight:
+
+- Sonitus is an instrument, so it has **no bypass parameter** to silence.
+- The **tuning is unreachable**. The scale and the concert pitch were
+  deliberately never made parameters, because a scale is a rig decision that
+  presets must not reset — so the same property that keeps presets off them
+  keeps the dice off them too. No list to maintain, nothing to forget.
+
+Two things to know before using it:
+
+- **There is no undo.** COPY the patch to the other A/B slot in the header
+  first if it is worth keeping.
+- **A roll can land the output at +12 dB with everything else at maximum.**
+  Sonitus has no safety limiter, so that reaches the DAW as sustained
+  full-scale clipping. Bounded at 0 dBFS by the interface, but sudden. Mind the
+  monitors.
+
+Later revisions are planned to randomise by a percentage of the current values,
+and to roll one section at a time — envelopes only, oscillators only.
 
 ### v0.1.0
 

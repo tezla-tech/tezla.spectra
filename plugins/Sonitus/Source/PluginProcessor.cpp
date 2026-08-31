@@ -9,6 +9,8 @@
 #include "PluginEditor.h"
 
 #include <algorithm>
+#include <iterator>
+#include <random>
 #include <cmath>
 #include <vector>
 
@@ -35,8 +37,19 @@ constexpr int kSchemaV2 = 2;
 /// one keeps the version it was born with.
 constexpr int kSchemaV3 = 3;
 
-constexpr int kStateSchemaVersion = kSchemaV3;
+/// The ADV envelopes' points 9..16, added when the ceiling went from eight
+/// points to sixteen. Points 1..8 keep V2 -- they are the same parameters they
+/// always were and their hints must not move.
+constexpr int kSchemaV4 = 4;
+
+constexpr int kStateSchemaVersion = kSchemaV4;
 constexpr auto kStateTypeName = "SonitusState";
+
+/// DICEROLL's locks and strengths, stored beside the tuning rather than as
+/// parameters. See `randomizeAllParameters`.
+constexpr auto kDiceLocksProperty = "diceLocks";
+constexpr auto kDiceAmountProperty = "diceAmount";
+constexpr auto kDiceSpreadProperty = "diceSpread";
 
 /// Where the tuning is stashed inside the state tree.
 ///
@@ -525,10 +538,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     // ---- ADV envelopes ------------------------------------------------------
     //
-    // Three multi-stage breakpoint envelopes, ninety parameters built by
-    // ids::adv rather than typed. Everything defaults to a disabled, sensible
-    // four-point ADSR-ish curve, so switching one on does something audible
-    // before any editing and a project that never heard of them is untouched.
+    // Three multi-stage breakpoint envelopes, 162 parameters built by ids::adv
+    // rather than typed. Everything defaults to a disabled, sensible four-point
+    // ADSR-ish curve, so switching one on does something audible before any
+    // editing and a project that never heard of them is untouched.
+    //
+    // **Points 1..8 carry V2 and points 9..16 carry V4**, which is the whole
+    // of the append-only discipline here: the first eight are the parameters
+    // that shipped and their ids and version hints are frozen; the eight that
+    // raised the ceiling to sixteen are new names at a new hint, so a project
+    // saved against the eight-point build finds every id it stored exactly
+    // where it left it.
+    //
+    // The one thing that genuinely changed under an existing id is the *range*
+    // of Points, Sustain and LoopStart, 8 -> 16. The stored value is the plain
+    // integer, not a normalised fraction (that is what APVTS keeps in its
+    // tree), so a saved project reopens on the same numbers -- verified by
+    // rendering an eight-point-era patch before and after and comparing bit
+    // for bit. A *recorded automation curve* on one of those three is the
+    // exception, because automation is normalised: a lane drawn to 4 points on
+    // the old range reads 6 or 7 on the new one. They are structural controls
+    // that nobody automates, and saying so is cheaper than a second parameter.
     for (int envelope = 0; envelope < 3; ++envelope)
     {
         const auto prefix = "ADV " + juce::String (envelope + 1);
@@ -558,28 +588,41 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
             juce::ParameterID { ids::adv (envelope, "LoopStart"), kSchemaV2 },
             prefix + " loop start", 1, dsp::MultiEnvelope::kMaxPoints, 1));
 
-        constexpr float defaultSeconds[] { 0.01f, 0.25f, 0.05f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f };
-        constexpr float defaultLevel[]   { 1.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f, 0.0f, 0.0f, 0.0f, 0.0f };
+        // Sixteen of each; points past the fourth are flat, level-0 legs, so
+        // lengthening an envelope adds time rather than a shape.
+        constexpr float defaultSeconds[] { 0.01f, 0.25f, 0.05f, 0.2f, 0.1f, 0.1f, 0.1f, 0.1f,
+                                           0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f, 0.1f };
+        constexpr float defaultLevel[]   { 1.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+
+        static_assert (static_cast<int> (std::size (defaultSeconds)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultLevel)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultTension)) == dsp::MultiEnvelope::kMaxPoints);
 
         for (int point = 0; point < dsp::MultiEnvelope::kMaxPoints; ++point)
         {
             const auto n = juce::String (point + 1);
 
+            // The first eight are frozen at V2; everything the sixteen-point
+            // ceiling added is V4. Never the other way round.
+            const int hint = point < 8 ? kSchemaV2 : kSchemaV4;
+
             layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::adv (envelope, "T" + n), kSchemaV2 },
+                juce::ParameterID { ids::adv (envelope, "T" + n), hint },
                 prefix + " time " + n,
                 skewedRange (0.0f, 20.0f, 0.12f),
                 defaultSeconds[point], timeAttributes()));
 
             layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::adv (envelope, "L" + n), kSchemaV2 },
+                juce::ParameterID { ids::adv (envelope, "L" + n), hint },
                 prefix + " level " + n,
                 juce::NormalisableRange<float> { 0.0f, 1.0f },
                 defaultLevel[point], percentAttributes()));
 
             layout.add (std::make_unique<Parameter> (
-                juce::ParameterID { ids::adv (envelope, "C" + n), kSchemaV2 },
+                juce::ParameterID { ids::adv (envelope, "C" + n), hint },
                 prefix + " tension " + n,
                 juce::NormalisableRange<float> { -1.0f, 1.0f },
                 defaultTension[point], percentAttributes()));
@@ -1308,8 +1351,18 @@ void SonitusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
             const auto ppq = position->getPpqPosition();
             const auto bpm = position->getBpm();
 
+            // The bar length as well as the tempo, so the envelope rulers draw
+            // the player's bar rather than assuming four. A 7/8 session gets a
+            // 7/8 ruler; the beat is still the denominator's note, which is
+            // what "beats per bar" has to mean for a grid.
+            int beatsPerBar = 4;
+
+            if (const auto signature = position->getTimeSignature())
+                if (signature->numerator > 0)
+                    beatsPerBar = signature->numerator;
+
             engine_.setTransport (ppq.orFallback (-1.0), bpm.orFallback (120.0),
-                                  position->getIsPlaying());
+                                  position->getIsPlaying(), beatsPerBar);
         }
     }
 
@@ -2725,6 +2778,16 @@ void SonitusProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty (kConcertPitchProperty, concertPitchHz_, nullptr);
     state.setProperty (ui::stateIds::tooltipsEnabled, tooltipsEnabled_, nullptr);
 
+    // DICEROLL's locks and strengths, which are state and never parameters --
+    // a lock that was a parameter would be randomised by the button it
+    // restrains, and reset by every preset the player loads. The roll history
+    // is deliberately **not** saved: it is a session's worth of undo, and
+    // writing 41 kB of snapshots into every project file to preserve it would
+    // be paying for the wrong thing.
+    state.setProperty (kDiceLocksProperty, static_cast<int> (diceLocks_), nullptr);
+    state.setProperty (kDiceAmountProperty, diceAmount_, nullptr);
+    state.setProperty (kDiceSpreadProperty, diceSpread_, nullptr);
+
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -2745,6 +2808,22 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
     const juce::String name = tree.getProperty (kScaleNameProperty, "").toString();
     const juce::String text = tree.getProperty (kScaleTextProperty, "").toString();
     tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
+
+    // A project saved before these existed gets the defaults, OUTPUT locked
+    // included -- which is the right answer rather than an accident: an old
+    // project reopening with the dice able to reach the master level would be
+    // a surprise in the dangerous direction.
+    const int storedLocks = tree.getProperty (kDiceLocksProperty,
+                                              static_cast<int> (diceLocks_));
+    diceLocks_ = static_cast<unsigned int> (std::max (0, storedLocks));
+
+    setDiceAmount (static_cast<float> (double (tree.getProperty (kDiceAmountProperty, 1.0))));
+    setDiceSpread (static_cast<float> (double (tree.getProperty (kDiceSpreadProperty, 1.0))));
+
+    // The history describes a parameter set that the state just replaced, so
+    // it cannot survive the load.
+    diceHistory_.clear();
+    diceCursor_ = -1;
 
     const juce::String map = tree.getProperty (kKeyboardMapProperty, "").toString();
 
@@ -2770,6 +2849,159 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
 
     if (map.isNotEmpty())
         loadKeyboardMapText (map);
+}
+
+std::vector<float> SonitusProcessor::captureParameterSnapshot() const
+{
+    std::vector<float> snapshot;
+    snapshot.reserve (static_cast<std::size_t> (getParameters().size()));
+
+    for (const auto* parameter : getParameters())
+        snapshot.push_back (parameter->getValue());
+
+    return snapshot;
+}
+
+void SonitusProcessor::applyParameterSnapshot (const std::vector<float>& snapshot)
+{
+    const auto& parameters = getParameters();
+
+    // A snapshot from a build with fewer parameters is applied as far as it
+    // goes rather than refused: the ones it does not mention keep what they
+    // have, which is the same rule a project saved before a parameter existed
+    // already follows.
+    const auto count = std::min (snapshot.size(), static_cast<std::size_t> (parameters.size()));
+
+    for (std::size_t i = 0; i < count; ++i)
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameters[static_cast<int> (i)]))
+            ranged->setValueNotifyingHost (snapshot[i]);
+}
+
+void SonitusProcessor::pushDiceHistory (std::vector<float> snapshot)
+{
+    // Anything ahead of the cursor is a future that this roll replaces --
+    // ordinary undo semantics, and the alternative (a tree) is not what a
+    // dice wants.
+    if (diceCursor_ >= 0 && diceCursor_ + 1 < static_cast<int> (diceHistory_.size()))
+        diceHistory_.erase (diceHistory_.begin() + diceCursor_ + 1, diceHistory_.end());
+
+    diceHistory_.push_back (std::move (snapshot));
+
+    while (diceHistory_.size() > kDiceHistoryLimit)
+        diceHistory_.erase (diceHistory_.begin());
+
+    diceCursor_ = static_cast<int> (diceHistory_.size()) - 1;
+}
+
+bool SonitusProcessor::stepDiceHistory (int direction)
+{
+    const int target = diceCursor_ + (direction < 0 ? -1 : 1);
+
+    if (diceCursor_ < 0 || target < 0 || target >= static_cast<int> (diceHistory_.size()))
+        return false;
+
+    diceCursor_ = target;
+    applyParameterSnapshot (diceHistory_[static_cast<std::size_t> (target)]);
+
+    return true;
+}
+
+void SonitusProcessor::setDiceSectionLocked (DiceSection section, bool locked) noexcept
+{
+    const auto bit = 1u << static_cast<unsigned int> (section);
+
+    diceLocks_ = locked ? (diceLocks_ | bit) : (diceLocks_ & ~bit);
+}
+
+void SonitusProcessor::soloDiceSection (DiceSection section) noexcept
+{
+    // Every section but this one. The mask is built from the seven real
+    // sections; `unknown` is not one of them and is refused separately by the
+    // roller, so it cannot be soloed into relevance.
+    unsigned int everythingElse = 0u;
+
+    for (int i = 0; i < numDiceSections; ++i)
+        if (i != static_cast<int> (section))
+            everythingElse |= 1u << static_cast<unsigned int> (i);
+
+    // Pressing solo on the section that is already alone clears every lock, so
+    // the same button is the way back out. Without this the player has to
+    // remember which one they soloed to undo it, which is exactly the
+    // "lock all the others over and over" tedium the button exists to remove.
+    diceLocks_ = (diceLocks_ == everythingElse) ? 0u : everythingElse;
+}
+
+void SonitusProcessor::randomizeAllParameters()
+{
+    // A fresh seed per roll rather than one member generator: two rolls a
+    // second apart must not be able to produce the same patch, and a member
+    // seeded once at construction would make every session's first roll the
+    // same one.
+    std::mt19937 generator { std::random_device {} () };
+    std::uniform_real_distribution<float> uniform { 0.0f, 1.0f };
+
+    // **The state before the roll goes into the history first**, and only if
+    // it is not already the entry the cursor is sitting on -- so hand edits
+    // made between two rolls are recorded rather than lost, and pressing the
+    // button twice does not fill the ring with duplicates.
+    auto before = captureParameterSnapshot();
+
+    if (diceCursor_ < 0 || diceHistory_[static_cast<std::size_t> (diceCursor_)] != before)
+        pushDiceHistory (before);
+
+    const float amount = diceAmount_;
+    const float spread = diceSpread_;
+
+    lastRollCount_ = 0;
+
+    // Every parameter, minus the sections the player locked -- and there is
+    // still no exclusion list of ids anywhere. Sonitus is an instrument, so it
+    // has no bypass parameter to silence (the header leaves that button out;
+    // muting the track is what a player reaches for). And the tuning was
+    // deliberately never made a parameter, because a scale is a rig decision
+    // presets must not reset -- so the scale and the concert pitch are
+    // unreachable from here by construction rather than by a list somebody has
+    // to remember to maintain.
+    for (auto* parameter : getParameters())
+    {
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter);
+
+        if (ranged == nullptr)
+            continue;
+
+        const auto section = diceSectionFor (ranged->paramID.toStdString());
+
+        // `unknown` is treated as locked. A parameter added and not yet
+        // classified is left alone rather than rolled at random, which is the
+        // safe direction for a mistake nobody has noticed yet.
+        if (section == DiceSection::unknown || isDiceSectionLocked (section))
+            continue;
+
+        // SPREAD is how many, not how far: a roll that changes six things is a
+        // different creature from one that changes three hundred, however hard
+        // each one is pushed.
+        if (spread < 1.0f && uniform (generator) >= spread)
+            continue;
+
+        // Uniform on the NORMALISED range, which is what "0 to MAX" means for
+        // a control whose own range is skewed: a skewed knob spends more of
+        // its travel at the fine end, and rolling in its own units would land
+        // in the coarse end nearly every time. Choices and switches come out
+        // uniform over their entries for the same reason.
+        const float target = uniform (generator);
+
+        // AMOUNT drags each control towards that target rather than capping how
+        // far it may move -- see `diceValueFor`, which is where the rule and
+        // the reason for its shape live, and which the tests can reach.
+        const float value = diceValueFor (ranged->getValue(), target, amount);
+
+        ranged->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value));
+        ++lastRollCount_;
+    }
+
+    // And the result, so PREV steps back to the patch this roll replaced and
+    // NEXT returns to the roll.
+    pushDiceHistory (captureParameterSnapshot());
 }
 
 juce::AudioProcessorEditor* SonitusProcessor::createEditor()

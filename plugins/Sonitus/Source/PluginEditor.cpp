@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Divisions.hpp>
 #include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/Scales.hpp>
 
@@ -131,7 +132,11 @@ const PageAccent kPageAccents[] {
     { juce::Colour { 0xff86a7fc }, juce::Colour { 0xffc7d7fe } },   // ENV     blue    H 267
     { juce::Colour { 0xfffc854d }, juce::Colour { 0xfffecbb5 } },   // MOD     orange  H  45
     { juce::Colour { 0xfffc75b7 }, juce::Colour { 0xfffec5dc } },   // MANGLE  pink    H 352
-    { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } }    // TUNING  lime    H 130
+    { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } },   // TUNING  lime    H 130
+
+    // DICEROLL has no fixed accent -- the tab cycles the whole wheel, and
+    // this is only what a still frame falls back to.
+    { juce::Colour { 0xffd8d5cf }, juce::Colour { 0xffffffff } }
 };
 
 /// The base palette with one page's accent swapped in.
@@ -332,7 +337,8 @@ void MetalBackground::render (int width, int height, float highlightAt)
         for (int y = 0; y < height; y += step)
         {
             const double noise = hashed (static_cast<std::uint64_t> (y)
-                                           + static_cast<std::uint64_t> (pass) * 7919ull);
+                                           + static_cast<std::uint64_t> (pass)
+                                               * std::uint64_t { 7919 });
 
             // **Always subtractive.** The first version was centred on zero, so
             // the grain lightened as often as it darkened and the average
@@ -634,6 +640,461 @@ void ToggleCell::resized()
 // ControlPage
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// DICEROLL
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// One shared clock for every rainbow on the panel, so the tab and the button
+/// are the same colour at the same instant rather than two drifting cycles.
+/// Six seconds a lap: alive without strobing.
+[[nodiscard]] float rainbowPhase()
+{
+    return static_cast<float> (juce::Time::getMillisecondCounter() % 6000) / 6000.0f;
+}
+} // namespace
+
+void DicePage::RainbowButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+
+    if (down)
+        bounds = bounds.reduced (1.5f);
+
+    const float phase = rainbowPhase();
+    const float saturation = down ? 1.0f : highlighted ? 0.95f : 0.85f;
+
+    // A sweep across the whole wheel rather than one hue: the tab is a single
+    // colour because it is small, and this is the opposite -- it is the only
+    // control on the page and it should look like all six tabs at once.
+    juce::ColourGradient sweep { juce::Colour::fromHSV (phase, saturation, 1.0f, 1.0f),
+                                 bounds.getTopLeft(),
+                                 juce::Colour::fromHSV (std::fmod (phase + 0.85f, 1.0f),
+                                                        saturation, 1.0f, 1.0f),
+                                 bounds.getTopRight(), false };
+
+    for (int stop = 1; stop < 6; ++stop)
+    {
+        const auto along = static_cast<double> (stop) / 6.0;
+
+        sweep.addColour (along,
+                         juce::Colour::fromHSV (
+                             std::fmod (phase + static_cast<float> (along) * 0.85f, 1.0f),
+                             saturation, 1.0f, 1.0f));
+    }
+
+    g.setGradientFill (sweep);
+    g.fillRoundedRectangle (bounds, 10.0f);
+
+    // The text in black, because every hue behind it is at full value and
+    // white would vanish over the yellows.
+    g.setColour (juce::Colours::black.withAlpha (down ? 1.0f : 0.85f));
+    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.drawText (getButtonText(), bounds, juce::Justification::centred);
+}
+
+float DicePage::hueNow()
+{
+    return rainbowPhase();
+}
+
+void DicePage::addSectionRow (DiceSection section)
+{
+    auto& row = sections_[static_cast<std::size_t> (section)];
+
+    row.section = section;
+
+    const juce::String name = diceSectionName (section);
+
+    row.lock = std::make_unique<juce::TextButton> (name);
+    row.lock->setComponentID ("lock-" + name.toLowerCase());
+    row.lock->setClickingTogglesState (false);
+    row.lock->setTooltip (
+        "Holds " + name + " still while the dice rolls everything else.\n\n"
+        "Locks are saved with the project and are **not** parameters -- a lock "
+        "that was a parameter would be randomised by the button it restrains, "
+        "and reset by every preset you load.");
+
+    row.lock->onClick = [this, section]
+    {
+        processor_.setDiceSectionLocked (section, ! processor_.isDiceSectionLocked (section));
+        refreshControls();
+    };
+
+    row.solo = std::make_unique<juce::TextButton> ("SOLO");
+    row.solo->setComponentID ("solo-" + name.toLowerCase());
+    row.solo->setClickingTogglesState (false);
+    row.solo->setTooltip (
+        "Rolls ONLY " + name + ", by locking every other section in one press. "
+        "Press it again to unlock everything -- the same button is the way back "
+        "out, so an exclusive target costs one click each way rather than six.");
+
+    row.solo->onClick = [this, section]
+    {
+        processor_.soloDiceSection (section);
+        refreshControls();
+    };
+
+    addAndMakeVisible (*row.lock);
+    addAndMakeVisible (*row.solo);
+}
+
+DicePage::DicePage (SonitusProcessor& processorToUse, ui::Palette palette)
+    : processor_ (processorToUse), palette_ (palette)
+{
+    roll_.setComponentID ("randomize");
+    roll_.setTooltip (
+        "Rolls every unlocked control. At AMOUNT 100% each one lands anywhere "
+        "in its range, both extremes, no restraint -- most rolls are unusable "
+        "and the point is finding the one in twenty that is not, faster than "
+        "three hundred controls can be turned by hand.\n\n"
+        "PREV steps back through the last 32 rolls, so nothing is lost. LOCK "
+        "holds a section still; SOLO rolls only that one. AMOUNT is how far "
+        "each control moves, SPREAD is how many of them move at all.\n\n"
+        "It cannot touch the tuning: the scale and concert pitch were never "
+        "parameters, so nothing here reaches them. OUTPUT is locked by default "
+        "because a roll can otherwise land the master at +12 dB with "
+        "everything else at maximum, and an instrument has no limiter after "
+        "it. Mind the monitors if you unlock it.");
+
+    roll_.onClick = [this]
+    {
+        processor_.randomizeAllParameters();
+        ++rolls_;
+        refreshControls();
+    };
+
+    addAndMakeVisible (roll_);
+
+    caption_.setText ("Every unlocked control. PREV is your way back.",
+                      juce::dontSendNotification);
+    caption_.setJustificationType (juce::Justification::centred);
+    caption_.setColour (juce::Label::textColourId, palette_.dimText);
+    caption_.setFont (juce::FontOptions (13.0f));
+    addAndMakeVisible (caption_);
+
+    count_.setText ("no rolls yet", juce::dontSendNotification);
+    count_.setJustificationType (juce::Justification::centred);
+    count_.setColour (juce::Label::textColourId, palette_.dimText);
+    count_.setFont (juce::FontOptions (11.0f));
+    addAndMakeVisible (count_);
+
+    for (int i = 0; i < numDiceSections; ++i)
+        addSectionRow (static_cast<DiceSection> (i));
+
+    // ---- history -----------------------------------------------------------
+    previous_.setComponentID ("dice-prev");
+    previous_.setTooltip (
+        "Back one step through the roll history -- up to 32 of them. The patch "
+        "you had before the first roll is the oldest entry, so the dice can "
+        "always be undone completely.\n\n"
+        "Edits you make by hand between two rolls are recorded too: the state "
+        "going into a roll is what gets stored, whatever put it there. The "
+        "history is a session's worth of undo and is not saved with the "
+        "project.");
+
+    next_.setComponentID ("dice-next");
+    next_.setTooltip ("Forward one step, if you have stepped back. Rolling again from a "
+                      "step back replaces everything ahead of it, as an undo history does.");
+
+    previous_.onClick = [this] { processor_.stepDiceHistory (-1); refreshControls(); };
+    next_.onClick = [this] { processor_.stepDiceHistory (1); refreshControls(); };
+
+    addAndMakeVisible (previous_);
+    addAndMakeVisible (next_);
+
+    history_.setText ("--", juce::dontSendNotification);
+    history_.setJustificationType (juce::Justification::centred);
+    history_.setColour (juce::Label::textColourId, palette_.dimText);
+    history_.setFont (juce::FontOptions (11.0f));
+    addAndMakeVisible (history_);
+
+    // ---- strengths ---------------------------------------------------------
+    const auto slider = [this] (juce::Slider& control, juce::Label& label,
+                                const juce::String& name, const juce::String& tooltip,
+                                double initial)
+    {
+        control.setRange (0.0, 100.0, 1.0);
+        control.setValue (initial, juce::dontSendNotification);
+        control.setTextValueSuffix (" %");
+        control.setComponentID (name.toLowerCase());
+        control.setTooltip (tooltip);
+        control.setColour (juce::Slider::trackColourId, palette_.accent.withAlpha (0.55f));
+        control.setColour (juce::Slider::backgroundColourId, palette_.panel.darker (0.3f));
+        control.setColour (juce::Slider::thumbColourId, palette_.accentBright);
+        control.setColour (juce::Slider::textBoxTextColourId, palette_.text);
+        control.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible (control);
+
+        label.setText (name, juce::dontSendNotification);
+        label.setJustificationType (juce::Justification::centredRight);
+        label.setColour (juce::Label::textColourId, palette_.dimText);
+        label.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        addAndMakeVisible (label);
+    };
+
+    slider (amount_, amountLabel_, "AMOUNT",
+            "How far each control is dragged towards its random target.\n\n"
+            "100% is the full-strength roll: anywhere in the range, both extremes. "
+            "Lower values keep the patch you have and nudge it -- 15% is a variation "
+            "on a sound, 50% is a different sound with the same bones. It is not a "
+            "cap on the distance but a fraction of the way there, so nothing piles "
+            "up at the ends of its range.",
+            static_cast<double> (processor_.getDiceAmount()) * 100.0);
+
+    slider (spread_, spreadLabel_, "SPREAD",
+            "How many of the unlocked controls a roll touches at all.\n\n"
+            "AMOUNT changes how far, this changes how many, and they do not sound "
+            "alike: three hundred controls nudged 10% is a patch that drifts, while "
+            "five controls thrown anywhere is a patch that surprises you. Low spread "
+            "with high amount is the interesting corner.",
+            static_cast<double> (processor_.getDiceSpread()) * 100.0);
+
+    amount_.onValueChange = [this]
+    {
+        processor_.setDiceAmount (static_cast<float> (amount_.getValue() / 100.0));
+    };
+
+    spread_.onValueChange = [this]
+    {
+        processor_.setDiceSpread (static_cast<float> (spread_.getValue() / 100.0));
+    };
+
+    refreshControls();
+
+    startTimerHz (30);
+}
+
+DicePage::~DicePage()
+{
+    stopTimer();
+}
+
+void DicePage::refreshControls()
+{
+    for (auto& row : sections_)
+    {
+        if (row.lock == nullptr)
+            continue;
+
+        const bool locked = processor_.isDiceSectionLocked (row.section);
+
+        // Locked reads as *held*, so it is coloured rather than dimmed: an
+        // unlit button on a panel of unlit buttons says nothing, and the state
+        // worth seeing at a glance is which sections are out of the game.
+        // Amber for held, which is this suite's colour for "this stage is
+        // doing something" -- Capstone's gain reduction and Syrinx's wear it
+        // too. The DICEROLL page's own accent is a near-white, and a locked
+        // button in it read as a blank plate rather than as a state.
+        row.lock->setColour (juce::TextButton::buttonColourId,
+                             locked ? juce::Colour { 0xffe0a33c }
+                                    : palette_.panel.darker (0.25f));
+        row.lock->setColour (juce::TextButton::textColourOffId,
+                             locked ? palette_.background : palette_.dimText);
+
+        // Solo lights when this section is the only one left unlocked, which
+        // is a fact about the whole mask rather than about this button -- so
+        // it is recomputed here rather than remembered.
+        unsigned int everythingElse = 0u;
+
+        for (int i = 0; i < numDiceSections; ++i)
+            if (i != static_cast<int> (row.section))
+                everythingElse |= 1u << static_cast<unsigned int> (i);
+
+        const bool soloed = processor_.getDiceLocks() == everythingElse;
+
+        row.solo->setColour (juce::TextButton::buttonColourId,
+                             soloed ? palette_.secondary.withAlpha (0.85f)
+                                    : palette_.panel.darker (0.25f));
+        row.solo->setColour (juce::TextButton::textColourOffId,
+                             soloed ? palette_.background : palette_.dimText);
+
+        row.lock->repaint();
+        row.solo->repaint();
+    }
+
+    shownLocks_ = processor_.getDiceLocks();
+
+    previous_.setEnabled (processor_.canStepDiceHistoryBack());
+    next_.setEnabled (processor_.canStepDiceHistoryForward());
+
+    const int length = processor_.getDiceHistoryLength();
+
+    history_.setText (length == 0
+                        ? juce::String ("no history yet")
+                        : juce::String (processor_.getDiceHistoryPosition()) + " / "
+                            + juce::String (length),
+                      juce::dontSendNotification);
+
+    if (rolls_ == 0)
+    {
+        count_.setText ("no rolls yet", juce::dontSendNotification);
+        return;
+    }
+
+    // What the last roll actually moved, which is the number that tells you
+    // whether the locks and the spread did what you meant them to.
+    count_.setText (juce::String (rolls_) + (rolls_ == 1 ? " roll" : " rolls") + "  --  "
+                      + juce::String (processor_.getLastRollCount()) + " of "
+                      + juce::String (processor_.getParameters().size()) + " controls moved",
+                    juce::dontSendNotification);
+}
+
+void DicePage::timerCallback()
+{
+    // The button and its halo, not the whole page: repainting the brushed
+    // metal thirty times a second to animate one control would be the most
+    // expensive thing on the panel.
+    repaint (roll_.getBounds().expanded (36));
+
+    // The locks and strengths are state rather than parameters, so nothing
+    // notifies this page when a project load or an A/B swap changes them --
+    // there is no attachment to do it. Comparing four numbers on the tick that
+    // is already happening is cheaper than an extra listener, and without it a
+    // panel left open across a project load shows the previous project's locks
+    // while rolling by the new project's.
+    const double amount = static_cast<double> (processor_.getDiceAmount()) * 100.0;
+    const double spread = static_cast<double> (processor_.getDiceSpread()) * 100.0;
+
+    bool stale = std::abs (amount_.getValue() - amount) > 0.5
+              || std::abs (spread_.getValue() - spread) > 0.5;
+
+    if (stale)
+    {
+        amount_.setValue (amount, juce::dontSendNotification);
+        spread_.setValue (spread, juce::dontSendNotification);
+    }
+
+    if (processor_.getDiceLocks() != shownLocks_)
+    {
+        shownLocks_ = processor_.getDiceLocks();
+        stale = true;
+    }
+
+    if (stale)
+        refreshControls();
+}
+
+void DicePage::paint (juce::Graphics& g)
+{
+    const auto bounds = roll_.getBounds().toFloat();
+
+    if (bounds.isEmpty())
+        return;
+
+    const float phase = rainbowPhase();
+
+    // The halo: rings stepping outward, each a different point on the wheel,
+    // so it is itself a spectrum rather than one colour blurred.
+    for (int ring = 11; ring >= 1; --ring)
+    {
+        const float grow = static_cast<float> (ring) * 3.0f;
+        const float hue = std::fmod (phase + static_cast<float> (ring) * 0.045f, 1.0f);
+        const float alpha = 0.20f * (1.0f - static_cast<float> (ring) / 12.0f);
+
+        g.setColour (juce::Colour::fromHSV (hue, 0.9f, 1.0f, alpha));
+        g.drawRoundedRectangle (bounds.expanded (grow), 10.0f + grow, 2.2f);
+    }
+
+    // The face is the button's own business -- see RainbowButton::paintButton.
+    // This is only what glows around it.
+
+    // Three group headings, so the page reads as three answers to three
+    // questions -- where have I been, how hard, and on what -- rather than as
+    // eleven controls under a button.
+    static const char* names[3] { "HISTORY", "STRENGTH", "WHAT ROLLS" };
+
+    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+
+    for (int i = 0; i < 3; ++i)
+    {
+        if (headings_[static_cast<std::size_t> (i)].isEmpty())
+            continue;
+
+        const auto row = headings_[static_cast<std::size_t> (i)].toFloat();
+
+        g.setColour (palette_.dimText.withAlpha (0.75f));
+        g.drawText (names[i], row, juce::Justification::centredLeft, false);
+
+        // A rule from the end of the word to the right edge, the same trim the
+        // control pages' group headings wear.
+        const float textWidth = juce::GlyphArrangement::getStringWidth (
+            juce::FontOptions (10.0f, juce::Font::bold), names[i]) + 8.0f;
+
+        g.setColour (palette_.dimText.withAlpha (0.20f));
+        g.fillRect (juce::Rectangle<float> (row.getX() + textWidth, row.getCentreY(),
+                                            row.getWidth() - textWidth, 1.0f));
+    }
+}
+
+void DicePage::resized()
+{
+    auto bounds = getLocalBounds().reduced (24, 22);
+
+    caption_.setBounds (bounds.removeFromTop (20));
+    bounds.removeFromTop (14);
+
+    // Big, because it is the only control here that does anything on its own
+    // and a dice you have to aim at is a dice you roll less.
+    const int width = juce::jmin (bounds.getWidth() - 60, 420);
+
+    roll_.setBounds (bounds.removeFromTop (78).withSizeKeepingCentre (width, 78));
+
+    bounds.removeFromTop (10);
+    count_.setBounds (bounds.removeFromTop (16));
+    bounds.removeFromTop (10);
+    headings_[0] = bounds.removeFromTop (13).withSizeKeepingCentre (420, 13);
+    bounds.removeFromTop (2);
+
+    // History, centred under the dice: PREV, the position, NEXT.
+    {
+        auto row = bounds.removeFromTop (26).withSizeKeepingCentre (320, 26);
+
+        previous_.setBounds (row.removeFromLeft (92));
+        next_.setBounds (row.removeFromRight (92));
+        history_.setBounds (row.reduced (6, 0));
+    }
+
+    bounds.removeFromTop (12);
+    headings_[1] = bounds.removeFromTop (13).withSizeKeepingCentre (420, 13);
+    bounds.removeFromTop (2);
+
+    // The two strengths, label on the left of each.
+    for (auto* pair : { &amount_, &spread_ })
+    {
+        auto row = bounds.removeFromTop (26).withSizeKeepingCentre (
+            juce::jmin (bounds.getWidth(), 420), 26);
+
+        auto& label = (pair == &amount_) ? amountLabel_ : spreadLabel_;
+
+        label.setBounds (row.removeFromLeft (68));
+        row.removeFromLeft (6);
+        pair->setBounds (row);
+    }
+
+    bounds.removeFromTop (12);
+    headings_[2] = bounds.removeFromTop (13).withSizeKeepingCentre (420, 13);
+    bounds.removeFromTop (2);
+
+    // The seven sections, one row each: a wide LOCK and a SOLO.
+    const int rowHeight = juce::jlimit (20, 26, bounds.getHeight() / numDiceSections);
+    const int rowWidth = juce::jmin (bounds.getWidth(), 420);
+
+    for (auto& row : sections_)
+    {
+        if (row.lock == nullptr)
+            continue;
+
+        auto strip = bounds.removeFromTop (rowHeight).withSizeKeepingCentre (rowWidth, rowHeight);
+
+        row.bounds = strip;
+        row.solo->setBounds (strip.removeFromRight (54).reduced (1));
+        strip.removeFromRight (4);
+        row.lock->setBounds (strip.reduced (1));
+    }
+}
+
 void ControlPage::addHeading (const juce::String& text, int columns, bool sameRow)
 {
     const auto parts = splitHeading (text);
@@ -884,6 +1345,15 @@ constexpr float kLevelColumn = 7.0f;
 
 /// The strip along the bottom that carries the A / H / D / S / R marks.
 constexpr float kAxisHeight = 11.0f;
+
+/// The ADV graph's ruler strip: bar numbers, or seconds when Snap is off.
+/// Deep enough for a 9 pt digit and the beat ticks above it.
+constexpr float kRulerHeight = 12.0f;
+
+/// The right-hand end of the ruler strip belongs to the length readout, and a
+/// tick label that runs under it prints one number on top of another -- which
+/// the first seconds-ruler screenshot did, "2.20 s" under "2.29 s total".
+constexpr float kRulerReadout = 126.0f;
 } // namespace
 
 EnvelopeEditor::EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
@@ -1012,6 +1482,33 @@ EnvelopeEditor::Handle EnvelopeEditor::handleAt (juce::Point<float> position) co
     }
 
     return best;
+}
+
+void EnvelopeEditor::setTempo (double bpm, int beatsPerBar) noexcept
+{
+    bpm_ = bpm > 0.0 ? bpm : 120.0;
+    beatsPerBar_ = beatsPerBar > 0 ? beatsPerBar : 4;
+}
+
+juce::String EnvelopeEditor::stageLabel (const char* letter, const juce::String& timeId) const
+{
+    if (snapId_.isEmpty())
+        return letter;
+
+    const auto* snap = state_.getRawParameterValue (snapId_);
+
+    if (snap == nullptr || snap->load() <= 0.5f)
+        return letter;
+
+    const int division = dsp::snapDivisionIndex (static_cast<double> (plain (timeId)), bpm_);
+
+    // Below half a 1/32 the snapper passes the time through, and there is no
+    // note to name -- an instant attack stays an instant attack, and calling
+    // it a 1/32 would be a lie the panel told to look tidy.
+    if (division < 0)
+        return letter;
+
+    return juce::String (letter) + " " + dsp::divisionName (division);
 }
 
 void EnvelopeEditor::refresh (double level)
@@ -1163,18 +1660,36 @@ void EnvelopeEditor::paint (juce::Graphics& graphics)
                                g.sustainEndX, g.releaseX };
         static const char* names[5] { "A", "H", "D", "S", "R" };
 
+        // With Snap on the timed stages name the note they snapped to. This
+        // graph's axis is the knobs' travel rather than seconds, so a ruler
+        // across it would be measuring nothing -- but "A 1/16" is exactly the
+        // fact Snap creates, in the place the eye is already looking.
+        const juce::String labels[5] {
+            stageLabel (names[0], ids_.attack),
+            stageLabel (names[1], ids_.hold),
+            stageLabel (names[2], ids_.decay),
+            names[3],                              // sustain is a level, not a time
+            stageLabel (names[4], ids_.release),
+        };
+
         for (int i = 0; i < 5; ++i)
         {
             const float width = edges[i + 1] - edges[i];
 
             // A segment too narrow to hold its own letter is left unlabelled --
             // a zero hold has nothing to point at, and a letter squeezed
-            // between two others reads as belonging to neither.
+            // between two others reads as belonging to neither. A named stage
+            // needs more room than a bare letter, and falls back to the letter
+            // rather than to nothing.
             if (width < 11.0f)
                 continue;
 
-            graphics.setColour (palette_.dimText.withAlpha (0.65f));
-            graphics.drawText (names[i], axis.withX (edges[i]).withWidth (width),
+            const bool named = labels[i].length() > 1;
+
+            graphics.setColour (named ? palette_.secondary.withAlpha (0.80f)
+                                      : palette_.dimText.withAlpha (0.65f));
+            graphics.drawText (named && width < 34.0f ? juce::String (names[i]) : labels[i],
+                               axis.withX (edges[i]).withWidth (width),
                                juce::Justification::centred, false);
         }
     }
@@ -1367,9 +1882,24 @@ void MultiEnvelopeEditor::setPlain (const juce::String& field, float value, bool
         parameter->endChangeGesture();
 }
 
+void MultiEnvelopeEditor::setTempo (double bpm, int beatsPerBar) noexcept
+{
+    bpm_ = bpm > 0.0 ? bpm : 120.0;
+    beatsPerBar_ = beatsPerBar > 0 ? beatsPerBar : 4;
+}
+
+/// The ruler's strip along the bottom, and the curve's area above it.
 juce::Rectangle<float> MultiEnvelopeEditor::plotArea() const
 {
-    return getLocalBounds().toFloat().reduced (8.0f, 7.0f);
+    return getLocalBounds().toFloat().reduced (8.0f, 7.0f)
+             .withTrimmedBottom (kRulerHeight);
+}
+
+juce::Rectangle<float> MultiEnvelopeEditor::rulerArea() const
+{
+    const auto full = getLocalBounds().toFloat().reduced (8.0f, 7.0f);
+
+    return full.withTop (full.getBottom() - kRulerHeight);
 }
 
 MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
@@ -1383,10 +1913,26 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     layout.loopStart = juce::jlimit (0, layout.sustain,
                                      static_cast<int> (std::lround (plain ("LoopStart"))) - 1);
     layout.loop = state_.getRawParameterValue (ids::adv (envelope_, "Loop"))->load() > 0.5f;
+    layout.snap = state_.getRawParameterValue (ids::adv (envelope_, "Snap"))->load() > 0.5f;
 
+    // **The times as they will be played.** With Snap on the engine quantises
+    // every leg (`Engine::snappedVoice`), so drawing the raw parameters drew a
+    // shape the synthesiser was not running -- and the difference is a whole
+    // note value wide, not a rounding. The same `dsp::snapSeconds` the audio
+    // thread calls, so the picture cannot drift from the sound.
     layout.total = 0.0;
+
     for (int i = 0; i < layout.points; ++i)
-        layout.total += plain ("T" + juce::String (i + 1));
+    {
+        const double raw = plain ("T" + juce::String (i + 1));
+        const auto slot = static_cast<std::size_t> (i);
+
+        layout.division[slot] = layout.snap ? dsp::snapDivisionIndex (raw, bpm_) : -1;
+        layout.seconds[slot] = layout.snap ? dsp::snapSeconds (raw, bpm_) : raw;
+
+        layout.total += layout.seconds[slot];
+    }
+
     layout.total = std::max (layout.total, 1.0e-3);
 
     const auto area = plotArea();
@@ -1397,7 +1943,7 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     double elapsed = 0.0;
     for (int i = 0; i < layout.points; ++i)
     {
-        elapsed += plain ("T" + juce::String (i + 1));
+        elapsed += layout.seconds[static_cast<std::size_t> (i)];
 
         layout.x[static_cast<std::size_t> (i + 1)] =
             area.getX() + area.getWidth() * static_cast<float> (elapsed / layout.total);
@@ -1406,6 +1952,257 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     }
 
     return layout;
+}
+
+juce::String MultiEnvelopeEditor::musicalLength (double seconds) const
+{
+    const double beats = seconds * bpm_ / 60.0;
+    const double bars = beats / static_cast<double> (beatsPerBar_);
+
+    const auto nearlyWhole = [] (double value)
+    {
+        return value >= 0.999 && std::abs (value - std::round (value)) < 0.01 * value;
+    };
+
+    if (nearlyWhole (bars))
+    {
+        const int whole = static_cast<int> (std::round (bars));
+        return juce::String (whole) + (whole == 1 ? " bar" : " bars");
+    }
+
+    if (nearlyWhole (beats))
+    {
+        const int whole = static_cast<int> (std::round (beats));
+        return juce::String (whole) + (whole == 1 ? " beat" : " beats");
+    }
+
+    // Off the grid, and saying so is the useful answer: a pattern built from
+    // note lengths that do not add up to a bar is a pattern that will drift
+    // against the song, and no amount of rounding the label makes it not.
+    return juce::String (beats, beats < 10.0 ? 2 : 1) + " beats";
+}
+
+/// The musical grid and its numbered strip, drawn when Snap is on.
+///
+/// Three tiers at most, chosen by how much room each one gets: bars, beats,
+/// then the finest subdivision that still leaves its lines apart. Drawing all
+/// of them always turns a 16-point envelope into a grey wall, and a grid you
+/// cannot see past is worse than no grid.
+///
+/// **Straight divisions only.** A triplet grid is a different ruler -- three
+/// in the space of two -- and overlaying the two produces lines every sixth of
+/// a beat, which reads as noise. Triplets are named instead, per leg, by
+/// `paintLegLabels`: "1/8 T" under the segment that is one, which is the
+/// question actually being asked.
+void MultiEnvelopeEditor::paintMusicalRuler (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+    const auto ruler = rulerArea();
+
+    const double beatSeconds = 60.0 / bpm_;
+    const double barSeconds = beatSeconds * static_cast<double> (beatsPerBar_);
+    const double perSecond = area.getWidth() / layout.total;
+
+    const GridTier tiers[] {
+        { barSeconds,          0.34f, 1.4f },
+        { beatSeconds,         0.22f, 1.0f },
+        { beatSeconds * 0.5,   0.11f, 1.0f },
+        { beatSeconds * 0.25,  0.06f, 1.0f },
+    };
+
+    for (const auto& tier : tiers)
+    {
+        const double spacing = tier.seconds * perSecond;
+
+        // Below this the lines merge into a wash. 9 px is where a 1.0 px line
+        // and its gap are still two things rather than one.
+        if (spacing < 9.0)
+            continue;
+
+        g.setColour ((&tier == &tiers[0] ? palette_.accent : palette_.dimText)
+                       .withAlpha (tier.alpha));
+
+        for (double t = tier.seconds; t < layout.total - 1.0e-9; t += tier.seconds)
+        {
+            const auto x = area.getX() + static_cast<float> (t * perSecond);
+
+            g.fillRect (juce::Rectangle<float> (x - 0.5f * tier.thickness, area.getY(),
+                                                tier.thickness, area.getHeight()));
+        }
+    }
+
+    // The strip: bar numbers where they fit, beat ticks under everything.
+    const double beatSpacing = beatSeconds * perSecond;
+    const double barSpacing = barSeconds * perSecond;
+
+    if (beatSpacing >= 5.0)
+    {
+        g.setColour (palette_.dimText.withAlpha (0.35f));
+
+        for (double t = 0.0; t < layout.total - 1.0e-9; t += beatSeconds)
+        {
+            const auto x = area.getX() + static_cast<float> (t * perSecond);
+            g.fillRect (juce::Rectangle<float> (x, ruler.getY(), 1.0f, 3.0f));
+        }
+    }
+
+    if (barSpacing >= 22.0)
+    {
+        // Every bar, or every second or fourth when they crowd -- the numbers
+        // stay legible instead of overprinting.
+        const int step = barSpacing >= 26.0 ? 1 : (barSpacing >= 13.0 ? 2 : 4);
+
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+
+        int bar = 1;
+        for (double t = 0.0; t < layout.total - 1.0e-9; t += barSeconds, ++bar)
+        {
+            if ((bar - 1) % step != 0)
+                continue;
+
+            const auto x = area.getX() + static_cast<float> (t * perSecond);
+
+            if (x + 24.0f > area.getRight() - kRulerReadout)
+                continue;
+
+            g.setColour (palette_.accent.withAlpha (0.75f));
+            g.drawText (juce::String (bar),
+                        juce::Rectangle<float> (x + 2.0f, ruler.getY() + 2.0f, 22.0f,
+                                                ruler.getHeight() - 2.0f),
+                        juce::Justification::centredLeft, false);
+        }
+    }
+
+}
+
+/// With Snap off there is no grid to draw, but there was never a time axis
+/// either -- the graph has always been a shape with no idea how long it lasts.
+/// A plain seconds ruler is the same information in the unit that applies.
+void MultiEnvelopeEditor::paintSecondsRuler (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+    const auto ruler = rulerArea();
+    const double perSecond = area.getWidth() / layout.total;
+
+    // The coarsest step that still gives at least three labelled marks, from a
+    // 1-2-5 ladder so the numbers read as round.
+    static constexpr double ladder[] { 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5,
+                                       1.0, 2.0, 5.0, 10.0 };
+    double step = ladder[std::size (ladder) - 1];
+
+    for (const double candidate : ladder)
+        if (candidate * perSecond >= 38.0)
+        {
+            step = candidate;
+            break;
+        }
+
+    g.setFont (juce::FontOptions (9.0f));
+
+    for (double t = step; t < layout.total - 1.0e-9; t += step)
+    {
+        const auto x = area.getX() + static_cast<float> (t * perSecond);
+
+        g.setColour (palette_.dimText.withAlpha (0.09f));
+        g.fillRect (juce::Rectangle<float> (x, area.getY(), 1.0f, area.getHeight()));
+
+        if (x + 48.0f > area.getRight() - kRulerReadout)
+            continue;
+
+        g.setColour (palette_.dimText.withAlpha (0.55f));
+        g.drawText (t < 1.0 ? juce::String (juce::roundToInt (t * 1000.0)) + " ms"
+                            : juce::String (t, t < 10.0 ? 2 : 1) + " s",
+                    juce::Rectangle<float> (x + 2.0f, ruler.getY() + 2.0f, 46.0f,
+                                            ruler.getHeight() - 2.0f),
+                    juce::Justification::centredLeft, false);
+    }
+
+}
+
+/// What the whole thing measures, right-aligned in the ruler strip: the loop's
+/// length when there is a loop, because that is the number a rhythmic patch is
+/// actually setting, and the total otherwise.
+///
+/// **Drawn last, over the handles.** A point at level 0 sits on the plot's
+/// bottom edge and its handle -- 7 px, or 12 with the sustain ring -- reaches
+/// into the strip. Painted with the rest of the ruler it came out with the
+/// last letter under a circle, which is how the first screenshot read
+/// "LOOP 1 ba".
+void MultiEnvelopeEditor::paintLengthReadout (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+    const auto ruler = rulerArea();
+
+    juce::String text;
+
+    if (! layout.snap)
+    {
+        text = layout.total < 1.0
+                 ? juce::String (juce::roundToInt (layout.total * 1000.0)) + " ms total"
+                 : juce::String (layout.total, 2) + " s total";
+    }
+    else if (layout.loop)
+    {
+        double loopSeconds = layout.seconds[static_cast<std::size_t> (layout.loopStart)];
+
+        for (int i = layout.loopStart + 1; i <= layout.sustain; ++i)
+            loopSeconds += layout.seconds[static_cast<std::size_t> (i)];
+
+        text = "LOOP " + musicalLength (loopSeconds);
+    }
+    else
+    {
+        text = musicalLength (layout.total);
+    }
+
+    const auto box = juce::Rectangle<float> (area.getRight() - kRulerReadout + 3.0f,
+                                             ruler.getY() + 1.0f, kRulerReadout - 6.0f,
+                                             ruler.getHeight() - 1.0f);
+
+    // A wash of the panel's own background under it, so the text wins wherever
+    // a handle happens to land rather than being partly erased by one.
+    g.setColour (palette_.background.darker (0.2f).withAlpha (0.85f));
+    g.fillRoundedRectangle (box.expanded (2.0f, 0.0f), 3.0f);
+
+    g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+    g.setColour (palette_.secondary.withAlpha (0.85f));
+    g.drawText (text, box, juce::Justification::centredRight, false);
+}
+
+/// The note value each leg snapped to, written over the leg it belongs to.
+///
+/// This is where triplets and dotted notes become visible, and it is the half
+/// of the answer a grid cannot give: the grid says *where* a point landed, the
+/// label says *what* the leg is.
+void MultiEnvelopeEditor::paintLegLabels (juce::Graphics& g, const Layout& layout)
+{
+    const auto area = plotArea();
+
+    g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+
+    for (int i = 0; i < layout.points; ++i)
+    {
+        const auto slot = static_cast<std::size_t> (i);
+        const float x0 = layout.x[slot];
+        const float x1 = layout.x[slot + 1];
+        const float width = x1 - x0;
+
+        // Too narrow to hold a name is left blank rather than overprinted, the
+        // same rule the AHDSR's stage letters follow.
+        if (width < 26.0f)
+            continue;
+
+        const int division = layout.division[slot];
+
+        // A leg below half a 1/32 passes through the snapper untouched, and
+        // saying "free" is the truth rather than naming a note it is not.
+        g.setColour (division < 0 ? palette_.dimText.withAlpha (0.40f)
+                                  : palette_.secondary.withAlpha (0.70f));
+
+        g.drawText (dsp::divisionName (division),
+                    juce::Rectangle<float> (x0, area.getY() + 1.0f, width, 10.0f),
+                    juce::Justification::centred, false);
+    }
 }
 
 void MultiEnvelopeEditor::paint (juce::Graphics& g)
@@ -1426,6 +2223,14 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
         g.fillRect (juce::Rectangle<float> (from, area.getY(),
                                             std::max (2.0f, to - from), area.getHeight()));
     }
+
+    // The ruler, under the curve rather than over it: it is the paper this is
+    // drawn on, and a grid line across a handle would read as part of the
+    // shape.
+    if (layout.snap)
+        paintMusicalRuler (g, layout);
+    else
+        paintSecondsRuler (g, layout);
 
     // The curve, in the DSP's own arithmetic -- EnvelopeEditor::segment.
     juce::Path path;
@@ -1453,7 +2258,19 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
     g.setColour (palette_.accent);
     g.strokePath (path, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved));
 
-    // Handles. The sustain point wears a ring; the release chain draws dim.
+    // Handles. The sustain point wears a ring; the release chain draws dim; and
+    // a point that lands **on** a beat or a bar gets a stem down to the ruler.
+    //
+    // The stem is the whole point of the exercise. Snap quantises each leg's
+    // *duration*, not its position, so a chain of legitimate note lengths can
+    // still add up to an arrival between two beats -- 1/8 + 1/8 T lands
+    // nowhere. Nothing in the panel said so before; the stem says it by being
+    // absent.
+    const double beatSeconds = 60.0 / bpm_;
+    const double barSeconds = beatSeconds * static_cast<double> (beatsPerBar_);
+
+    double elapsed = 0.0;
+
     for (int i = 0; i < layout.points; ++i)
     {
         const auto centre = juce::Point<float> (layout.x[static_cast<std::size_t> (i + 1)],
@@ -1461,6 +2278,25 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
 
         const bool isSustain = i == layout.sustain;
         const bool isRelease = i > layout.sustain;
+
+        elapsed += layout.seconds[static_cast<std::size_t> (i)];
+
+        if (layout.snap)
+        {
+            // A twentieth of a beat of slack, which at 120 bpm is 25 ms -- wide
+            // enough for the arithmetic of summing sixteen legs, far narrower
+            // than the smallest division in the table.
+            const bool onBar = dsp::gridOffset (elapsed, barSeconds) < 0.02;
+            const bool onBeat = dsp::gridOffset (elapsed, beatSeconds) < 0.05;
+
+            if (onBeat || onBar)
+            {
+                g.setColour ((onBar ? palette_.accent : palette_.secondary)
+                               .withAlpha (onBar ? 0.55f : 0.35f));
+                g.fillRect (juce::Rectangle<float> (centre.x - 0.5f, centre.y,
+                                                    1.0f, area.getBottom() - centre.y));
+            }
+        }
 
         g.setColour (isRelease ? palette_.dimText : palette_.accentBright);
         g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (centre));
@@ -1471,6 +2307,11 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
             g.drawEllipse (juce::Rectangle<float> (12.0f, 12.0f).withCentre (centre), 1.4f);
         }
     }
+
+    if (layout.snap)
+        paintLegLabels (g, layout);
+
+    paintLengthReadout (g, layout);
 }
 
 void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
@@ -1481,8 +2322,23 @@ void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
     dragPoint_ = -1;
     dragSegment_ = -1;
 
-    // A point first: the nearest within reach.
-    float best = 12.0f * 12.0f;
+    // A point first: the nearest within reach. **Reach shrinks with density**,
+    // and that is not polish -- a point's time, level and tension have no
+    // knobs, so the graph is the only way to reach them. At sixteen points the
+    // fixed 12 px radius swallowed every segment midpoint, and a tension you
+    // cannot grab is a tension only host automation can set. Two fifths of the
+    // closest spacing keeps the midpoints clear at any point count, and the
+    // floor of 4 px stops it vanishing when two points sit on top of each
+    // other.
+    float closest = getWidth() > 0 ? static_cast<float> (getWidth()) : 12.0f;
+    for (int i = 0; i < layout.points; ++i)
+        closest = std::min (closest,
+                            std::abs (layout.x[static_cast<std::size_t> (i + 1)]
+                                        - layout.x[static_cast<std::size_t> (i)]));
+
+    const float reach = juce::jlimit (4.0f, 12.0f, 0.4f * closest);
+
+    float best = reach * reach;
     for (int i = 0; i < layout.points; ++i)
     {
         const auto centre = juce::Point<float> (layout.x[static_cast<std::size_t> (i + 1)],
@@ -1622,8 +2478,9 @@ void EnvelopePage::addAdvRow (juce::AudioProcessorValueTreeState& state, int ind
         palette_), false);
 
     cell (std::make_unique<KnobCell> (state, ids::adv (index, "Points"), "Points",
-        "How many points the envelope has, 2 to 8. The rest keep their values for when "
-        "you lengthen it again.", palette_), true);
+        "How many points the envelope has, 2 to 16. The rest keep their values for when "
+        "you lengthen it again -- and sixteen with Loop and Snap on is a bar of sixteenths, "
+        "which is the point of having that many.", palette_), true);
 
     cell (std::make_unique<KnobCell> (state, ids::adv (index, "Sustain"), "Sustain pt",
         "Which point the envelope parks at while the key is held -- the ringed one. The "
@@ -1640,7 +2497,16 @@ void EnvelopePage::addAdvRow (juce::AudioProcessorValueTreeState& state, int ind
 
     cell (std::make_unique<ToggleCell> (state, ids::adv (index, "Snap"), "Snap",
         "Quantises every point's time to note lengths at the host tempo, exactly as the "
-        "AHDSR Snap does.", palette_), true);
+        "AHDSR Snap does.\n\n"
+        "With this on the graph becomes a **ruler**: bar lines in the accent colour, beats "
+        "and subdivisions behind them, numbered bars along the bottom, and the note each leg "
+        "landed on written over it -- so a 1/8 T reads as a 1/8 T rather than as 167 ms. A "
+        "point that arrives exactly on a beat drops a stem to the ruler, and one that does "
+        "not, does not: snapping fixes each leg's *length*, so a chain of legal note values "
+        "can still land between beats. With Loop on, the readout on the right is the loop's "
+        "length in bars.\n\n"
+        "Off, the same strip is a plain seconds ruler -- the graph has a time axis either "
+        "way now.", palette_), true);
 }
 
 void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const juce::String& heading,
@@ -1701,11 +2567,18 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
     // The tempo grid. A toggle rather than a knob, in the same cell grid.
     if (snapId != nullptr)
     {
+        // And the graph is told about it, so the stage marks under the curve
+        // can name the note each stage snapped to instead of a bare letter.
+        block.graph->setSnapSource (snapId);
+
         auto cell = std::make_unique<ToggleCell> (state, snapId, "Snap",
             "Quantises Attack, Hold, Decay and Release to note lengths at the host tempo -- "
             "nearest in musical distance, from 1/32 up to 8 bars. Times under half a 1/32 pass "
             "through untouched, so an instant attack stays instant. The knobs keep their "
-            "positions; the sound follows the grid, live, when the tempo changes.",
+            "positions; the sound follows the grid, live, when the tempo changes.\n\n"
+            "With this on, the marks under the curve name the note each stage landed on -- "
+            "\"A 1/16\" rather than \"A\". The axis stays the knobs' own travel, because "
+            "that is what makes a 5 ms attack visible beside a 5 s release.",
             palette_);
         addAndMakeVisible (*cell);
         block.knobs.push_back (std::move (cell));
@@ -1716,8 +2589,16 @@ void EnvelopePage::addBlock (juce::AudioProcessorValueTreeState& state, const ju
 
 void EnvelopePage::refresh (const SonitusProcessor& processor)
 {
+    // The tempo the *engine* is snapping against, not one the panel worked out
+    // for itself: the two agreeing is the whole claim the ruler makes.
+    const double bpm = processor.getTempoBpm();
+    const int beatsPerBar = processor.getBeatsPerBar();
+
     for (std::size_t i = 0; i < blocks_.size(); ++i)
+    {
+        blocks_[i].graph->setTempo (bpm, beatsPerBar);
         blocks_[i].graph->refresh (processor.getEnvelopeLevel (static_cast<int> (i)));
+    }
 
     bool heightChanged = false;
 
@@ -1738,8 +2619,12 @@ void EnvelopePage::refresh (const SonitusProcessor& processor)
                 row.cells[i]->setVisible (enabled);
         }
 
+        row.graph->setTempo (bpm, beatsPerBar);
+
         if (enabled)
-            row.graph->repaint();   // external parameter changes redraw
+            row.graph->repaint();   // external parameter changes redraw, and so
+                                    // does a tempo change: the ruler moves
+                                    // under a shape that did not.
     }
 
     if (heightChanged)
@@ -1836,9 +2721,9 @@ void EnvelopePage::resized()
 
     for (auto& row : advRows_)
     {
-        const int height = row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight;
+        const int rowHeight = row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight;
 
-        row.bounds = bounds.removeFromTop (height);
+        row.bounds = bounds.removeFromTop (rowHeight);
         bounds.removeFromTop (kGroupGap);
 
         auto inner = row.bounds.reduced (5, 3).withTrimmedTop (kHeadingHeight);
@@ -2073,7 +2958,8 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
 
     addAndMakeVisible (*steps_);
 
-    static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE", "TUNING" };
+    static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE",
+                                             "TUNING", "DICEROLL" };
 
     for (int i = 0; i < kNumPages; ++i)
     {
@@ -2632,18 +3518,19 @@ void SonitusEditor::buildPages()
     // neither before: it was a component the editor parented by hand, and the
     // hand-parenting is what got forgotten.
     pages_[kTuningPage] = std::make_unique<TuningPage> (sonitus_, paletteForPage (kTuningPage));
+    pages_[kDicePage] = std::make_unique<DicePage> (sonitus_, paletteForPage (kDicePage));
 
     // Each page wears its own accent, and the look and feel is how that reaches
     // the knobs: JUCE resolves one by walking up the tree, so a page holding
     // its own colours every control inside it with nothing passed down by hand.
     for (int page = 0; page < kNumPages; ++page)
     {
-        auto& lookAndFeel = pageLookAndFeels_[static_cast<std::size_t> (page)];
+        auto& pageLookAndFeel = pageLookAndFeels_[static_cast<std::size_t> (page)];
 
-        lookAndFeel = std::make_unique<ui::KnobLookAndFeel> (paletteForPage (page));
+        pageLookAndFeel = std::make_unique<ui::KnobLookAndFeel> (paletteForPage (page));
 
         if (auto* component = pages_[static_cast<std::size_t> (page)].get())
-            component->setLookAndFeel (lookAndFeel.get());
+            component->setLookAndFeel (pageLookAndFeel.get());
     }
 }
 
@@ -2668,6 +3555,10 @@ void SonitusEditor::showPage (int index)
         tab.setColour (juce::TextButton::textColourOffId,
                        active ? kGroupPanel.darker (0.4f) : accent);
     }
+
+    // DICEROLL's colours are re-decided every frame, so whatever the loop
+    // above just wrote for it is about to be overwritten -- see refreshDiceTab.
+    refreshDiceTab();
 
     // `false`: the viewport must not take ownership -- the pages outlive the
     // page changes and are owned by the array.
@@ -2820,8 +3711,31 @@ void SonitusEditor::updateForSwitches()
     noteLabel_.setText (notes_[static_cast<std::size_t> (currentPage_)], juce::dontSendNotification);
 }
 
+void SonitusEditor::refreshDiceTab()
+{
+    auto& tab = tabs_[static_cast<std::size_t> (kDicePage)];
+
+    const float phase = DicePage::hueNow();
+    const bool active = currentPage_ == kDicePage;
+
+    // Every other tab is one hue because it does one coherent thing. This one
+    // does all of them at once, so it gets all of them at once. The active and
+    // inactive states differ in saturation and in which of the pair is the
+    // plate, exactly as the others do -- it is the same tab, wearing the whole
+    // wheel instead of a page's accent.
+    const auto colour = juce::Colour::fromHSV (phase, active ? 0.85f : 0.75f, 1.0f, 1.0f);
+
+    tab.setColour (juce::TextButton::buttonColourId,
+                   active ? colour : kGroupPanel.darker (0.10f));
+    tab.setColour (juce::TextButton::textColourOffId,
+                   active ? kGroupPanel.darker (0.4f) : colour);
+    tab.repaint();
+}
+
 void SonitusEditor::timerCallback()
 {
+    refreshDiceTab();
+
     auto& meters = sonitus_.getMeterValues();
 
     outputMeter_->setValues (meters.outputVuDb.load (std::memory_order_relaxed),

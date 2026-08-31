@@ -161,7 +161,7 @@ public:
 
             // Every voice its own noise stream, derived from the bank's seed:
             // a noise stack whose voices agree is mono however wide the pan.
-            voices_[index].seedNoise (seed_ ^ (0x9e3779b97f4a7c15ull
+            voices_[index].seedNoise (seed_ ^ (std::uint64_t { 0x9e3779b97f4a7c15 }
                                                  * static_cast<std::uint64_t> (i + 1)));
 
             drift_[index] = 0.0;

@@ -196,6 +196,95 @@ public:
 /// genuinely differ: an oscillator is ten controls that want five across, and a
 /// modulation slot is three that want six so two slots share a row. Forcing
 /// both onto one grid leaves a ragged edge on every page.
+/// The DICEROLL page: one button, and it is not a subtle one.
+///
+/// Rainbow rather than a page accent, and that is the point rather than a
+/// decoration: every other tab on this panel is one hue because it does one
+/// coherent thing. This one does all of them at once, so it gets all of them
+/// at once, and it is the only control on the panel that can throw away work.
+/// Being unmissable is a feature.
+class DicePage final : public Page,
+                       private juce::Timer
+{
+public:
+    /// The button paints itself, because a `TextButton` covers whatever is
+    /// behind it -- the first draft drew the spectrum onto the page and the
+    /// button sat on top of it as a grey plate, with only the halo showing.
+    class RainbowButton final : public juce::Button
+    {
+    public:
+        RainbowButton() : juce::Button ("R A N D O M I Z E") {}
+
+        void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+    };
+
+    /// One section's row: a LOCK toggle and a SOLO button.
+    ///
+    /// SOLO is a **button of its own** rather than a modifier on the lock, and
+    /// deliberately: a modifier is a thing you have to know about, and the one
+    /// gesture worth optimising here -- "roll only the filter" -- should not
+    /// need a manual. It locks everything else; pressing it again on the
+    /// section that is already alone clears the locks, so it is its own way
+    /// back out.
+    struct SectionRow
+    {
+        DiceSection section { DiceSection::osc };
+        std::unique_ptr<juce::TextButton> lock;
+        std::unique_ptr<juce::TextButton> solo;
+        juce::Rectangle<int> bounds;
+    };
+
+    DicePage (SonitusProcessor& processorToUse, ui::Palette palette);
+    ~DicePage() override;
+
+    [[nodiscard]] int getPreferredHeight() const override { return 470; }
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    /// The rolling hue, so the tab can glow in step with the page.
+    [[nodiscard]] static float hueNow();
+
+private:
+    void timerCallback() override;
+
+    /// Repaints the lock and solo faces from the processor's mask, and greys
+    /// PREV/NEXT at the ends of the ring. One function rather than each button
+    /// tracking its own idea of the state -- SOLO changes six other buttons.
+    void refreshControls();
+
+    void addSectionRow (DiceSection section);
+
+    SonitusProcessor& processor_;
+    ui::Palette palette_;
+
+    RainbowButton roll_;
+    juce::Label caption_;
+    juce::Label count_;
+
+    std::array<SectionRow, numDiceSections> sections_;
+
+    /// HISTORY / STRENGTH / WHAT ROLLS, laid out by resized() and drawn by
+    /// paint() -- headings are not components here, they are three strings.
+    std::array<juce::Rectangle<int>, 3> headings_;
+
+    juce::TextButton previous_ { "< PREV" };
+    juce::TextButton next_ { "NEXT >" };
+    juce::Label history_;
+
+    juce::Slider amount_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::Slider spread_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::Label amountLabel_;
+    juce::Label spreadLabel_;
+
+    int rolls_ { 0 };
+
+    /// The lock mask the buttons are currently drawn from, so the tick can
+    /// tell "nothing changed" from "a project load moved it" without
+    /// repainting seven buttons thirty times a second.
+    unsigned int shownLocks_ { 0 };
+};
+
 class ControlPage final : public Page
 {
 public:
@@ -289,6 +378,9 @@ public:
     MultiEnvelopeEditor (juce::AudioProcessorValueTreeState& state, int envelopeIndex,
                          ui::Palette palette);
 
+    /// The tempo the ruler is drawn against, pushed in by the page each tick.
+    void setTempo (double bpm, int beatsPerBar) noexcept;
+
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -297,17 +389,56 @@ public:
 private:
     struct Layout
     {
+        /// kMaxPoints + 1: x[0] is the gate's own start, x[i] is point i-1.
+        /// Sized by the constant rather than typed, because it moved from 8 to
+        /// 16 and a hard 9 here would have been an out-of-bounds write with
+        /// nothing to notice it -- exactly the shape of the DICEROLL crash.
+        static constexpr std::size_t kSlots =
+            static_cast<std::size_t> (dsp::MultiEnvelope::kMaxPoints) + 1;
+
         double total { 1.0 };
-        std::array<float, 9> x {};   ///< x[0] is the start, x[i] point i-1
-        std::array<float, 9> y {};
+        std::array<float, kSlots> x {};
+        std::array<float, kSlots> y {};
+
+        /// Each leg's duration **as it will be played** -- snapped when Snap is
+        /// on. The graph drew the raw parameters before, which meant a synced
+        /// envelope showed a shape the engine was not running; the ruler made
+        /// that visible the first time it was drawn.
+        std::array<double, kSlots> seconds {};
+
+        /// Which note length each leg snapped to, or -1 for one that passed
+        /// through. Straight from the DSP's own chooser, so the label and the
+        /// sound cannot disagree.
+        std::array<int, kSlots> division {};
+
         int points { 2 };
         int sustain { 0 };
         int loopStart { 0 };
         bool loop { false };
+        bool snap { false };
+    };
+
+    /// One tier of the musical grid: how far apart its lines are and how
+    /// loudly to draw them.
+    struct GridTier
+    {
+        double seconds { 0.0 };
+        float alpha { 0.0f };
+        float thickness { 1.0f };
     };
 
     [[nodiscard]] Layout layoutNow() const;
     [[nodiscard]] juce::Rectangle<float> plotArea() const;
+    [[nodiscard]] juce::Rectangle<float> rulerArea() const;
+
+    void paintMusicalRuler (juce::Graphics&, const Layout&);
+    void paintSecondsRuler (juce::Graphics&, const Layout&);
+    void paintLegLabels (juce::Graphics&, const Layout&);
+    void paintLengthReadout (juce::Graphics&, const Layout&);
+
+    /// "1 bar", "3 beats", "1.4 beats", or a time in seconds when there is no
+    /// grid to measure against.
+    [[nodiscard]] juce::String musicalLength (double seconds) const;
 
     [[nodiscard]] float plain (const juce::String& field) const;
     void setPlain (const juce::String& field, float value, bool gesture);
@@ -315,6 +446,9 @@ private:
     juce::AudioProcessorValueTreeState& state_;
     int envelope_ { 0 };
     ui::Palette palette_;
+
+    double bpm_ { 120.0 };
+    int beatsPerBar_ { 4 };
 
     int dragPoint_ { -1 };
     int dragSegment_ { -1 };
@@ -358,6 +492,20 @@ public:
     };
 
     EnvelopeEditor (juce::AudioProcessorValueTreeState& state, ui::Palette palette, Ids ids);
+
+    /// The Snap toggle this envelope answers to, and the tempo it is snapping
+    /// against. Both optional: an envelope with no Snap parameter draws its
+    /// plain stage letters as it always did.
+    ///
+    /// **Why the axis does not become a ruler here.** This graph's horizontal
+    /// axis is the knobs' own travel, not seconds (see the class comment), so
+    /// a grid drawn on it would be measuring the wrong thing. What Snap
+    /// actually does is turn each stage's *duration* into a note length -- so
+    /// the honest indication is to name the note under the stage, which is
+    /// what the axis marks do when this is set. The ADV graph, whose axis
+    /// really is time, gets the ruler.
+    void setSnapSource (juce::String snapId) { snapId_ = std::move (snapId); }
+    void setTempo (double bpm, int beatsPerBar) noexcept;
 
     /// Re-reads the parameters and repaints if any of them moved. Driven by the
     /// editor's timer rather than one of its own -- the panel already ticks at
@@ -408,10 +556,17 @@ private:
     void appendSegment (juce::Path& path, float x0, float x1,
                         double from, double to, double tension) const;
 
+    /// "A" on its own, or "A 1/16" when Snap is on and the stage is long
+    /// enough to have snapped to something.
+    [[nodiscard]] juce::String stageLabel (const char* letter, const juce::String& timeId) const;
+
     juce::AudioProcessorValueTreeState& state_;
     ui::Palette palette_;
 
     Ids ids_;
+    juce::String snapId_;
+    double bpm_ { 120.0 };
+    int beatsPerBar_ { 4 };
 
     Handle dragging_ { Handle::none };
     Handle hovered_ { Handle::none };
@@ -553,6 +708,10 @@ public:
 
 private:
     void timerCallback() override;
+
+    /// Repaints the DICEROLL tab in whatever colour the shared rainbow clock
+    /// is at. Called every tick, which is what makes it glow.
+    void refreshDiceTab();
     void buildPages();
     void showPage (int index);
 
@@ -578,7 +737,6 @@ private:
     /// inside it -- there is nothing to pass down by hand and nothing to forget
     /// to pass. They are declared after the editor's own so they are destroyed
     /// before it, and cleared from their pages in the destructor either way.
-    std::array<std::unique_ptr<ui::KnobLookAndFeel>, 6> pageLookAndFeels_;
 
     /// Held by pointer so it can be *destroyed*, which is the only reliable way
     /// to turn tooltips off: JUCE has no "disabled" state for one, and setting
@@ -591,7 +749,7 @@ private:
 
     std::unique_ptr<ui::HeaderBar> header_;
 
-    static constexpr int kNumPages = 6;
+    static constexpr int kNumPages = 7;
 
     /// The MOD page is the one with the step strip under its grid, and the ENV
     /// page is the bespoke one, so both are named rather than numbered where
@@ -602,6 +760,17 @@ private:
     static constexpr int kModPage    = 3;
     static constexpr int kManglePage = 4;
     static constexpr int kTuningPage = 5;
+    static constexpr int kDicePage   = 6;
+
+    /// One look and feel per page, so each wears its own accent. JUCE resolves
+    /// one by walking *up* the tree, so setting it on a page colours every
+    /// control inside it.
+    ///
+    /// **Sized by kNumPages rather than by a literal**, and it was a literal 6:
+    /// adding a seventh page wrote one past the end and segfaulted inside a
+    /// LookAndFeel destructor, which points nowhere near the cause. Declared
+    /// here rather than beside the tooltip host so the constant is in scope.
+    std::array<std::unique_ptr<ui::KnobLookAndFeel>, kNumPages> pageLookAndFeels_;
 
     std::array<std::unique_ptr<Page>, kNumPages> pages_;
     std::array<juce::TextButton, kNumPages> tabs_;

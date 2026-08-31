@@ -182,6 +182,15 @@ beyond this file and CLAUDE.md.
 | P4-5 four macros | pending |
 | P4-6 close-out | pending |
 
+**Work done on Sonitus outside this list**, so a resuming session is not
+surprised by it: the DICEROLL tab (a seventh page -- RANDOMIZE, roll history,
+per-section locks with solo, and the AMOUNT/SPREAD strengths), the ADV
+envelopes' point ceiling raised from 8 to 16, and the synced envelopes' tempo
+ruler. Both were asked for
+directly and neither belongs to a phase; both are finished and pushed. The
+point ceiling matters to anything here that touches the ADV parameters --
+points 1..8 carry schema V2 and 9..16 carry V4.
+
 **To resume**: read CLAUDE.md in full, then this file; take the first
 `pending` phase. The non-negotiables:
 
