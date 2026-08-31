@@ -167,6 +167,12 @@ private:
     /// What the panel is currently dressed for. Deliberately impossible, so
     /// the first tick always applies the state.
     int shownExciter_ { -1 };
+    int shownExciterB_ { -1 };
+
+    // -1 rather than a legal value, so the first timer tick always runs the
+    // greying rather than deciding nothing has changed yet.
+    float shownBlend_ { -1.0f };
+    float shownListen_ { -1.0f };
     int shownSympCount_ { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MalleusEditor)

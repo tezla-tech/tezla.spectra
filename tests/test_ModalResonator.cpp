@@ -500,7 +500,7 @@ TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
     //
     //                    early     late    late/early
     //     bloom 0.00    0.1521   0.1187        0.780
-    //     bloom 1.00    0.0104   0.3853       37.134
+    //     bloom 1.00    0.0034   0.3916      115.082
     //
     // Without bloom the top loses a fifth of its share as the object rings
     // down, which is all a linear bank can do -- the high modes are damped
@@ -511,6 +511,19 @@ TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
     // the low modes' energy and has not yet delivered it. Higher later
     // because that is where it delivers. A tam-tam does exactly this and a
     // mode bank on its own cannot.
+    //
+    // **The strike amplitude is 0.030, and that number is the finding.** It
+    // used to be 0.9, which drives this bank to an output peak of 1.88 -- and
+    // a Malleus voice at full velocity peaks at **0.046**, forty times lower.
+    // The coupling rate goes as amplitude squared, so this test was measuring
+    // the feature at some sixteen hundred times the rate the instrument ever
+    // sees it, and through the plugin the control measured as completely
+    // inert: late-window energy shares at 110/220/440 Hz read
+    // 0.1797/0.3642/0.4481 with Bloom off and 0.1917/0.3584/0.4434 at
+    // maximum, which is a knob that moves the fourth decimal place.
+    //
+    // `kBloomDrive` fixes the operating point and 0.030 here (a bank peak of
+    // 0.063) is what makes this test measure the shipped thing.
     const auto fractions = [] (double bloom)
     {
         ModalResonator bank;
@@ -518,7 +531,7 @@ TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
         buildBar (bank, 110.0, 2.0, 32);
         bank.setBloom (bloom);
 
-        const auto rendered = strikeAndRing (bank, 0.9, 48000);
+        const auto rendered = strikeAndRing (bank, 0.030, 48000);
 
         const double early = highFraction (rendered, 960, 9600, 48000.0, 440.0);
         const double late = highFraction (rendered, 14400, 9600, 48000.0, 440.0);
@@ -547,31 +560,41 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
     // hit, and would be the wrong instrument.
     //
     // Measured, late high-band fraction against strike amplitude, bloom at
-    // its ceiling against bloom off:
+    // its ceiling against bloom off. The amplitudes are the ones the
+    // instrument reaches -- a full-velocity Malleus voice peaks at 0.046, and
+    // a strike of 0.013 here drives the bank to 0.043:
     //
-    //     amplitude   bloom 1   bloom 0
-    //        0.02      0.1178    0.1187
-    //        0.10      0.1109    0.1187
-    //        0.35      0.0980    0.1187
-    //        0.50      0.1143    0.1187
-    //        0.70      0.2418    0.1187
-    //        0.90      0.3853    0.1187
-    //        1.00      0.3862    0.1187
+    //     strike   bank peak   bloom 1   bloom 0
+    //      0.004      0.0084     0.1062    0.1187
+    //      0.008      0.0167     0.0985    0.1187
+    //      0.013      0.0272     0.1708    0.1187
+    //      0.020      0.0418     0.3854    0.1187
+    //      0.030      0.0628     0.3916    0.1187
+    //      0.050      0.1046     0.4012    0.1187
+    //      0.090      0.1883     0.0113    0.1187
+    //      0.200      0.4185     0.0025    0.1187
     //
-    // Two things in that table, and both are the point.
+    // Three things in that table, and all three are the point.
     //
     // The linear column is **0.1187 at every amplitude**, to the last digit
     // printed: a linear bank does not care how hard it was hit, which is the
     // property bloom exists to remove.
     //
-    // The bloom column is **threshold-like, not a smooth ramp**: essentially
-    // dormant below half amplitude, engaging sharply through 0.7, saturating
-    // near 0.386. That is more physical than a proportional law would be, and
-    // it is why the assertion below is written as "hard blooms, soft does
-    // not" rather than as a monotone chain -- the dip through 0.35, where the
-    // conservative coupling is drawing from the top faster than the cascade
-    // refills it, is real and a monotone test would be asserting something
-    // the instrument does not do.
+    // The bloom column is **threshold-like, not a smooth ramp**: dormant at a
+    // soft hit, engaging through 0.013, on by 0.020, and falling away again
+    // past 0.09 as the injection swamps the state rather than perturbing it.
+    // That is more physical than a proportional law would be, and it is why
+    // the assertion below is written as "hard blooms, soft does not" rather
+    // than as a monotone chain.
+    //
+    // And the **useful window is about 9 dB wide**, bank peaks 0.027 to 0.105,
+    // which is narrower than the range a velocity control covers. That is a
+    // real limitation of a coupling bounded by `q / (1 + |q|)`, and it is
+    // stated rather than tuned around: `kBloomDrive` centres the window on a
+    // hard hit (a full-velocity Malleus voice peaks at 0.046) so that Bloom is
+    // a "hit it hard" effect, which is what the physics says it is. Widening
+    // the window means changing the saturation, and that is a redesign of the
+    // bound rather than a constant.
     const auto lateFraction = [] (double amplitude, double bloom)
     {
         ModalResonator bank;
@@ -583,8 +606,8 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
                              14400, 9600, 48000.0, 440.0);
     };
 
-    const double quiet = lateFraction (0.10, ModalResonator::kMaxBloom);
-    const double loud = lateFraction (0.90, ModalResonator::kMaxBloom);
+    const double quiet = lateFraction (0.008, ModalResonator::kMaxBloom);
+    const double loud = lateFraction (0.030, ModalResonator::kMaxBloom);
 
     std::printf ("        [bloom] late high fraction, quiet %.4f loud %.4f\n",
                  quiet, loud);
@@ -593,8 +616,8 @@ TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
     CHECK (loud > 3.0 * quiet);
 
     // And the linear bank is genuinely indifferent to level.
-    const double quietOff = lateFraction (0.10, 0.0);
-    const double loudOff = lateFraction (0.90, 0.0);
+    const double quietOff = lateFraction (0.008, 0.0);
+    const double loudOff = lateFraction (0.030, 0.0);
 
     CHECK (std::abs (loudOff - quietOff) < 1.0e-9);
 }

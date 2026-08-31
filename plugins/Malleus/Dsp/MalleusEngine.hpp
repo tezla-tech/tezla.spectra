@@ -170,6 +170,13 @@ public:
 
         chosen->noteOn (note, hz, velocity, seed, settings_,
                         tuning_.getScale(), noteOnCount_);
+
+        // `noteOn` rebuilds the bank's poles from scratch, so the two live
+        // controls have to be re-applied after it rather than before -- a
+        // note struck with the hand already down is damped from its first
+        // sample, not from the next control tick.
+        chosen->setBloom (bloom_);
+        chosen->setDamp (damp_);
     }
 
     void noteOff (int note) noexcept
@@ -177,6 +184,17 @@ public:
         for (auto& voice : voices_)
             if (voice.isHeld() && voice.getNote() == note)
                 voice.noteOff();
+    }
+
+    /// The two controls that are played rather than set: pushed to every
+    /// voice at every control tick and at every note-on, so a hand on the
+    /// object and a bloom coming up are heard on the notes already ringing.
+    void setCharacter (double bloom, double damp) noexcept
+    {
+        bloom_ = bloom;
+        damp_ = damp;
+
+        applyCharacter();
     }
 
     void allNotesOff() noexcept
@@ -205,6 +223,7 @@ public:
                 for (auto& voice : voices_)
                     voice.controlTick (kControlIntervalSamples);
 
+                applyCharacter();
                 maintainSympathetic();
                 sinceControl_ = kControlIntervalSamples;
             }
@@ -292,6 +311,15 @@ public:
 private:
     static constexpr std::uint64_t kSeedBase = 0x7E21ABA5E0000001ULL;
 
+    void applyCharacter() noexcept
+    {
+        for (auto& voice : voices_)
+        {
+            voice.setBloom (bloom_);
+            voice.setDamp (damp_);
+        }
+    }
+
     void maintainSympathetic() noexcept
     {
         if (sympatheticCount_ <= 0)
@@ -344,6 +372,9 @@ private:
 
     /// Scratch for the mono fold; see the mono `process` overload.
     std::vector<double> monoRight_;
+
+    double bloom_ { 0.0 };
+    double damp_ { 0.0 };
     long long noteOnCount_ { 0 };
 };
 

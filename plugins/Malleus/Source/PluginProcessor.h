@@ -56,7 +56,10 @@ inline constexpr auto position     = "position";
 
 // EXCITE
 inline constexpr auto exciter      = "exciter";
+inline constexpr auto exciterB     = "exciterB";
+inline constexpr auto exciterBlend = "exciterBlend";
 inline constexpr auto hardness     = "hardness";
+inline constexpr auto hardnessVel  = "hardnessVel";
 inline constexpr auto noiseAmount  = "noiseAmount";
 inline constexpr auto dropDepth    = "dropDepth";
 inline constexpr auto dropTime     = "dropTime";
@@ -75,6 +78,13 @@ inline constexpr auto sympCoupling   = "sympCoupling";
 inline constexpr auto sympDrone      = "sympDrone";
 inline constexpr auto sympDecay      = "sympDecay";
 inline constexpr auto sympBrightness = "sympBrightness";
+
+// PHASE 2 -- the object answers back, and you can hear it from somewhere
+inline constexpr auto bloom        = "bloom";
+inline constexpr auto damp         = "damp";
+inline constexpr auto listenLeft   = "listenLeft";
+inline constexpr auto listenRight  = "listenRight";
+inline constexpr auto listenAmount = "listenAmount";
 
 // OUTPUT
 inline constexpr auto outputTrim   = "outputTrim";

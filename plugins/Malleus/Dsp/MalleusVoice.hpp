@@ -300,6 +300,18 @@ public:
         }
     }
 
+    /// **Bloom and Damp are pushed live, not frozen at note-on.**
+    ///
+    /// Every other setting here is copied when the key goes down, because a
+    /// ringing object should keep the shape it was struck with. These two are
+    /// the exceptions and they are exceptions on purpose: a hand landing on a
+    /// gong is a thing you do *while* it rings, and turning Bloom up on a
+    /// sustained tam-tam is the gesture the control exists for. Both setters
+    /// underneath are no-op guarded and state-preserving, so pushing them
+    /// every control chunk costs nothing and cannot click.
+    void setBloom (double amount) noexcept { bank_.setBloom (amount); }
+    void setDamp (double amount) noexcept { bank_.setDamp (amount); }
+
     /// The hardness this note was actually struck with, after the velocity
     /// amount. Exposed because the law is the claim and a rendered note is a
     /// blunt way to check it: the difference between the two spellings of a

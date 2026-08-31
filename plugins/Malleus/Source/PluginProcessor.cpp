@@ -20,7 +20,15 @@ namespace
 {
 constexpr auto kStateTypeName = "MalleusState";
 constexpr int kSchemaV1 = 1;
-constexpr int kStateSchemaVersion = kSchemaV1;
+
+/// Phase 2's parameters carry their own version hint, and the phase-1 ones
+/// keep theirs forever: the hint feeds the VST3 parameter ID, so bumping it on
+/// a live parameter is indistinguishable from renaming it (CLAUDE.md
+/// section 8). Every one of them defaults to neutral, so a project saved
+/// before they existed reopens sounding the same.
+constexpr int kSchemaV2 = 2;
+
+constexpr int kStateSchemaVersion = kSchemaV2;
 
 // The same property names as Sonitus and Svarayantra, so the tuning
 // workflow reads identically across all three instruments.
@@ -195,6 +203,15 @@ const std::vector<Preset>& presets()
                 { ids::sympLevel, 0.35f },
                 { ids::sympDrone, 0.25f },
                 { ids::sympDecay, 14.0f },
+
+                // **-12 dB, and it is a fix rather than a taste.** Held, this
+                // patch peaked at 1.945 of full scale -- nearly +6 dB over --
+                // because a bow sustains and the taraf's drone adds to it for
+                // as long as the key is down. Found by rendering every preset
+                // while measuring the phase-2 four; nothing else could have,
+                // because a preset's level is not a claim any test makes.
+                // Measured after: 0.489.
+                { ids::outputTrim, -12.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -253,6 +270,129 @@ const std::vector<Preset>& presets()
                 { ids::rollRatio, 0.74f },
                 { ids::rollMinimum, 0.022f },
                 { ids::rollHumanise, 0.45f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The flagship phase-2 patch.** A tam-tam does not decay so much
+            // as *develop*: the shimmer that arrives a second after the strike
+            // was not there at contact, and it is energy climbing out of the
+            // low modes rather than any filter or reverb. Bloom is the only
+            // control here that can do that, and it needs a big plate, a long
+            // decay and a hard hit to show it.
+            //
+            // Play it hard, then play it quietly, and listen to the difference
+            // in *character* rather than in level: the coupling rate goes as
+            // amplitude squared, so a soft hit stays a soft plate.
+            "Tam-tam Bloom -- hit it hard",
+            {
+                { ids::material, 3.6f },        // plate towards bell
+                { ids::stretch, 0.14f },
+                { ids::partials, 56.0f },
+                { ids::decay, 9.0f },
+                { ids::tilt, 0.28f },
+                { ids::position, 0.17f },
+                { ids::hardness, 0.34f },
+                { ids::noiseAmount, 0.18f },
+                { ids::hardnessVel, 0.55f },
+                { ids::bloom, 0.72f },
+                { ids::listenAmount, 0.8f },
+                { ids::listenLeft, 0.13f },
+                { ids::listenRight, 0.61f },
+                // +24 dB, the parameter's ceiling. Bloom redistributes energy
+                // upward and the vactrol gate then takes most of it away, so
+                // this patch is 10 dB quieter with Bloom up than with it down
+                // -- which is the trade the control makes, not a defect.
+                { ids::outputTrim, 24.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Damp is played, not set.** A cymbal with the edge free, and a
+            // Damp knob under your left hand: push it while the note rings and
+            // the top goes first, so the object turns dull before it turns
+            // quiet. That is what a palm does and what a fader does not.
+            //
+            // Assign Damp to an expression pedal or aftertouch and the choke
+            // is a gesture rather than an edit.
+            "Choked Cymbal -- ride the Damp knob",
+            {
+                { ids::material, 3.9f },
+                { ids::stretch, 0.35f },
+                { ids::partials, 60.0f },
+                { ids::decay, 7.0f },
+                { ids::tilt, 0.22f },
+                { ids::position, 0.11f },
+                { ids::hardness, 0.86f },
+                { ids::noiseAmount, 0.26f },
+                { ids::hardnessVel, 0.4f },
+                { ids::damp, 0.0f },            // your hand goes here
+                { ids::listenAmount, 0.6f },
+                { ids::listenLeft, 0.21f },
+                { ids::listenRight, 0.44f },
+                { ids::outputTrim, 22.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Two contacts.** A wooden bar struck with a mallet that has a
+            // fingernail on it: mostly Mallet, a quarter Pluck, so the attack
+            // has a click on it that no single contact model gives. The blend
+            // is a lerp on the excitation, so pulling it to either end is
+            // exactly the single exciter.
+            //
+            // Velocity picks the hardness at 80%, which is most of what makes
+            // this playable as a drum rather than settable as a sound.
+            "Fingernail Marimba -- two contacts",
+            {
+                { ids::material, 1.0f },        // bar
+                { ids::partials, 28.0f },
+                { ids::decay, 1.4f },
+                { ids::tilt, 0.58f },
+                { ids::position, 0.24f },
+                { ids::hardness, 0.55f },
+                { ids::hardnessVel, 0.8f },
+                { ids::exciterB, 1.0f },        // Pluck
+                { ids::exciterBlend, 0.26f },
+                { ids::noiseAmount, 0.14f },
+                { ids::listenAmount, 0.7f },
+                { ids::listenLeft, 0.19f },
+                { ids::listenRight, 0.41f },
+                { ids::outputTrim, 22.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **A bow, started with a pluck** -- which is how a bowed string is
+            // actually begun, and something one exciter choice cannot say. Hold
+            // a key: the pluck gives the attack, the bow takes over and
+            // sustains it.
+            //
+            // The listening pair is offset rather than mirrored (0.10 / 0.75),
+            // which is the widest pair that still survives a mono fold: same
+            // channel correlation as a mirrored 0.20 / 0.80 and it keeps 0.641
+            // of its level in mono against 0.600.
+            "Plucked Bow -- hold a key",
+            {
+                { ids::exciter, 3.0f },         // Bow
+                { ids::exciterB, 1.0f },        // Pluck
+                { ids::exciterBlend, 0.35f },
+                { ids::material, 0.4f },        // string into bar
+                { ids::stretch, 0.05f },
+                { ids::partials, 36.0f },
+                { ids::decay, 4.0f },
+                { ids::tilt, 0.45f },
+                { ids::position, 0.13f },
+                { ids::bowPressure, 0.38f },
+                { ids::bowSpeed, 0.52f },
+                { ids::bloom, 0.22f },
+                { ids::listenAmount, 1.0f },
+                { ids::listenLeft, 0.10f },
+                { ids::listenRight, 0.75f },
+                { ids::sympCount, 4.0f },
+                { ids::sympLevel, 0.28f },
+                { ids::sympDecay, 8.0f },
+                { ids::outputTrim, 21.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -355,9 +495,28 @@ MalleusProcessor::createParameterLayout()
                            static_cast<int> (std::size (exciterNames::list))),
         0));
 
+    // Slot B and the blend. The **choice** defaults to Pluck rather than to
+    // Mallet, and that is not a neutrality violation: neutrality lives in the
+    // blend, which defaults to 0 and makes slot B unreachable. Defaulting the
+    // choice to something *different* from slot A is what makes turning the
+    // blend up do something audible on the first try.
+    parameters.push_back (std::make_unique<ChoiceParameter> (
+        juce::ParameterID { ids::exciterB, kSchemaV2 }, "Exciter B",
+        juce::StringArray (exciterNames::list,
+                           static_cast<int> (std::size (exciterNames::list))),
+        static_cast<int> (Exciter::Pluck)));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::exciterBlend, kSchemaV2 }, "Exciter blend",
+        Range (0.0f, 1.0f, 0.001f), 0.0f));
+
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::hardness, kSchemaV1 }, "Hardness",
         Range (0.0f, 1.0f, 0.001f), 0.5f));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::hardnessVel, kSchemaV2 }, "Hardness from velocity",
+        Range (0.0f, 1.0f, 0.001f), 0.0f));
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::noiseAmount, kSchemaV1 }, "Scrape",
@@ -429,6 +588,33 @@ MalleusProcessor::createParameterLayout()
 
     // ---- OUTPUT ----------------------------------------------------------
 
+    // ---- CHARACTER -------------------------------------------------------
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::bloom, kSchemaV2 }, "Bloom",
+        Range (0.0f, 1.0f, 0.001f), 0.0f));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::damp, kSchemaV2 }, "Damp",
+        Range (0.0f, 1.0f, 0.001f), 0.0f));
+
+    // ---- LISTEN ----------------------------------------------------------
+
+    // Both positions default to the middle and the amount to zero, so the
+    // plugin is the mono instrument that shipped until somebody asks for two
+    // ears. The positions are inert at amount 0 and a test pins that.
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::listenLeft, kSchemaV2 }, "Listen left",
+        Range (0.01f, 0.99f, 0.001f), 0.5f));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::listenRight, kSchemaV2 }, "Listen right",
+        Range (0.01f, 0.99f, 0.001f), 0.5f));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::listenAmount, kSchemaV2 }, "Listen amount",
+        Range (0.0f, 1.0f, 0.001f), 0.0f));
+
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::outputTrim, kSchemaV1 }, "Output trim",
         Range (-60.0f, 24.0f, 0.01f), 0.0f, attributes ("dB")));
@@ -483,8 +669,19 @@ void MalleusProcessor::pullParameters()
     settings.exciter = static_cast<Exciter> (
         juce::jlimit (0, static_cast<int> (Exciter::count) - 1, exciterIndex));
 
+    const auto exciterBIndex = static_cast<int> (valueOf (state_, ids::exciterB));
+    settings.exciterB = static_cast<Exciter> (
+        juce::jlimit (0, static_cast<int> (Exciter::count) - 1, exciterBIndex));
+
+    settings.exciterBlend = valueOf (state_, ids::exciterBlend);
+
     settings.hardness = valueOf (state_, ids::hardness);
+    settings.hardnessVelocity = valueOf (state_, ids::hardnessVel);
     settings.noiseAmount = valueOf (state_, ids::noiseAmount);
+
+    settings.listenLeft = valueOf (state_, ids::listenLeft);
+    settings.listenRight = valueOf (state_, ids::listenRight);
+    settings.listenAmount = valueOf (state_, ids::listenAmount);
     settings.dropSemitones = valueOf (state_, ids::dropDepth);
     settings.dropSeconds = valueOf (state_, ids::dropTime);
     settings.bowPressure = valueOf (state_, ids::bowPressure);
@@ -503,6 +700,10 @@ void MalleusProcessor::pullParameters()
                             valueOf (state_, ids::sympDrone),
                             valueOf (state_, ids::sympDecay),
                             valueOf (state_, ids::sympBrightness));
+
+    // Bloom and Damp are pushed to the *ringing* voices rather than copied at
+    // note-on, which is what makes them playable -- see MalleusVoice.
+    engine_.setCharacter (valueOf (state_, ids::bloom), valueOf (state_, ids::damp));
 
     outputGain_ = std::pow (10.0, valueOf (state_, ids::outputTrim) / 20.0);
 }

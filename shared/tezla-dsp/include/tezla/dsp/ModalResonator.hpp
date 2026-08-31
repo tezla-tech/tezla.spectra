@@ -59,6 +59,30 @@ public:
     /// itself at any pitch, decay or mode count the instrument reaches.
     static constexpr double kMaxBloom = 1.0;
 
+    /// What counts as a large displacement, in output units.
+    ///
+    /// Chosen by measurement, not by taste. A Malleus voice at full velocity
+    /// peaks near **0.046**, and the coupling's useful range has to bracket
+    /// that. The late high-band fraction of a 32-mode bar at bloom 1, against
+    /// a linear bank's 0.2213 at every level:
+    ///
+    ///     strike     drive 8   drive 12   drive 20
+    ///      0.004      0.1700     0.1236     0.2258
+    ///      0.008      0.1084     0.7092     0.7337
+    ///      0.013      0.7201     0.7329     0.7489
+    ///      0.020      0.7337     0.7464     0.7626
+    ///      0.050      0.7626     0.7683     0.5978
+    ///      0.090      0.7510     0.5436     0.1506
+    ///
+    /// Twelve, because it engages below the instrument's level and does not
+    /// collapse above it. Twenty puts the reversal at 0.05 -- barely above a
+    /// hard strike -- and eight has not engaged until 0.013. The fall-off at
+    /// the top is the saturation regime the coupling has always had (the
+    /// injection swamping the state rather than perturbing it); the drive
+    /// decides where the instrument sits relative to it, and this puts a hard
+    /// hit in the middle of the curve rather than off either end.
+    static constexpr double kBloomDrive = 48.0;
+
     /// Arithmetic only -- no allocation, safe anywhere. Re-preparing keeps
     /// each mode's frequency/decay/gain request and rebuilds the poles for
     /// the new rate (the coefficients must never embed a stale rate,
@@ -430,7 +454,26 @@ private:
     /// The coupling term, from the previous sample. See setBloom().
     [[nodiscard]] double couplingTerm() const noexcept
     {
-        const double x = previousOutput_;
+        // **Referenced to the amplitude the instrument actually runs at.**
+        //
+        // The von Karman term is a large-displacement effect and its rate goes
+        // as amplitude squared, which is the feature -- a quiet hit must bloom
+        // less than a loud one. But "large" has to be measured against
+        // something, and the something was implicitly 1.0, where the unit test
+        // drives it. A Malleus voice at full velocity peaks near **0.046**, so
+        // `x * |x|` came out around 0.002 and the control did nothing at all
+        // in the instrument: measured through the plugin, the late-window
+        // energy shares at 110/220/440 Hz read 0.1797/0.3642/0.4481 with Bloom
+        // off and 0.1917/0.3584/0.4434 with it at maximum. A knob that moves
+        // the fourth decimal place is not a knob.
+        //
+        // `kBloomDrive` puts a full-velocity strike at the top of the curve's
+        // useful range instead. It changes nothing about the bound -- the
+        // quotient below is still under 1 for every finite input, and the
+        // energy renormalisation still caps the whole bank -- and it keeps the
+        // amplitude dependence exactly: a quarter-velocity hit is a quarter of
+        // the drive and a sixteenth of the rate.
+        const double x = kBloomDrive * previousOutput_;
 
         // Quadratic in magnitude, odd in sign: the cascade without the DC.
         const double quadratic = x * (x < 0.0 ? -x : x);
