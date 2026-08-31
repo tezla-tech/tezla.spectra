@@ -1146,3 +1146,330 @@ TEZLA_TEST (noise_is_flat_darkens_with_morph_and_two_seeds_are_two_streams)
 
     CHECK (std::abs (dot) / std::sqrt (ea * ec) < 0.05);
 }
+
+// ---------------------------------------------------------------------------
+// Operator feedback
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (feedback_at_zero_is_the_identity_bit_for_bit)
+{
+    // The regression guard that matters most: every project saved before
+    // phase 4 existed has no feedback in it, and must reopen sounding the
+    // same. Not nearly the same -- the same doubles.
+    //
+    // The guard is in `advance()`: the feedback term is only added when the
+    // amount is non-zero, so that this is true by inspection rather than by
+    // an argument about what `x + 0.0` does to a signed zero.
+    for (int shapeIndex = 0; shapeIndex < static_cast<int> (OscShape::count); ++shapeIndex)
+    {
+        const auto shape = static_cast<OscShape> (shapeIndex);
+
+        Oscillator plain;
+        Oscillator fed;
+
+        for (auto* osc : { &plain, &fed })
+        {
+            osc->setShape (shape);
+            osc->setIncrement (110.0 / kRate);
+            osc->setWidth (0.35);
+            osc->setMorph (0.4);
+            osc->reset (kSafeStart);
+        }
+
+        fed.setFeedback (0.0);
+
+        for (std::size_t n = 0; n < 4096; ++n)
+            CHECK (isExactly (plain.advance(), fed.advance()));
+    }
+}
+
+TEZLA_TEST (feedback_walks_a_sine_towards_a_saw)
+{
+    // What operator feedback is *for*. A sine has one harmonic; feeding its
+    // own output back into its phase generates a series, and the series grows
+    // as the feedback rises. This is the DX-series behaviour and it is the
+    // whole reason the control earns a place on a reese.
+    //
+    // Measured, partials above -40 dBc on a 110 Hz sine:
+    //
+    //     feedback   partials
+    //        0.00           1     a sine, and nothing else
+    //        0.25           7
+    //        0.50           7
+    //        1.00          12
+    //
+    // Pinned exactly, because they are deterministic. Note 0.25 and 0.50
+    // reading the same: the count is a threshold crossing, so it quantises --
+    // the partials between them grew without any new one crossing -40 dBc.
+    // That is why the assertions below are not a strict monotone chain; a
+    // test that demanded one would be asserting something the measurement
+    // does not support.
+    const auto partialsAbove = [] (double feedback)
+    {
+        Oscillator osc;
+        osc.setShape (OscShape::sine);
+        osc.setIncrement (110.0 / kRate);
+        osc.setFeedback (feedback);
+        osc.reset (kSafeStart);
+
+        const auto report = measure::analyseHarmonics (render (osc, kFft), kRate, 110.0);
+
+        int count = 0;
+
+        for (const double db : report.harmonicsDb)
+            if (db > -40.0)
+                ++count;
+
+        return count;
+    };
+
+    const int none = partialsAbove (0.0);
+    const int quarter = partialsAbove (0.25);
+    const int half = partialsAbove (0.5);
+    const int full = partialsAbove (1.0);
+
+    std::printf ("        [feedback] partials above -40 dBc: %d / %d / %d / %d\n",
+                 none, quarter, half, full);
+
+    CHECK (none == 1);            // a sine is a sine, and nothing else
+    CHECK (quarter == 7);
+    CHECK (half == 7);
+    CHECK (full == 12);
+}
+
+TEZLA_TEST (feedback_uses_two_samples_so_it_cannot_ring_at_nyquist)
+{
+    // The mechanism, and the reason it is two samples rather than one.
+    //
+    // A single-sample feedback path lets an operator flip between the two
+    // extremes of its waveform on alternating samples: bounded, and a pure
+    // Nyquist tone rather than a musical one. Averaging the last two outputs
+    // is a one-zero lowpass with a null at exactly Nyquist, so that mode has
+    // no gain there at all.
+    //
+    // Measured as **roughness** -- the sum of squared first differences over
+    // the sum of squares, which reads 4.0 for a pure sample-to-sample
+    // alternation and near zero for a smooth waveform. Energy in a high band
+    // will not do: a sine with a cycle of self-PM has genuine harmonics up
+    // there, and a test that counted those would be calling the feature a
+    // fault.
+    //
+    //     feedback   two-sample mean   single sample (break-check)
+    //        0.000           0.00021        0.00021
+    //        0.125           0.00041        0.00046
+    //        0.250           0.00277        1.89506
+    //        0.500           1.81174        0.91833
+    //        1.000           0.79925        1.21345
+    //
+    // **The mean moves the onset, it does not abolish it**, and that is worth
+    // stating rather than glossing: at a quarter cycle of feedback it is the
+    // difference between a smooth waveform and a rough one by a factor of
+    // 685, and by half a cycle both are rough because a sine modulated that
+    // hard by itself genuinely is a noisy waveform. The control's usable
+    // range is the part the mean protects, and the top of it is a noise
+    // source on purpose -- the DX-series behaves the same way and for the
+    // same reason.
+    //
+    // So the assertion is made where the claim is true: at 0.25.
+    Oscillator osc;
+    osc.setShape (OscShape::sine);
+    osc.setIncrement (110.0 / kRate);
+    osc.setFeedback (0.25);
+    osc.reset (kSafeStart);
+
+    const auto rendered = render (osc, kFft);
+
+    double difference = 0.0;
+    double energy = 0.0;
+
+    for (std::size_t n = 1; n < rendered.size(); ++n)
+    {
+        const double step = rendered[n] - rendered[n - 1];
+
+        difference += step * step;
+        energy += rendered[n] * rendered[n];
+    }
+
+    const double roughness = energy > 0.0 ? difference / energy : 0.0;
+
+    std::printf ("        [feedback] roughness at 0.25: %.5f\n", roughness);
+
+    CHECK (roughness < 0.05);
+}
+
+TEZLA_TEST (every_feedback_setting_of_every_shape_stays_bounded_and_finite)
+{
+    // CLAUDE.md section 7: a feedback loop around a nonlinearity needs a bound
+    // that cannot be defeated, **and a test that sweeps the whole parameter
+    // space rather than sampling it**.
+    //
+    // The bound here is structural rather than bolted on, and the sweep is
+    // what checks the claim. Phase modulation is applied to the *reading* of
+    // the waveform, not to the phase accumulator, so whatever phase is asked
+    // for the value returned is a shape function of a wrapped phase -- and
+    // every shape is bounded to [-1, 1]. The loop gain on amplitude is
+    // therefore zero by construction: more feedback makes a differently
+    // shaped output, never a bigger one.
+    //
+    // Nine shapes x 41 feedback settings x 5 pitches spanning eight octaves =
+    // 1845 combinations, 2048 samples each. The triangle is the one worth
+    // sweeping hardest, because it is the only shape that *integrates*: its
+    // state could in principle wind up even though its input cannot.
+    //
+    // Measured: the worst absolute sample anywhere in the sweep is exactly
+    // 4.0000 -- the triangle's ceiling, doing its job. Every other shape stays
+    // under 2.2. Nothing is non-finite anywhere.
+    //
+    // That the triangle needs a ceiling at all is what this sweep found, and
+    // it found a bug that predates the feature: see
+    // `phase_modulating_a_skewed_triangle_used_to_wind_up` below.
+    double worst = 0.0;
+    int combinations = 0;
+
+    for (int shapeIndex = 0; shapeIndex < static_cast<int> (OscShape::count); ++shapeIndex)
+    {
+        for (int step = 0; step <= 40; ++step)
+        {
+            for (const double hz : { 20.0, 110.0, 440.0, 2000.0, 5000.0 })
+            {
+                Oscillator osc;
+                osc.setShape (static_cast<OscShape> (shapeIndex));
+                osc.setIncrement (hz / kRate);
+                osc.setWidth (0.3);
+                osc.setMorph (0.6);
+
+                // Deliberately past the control's own ceiling, because a
+                // modulated control can be pushed there and the clamp inside
+                // setFeedback is what has to hold.
+                osc.setFeedback (2.0 * Oscillator::kMaxFeedback
+                                   * static_cast<double> (step) / 40.0);
+                osc.reset (kSafeStart);
+
+                ++combinations;
+
+                for (std::size_t n = 0; n < 2048; ++n)
+                {
+                    const double value = osc.advance();
+
+                    CHECK (std::isfinite (value));
+                    worst = std::max (worst, std::abs (value));
+                }
+            }
+        }
+    }
+
+    std::printf ("        [feedback] %d combinations, worst |sample| %.4f\n",
+                 combinations, worst);
+
+    // The triangle's ceiling is the bound, so the sweep may reach it and must
+    // not pass it. A loop that ran away would reach infinity in a few hundred
+    // samples rather than sitting exactly on a clamp.
+    CHECK (worst <= Oscillator::kTriangleCeiling);
+}
+
+TEZLA_TEST (a_skewed_triangle_stays_a_triangle_instead_of_winding_up)
+{
+    // **A bug that predates the feature that found it.** The feedback sweep
+    // above found the triangle reaching hundreds of times full scale, and the
+    // cause turned out to have nothing to do with feedback: a square of duty
+    // w has mean 2w - 1, the triangle is made by integrating that square, and
+    // an integrator integrates a mean into a ramp. The 1e-4 leak was carrying
+    // the whole job of removing it and is nowhere near strong enough.
+    //
+    // Peak |output| at 110 Hz, before and after removing the mean:
+    //
+    //     width    before    after
+    //      0.02     88.08     1.27
+    //      0.10     73.69     1.38
+    //      0.25     46.58     1.66
+    //      0.40     19.29     1.82
+    //      0.50      1.46     1.46     <- the only width that was ever right
+    //      0.75     46.58     1.01
+    //      0.98     88.08     1.23
+    //
+    // Only the symmetric triangle was correct. Every skewed one was a ramp
+    // with a waveform riding on it, growing with the skew -- which is exactly
+    // why it survived: the default is 0.5, and nothing in the suite swept the
+    // width of a triangle. No existing test changed when this was fixed,
+    // which is the same statement from the other side.
+    // Above about 1 kHz the extreme skews stop being representable at all,
+    // and that is a sampling limit rather than an arithmetic one: at 2 kHz a
+    // width of 0.02 asks for a pulse **0.48 samples wide**, so the sampled
+    // square's mean is not the ideal 2w - 1 however exactly the ideal is
+    // subtracted. There the ceiling is what holds it, which is the job a
+    // bound that cannot be defeated exists to do.
+    //
+    //     pitch     worst    at width
+    //       20 Hz    1.86        0.37
+    //      110 Hz    1.97        0.37
+    //      440 Hz    2.00        0.37
+    //     1000 Hz    2.00        0.37
+    //     2000 Hz    4.00        0.02   <- the ceiling, sub-sample pulse
+    //    16000 Hz    4.00        0.02
+    //
+    // So the assertion is split: bounded like a waveform where a triangle is
+    // actually played, and bounded by the ceiling everywhere.
+    double musical = 0.0;
+    double everywhere = 0.0;
+
+    for (int widthStep = 2; widthStep <= 98; ++widthStep)
+    {
+        for (const double hz : { 20.0, 110.0, 440.0, 1000.0, 4000.0, 16000.0 })
+        {
+            Oscillator osc;
+            osc.setShape (OscShape::triangle);
+            osc.setIncrement (hz / kRate);
+            osc.setWidth (static_cast<double> (widthStep) / 100.0);
+            osc.reset (kSafeStart);
+
+            for (std::size_t n = 0; n < 20000; ++n)
+            {
+                const double value = std::abs (osc.advance());
+
+                everywhere = std::max (everywhere, value);
+
+                if (hz <= 1000.0)
+                    musical = std::max (musical, value);
+            }
+        }
+    }
+
+    std::printf ("        [triangle] worst |sample|: %.4f up to 1 kHz, %.4f overall\n",
+                 musical, everywhere);
+
+    // A triangle is a bounded waveform. Before the fix this read 88.
+    CHECK (musical < 2.05);
+    CHECK (everywhere <= Oscillator::kTriangleCeiling);
+}
+
+TEZLA_TEST (the_symmetric_triangle_is_unchanged_to_the_bit)
+{
+    // The other half of the fix: at width 0.5 the square's mean is exactly
+    // zero and the normalisation factor is exactly 4 * 0.5 * 0.5 = 1.0, so
+    // the default triangle -- and every project that uses one -- comes out
+    // bit for bit as it did before. Checked against a reference computed the
+    // old way, inline, so the claim does not rest on the class agreeing with
+    // itself.
+    Oscillator osc;
+    osc.setShape (OscShape::triangle);
+    osc.setIncrement (110.0 / kRate);
+    osc.setWidth (0.5);
+    osc.reset (kSafeStart);
+
+    // The pre-fix arithmetic, reproduced here: no mean removal, no
+    // normalisation, same leak.
+    Oscillator reference;
+    reference.setShape (OscShape::pulse);   // the square the triangle integrates
+    reference.setIncrement (110.0 / kRate);
+    reference.setWidth (0.5);
+    reference.reset (kSafeStart);
+
+    double state = 0.0;
+
+    for (std::size_t n = 0; n < 8192; ++n)
+    {
+        state += 4.0 * (110.0 / kRate) * reference.advance() - 1.0e-4 * state;
+
+        CHECK (isExactly (osc.advance(), state));
+    }
+}

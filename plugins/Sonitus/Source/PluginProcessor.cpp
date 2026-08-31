@@ -31,7 +31,11 @@ constexpr int kSchemaV1 = 1;
 /// parameter ID, so bumping a live one is indistinguishable from renaming it.
 constexpr int kSchemaV2 = 2;
 
-constexpr int kStateSchemaVersion = kSchemaV2;
+/// Phase 4, and the same rule again: new parameters carry V3, every existing
+/// one keeps the version it was born with.
+constexpr int kSchemaV3 = 3;
+
+constexpr int kStateSchemaVersion = kSchemaV3;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// Where the tuning is stashed inside the state tree.
@@ -308,6 +312,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::pmIndex, kSchemaV1 }, "PM index",
         skewedRange (0.0f, 8.0f, 1.5f), 0.0f, percentAttributes()));
+
+    // **B modulating A** -- the other half of the FM pair. Same range and
+    // skew as the forward path, because they are the same quantity in the
+    // other direction; what differs is that this one is a sample late, which
+    // is what makes the loop computable rather than algebraic.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::pmReverse, kSchemaV3 }, "PM reverse",
+        skewedRange (0.0f, 8.0f, 1.5f), 0.0f, percentAttributes()));
+
+    // **Operator feedback**, in cycles of self-deviation. One cycle is the
+    // ceiling, which is about where the DX-series tops out and about where the
+    // sound stops being a bright waveform and starts being noise -- which is
+    // a legitimate destination, and the tooltip says so.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::feedbackA, kSchemaV3 }, "Feedback A",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::feedbackB, kSchemaV3 }, "Feedback B",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f, percentAttributes()));
 
     // ---- sub and destruction ------------------------------------------------
 
@@ -992,6 +1016,10 @@ void SonitusProcessor::pullParameters()
     v.centsB = valueOf (state_, ids::centsB);
     v.widthB = valueOf (state_, ids::widthB);
     v.morphB = valueOf (state_, ids::morphB);
+
+    v.feedbackA = valueOf (state_, ids::feedbackA);
+    v.feedbackB = valueOf (state_, ids::feedbackB);
+    v.pmReverse = valueOf (state_, ids::pmReverse);
     v.unisonB = indexOf (state_, ids::unisonB);
     v.detuneB = valueOf (state_, ids::detuneB);
     v.spreadB = valueOf (state_, ids::spreadB);
@@ -1109,8 +1137,10 @@ void SonitusProcessor::pullParameters()
             case ModDestination::detuneB:     v.slots[slot].depth = depth * 1200.0; break; // cents
 
             // The voice clamps phase modulation at 16 and the depth reached 8,
-            // so half the range was unreachable from the matrix.
-            case ModDestination::pmIndex:     v.slots[slot].depth = depth * 16.0; break;
+            // so half the range was unreachable from the matrix. The reverse
+            // path shares the ceiling and therefore the scale.
+            case ModDestination::pmIndex:
+            case ModDestination::pmReverse:   v.slots[slot].depth = depth * 16.0; break;
 
             // The rest are already normalised, so the -1..+1 depth is the
             // depth. Listed rather than defaulted: a destination added to the
@@ -1133,6 +1163,11 @@ void SonitusProcessor::pullParameters()
             case ModDestination::kargyraa:
             case ModDestination::morphA:
             case ModDestination::morphB:
+
+            // Feedback is in cycles and tops out at one, so a normalised depth
+            // already spans the whole control.
+            case ModDestination::feedbackA:
+            case ModDestination::feedbackB:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }

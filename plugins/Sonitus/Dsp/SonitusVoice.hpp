@@ -151,6 +151,12 @@ enum class ModDestination
     morphA,
     morphB,
 
+    /// Phase 4, and appended for the same reason again: the two operator
+    /// feedbacks and the reverse phase-modulation path.
+    feedbackA,
+    feedbackB,
+    pmReverse,         ///< B modulating A -- the other half of the FM pair
+
     count
 };
 
@@ -242,6 +248,20 @@ struct VoiceParameters
     /// the carrier's pitch away permanently, and a unison stack has DC in it by
     /// construction.
     double pmIndex { 0.0 };            ///< 0 .. 8
+
+    /// **Operator feedback**, per oscillator, in cycles of self-deviation.
+    /// Zero is off and is bit-exact. See `Oscillator::setFeedback` for why the
+    /// loop cannot run away and what it can still do.
+    double feedbackA { 0.0 };          ///< 0 .. 1
+    double feedbackB { 0.0 };          ///< 0 .. 1
+
+    /// **B modulating A**, the other half of the pair, in cycles.
+    ///
+    /// With `pmIndex` non-zero as well this closes a loop: A modulates B and B
+    /// modulates A. It is broken by one sample -- A reads the *previous*
+    /// sample's B -- which is what makes it computable at all, and which is
+    /// also why the two directions do not sound alike at the same depth.
+    double pmReverse { 0.0 };          ///< 0 .. 8
 
     // ---- sub -----------------------------------------------------------------
 
@@ -686,6 +706,21 @@ public:
         ring_ = std::clamp (parameters.ringAmount + amount (ModDestination::ringAmount), 0.0, 1.0);
         pmIndex_ = std::clamp (parameters.pmIndex + amount (ModDestination::pmIndex), 0.0, 16.0);
 
+        // Both feedbacks and the reverse path, clamped at the same ceilings
+        // the controls carry. The clamp is what section 7 calls a bound that
+        // cannot be defeated: modulation can push a control past its own range
+        // and these are the only things standing between that and an operator
+        // asked for sixteen cycles of self-deviation.
+        pmReverse_ = std::clamp (parameters.pmReverse + amount (ModDestination::pmReverse),
+                                 0.0, 16.0);
+
+        bankA_.setFeedback (std::clamp (parameters.feedbackA
+                                          + amount (ModDestination::feedbackA),
+                                        0.0, dsp::Oscillator::kMaxFeedback));
+        bankB_.setFeedback (std::clamp (parameters.feedbackB
+                                          + amount (ModDestination::feedbackB),
+                                        0.0, dsp::Oscillator::kMaxFeedback));
+
         sub_.setShape (parameters.subShape == SubShape::sine ? OscShape::sine : OscShape::pulse);
         sub_.setIncrement (subIncrement (pitchRatio));
 
@@ -736,7 +771,20 @@ public:
         double leftB = 0.0;
         double rightB = 0.0;
 
-        bankA_.process (0.0, leftA, rightA);
+        // **The reverse path is one sample old, and it has to be.** A runs
+        // first because it is the sync master and the forward modulator, so
+        // the only B available to it is last sample's. That single-sample
+        // delay is what turns an algebraic loop into a computable one, and it
+        // is why A -> B and B -> A do not sound alike at the same depth: the
+        // forward path is instantaneous within the sample, the reverse is not.
+        //
+        // Guarded rather than always added so that zero reverse PM is the
+        // identity by inspection -- the pre-phase-4 output, bit for bit.
+        const double reverseMod = dsp::isExactlyZero (pmReverse_)
+                                    ? 0.0
+                                    : pmReverse_ * previousB_;
+
+        bankA_.process (reverseMod, leftA, rightA);
 
         // Sync and phase modulation both come from A, and both are read *after*
         // A has advanced this sample -- A is the master, so its edge is what B
@@ -748,6 +796,8 @@ public:
         const double phaseMod = pmIndex_ * modulator;
 
         bankB_.process (phaseMod, leftB, rightB);
+
+        previousB_ = 0.5 * (leftB + rightB);
 
         const double subValue = sub_.advance() * subLevel_;
 
@@ -1138,6 +1188,11 @@ private:
     double ring_ { 0.0 };
     double fold_ { 0.0 };
     double pmIndex_ { 0.0 };
+    double pmReverse_ { 0.0 };
+
+    /// Last sample's B, for the reverse phase-modulation path. The delay is
+    /// the design; see process().
+    double previousB_ { 0.0 };
 
     double syncPhase_ { 0.0 };
 
