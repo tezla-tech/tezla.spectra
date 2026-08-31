@@ -45,6 +45,12 @@ constexpr int kSchemaV4 = 4;
 constexpr int kStateSchemaVersion = kSchemaV4;
 constexpr auto kStateTypeName = "SonitusState";
 
+/// DICEROLL's locks and strengths, stored beside the tuning rather than as
+/// parameters. See `randomizeAllParameters`.
+constexpr auto kDiceLocksProperty = "diceLocks";
+constexpr auto kDiceAmountProperty = "diceAmount";
+constexpr auto kDiceSpreadProperty = "diceSpread";
+
 /// Where the tuning is stashed inside the state tree.
 ///
 /// A property rather than a parameter, because a scale is text and a parameter
@@ -2772,6 +2778,16 @@ void SonitusProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty (kConcertPitchProperty, concertPitchHz_, nullptr);
     state.setProperty (ui::stateIds::tooltipsEnabled, tooltipsEnabled_, nullptr);
 
+    // DICEROLL's locks and strengths, which are state and never parameters --
+    // a lock that was a parameter would be randomised by the button it
+    // restrains, and reset by every preset the player loads. The roll history
+    // is deliberately **not** saved: it is a session's worth of undo, and
+    // writing 41 kB of snapshots into every project file to preserve it would
+    // be paying for the wrong thing.
+    state.setProperty (kDiceLocksProperty, static_cast<int> (diceLocks_), nullptr);
+    state.setProperty (kDiceAmountProperty, diceAmount_, nullptr);
+    state.setProperty (kDiceSpreadProperty, diceSpread_, nullptr);
+
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -2792,6 +2808,22 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
     const juce::String name = tree.getProperty (kScaleNameProperty, "").toString();
     const juce::String text = tree.getProperty (kScaleTextProperty, "").toString();
     tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
+
+    // A project saved before these existed gets the defaults, OUTPUT locked
+    // included -- which is the right answer rather than an accident: an old
+    // project reopening with the dice able to reach the master level would be
+    // a surprise in the dangerous direction.
+    const int storedLocks = tree.getProperty (kDiceLocksProperty,
+                                              static_cast<int> (diceLocks_));
+    diceLocks_ = static_cast<unsigned int> (std::max (0, storedLocks));
+
+    setDiceAmount (static_cast<float> (double (tree.getProperty (kDiceAmountProperty, 1.0))));
+    setDiceSpread (static_cast<float> (double (tree.getProperty (kDiceSpreadProperty, 1.0))));
+
+    // The history describes a parameter set that the state just replaced, so
+    // it cannot survive the load.
+    diceHistory_.clear();
+    diceCursor_ = -1;
 
     const juce::String map = tree.getProperty (kKeyboardMapProperty, "").toString();
 
@@ -2819,6 +2851,86 @@ void SonitusProcessor::setStateInformation (const void* data, int sizeInBytes)
         loadKeyboardMapText (map);
 }
 
+std::vector<float> SonitusProcessor::captureParameterSnapshot() const
+{
+    std::vector<float> snapshot;
+    snapshot.reserve (static_cast<std::size_t> (getParameters().size()));
+
+    for (const auto* parameter : getParameters())
+        snapshot.push_back (parameter->getValue());
+
+    return snapshot;
+}
+
+void SonitusProcessor::applyParameterSnapshot (const std::vector<float>& snapshot)
+{
+    const auto& parameters = getParameters();
+
+    // A snapshot from a build with fewer parameters is applied as far as it
+    // goes rather than refused: the ones it does not mention keep what they
+    // have, which is the same rule a project saved before a parameter existed
+    // already follows.
+    const auto count = std::min (snapshot.size(), static_cast<std::size_t> (parameters.size()));
+
+    for (std::size_t i = 0; i < count; ++i)
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameters[static_cast<int> (i)]))
+            ranged->setValueNotifyingHost (snapshot[i]);
+}
+
+void SonitusProcessor::pushDiceHistory (std::vector<float> snapshot)
+{
+    // Anything ahead of the cursor is a future that this roll replaces --
+    // ordinary undo semantics, and the alternative (a tree) is not what a
+    // dice wants.
+    if (diceCursor_ >= 0 && diceCursor_ + 1 < static_cast<int> (diceHistory_.size()))
+        diceHistory_.erase (diceHistory_.begin() + diceCursor_ + 1, diceHistory_.end());
+
+    diceHistory_.push_back (std::move (snapshot));
+
+    while (diceHistory_.size() > kDiceHistoryLimit)
+        diceHistory_.erase (diceHistory_.begin());
+
+    diceCursor_ = static_cast<int> (diceHistory_.size()) - 1;
+}
+
+bool SonitusProcessor::stepDiceHistory (int direction)
+{
+    const int target = diceCursor_ + (direction < 0 ? -1 : 1);
+
+    if (diceCursor_ < 0 || target < 0 || target >= static_cast<int> (diceHistory_.size()))
+        return false;
+
+    diceCursor_ = target;
+    applyParameterSnapshot (diceHistory_[static_cast<std::size_t> (target)]);
+
+    return true;
+}
+
+void SonitusProcessor::setDiceSectionLocked (DiceSection section, bool locked) noexcept
+{
+    const auto bit = 1u << static_cast<unsigned int> (section);
+
+    diceLocks_ = locked ? (diceLocks_ | bit) : (diceLocks_ & ~bit);
+}
+
+void SonitusProcessor::soloDiceSection (DiceSection section) noexcept
+{
+    // Every section but this one. The mask is built from the seven real
+    // sections; `unknown` is not one of them and is refused separately by the
+    // roller, so it cannot be soloed into relevance.
+    unsigned int everythingElse = 0u;
+
+    for (int i = 0; i < numDiceSections; ++i)
+        if (i != static_cast<int> (section))
+            everythingElse |= 1u << static_cast<unsigned int> (i);
+
+    // Pressing solo on the section that is already alone clears every lock, so
+    // the same button is the way back out. Without this the player has to
+    // remember which one they soloed to undo it, which is exactly the
+    // "lock all the others over and over" tedium the button exists to remove.
+    diceLocks_ = (diceLocks_ == everythingElse) ? 0u : everythingElse;
+}
+
 void SonitusProcessor::randomizeAllParameters()
 {
     // A fresh seed per roll rather than one member generator: two rolls a
@@ -2828,15 +2940,28 @@ void SonitusProcessor::randomizeAllParameters()
     std::mt19937 generator { std::random_device {} () };
     std::uniform_real_distribution<float> uniform { 0.0f, 1.0f };
 
-    // Every parameter, with no exclusion list -- and there is nothing to
-    // exclude, which is worth stating because it is not an oversight.
-    //
-    // Sonitus is an instrument, so it has no bypass parameter to silence (the
-    // header leaves that button out; muting the track is what a player reaches
-    // for). And the tuning was deliberately never made a parameter, because a
-    // scale is a rig decision presets must not reset -- so the scale and the
-    // concert pitch are unreachable from here by construction rather than by a
-    // list somebody has to remember to maintain.
+    // **The state before the roll goes into the history first**, and only if
+    // it is not already the entry the cursor is sitting on -- so hand edits
+    // made between two rolls are recorded rather than lost, and pressing the
+    // button twice does not fill the ring with duplicates.
+    auto before = captureParameterSnapshot();
+
+    if (diceCursor_ < 0 || diceHistory_[static_cast<std::size_t> (diceCursor_)] != before)
+        pushDiceHistory (before);
+
+    const float amount = diceAmount_;
+    const float spread = diceSpread_;
+
+    lastRollCount_ = 0;
+
+    // Every parameter, minus the sections the player locked -- and there is
+    // still no exclusion list of ids anywhere. Sonitus is an instrument, so it
+    // has no bypass parameter to silence (the header leaves that button out;
+    // muting the track is what a player reaches for). And the tuning was
+    // deliberately never made a parameter, because a scale is a rig decision
+    // presets must not reset -- so the scale and the concert pitch are
+    // unreachable from here by construction rather than by a list somebody has
+    // to remember to maintain.
     for (auto* parameter : getParameters())
     {
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter);
@@ -2844,13 +2969,39 @@ void SonitusProcessor::randomizeAllParameters()
         if (ranged == nullptr)
             continue;
 
+        const auto section = diceSectionFor (ranged->paramID.toStdString());
+
+        // `unknown` is treated as locked. A parameter added and not yet
+        // classified is left alone rather than rolled at random, which is the
+        // safe direction for a mistake nobody has noticed yet.
+        if (section == DiceSection::unknown || isDiceSectionLocked (section))
+            continue;
+
+        // SPREAD is how many, not how far: a roll that changes six things is a
+        // different creature from one that changes three hundred, however hard
+        // each one is pushed.
+        if (spread < 1.0f && uniform (generator) >= spread)
+            continue;
+
         // Uniform on the NORMALISED range, which is what "0 to MAX" means for
         // a control whose own range is skewed: a skewed knob spends more of
         // its travel at the fine end, and rolling in its own units would land
         // in the coarse end nearly every time. Choices and switches come out
         // uniform over their entries for the same reason.
-        ranged->setValueNotifyingHost (uniform (generator));
+        const float target = uniform (generator);
+
+        // AMOUNT drags each control towards that target rather than capping how
+        // far it may move -- see `diceValueFor`, which is where the rule and
+        // the reason for its shape live, and which the tests can reach.
+        const float value = diceValueFor (ranged->getValue(), target, amount);
+
+        ranged->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, value));
+        ++lastRollCount_;
     }
+
+    // And the result, so PREV steps back to the patch this roll replaced and
+    // NEXT returns to the roll.
+    pushDiceHistory (captureParameterSnapshot());
 }
 
 juce::AudioProcessorEditor* SonitusProcessor::createEditor()

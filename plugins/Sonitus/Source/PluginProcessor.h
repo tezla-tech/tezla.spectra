@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include <tezla/dsp/Divisions.hpp>
 #include <juce_audio_processors/juce_audio_processors.h>
 
@@ -14,6 +16,7 @@
 #include <tezla/ui/AbCompare.hpp>
 #include <tezla/ui/TuningHost.hpp>
 
+#include "DiceSections.hpp"
 #include "SonitusEngine.hpp"
 
 namespace tezla::sonitus
@@ -428,6 +431,75 @@ public:
     /// keeping survives a roll: COPY it across first.
     void randomizeAllParameters();
 
+    // ---- DICEROLL ----------------------------------------------------------
+    //
+    // The locks, the amount and the history are **state, not parameters**, and
+    // that is load-bearing rather than tidy. A lock that was a parameter would
+    // be randomised by the very button it is meant to restrain, and would be
+    // reset by every preset the player loads -- the same argument that keeps
+    // `tooltipsEnabled` out of the parameter list.
+
+    /// Which sections the dice leaves alone, as a bit per `DiceSection`.
+    /// OUTPUT starts locked: it is the one section a roll can make painful.
+    [[nodiscard]] unsigned int getDiceLocks() const noexcept { return diceLocks_; }
+    void setDiceLocks (unsigned int locks) noexcept { diceLocks_ = locks; }
+
+    [[nodiscard]] bool isDiceSectionLocked (DiceSection section) const noexcept
+    {
+        return (diceLocks_ & (1u << static_cast<unsigned int> (section))) != 0u;
+    }
+
+    void setDiceSectionLocked (DiceSection section, bool locked) noexcept;
+
+    /// Locks every section but this one -- the exclusive target. Calling it on
+    /// a section that is already the only unlocked one clears every lock
+    /// instead, so the same button gets you out again.
+    void soloDiceSection (DiceSection section) noexcept;
+
+    /// How far each control is dragged towards its random target, 0 .. 1.
+    /// 1 is the original behaviour exactly: uniform across the whole range.
+    [[nodiscard]] float getDiceAmount() const noexcept { return diceAmount_; }
+    void setDiceAmount (float amount) noexcept
+    {
+        diceAmount_ = juce::jlimit (0.0f, 1.0f, amount);
+    }
+
+    /// What fraction of the eligible controls a roll touches, 0 .. 1. Amount
+    /// changes how far; spread changes how many, and they do not sound alike.
+    [[nodiscard]] float getDiceSpread() const noexcept { return diceSpread_; }
+    void setDiceSpread (float spread) noexcept
+    {
+        diceSpread_ = juce::jlimit (0.0f, 1.0f, spread);
+    }
+
+    /// How many controls the last roll actually moved, for the panel's readout.
+    [[nodiscard]] int getLastRollCount() const noexcept { return lastRollCount_; }
+
+    // ---- roll history ------------------------------------------------------
+    //
+    // A ring of whole-parameter snapshots, walked by PREV and NEXT. It is what
+    // makes the rest safe to use: a dice with no way back is a dice you press
+    // once and then stop pressing.
+
+    [[nodiscard]] bool canStepDiceHistoryBack() const noexcept { return diceCursor_ > 0; }
+
+    [[nodiscard]] bool canStepDiceHistoryForward() const noexcept
+    {
+        return diceCursor_ >= 0 && diceCursor_ + 1 < static_cast<int> (diceHistory_.size());
+    }
+
+    /// Walks the history. Returns false when there was nowhere to go.
+    bool stepDiceHistory (int direction);
+
+    /// Where in the ring we are, 1-based, and how long the ring is. Both zero
+    /// before the first roll.
+    [[nodiscard]] int getDiceHistoryPosition() const noexcept { return diceCursor_ + 1; }
+
+    [[nodiscard]] int getDiceHistoryLength() const noexcept
+    {
+        return static_cast<int> (diceHistory_.size());
+    }
+
     [[nodiscard]] ui::AbCompare& getAbCompare() noexcept { return abCompare_; }
 
     /// What the output is doing, for the panel's meter.
@@ -604,6 +676,35 @@ private:
     juce::String scalaText_;
 
     bool tooltipsEnabled_ { true };
+
+    // ---- DICEROLL state ----------------------------------------------------
+
+    /// OUTPUT locked from the first launch. The default is not caution for its
+    /// own sake: `output` runs to +12 dB and an instrument has no safety
+    /// limiter after it, so an unlocked roll can be a hearing hazard on
+    /// headphones. Unlocking it is one click and a deliberate one.
+    unsigned int diceLocks_ { 1u << static_cast<unsigned int> (DiceSection::output) };
+
+    float diceAmount_ { 1.0f };
+    float diceSpread_ { 1.0f };
+    int lastRollCount_ { 0 };
+
+    /// Whole-parameter snapshots in normalised form, oldest first, with
+    /// `diceCursor_` on the one currently loaded. -1 means nothing recorded
+    /// yet, which is different from "one entry" -- before the first roll there
+    /// is no history, and PREV must not offer to go anywhere.
+    std::vector<std::vector<float>> diceHistory_;
+    int diceCursor_ { -1 };
+
+    /// Thirty-two is about a minute of pressing the button, and 32 x 324
+    /// floats is 41 kB -- small enough that the ring never needs thinking
+    /// about and long enough that the roll you liked four rolls ago is still
+    /// there.
+    static constexpr std::size_t kDiceHistoryLimit = 32;
+
+    [[nodiscard]] std::vector<float> captureParameterSnapshot() const;
+    void applyParameterSnapshot (const std::vector<float>& snapshot);
+    void pushDiceHistory (std::vector<float> snapshot);
     juce::String keyboardMapText_;
     juce::String scaleName_;
 

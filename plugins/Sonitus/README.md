@@ -930,10 +930,31 @@ A preset that exercises every guard simultaneously is the honest stress test.
 
 ### DICEROLL
 
-A seventh tab, rainbow, and one button on it: **RANDOMIZE** sets every sound
-parameter to a uniform random value across its whole range. Both extremes, no
-restraint. Most rolls are unusable — the point is finding the one in twenty
-that is not, faster than a hundred and forty knobs can be turned by hand.
+A seventh tab, rainbow, and **RANDOMIZE** on it: every unlocked control to a
+uniform random value across its whole range. Both extremes, no restraint. Most
+rolls are unusable — the point is finding the one in twenty that is not, faster
+than three hundred controls can be turned by hand.
+
+Around it, four things that make that usable rather than merely exciting:
+
+| | |
+|---|---|
+| **PREV / NEXT** | Steps through the last 32 rolls. The oldest entry is the patch you had before the first roll, so the dice can always be undone completely. Hand edits made between two rolls are recorded too, because what gets stored is the state going *into* a roll, whatever put it there. Rolling from a step back replaces everything ahead of it, as an undo history does. Session-only: it is a minute's worth of undo, not something worth writing 41 kB of snapshots into every project file for |
+| **LOCK**, per section | OSC · FILTER · ENV · MOD · MANGLE · PLAY · OUTPUT. A locked section is held still. **OUTPUT is locked by default**, and that is not caution for its own sake — `output` runs to +12 dB, an instrument has no limiter after it, and an unlocked roll on headphones is a hazard |
+| **SOLO**, per section | Rolls *only* that section, by locking the other six in one press. Pressing it again unlocks everything, so an exclusive target costs one click each way rather than six. A button rather than a modifier on the lock, deliberately: a modifier is a thing you have to know about |
+| **AMOUNT / SPREAD** | AMOUNT is how far each control moves — 100% is the full-strength roll, 15% is a variation on the sound you have. SPREAD is how *many* of them move at all. They do not sound alike: three hundred controls nudged 10% is a patch that drifts, five controls thrown anywhere is a patch that surprises you |
+
+The locks and the two strengths are **state, not parameters** — a lock that was
+a parameter would be randomised by the very button it restrains, and reset by
+every preset you load. They are saved with the project; the roll history is not.
+
+Which section a control belongs to is read from its parameter id
+(`plugins/Sonitus/Dsp/DiceSections.hpp`), and a test holds that function to the
+whole 324-id list: **every id lands in exactly one section and none in
+`unknown`**. An id that matched nothing would be treated as locked — the safe
+direction — and the sixteen-point ADV envelopes are why it is a function rather
+than a table: they would have needed 48 new rows in one, and forgetting them
+would have silently made an "envelopes locked" roll change the envelopes.
 
 Rolling is uniform on each parameter's **normalised** range, which is what "0
 to MAX" has to mean for a control whose own range is skewed: a skewed knob

@@ -699,33 +699,75 @@ float DicePage::hueNow()
     return rainbowPhase();
 }
 
+void DicePage::addSectionRow (DiceSection section)
+{
+    auto& row = sections_[static_cast<std::size_t> (section)];
+
+    row.section = section;
+
+    const juce::String name = diceSectionName (section);
+
+    row.lock = std::make_unique<juce::TextButton> (name);
+    row.lock->setComponentID ("lock-" + name.toLowerCase());
+    row.lock->setClickingTogglesState (false);
+    row.lock->setTooltip (
+        "Holds " + name + " still while the dice rolls everything else.\n\n"
+        "Locks are saved with the project and are **not** parameters -- a lock "
+        "that was a parameter would be randomised by the button it restrains, "
+        "and reset by every preset you load.");
+
+    row.lock->onClick = [this, section]
+    {
+        processor_.setDiceSectionLocked (section, ! processor_.isDiceSectionLocked (section));
+        refreshControls();
+    };
+
+    row.solo = std::make_unique<juce::TextButton> ("SOLO");
+    row.solo->setComponentID ("solo-" + name.toLowerCase());
+    row.solo->setClickingTogglesState (false);
+    row.solo->setTooltip (
+        "Rolls ONLY " + name + ", by locking every other section in one press. "
+        "Press it again to unlock everything -- the same button is the way back "
+        "out, so an exclusive target costs one click each way rather than six.");
+
+    row.solo->onClick = [this, section]
+    {
+        processor_.soloDiceSection (section);
+        refreshControls();
+    };
+
+    addAndMakeVisible (*row.lock);
+    addAndMakeVisible (*row.solo);
+}
+
 DicePage::DicePage (SonitusProcessor& processorToUse, ui::Palette palette)
     : processor_ (processorToUse), palette_ (palette)
 {
     roll_.setComponentID ("randomize");
     roll_.setTooltip (
-        "Sets EVERY sound parameter to a random value across its whole range "
-        "-- both extremes, no restraint. Most rolls are unusable; the point is "
-        "finding the one in twenty that is not, faster than a hundred and "
-        "forty knobs can be turned by hand.\n\n"
+        "Rolls every unlocked control. At AMOUNT 100% each one lands anywhere "
+        "in its range, both extremes, no restraint -- most rolls are unusable "
+        "and the point is finding the one in twenty that is not, faster than "
+        "three hundred controls can be turned by hand.\n\n"
+        "PREV steps back through the last 32 rolls, so nothing is lost. LOCK "
+        "holds a section still; SOLO rolls only that one. AMOUNT is how far "
+        "each control moves, SPREAD is how many of them move at all.\n\n"
         "It cannot touch the tuning: the scale and concert pitch were never "
-        "parameters, so nothing here reaches them.\n\n"
-        "There is no undo, and a roll can land the output at +12 dB with "
-        "everything else at maximum. COPY the patch to the other A/B slot "
-        "first if it is worth keeping, and mind the monitors.");
+        "parameters, so nothing here reaches them. OUTPUT is locked by default "
+        "because a roll can otherwise land the master at +12 dB with "
+        "everything else at maximum, and an instrument has no limiter after "
+        "it. Mind the monitors if you unlock it.");
 
     roll_.onClick = [this]
     {
         processor_.randomizeAllParameters();
         ++rolls_;
-        count_.setText (rolls_ == 1 ? juce::String ("1 roll")
-                                    : juce::String (rolls_) + " rolls",
-                        juce::dontSendNotification);
+        refreshControls();
     };
 
     addAndMakeVisible (roll_);
 
-    caption_.setText ("Every parameter, both extremes. No undo.",
+    caption_.setText ("Every unlocked control. PREV is your way back.",
                       juce::dontSendNotification);
     caption_.setJustificationType (juce::Justification::centred);
     caption_.setColour (juce::Label::textColourId, palette_.dimText);
@@ -738,6 +780,89 @@ DicePage::DicePage (SonitusProcessor& processorToUse, ui::Palette palette)
     count_.setFont (juce::FontOptions (11.0f));
     addAndMakeVisible (count_);
 
+    for (int i = 0; i < numDiceSections; ++i)
+        addSectionRow (static_cast<DiceSection> (i));
+
+    // ---- history -----------------------------------------------------------
+    previous_.setComponentID ("dice-prev");
+    previous_.setTooltip (
+        "Back one step through the roll history -- up to 32 of them. The patch "
+        "you had before the first roll is the oldest entry, so the dice can "
+        "always be undone completely.\n\n"
+        "Edits you make by hand between two rolls are recorded too: the state "
+        "going into a roll is what gets stored, whatever put it there. The "
+        "history is a session's worth of undo and is not saved with the "
+        "project.");
+
+    next_.setComponentID ("dice-next");
+    next_.setTooltip ("Forward one step, if you have stepped back. Rolling again from a "
+                      "step back replaces everything ahead of it, as an undo history does.");
+
+    previous_.onClick = [this] { processor_.stepDiceHistory (-1); refreshControls(); };
+    next_.onClick = [this] { processor_.stepDiceHistory (1); refreshControls(); };
+
+    addAndMakeVisible (previous_);
+    addAndMakeVisible (next_);
+
+    history_.setText ("--", juce::dontSendNotification);
+    history_.setJustificationType (juce::Justification::centred);
+    history_.setColour (juce::Label::textColourId, palette_.dimText);
+    history_.setFont (juce::FontOptions (11.0f));
+    addAndMakeVisible (history_);
+
+    // ---- strengths ---------------------------------------------------------
+    const auto slider = [this] (juce::Slider& control, juce::Label& label,
+                                const juce::String& name, const juce::String& tooltip,
+                                double initial)
+    {
+        control.setRange (0.0, 100.0, 1.0);
+        control.setValue (initial, juce::dontSendNotification);
+        control.setTextValueSuffix (" %");
+        control.setComponentID (name.toLowerCase());
+        control.setTooltip (tooltip);
+        control.setColour (juce::Slider::trackColourId, palette_.accent.withAlpha (0.55f));
+        control.setColour (juce::Slider::backgroundColourId, palette_.panel.darker (0.3f));
+        control.setColour (juce::Slider::thumbColourId, palette_.accentBright);
+        control.setColour (juce::Slider::textBoxTextColourId, palette_.text);
+        control.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible (control);
+
+        label.setText (name, juce::dontSendNotification);
+        label.setJustificationType (juce::Justification::centredRight);
+        label.setColour (juce::Label::textColourId, palette_.dimText);
+        label.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        addAndMakeVisible (label);
+    };
+
+    slider (amount_, amountLabel_, "AMOUNT",
+            "How far each control is dragged towards its random target.\n\n"
+            "100% is the full-strength roll: anywhere in the range, both extremes. "
+            "Lower values keep the patch you have and nudge it -- 15% is a variation "
+            "on a sound, 50% is a different sound with the same bones. It is not a "
+            "cap on the distance but a fraction of the way there, so nothing piles "
+            "up at the ends of its range.",
+            static_cast<double> (processor_.getDiceAmount()) * 100.0);
+
+    slider (spread_, spreadLabel_, "SPREAD",
+            "How many of the unlocked controls a roll touches at all.\n\n"
+            "AMOUNT changes how far, this changes how many, and they do not sound "
+            "alike: three hundred controls nudged 10% is a patch that drifts, while "
+            "five controls thrown anywhere is a patch that surprises you. Low spread "
+            "with high amount is the interesting corner.",
+            static_cast<double> (processor_.getDiceSpread()) * 100.0);
+
+    amount_.onValueChange = [this]
+    {
+        processor_.setDiceAmount (static_cast<float> (amount_.getValue() / 100.0));
+    };
+
+    spread_.onValueChange = [this]
+    {
+        processor_.setDiceSpread (static_cast<float> (spread_.getValue() / 100.0));
+    };
+
+    refreshControls();
+
     startTimerHz (30);
 }
 
@@ -746,12 +871,109 @@ DicePage::~DicePage()
     stopTimer();
 }
 
+void DicePage::refreshControls()
+{
+    for (auto& row : sections_)
+    {
+        if (row.lock == nullptr)
+            continue;
+
+        const bool locked = processor_.isDiceSectionLocked (row.section);
+
+        // Locked reads as *held*, so it is coloured rather than dimmed: an
+        // unlit button on a panel of unlit buttons says nothing, and the state
+        // worth seeing at a glance is which sections are out of the game.
+        // Amber for held, which is this suite's colour for "this stage is
+        // doing something" -- Capstone's gain reduction and Syrinx's wear it
+        // too. The DICEROLL page's own accent is a near-white, and a locked
+        // button in it read as a blank plate rather than as a state.
+        row.lock->setColour (juce::TextButton::buttonColourId,
+                             locked ? juce::Colour { 0xffe0a33c }
+                                    : palette_.panel.darker (0.25f));
+        row.lock->setColour (juce::TextButton::textColourOffId,
+                             locked ? palette_.background : palette_.dimText);
+
+        // Solo lights when this section is the only one left unlocked, which
+        // is a fact about the whole mask rather than about this button -- so
+        // it is recomputed here rather than remembered.
+        unsigned int everythingElse = 0u;
+
+        for (int i = 0; i < numDiceSections; ++i)
+            if (i != static_cast<int> (row.section))
+                everythingElse |= 1u << static_cast<unsigned int> (i);
+
+        const bool soloed = processor_.getDiceLocks() == everythingElse;
+
+        row.solo->setColour (juce::TextButton::buttonColourId,
+                             soloed ? palette_.secondary.withAlpha (0.85f)
+                                    : palette_.panel.darker (0.25f));
+        row.solo->setColour (juce::TextButton::textColourOffId,
+                             soloed ? palette_.background : palette_.dimText);
+
+        row.lock->repaint();
+        row.solo->repaint();
+    }
+
+    shownLocks_ = processor_.getDiceLocks();
+
+    previous_.setEnabled (processor_.canStepDiceHistoryBack());
+    next_.setEnabled (processor_.canStepDiceHistoryForward());
+
+    const int length = processor_.getDiceHistoryLength();
+
+    history_.setText (length == 0
+                        ? juce::String ("no history yet")
+                        : juce::String (processor_.getDiceHistoryPosition()) + " / "
+                            + juce::String (length),
+                      juce::dontSendNotification);
+
+    if (rolls_ == 0)
+    {
+        count_.setText ("no rolls yet", juce::dontSendNotification);
+        return;
+    }
+
+    // What the last roll actually moved, which is the number that tells you
+    // whether the locks and the spread did what you meant them to.
+    count_.setText (juce::String (rolls_) + (rolls_ == 1 ? " roll" : " rolls") + "  --  "
+                      + juce::String (processor_.getLastRollCount()) + " of "
+                      + juce::String (processor_.getParameters().size()) + " controls moved",
+                    juce::dontSendNotification);
+}
+
 void DicePage::timerCallback()
 {
     // The button and its halo, not the whole page: repainting the brushed
     // metal thirty times a second to animate one control would be the most
     // expensive thing on the panel.
     repaint (roll_.getBounds().expanded (36));
+
+    // The locks and strengths are state rather than parameters, so nothing
+    // notifies this page when a project load or an A/B swap changes them --
+    // there is no attachment to do it. Comparing four numbers on the tick that
+    // is already happening is cheaper than an extra listener, and without it a
+    // panel left open across a project load shows the previous project's locks
+    // while rolling by the new project's.
+    const double amount = static_cast<double> (processor_.getDiceAmount()) * 100.0;
+    const double spread = static_cast<double> (processor_.getDiceSpread()) * 100.0;
+
+    bool stale = std::abs (amount_.getValue() - amount) > 0.5
+              || std::abs (spread_.getValue() - spread) > 0.5;
+
+    if (stale)
+    {
+        amount_.setValue (amount, juce::dontSendNotification);
+        spread_.setValue (spread, juce::dontSendNotification);
+    }
+
+    if (processor_.getDiceLocks() != shownLocks_)
+    {
+        shownLocks_ = processor_.getDiceLocks();
+        stale = true;
+    }
+
+    if (stale)
+        refreshControls();
 }
 
 void DicePage::paint (juce::Graphics& g)
@@ -777,6 +999,33 @@ void DicePage::paint (juce::Graphics& g)
 
     // The face is the button's own business -- see RainbowButton::paintButton.
     // This is only what glows around it.
+
+    // Three group headings, so the page reads as three answers to three
+    // questions -- where have I been, how hard, and on what -- rather than as
+    // eleven controls under a button.
+    static const char* names[3] { "HISTORY", "STRENGTH", "WHAT ROLLS" };
+
+    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+
+    for (int i = 0; i < 3; ++i)
+    {
+        if (headings_[static_cast<std::size_t> (i)].isEmpty())
+            continue;
+
+        const auto row = headings_[static_cast<std::size_t> (i)].toFloat();
+
+        g.setColour (palette_.dimText.withAlpha (0.75f));
+        g.drawText (names[i], row, juce::Justification::centredLeft, false);
+
+        // A rule from the end of the word to the right edge, the same trim the
+        // control pages' group headings wear.
+        const float textWidth = juce::GlyphArrangement::getStringWidth (
+            juce::FontOptions (10.0f, juce::Font::bold), names[i]) + 8.0f;
+
+        g.setColour (palette_.dimText.withAlpha (0.20f));
+        g.fillRect (juce::Rectangle<float> (row.getX() + textWidth, row.getCentreY(),
+                                            row.getWidth() - textWidth, 1.0f));
+    }
 }
 
 void DicePage::resized()
@@ -784,16 +1033,66 @@ void DicePage::resized()
     auto bounds = getLocalBounds().reduced (24, 22);
 
     caption_.setBounds (bounds.removeFromTop (20));
-    bounds.removeFromTop (22);
+    bounds.removeFromTop (14);
 
-    // Big, because it is the only control here and a dice you have to aim at
-    // is a dice you roll less.
+    // Big, because it is the only control here that does anything on its own
+    // and a dice you have to aim at is a dice you roll less.
     const int width = juce::jmin (bounds.getWidth() - 60, 420);
 
-    roll_.setBounds (bounds.removeFromTop (86).withSizeKeepingCentre (width, 86));
+    roll_.setBounds (bounds.removeFromTop (78).withSizeKeepingCentre (width, 78));
 
-    bounds.removeFromTop (16);
-    count_.setBounds (bounds.removeFromTop (18));
+    bounds.removeFromTop (10);
+    count_.setBounds (bounds.removeFromTop (16));
+    bounds.removeFromTop (10);
+    headings_[0] = bounds.removeFromTop (13).withSizeKeepingCentre (420, 13);
+    bounds.removeFromTop (2);
+
+    // History, centred under the dice: PREV, the position, NEXT.
+    {
+        auto row = bounds.removeFromTop (26).withSizeKeepingCentre (320, 26);
+
+        previous_.setBounds (row.removeFromLeft (92));
+        next_.setBounds (row.removeFromRight (92));
+        history_.setBounds (row.reduced (6, 0));
+    }
+
+    bounds.removeFromTop (12);
+    headings_[1] = bounds.removeFromTop (13).withSizeKeepingCentre (420, 13);
+    bounds.removeFromTop (2);
+
+    // The two strengths, label on the left of each.
+    for (auto* pair : { &amount_, &spread_ })
+    {
+        auto row = bounds.removeFromTop (26).withSizeKeepingCentre (
+            juce::jmin (bounds.getWidth(), 420), 26);
+
+        auto& label = (pair == &amount_) ? amountLabel_ : spreadLabel_;
+
+        label.setBounds (row.removeFromLeft (68));
+        row.removeFromLeft (6);
+        pair->setBounds (row);
+    }
+
+    bounds.removeFromTop (12);
+    headings_[2] = bounds.removeFromTop (13).withSizeKeepingCentre (420, 13);
+    bounds.removeFromTop (2);
+
+    // The seven sections, one row each: a wide LOCK and a SOLO.
+    const int rowHeight = juce::jlimit (20, 26, bounds.getHeight() / numDiceSections);
+    const int rowWidth = juce::jmin (bounds.getWidth(), 420);
+
+    for (auto& row : sections_)
+    {
+        if (row.lock == nullptr)
+            continue;
+
+        auto strip = bounds.removeFromTop (rowHeight).withSizeKeepingCentre (rowWidth, rowHeight);
+
+        row.bounds = strip;
+        row.solo->setBounds (strip.removeFromRight (54).reduced (1));
+        strip.removeFromRight (4);
+        row.lock->setBounds (strip.reduced (1));
+    }
 }
 
 void ControlPage::addHeading (const juce::String& text, int columns, bool sameRow)

@@ -36,6 +36,7 @@
 // to check that after a refactor was to read two files side by side. Diffing two
 // dumps says it in one line.
 
+#include <cstdint>
 #include <cstdio>
 #include <cmath>
 #include <numbers>
@@ -156,7 +157,7 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
         // defaults. A display whose whole job is to show what a control does
         // cannot be checked at one setting: the picture that matters is the
         // difference between two.
-        if (id.contains ("=") && ! id.startsWith ("audio:"))
+        if (id.contains ("=") && ! id.startsWith ("audio:") && ! id.startsWith ("slider:"))
         {
             const auto name = id.upToFirstOccurrenceOf ("=", false, false);
             const auto text = id.fromFirstOccurrenceOf ("=", false, false);
@@ -296,6 +297,116 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             }
 
             std::printf ("  ticked %d times\n", juce::jmax (1, count));
+            continue;
+        }
+
+        // "roundtrip" saves the plugin's state and immediately restores it into
+        // the same instance. Anything the panel is holding that
+        // `getStateInformation` forgot to write comes back at its default, in
+        // one step, with no file and no second process -- which is the whole
+        // failure mode for state that is *not* a parameter (DICEROLL's locks,
+        // the tooltip preference, the tuning).
+        if (id == "roundtrip")
+        {
+            juce::MemoryBlock saved;
+
+            processor.getStateInformation (saved);
+            processor.setStateInformation (saved.getData(),
+                                           static_cast<int> (saved.getSize()));
+
+            std::printf ("  state round-tripped through %d bytes\n",
+                         static_cast<int> (saved.getSize()));
+            continue;
+        }
+
+        // "slider:<componentId>=<value>" moves a Slider that is **not** a
+        // parameter -- DICEROLL's AMOUNT and SPREAD are page state rather than
+        // automation, so `id=value` (which looks up parameters) cannot reach
+        // them and a control nothing can drive is a control nothing can check.
+        if (id.startsWith ("slider:"))
+        {
+            const auto request = id.fromFirstOccurrenceOf ("slider:", false, false);
+            const auto target = request.upToFirstOccurrenceOf ("=", false, false);
+            const double value = request.fromFirstOccurrenceOf ("=", false, false).getDoubleValue();
+
+            auto* found = dynamic_cast<juce::Slider*> (findById (*editor, target));
+
+            if (found == nullptr)
+            {
+                std::printf ("  no slider called '%s'\n", target.toRawUTF8());
+                ++failures;
+                continue;
+            }
+
+            found->setValue (value, juce::sendNotificationSync);
+            std::printf ("  %s slider = %g\n", target.toRawUTF8(), found->getValue());
+            continue;
+        }
+
+        // "dump" and "dump:<id>" read parameters back **after** the clicks,
+        // which is the half of driving a panel that was missing: a button can
+        // be clicked, the click can be seen to land, and whether it changed
+        // anything was still a question for the eyes. `dump` prints a checksum
+        // over every parameter's normalised value plus how many are non-default;
+        // `dump:<id>` prints one by name.
+        //
+        // The checksum is what makes an undo testable: roll, dump, step back,
+        // dump, and the two numbers either match or they do not.
+        if (id == "dump" || id.startsWith ("dump:"))
+        {
+            const auto wanted = id.startsWith ("dump:")
+                                  ? id.fromFirstOccurrenceOf ("dump:", false, false)
+                                  : juce::String();
+
+            if (wanted.isNotEmpty())
+            {
+                const juce::AudioProcessorParameter* found = nullptr;
+
+                for (const auto* candidate : processor.getParameters())
+                    if (const auto* ranged
+                            = dynamic_cast<const juce::RangedAudioParameter*> (candidate))
+                        if (ranged->paramID == wanted)
+                            found = ranged;
+
+                if (found == nullptr)
+                {
+                    std::printf ("  no parameter called '%s'\n", wanted.toRawUTF8());
+                    ++failures;
+                }
+                else
+                {
+                    std::printf ("  %s = %.9f\n", wanted.toRawUTF8(),
+                                 static_cast<double> (found->getValue()));
+                }
+
+                continue;
+            }
+
+            // A cheap order-sensitive mix rather than a real hash: it only has
+            // to tell two parameter sets apart, and it has to do that from a
+            // printf.
+            std::uint64_t checksum = 1469598103934665603ull;
+            int moved = 0;
+
+            for (const auto* candidate : processor.getParameters())
+            {
+                const auto* ranged = dynamic_cast<const juce::RangedAudioParameter*> (candidate);
+
+                if (ranged == nullptr)
+                    continue;
+
+                const auto quantised = static_cast<std::uint64_t> (
+                    juce::roundToInt (ranged->getValue() * 1.0e6f));
+
+                checksum = (checksum ^ quantised) * 1099511628211ull;
+
+                if (std::abs (ranged->getValue() - ranged->getDefaultValue()) > 1.0e-6f)
+                    ++moved;
+            }
+
+            std::printf ("  parameters %d, off-default %d, checksum %016llx\n",
+                         processor.getParameters().size(), moved,
+                         static_cast<unsigned long long> (checksum));
             continue;
         }
 
@@ -600,6 +711,8 @@ int main (int argc, char** argv)
                      "       tezla-render editor [componentId | id@x,y | press:id@x,y\n"
                      "                            | release:id@x,y | hit:id | shot:out.png\n"
                      "                            | audio:secs[@gain] | tick:n | size:WxH\n"
+                     "                            | dump | dump:paramId | slider:id=value\n"
+                     "                            | roundtrip\n"
                      "                            | id=value | reopen ...]\n");
         return 2;
     }

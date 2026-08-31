@@ -218,10 +218,26 @@ public:
         void paintButton (juce::Graphics&, bool highlighted, bool down) override;
     };
 
+    /// One section's row: a LOCK toggle and a SOLO button.
+    ///
+    /// SOLO is a **button of its own** rather than a modifier on the lock, and
+    /// deliberately: a modifier is a thing you have to know about, and the one
+    /// gesture worth optimising here -- "roll only the filter" -- should not
+    /// need a manual. It locks everything else; pressing it again on the
+    /// section that is already alone clears the locks, so it is its own way
+    /// back out.
+    struct SectionRow
+    {
+        DiceSection section { DiceSection::osc };
+        std::unique_ptr<juce::TextButton> lock;
+        std::unique_ptr<juce::TextButton> solo;
+        juce::Rectangle<int> bounds;
+    };
+
     DicePage (SonitusProcessor& processorToUse, ui::Palette palette);
     ~DicePage() override;
 
-    [[nodiscard]] int getPreferredHeight() const override { return 320; }
+    [[nodiscard]] int getPreferredHeight() const override { return 470; }
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -232,6 +248,13 @@ public:
 private:
     void timerCallback() override;
 
+    /// Repaints the lock and solo faces from the processor's mask, and greys
+    /// PREV/NEXT at the ends of the ring. One function rather than each button
+    /// tracking its own idea of the state -- SOLO changes six other buttons.
+    void refreshControls();
+
+    void addSectionRow (DiceSection section);
+
     SonitusProcessor& processor_;
     ui::Palette palette_;
 
@@ -239,7 +262,27 @@ private:
     juce::Label caption_;
     juce::Label count_;
 
+    std::array<SectionRow, numDiceSections> sections_;
+
+    /// HISTORY / STRENGTH / WHAT ROLLS, laid out by resized() and drawn by
+    /// paint() -- headings are not components here, they are three strings.
+    std::array<juce::Rectangle<int>, 3> headings_;
+
+    juce::TextButton previous_ { "< PREV" };
+    juce::TextButton next_ { "NEXT >" };
+    juce::Label history_;
+
+    juce::Slider amount_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::Slider spread_ { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+    juce::Label amountLabel_;
+    juce::Label spreadLabel_;
+
     int rolls_ { 0 };
+
+    /// The lock mask the buttons are currently drawn from, so the tick can
+    /// tell "nothing changed" from "a project load moved it" without
+    /// repainting seven buttons thirty times a second.
+    unsigned int shownLocks_ { 0 };
 };
 
 class ControlPage final : public Page
