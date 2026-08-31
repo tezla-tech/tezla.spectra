@@ -1779,6 +1779,31 @@ struct Preset
     std::vector<Setting> settings;
 };
 
+/// **Every preset's Output is a measured number, not a taste one.** A synth
+/// preset that reaches full scale on *one* note has nothing left for a chord,
+/// and this is a sixteen-voice instrument.
+///
+/// The rule arrived late and found four presets breaking it, which is why it is
+/// written down here rather than assumed. Rendered through the JUCE layer at
+/// note 45, five seconds, peak taken per channel:
+///
+/// | preset | was | peak | now | peak |
+/// |---|---|---|---|---|
+/// | Reese -- the classic  | -9 dB | 1.132 | -12 dB | 0.801 |
+/// | Clockwork wobble      | -4 dB | 1.089 |  -7 dB | 0.771 |
+/// | Morphing pluck        | -4 dB | 1.153 |  -7 dB | 0.817 |
+/// | Scale drone           | -6 dB | 1.949 | -14 dB | 0.776 |
+///
+/// Scale drone is the one that matters: a comb at 88% feedback locked to the
+/// tuning is a resonator being fed its own notes, so it *builds*, and 1.949 is
+/// nearly +6 dB over. It shipped that way an hour earlier and no test could
+/// have caught it, because a preset's level is not a claim any test makes.
+///
+/// **Init is deliberately not in the table** even though it reads 1.065. It is
+/// the parameter defaults by definition, so trimming it would be changing the
+/// plugin's neutral output gain for every new instance rather than editing a
+/// preset -- a different decision, and one for the user rather than for a
+/// preset pass. One saw at unity really is that loud.
 const std::vector<Preset>& presets()
 {
     static const std::vector<Preset> list
@@ -1828,7 +1853,7 @@ const std::vector<Preset>& presets()
 
                 { ids::tubeDrive, 7.0f },
                 { ids::splitHz, 130.0f },
-                { ids::output, -9.0f },
+                { ids::output, -12.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -2212,7 +2237,7 @@ const std::vector<Preset>& presets()
                 { ids::modDepth (0), -0.63f },   // ~4 octaves on the square law
 
                 { ids::tubeDrive, 7.0f },
-                { ids::output, -4.0f },
+                { ids::output, -7.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -2845,7 +2870,7 @@ const std::vector<Preset>& presets()
                 { ids::modDepth (1), 0.4f },
 
                 { ids::polyphony, 8.0f },
-                { ids::output, -4.0f },
+                { ids::output, -7.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -2875,6 +2900,235 @@ const std::vector<Preset>& presets()
 
                 { ids::ampAttack, 0.25f }, { ids::ampSustain, 0.95f },
                 { ids::ampRelease, 1.6f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -14.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Sixteen points, one bar.** The whole reason the ADV ceiling
+            // went from eight to sixteen: with Loop and Snap on, sixteen legs
+            // of a 1/16 each is a bar of sixteenths, so one envelope is a step
+            // sequencer with *curves* between the steps rather than gates.
+            //
+            // Watch the ENV page while it plays -- the ruler draws the bar and
+            // every leg reads "1/16", which is how you know it is locked and
+            // not merely fast.
+            "Sixteen-step gate -- one bar, drawn",
+            {
+                { ids::shapeA, 1.0f }, { ids::shapeB, 1.0f },
+                { ids::levelB, 0.85f }, { ids::centsB, -7.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 8.0f }, { ids::spreadA, 0.7f },
+                { ids::subLevel, 0.4f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 2600.0f }, { ids::resonance, 0.35f },
+                { ids::filterDrive, 0.25f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.12f },
+
+                { "adv1Enable", 1.0f }, { "adv1Loop", 1.0f }, { "adv1Snap", 1.0f },
+                { "adv1Points", 16.0f }, { "adv1Sustain", 16.0f }, { "adv1LoopStart", 1.0f },
+                { "adv1T1", 0.125f }, { "adv1L1", 0.00f }, { "adv1C1", 0.9f },
+                { "adv1T2", 0.125f }, { "adv1L2", 1.00f }, { "adv1C2", -0.9f },
+                { "adv1T3", 0.125f }, { "adv1L3", 0.15f }, { "adv1C3", 0.9f },
+                { "adv1T4", 0.125f }, { "adv1L4", 1.00f }, { "adv1C4", -0.9f },
+                { "adv1T5", 0.125f }, { "adv1L5", 0.00f }, { "adv1C5", 0.9f },
+                { "adv1T6", 0.125f }, { "adv1L6", 0.85f }, { "adv1C6", -0.9f },
+                { "adv1T7", 0.125f }, { "adv1L7", 1.00f }, { "adv1C7", 0.9f },
+                { "adv1T8", 0.125f }, { "adv1L8", 0.30f }, { "adv1C8", -0.9f },
+                { "adv1T9", 0.125f }, { "adv1L9", 0.00f }, { "adv1C9", 0.9f },
+                { "adv1T10", 0.125f }, { "adv1L10", 1.00f }, { "adv1C10", -0.9f },
+                { "adv1T11", 0.125f }, { "adv1L11", 0.40f }, { "adv1C11", 0.9f },
+                { "adv1T12", 0.125f }, { "adv1L12", 1.00f }, { "adv1C12", -0.9f },
+                { "adv1T13", 0.125f }, { "adv1L13", 0.10f }, { "adv1C13", 0.9f },
+                { "adv1T14", 0.125f }, { "adv1L14", 0.65f }, { "adv1C14", -0.9f },
+                { "adv1T15", 0.125f }, { "adv1L15", 1.00f }, { "adv1C15", 0.9f },
+                { "adv1T16", 0.125f }, { "adv1L16", 0.50f }, { "adv1C16", -0.9f },
+
+                // Straight onto Level, so the pattern is the note's rhythm.
+                //
+                // **A negative depth**, and that is not a taste decision: Level
+                // is a multiplier, `level * (1 + modulation)`, so a positive
+                // depth only ever makes a voice *louder* and a gate drawn that
+                // way never closes -- it peaked at 1.859 of full scale and read
+                // as a flat pattern. Negative, the envelope's own levels read
+                // as "how far this step ducks", which is why the point list
+                // above has 0 where the loud steps are.
+                { ids::modSource (0), 10.0f },   // ADV 1
+                { ids::modDest (0), 15.0f },     // level
+                { ids::modDepth (0), -0.92f },
+
+                // ...and a touch onto the cutoff so the loud steps are also
+                // the bright ones, which is what a gate on a real rig does.
+                { ids::modSource (1), 10.0f },
+                { ids::modDest (1), 1.0f },
+                { ids::modDepth (1), -0.5f },
+
+                { ids::polyphony, 6.0f },
+                { ids::output, -8.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Sixteen points as a shape rather than a gate.** The same
+            // ceiling used the other way: a bar-long riser whose acceleration
+            // is drawn leg by leg, going up in a stepped climb no ADSR and no
+            // LFO makes. It ends where it started because the loop returns.
+            //
+            // Two destinations from one envelope: the cutoff and the filter's
+            // *type*, so the riser gets thinner as well as brighter.
+            "Bar riser -- sixteen legs of climb",
+            {
+                { ids::shapeA, 0.0f }, { ids::morphA, 0.3f },
+                { ids::shapeB, 6.0f },           // shark
+                { ids::levelB, 0.6f }, { ids::octaveB, 1.0f },
+                { ids::unisonA, 4.0f }, { ids::detuneA, 14.0f }, { ids::spreadA, 0.9f },
+
+                { ids::cutoff, 380.0f }, { ids::resonance, 0.45f },
+                { ids::filterDrive, 0.3f },
+
+                { ids::ampAttack, 0.01f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.3f },
+
+                { "adv2Enable", 1.0f }, { "adv2Loop", 1.0f }, { "adv2Snap", 1.0f },
+                { "adv2Points", 16.0f }, { "adv2Sustain", 16.0f }, { "adv2LoopStart", 1.0f },
+                { "adv2T1", 0.125f }, { "adv2L1", 0.050f }, { "adv2C1", 0.4f },
+                { "adv2T2", 0.125f }, { "adv2L2", 0.113f }, { "adv2C2", 0.4f },
+                { "adv2T3", 0.125f }, { "adv2L3", 0.177f }, { "adv2C3", 0.4f },
+                { "adv2T4", 0.125f }, { "adv2L4", 0.240f }, { "adv2C4", 0.4f },
+                { "adv2T5", 0.125f }, { "adv2L5", 0.303f }, { "adv2C5", 0.4f },
+                { "adv2T6", 0.125f }, { "adv2L6", 0.367f }, { "adv2C6", 0.4f },
+                { "adv2T7", 0.125f }, { "adv2L7", 0.430f }, { "adv2C7", 0.4f },
+                { "adv2T8", 0.125f }, { "adv2L8", 0.493f }, { "adv2C8", 0.4f },
+                { "adv2T9", 0.125f }, { "adv2L9", 0.557f }, { "adv2C9", 0.4f },
+                { "adv2T10", 0.125f }, { "adv2L10", 0.620f }, { "adv2C10", 0.4f },
+                { "adv2T11", 0.125f }, { "adv2L11", 0.683f }, { "adv2C11", 0.4f },
+                { "adv2T12", 0.125f }, { "adv2L12", 0.747f }, { "adv2C12", 0.4f },
+                { "adv2T13", 0.125f }, { "adv2L13", 0.810f }, { "adv2C13", 0.4f },
+                { "adv2T14", 0.125f }, { "adv2L14", 0.873f }, { "adv2C14", 0.4f },
+                { "adv2T15", 0.125f }, { "adv2L15", 0.937f }, { "adv2C15", 0.4f },
+                { "adv2T16", 0.125f }, { "adv2L16", 1.000f }, { "adv2C16", 0.4f },
+
+                // 0.55 rather than 0.95. At full depth the sweep took the
+                // resonant peak clean out of the audible band by the eighth
+                // leg and the riser got *darker* for its second half --
+                // measured, brightness climbing 0.048 to 0.357 and then falling
+                // back to 0.150. A riser has to keep rising, so the sweep ends
+                // where the ear is still listening.
+                { ids::modSource (0), 11.0f },   // ADV 2
+                { ids::modDest (0), 1.0f },      // cutoff
+                { ids::modDepth (0), 0.55f },
+
+                // Morph only a little. At 0.45 the riser reached the bandpass
+                // halfway up and started *losing* content as the cutoff rose:
+                // measured, the zero-crossing count climbed for eight legs and
+                // then fell for the rest. A bandpass thins a sound whichever
+                // way its corner is going, and a riser has to get brighter.
+                { ids::modSource (1), 11.0f },
+                { ids::modDest (1), 22.0f },     // filter morph
+                { ids::modDepth (1), 0.18f },
+
+                // Drive climbing with it, because a cutoff sweep alone runs
+                // out of things to reveal: once the filter is past the saw's
+                // content the brightness plateaus, and the drive is what keeps
+                // making new harmonics for the second half of the bar.
+                { ids::modSource (2), 11.0f },
+                { ids::modDest (2), 3.0f },      // filter drive
+                { ids::modDepth (2), 0.55f },
+
+                // No detune row. It was there in the first draft and it is
+                // the reason this preset took three attempts to measure: a
+                // widening unison stack changes the beat pattern, which moves
+                // a zero-crossing count around by more than the cutoff does.
+                // The riser is a filter gesture; the stack should hold still.
+                { ids::polyphony, 6.0f },
+                { ids::output, -7.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Two knobs, eight destinations.** MACRO 1 is aggression --
+            // brightness, feedback, drive, filter type. MACRO 2 is size --
+            // detune, spread, comb time and comb mix. Between them they are the
+            // whole patch, and neither is a control the matrix could give you
+            // in one row.
+            //
+            // Both start low. Play with one hand on each.
+            "Two-hand macro -- aggression and size",
+            {
+                { ids::shapeA, 1.0f }, { ids::shapeB, 0.0f },
+                { ids::levelB, 0.9f }, { ids::centsB, 11.0f },
+                { ids::unisonA, 3.0f }, { ids::detuneA, 4.0f },
+                { ids::unisonB, 3.0f }, { ids::detuneB, 4.0f },
+
+                { ids::cutoff, 420.0f }, { ids::resonance, 0.3f },
+                { ids::filterTrack, 0.45f },
+
+                { ids::combMode, 1.0f }, { ids::combTime, 5.0f },
+                { ids::combFeed, 0.7f }, { ids::combDamp, 0.3f },
+
+                { ids::ampAttack, 0.006f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.4f },
+
+                // Macro 1 -- aggression.
+                { ids::modSource (0), 13.0f }, { ids::modDest (0), 1.0f },
+                { ids::modDepth (0), 0.9f },                       // cutoff
+                { ids::modSource (1), 13.0f }, { ids::modDest (1), 19.0f },
+                { ids::modDepth (1), 0.45f },                      // feedback A
+                { ids::modSource (2), 13.0f }, { ids::modDest (2), 3.0f },
+                { ids::modDepth (2), 0.6f },                       // filter drive
+                { ids::modSource (3), 13.0f }, { ids::modDest (3), 22.0f },
+                { ids::modDepth (3), 0.3f },                       // filter morph
+
+                // Macro 2 -- size.
+                { ids::modSource (4), 14.0f }, { ids::modDest (4), 7.0f },
+                { ids::modDepth (4), 0.8f },                       // detune A
+                { ids::modSource (5), 14.0f }, { ids::modDest (5), 8.0f },
+                { ids::modDepth (5), 0.8f },                       // detune B
+
+                { ids::globalSource (0), 12.0f },   // Macro 2, global
+                { ids::globalDest (0), 1.0f },      // comb time
+                { ids::globalDepth (0), -0.5f },
+
+                { ids::globalSource (1), 12.0f },
+                { ids::globalDest (1), 3.0f },      // comb mix
+                { ids::globalDepth (1), 0.7f },
+
+                { ids::macro (0), 0.2f }, { ids::macro (1), 0.2f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -8.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **A wah that changes type rather than cutoff.** A synced LFO on
+            // the filter *morph*, bipolar and centred on the mode, so the
+            // filter swings lowpass to bandpass and back once a bar. The
+            // cutoff barely moves; what moves is what kind of filter it is,
+            // which is a sound no cutoff sweep makes.
+            "Morph wah -- the filter type is the LFO",
+            {
+                { ids::shapeA, 1.0f }, { ids::morphA, 0.25f },
+                { ids::levelB, 0.7f }, { ids::shapeB, 1.0f }, { ids::centsB, -6.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 7.0f },
+                { ids::subLevel, 0.45f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 900.0f }, { ids::resonance, 0.55f },
+                { ids::filterDrive, 0.35f }, { ids::filterTrack, 0.35f },
+
+                { ids::lfo1Sync, 1.0f }, { ids::lfo1Div, 3.0f },   // 1 bar
+                { ids::lfo1Wave, 1.0f },                           // triangle
+                { ids::lfo1Smooth, 0.2f },
+
+                { ids::modSource (0), 7.0f },    // LFO 1
+                { ids::modDest (0), 22.0f },     // filter morph
+                { ids::modDepth (0), 0.85f },
+
+                { ids::ampAttack, 0.004f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.3f },
 
                 { ids::polyphony, 8.0f },
                 { ids::output, -6.0f },
