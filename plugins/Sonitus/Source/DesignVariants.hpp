@@ -66,6 +66,21 @@ enum class Grouping
     tinted       ///< each group its own hue, rotated off the page accent
 };
 
+/// What an on/off control looks like.
+enum class Switch
+{
+    pill,        ///< a travelling dot -- what shipped, and closest to a tick box
+    lamp,        ///< a flat plate that lights
+    bevel        ///< a moulded cap in a recessed bezel: hardware
+};
+
+/// Where a group's heading lives.
+enum class Heading
+{
+    rule,        ///< coloured text with a rule running out to the right
+    bar          ///< a filled block of the group's colour, name knocked out
+};
+
 struct Variant
 {
     const char* name { "Current" };
@@ -99,6 +114,53 @@ struct Variant
     /// **never a tick box**, and a pill with a travelling dot is closer to one
     /// than to a lit button.
     bool lampToggles { false };
+
+    /// Which of the three an on/off control actually is.
+    Switch switchStyle { Switch::pill };
+
+    /// **A switch that is always the same red, whatever the group is wearing.**
+    ///
+    /// The chromatic scheme tints everything by group, and for a *switch* that
+    /// is arguably wrong: a power switch is red on every piece of equipment in
+    /// a rack precisely so that it does not have to be identified before it can
+    /// be read. Offered as a variant rather than assumed, because it is a
+    /// legitimate disagreement with the rest of the scheme.
+    bool industrialRedSwitch { false };
+
+    /// How much of its group's colour a control's name takes, 0 to 1.
+    ///
+    /// Not the tint at full: a page of saturated labels is a page where the
+    /// loudest thing is the words, and the words are the part you already know.
+    /// Mixed toward the dim grey the labels use today, so a group reads as
+    /// *warm* or *cool* rather than as coloured.
+    float labelTint { 0.0f };
+
+    /// The value under a knob, in points, and its row's height.
+    float valueSize { 11.5f };
+    float valueSizeLead { 11.5f };
+    int valueHeight { 14 };
+
+    /// Bold values. Off by default, and that default is doing real work: the
+    /// baseline exists to be the *before* picture, and a weight change applied
+    /// to every variant made it drift -- caught by diffing variant 0 against
+    /// the panel photographed before any of this started, which is what that
+    /// check is for.
+    bool valueBold { false };
+
+    Heading heading { Heading::rule };
+
+    /// A machined skirt of tick marks around each knob. Costs one path and it
+    /// is most of what makes a control look like a component rather than a
+    /// circle.
+    bool knobSkirt { false };
+
+    /// The *unfilled* part of a knob's travel takes the group's colour too, at
+    /// a low alpha -- so a group hums one hue even with every control at zero.
+    bool tintTrack { false };
+
+    /// Screws at the plate corners. Pure decoration, and the honest question a
+    /// variant exists to answer is whether it reads as built or as kitsch.
+    bool plateScrews { false };
 
     /// Label size, in points. Denser layouts want a smaller one.
     float labelSize { 10.0f };
@@ -142,48 +204,100 @@ struct Variant
         // against in the same run rather than against a memory.
         Variant {},
 
-        // 1 -- COMPACT. Nothing but metrics: the cell loses 60 px of width and
-        // the knob keeps its size, so the air between knobs goes and the page
-        // fits its window instead of leaving a third of it empty.
+        // 1 -- COMPACT. Metrics only: a group fills its row, the cell narrows
+        // and grows taller, so the knobs come out bigger AND closer together.
         Variant {
-            "Compact", "one full row per group, bigger knobs, closer together",
-            118, 78, 104, 8,
-            1.0f, 1.0f, 1.0f,
-            Control::rotary, Grouping::uniform, 0.0f, false,
-            true, 10.0f, true, true, 86
+            .name = "Compact", .note = "one full row per group, bigger knobs, closer together",
+            .cellWidthMax = 118, .cellHeightMin = 78, .cellHeightMax = 104, .groupGap = 8,
+            .lampToggles = true, .switchStyle = Switch::lamp,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 86
         },
 
         // 2 -- TIERED. Compact plus a size hierarchy, so each group has
         // something the eye lands on first.
         Variant {
-            "Tiered", "compact, plus lead and trim sizes",
-            118, 78, 104, 8,
-            1.0f, 1.30f, 0.72f,
-            Control::rotary, Grouping::uniform, 0.0f, false,
-            true, 10.0f, true, true, 86
+            .name = "Tiered", .note = "compact, plus lead and trim sizes",
+            .cellWidthMax = 118, .cellHeightMin = 78, .cellHeightMax = 104, .groupGap = 8,
+            .leadScale = 1.30f, .trimScale = 0.72f,
+            .lampToggles = true, .switchStyle = Switch::lamp,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 86
         },
 
-        // 3 -- CHROMATIC. Tiered plus a hue per group. 24 degrees a step keeps
-        // the family related -- five groups span 96 degrees, which is a quarter
-        // of the wheel and reads as one instrument rather than as a paintbox.
+        // 3 -- CHROMATIC. **The chosen base.** Tiered plus a hue per group at
+        // 24 degrees a step, and a spine down each plate.
         Variant {
-            "Chromatic", "tiered, plus a hue and a spine per group",
-            118, 78, 104, 8,
-            1.0f, 1.30f, 0.72f,
-            Control::rotary, Grouping::tinted, 24.0f, true,
-            true, 10.0f, true, true, 86
+            .name = "Chromatic", .note = "tiered, plus a hue and a spine per group",
+            .cellWidthMax = 118, .cellHeightMin = 78, .cellHeightMax = 104, .groupGap = 8,
+            .leadScale = 1.30f, .trimScale = 0.72f,
+            .grouping = Grouping::tinted, .groupHueStep = 24.0f, .groupSpine = true,
+            .lampToggles = true, .switchStyle = Switch::lamp,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 86
         },
 
-        // 4 -- MIXER. The radical one: bars instead of knobs, value inside the
-        // bar, cell height nearly halved. Twice the controls in a window and
-        // every value readable without hovering -- at the cost of the gesture a
-        // knob gives you, which on a synth is not nothing.
+        // 4 -- MIXER. Bars instead of knobs, value inside the bar.
         Variant {
-            "Mixer", "bars with inline values, twice the density",
-            190, 40, 50, 7,
-            1.0f, 1.0f, 1.0f,
-            Control::bar, Grouping::tinted, 24.0f, true,
-            true, 9.5f, true, true, 150
+            .name = "Mixer", .note = "bars with inline values, twice the density",
+            .cellWidthMax = 190, .cellHeightMin = 40, .cellHeightMax = 50, .groupGap = 7,
+            .control = Control::bar,
+            .grouping = Grouping::tinted, .groupHueStep = 24.0f, .groupSpine = true,
+            .lampToggles = true, .switchStyle = Switch::lamp, .labelSize = 9.5f,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 150
+        },
+
+        // -------------------------------------------------------------------
+        // The revisions, all on 3.
+        //
+        // Hue step down from 24 to 18 across all three: at 24 the fourth group
+        // landed on a salmon close enough to a warning red to be worth a second
+        // look, and five groups still span 72 degrees, which is plainly five
+        // colours.
+        // -------------------------------------------------------------------
+
+        // 5 -- HARDWARE. The literal reading of "fat industrial switch": a
+        // moulded cap in a recessed bezel, and it is **red on every group**,
+        // because a power switch is red on every box in a rack precisely so
+        // that it can be read without being identified first. Knobs get a
+        // machined skirt and the plates get screws.
+        Variant {
+            .name = "Hardware", .note = "moulded switches in bezels, machined skirts, screws",
+            .cellWidthMax = 118, .cellHeightMin = 84, .cellHeightMax = 110, .groupGap = 8,
+            .leadScale = 1.30f, .trimScale = 0.72f,
+            .grouping = Grouping::tinted, .groupHueStep = 18.0f, .groupSpine = true,
+            .lampToggles = true, .switchStyle = Switch::bevel, .industrialRedSwitch = true,
+            .labelTint = 0.55f, .valueSize = 13.0f, .valueSizeLead = 15.0f, .valueHeight = 17, .valueBold = true,
+            .knobSkirt = true, .plateScrews = true,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 86
+        },
+
+        // 6 -- CONSOLE. Group identity carried as hard as it can be: the
+        // heading becomes a filled block of the group's colour with its name
+        // knocked out of it, the labels take most of the tint, and the knob's
+        // unfilled travel is tinted too -- so a group hums one hue even with
+        // every control at zero. Navigation first.
+        Variant {
+            .name = "Console", .note = "filled heading bars, strongly tinted labels, tinted tracks",
+            .cellWidthMax = 118, .cellHeightMin = 84, .cellHeightMax = 110, .groupGap = 8,
+            .leadScale = 1.30f, .trimScale = 0.72f,
+            .grouping = Grouping::tinted, .groupHueStep = 18.0f, .groupSpine = true,
+            .lampToggles = true, .switchStyle = Switch::bevel,
+            .labelTint = 0.85f, .valueSize = 13.5f, .valueSizeLead = 16.0f, .valueHeight = 18, .valueBold = true,
+            .heading = Heading::bar, .tintTrack = true,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 86
+        },
+
+        // 7 -- INSTRUMENT. The restrained one. Everything the other two do, at
+        // the volume a thing you look at for six hours wants: labels warmed
+        // rather than coloured, the biggest values of the three because the
+        // number is what you actually read, and a skirt but no screws.
+        Variant {
+            .name = "Instrument", .note = "restrained tint, the largest values, skirts without screws",
+            .cellWidthMax = 118, .cellHeightMin = 86, .cellHeightMax = 112, .groupGap = 9,
+            .leadScale = 1.32f, .trimScale = 0.74f,
+            .grouping = Grouping::tinted, .groupHueStep = 18.0f, .groupSpine = true,
+            .lampToggles = true, .switchStyle = Switch::bevel,
+            .labelTint = 0.40f, .valueSize = 14.0f, .valueSizeLead = 16.5f, .valueHeight = 19, .valueBold = true,
+            .knobSkirt = true, .tintTrack = true,
+            .knobRelief = true, .fillRow = true, .cellWidthMin = 86
         }
     };
 
@@ -192,7 +306,7 @@ struct Variant
     return kVariants[static_cast<std::size_t> (juce::jlimit (0, count - 1, index))];
 }
 
-[[nodiscard]] inline int variantCount() noexcept { return 5; }
+[[nodiscard]] inline int variantCount() noexcept { return 8; }
 
 /// The variant this editor was built with.
 ///

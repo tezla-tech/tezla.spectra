@@ -261,6 +261,37 @@ void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds,
     g.drawLine (area.getX() + 5.0f, area.getBottom() - 0.5f,
                 area.getRight() - 5.0f, area.getBottom() - 0.5f, 1.0f);
 
+    // **Screws.** Four of them, and the honest question a variant exists to
+    // answer is whether they read as built or as kitsch.
+    //
+    // Drawn as a countersunk hole rather than a screw *head*: a dark dot with a
+    // lit lower lip and a single slot. A drawn Phillips cross at four pixels is
+    // mud; one slot at a consistent angle is legible and is what a panel screw
+    // mostly looks like from a metre away anyway.
+    if (design::current().plateScrews && area.getWidth() > 60.0f)
+    {
+        const float inset = 7.0f;
+        const float r = 2.6f;
+
+        for (const auto corner : { juce::Point<float> { area.getX() + inset, area.getY() + inset },
+                                   { area.getRight() - inset, area.getY() + inset },
+                                   { area.getX() + inset, area.getBottom() - inset },
+                                   { area.getRight() - inset, area.getBottom() - inset } })
+        {
+            const auto hole = juce::Rectangle<float> { r * 2.0f, r * 2.0f }.withCentre (corner);
+
+            g.setColour (juce::Colours::black.withAlpha (0.55f));
+            g.fillEllipse (hole);
+
+            g.setColour (juce::Colours::white.withAlpha (0.14f));
+            g.drawEllipse (hole.reduced (0.25f).translated (0.0f, 0.4f), 0.9f);
+
+            g.setColour (juce::Colours::white.withAlpha (0.10f));
+            g.drawLine (corner.x - r * 0.7f, corner.y - r * 0.7f,
+                        corner.x + r * 0.7f, corner.y + r * 0.7f, 0.9f);
+        }
+    }
+
     // **The spine**: a bar of the group's own colour down its left edge.
     //
     // A coloured heading tells you which group you are reading once you are
@@ -290,6 +321,49 @@ void paintHeading (juce::Graphics& g, const ui::Palette& palette, juce::Rectangl
                    juce::Colour tint = juce::Colours::transparentBlack)
 {
     const auto accent = tint.isTransparent() ? palette.accent : tint;
+
+    // **The heading as a filled block**, name knocked out of it.
+    //
+    // Coloured text tells you which group you are reading once you are reading
+    // it; a block of colour is visible in peripheral vision, which is where a
+    // navigation cue actually has to work. The trade is that a block is a
+    // heavier object than a line of text, so it is a variant rather than the
+    // default -- five of them on a page is a lot of paint.
+    if (design::current().heading == design::Heading::bar && ! tint.isTransparent())
+    {
+        const auto block = row.toFloat().reduced (4.0f, 2.5f);
+
+        g.setColour (accent.withAlpha (0.90f));
+        g.fillRoundedRectangle (block, 2.5f);
+
+        g.setColour (juce::Colours::black.withAlpha (0.28f));
+        g.drawLine (block.getX() + 2.0f, block.getBottom() - 0.5f,
+                    block.getRight() - 2.0f, block.getBottom() - 0.5f, 1.0f);
+
+        const auto inner = row.reduced (11, 0);
+
+        // Knocked out in the panel's own dark, not in black: the name has to
+        // read as a hole in the block rather than as ink printed on it.
+        g.setColour (palette.background.darker (0.45f));
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+
+        const auto width = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), name);
+        g.drawText (name, inner, juce::Justification::centredLeft, false);
+
+        if (detail.isNotEmpty())
+        {
+            // Two thirds of the way from the block to the name, rather than a
+            // lighter dark: knocked out at `background.darker(0.15)` the
+            // explanation read as a smudge on a bright bar. It has to be
+            // quieter than the name and still be a word.
+            g.setColour (palette.background.darker (0.45f).withAlpha (0.62f));
+            g.setFont (juce::FontOptions (10.5f));
+            g.drawText (detail, inner.withTrimmedLeft (width + 8),
+                        juce::Justification::centredLeft, false);
+        }
+
+        return;
+    }
 
     const auto text = row.reduced (8, 0);
 
@@ -431,11 +505,34 @@ void LampButton::setTint (juce::Colour tint)
 
 void LampButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
-    const auto bounds = getLocalBounds().toFloat().reduced (1.0f);
-    const float radius = 3.0f;
-
     const bool on = getToggleState();
     const bool enabled = isEnabled();
+
+    // **The switch is red on every group when the design says so.**
+    //
+    // Every other coloured thing on this panel takes its group's hue, and for a
+    // switch that is arguably the wrong rule: a power switch is red on every
+    // box in a rack precisely so that it can be *read* without first being
+    // identified. Which of the two is right is a taste question, so it is a
+    // variant rather than a decision made here.
+    const auto lit = design::current().industrialRedSwitch
+                       ? juce::Colour { 0xffe8342a }
+                       : tint_;
+
+    if (design::current().switchStyle == design::Switch::bevel)
+    {
+        paintBevel (g, lit, on, enabled, highlighted, down);
+        return;
+    }
+
+    paintLamp (g, lit, on, enabled, highlighted, down);
+}
+
+void LampButton::paintLamp (juce::Graphics& g, juce::Colour lit, bool on, bool enabled,
+                            bool highlighted, bool down)
+{
+    const auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+    const float radius = 3.0f;
 
     // **Lit, not ticked.** The whole plate carries the state: a filled, glowing
     // rectangle against a dark recessed one. Three cues at once -- fill, text
@@ -443,17 +540,14 @@ void LampButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     // somebody's eye slides past.
     if (on && enabled)
     {
-        // The halo first, under everything, so the button reads as a source of
-        // light rather than as a coloured rectangle. Two passes at different
-        // alphas is the same trick the knob's value arc uses.
-        g.setColour (tint_.withAlpha (0.20f));
+        g.setColour (lit.withAlpha (0.20f));
         g.fillRoundedRectangle (bounds.expanded (3.0f), radius + 3.0f);
 
-        g.setColour (tint_.withAlpha (0.30f));
+        g.setColour (lit.withAlpha (0.30f));
         g.fillRoundedRectangle (bounds.expanded (1.5f), radius + 1.5f);
     }
 
-    const auto fill = on ? (enabled ? tint_.withAlpha (0.82f) : tint_.withAlpha (0.22f))
+    const auto fill = on ? (enabled ? lit.withAlpha (0.82f) : lit.withAlpha (0.22f))
                          : palette_.background.darker (enabled ? 0.30f : 0.10f);
 
     g.setGradientFill (juce::ColourGradient (fill.brighter (on ? 0.14f : 0.05f),
@@ -462,9 +556,7 @@ void LampButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
                                              bounds.getCentreX(), bounds.getBottom(), false));
     g.fillRoundedRectangle (bounds, radius);
 
-    // The rim. Bright and in the tint when lit; a dark inset lip when not, so
-    // the dark state reads as a recess rather than as a flat patch.
-    g.setColour (on ? tint_.brighter (0.5f).withAlpha (enabled ? 0.9f : 0.3f)
+    g.setColour (on ? lit.brighter (0.5f).withAlpha (enabled ? 0.9f : 0.3f)
                     : juce::Colours::black.withAlpha (enabled ? 0.45f : 0.2f));
     g.drawRoundedRectangle (bounds.reduced (0.5f), radius, 1.0f);
 
@@ -481,8 +573,6 @@ void LampButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
         g.fillRoundedRectangle (bounds, radius);
     }
 
-    // The word inside, because a lamp with its name beside it is two things to
-    // look at and a lamp with its name on it is one.
     g.setColour (on ? juce::Colours::black.withAlpha (enabled ? 0.82f : 0.35f)
                     : palette_.dimText.withAlpha (enabled ? 0.85f : 0.35f));
     g.setFont (juce::FontOptions (juce::jmin (11.0f, bounds.getHeight() * 0.62f),
@@ -490,6 +580,119 @@ void LampButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred, false);
 }
 
+void LampButton::paintBevel (juce::Graphics& g, juce::Colour lit, bool on, bool enabled,
+                             bool highlighted, bool down)
+{
+    // **A moulded cap sitting in a recessed bezel** -- the fat industrial
+    // switch, drawn rather than photographed.
+    //
+    // Four passes and no images:
+    //
+    //  1. The bezel: a dark, hard-edged recess cut into the plate, with its own
+    //     inner shadow along the top and a lit lip along the bottom. This is
+    //     the hole the switch lives in and it is what makes the cap look like
+    //     it is *in* the panel rather than on it.
+    //  2. The cap: inset from the bezel, with a vertical gradient. Off, the
+    //     gradient runs light-at-the-top -- a surface lit from above, standing
+    //     proud. On, it inverts and the cap drops two pixels, which is what a
+    //     pressed switch does and is the cue the eye reads fastest.
+    //  3. The chamfer: a bright line along whichever edge is catching the light
+    //     and a dark one opposite. Two lines, and they are the whole of the
+    //     3D -- a gradient alone reads as a painted rectangle.
+    //  4. The lamp: lit, the cap carries its colour and throws a halo past the
+    //     bezel; dark, it is a dead grey with the legend cut into it.
+    const auto full = getLocalBounds().toFloat();
+    const auto bezel = full.reduced (1.0f);
+    const float bezelRadius = 4.0f;
+
+    // -- 1. the recess ------------------------------------------------------
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.fillRoundedRectangle (bezel, bezelRadius);
+
+    g.setColour (juce::Colours::black.withAlpha (0.65f));
+    g.drawLine (bezel.getX() + bezelRadius, bezel.getY() + 1.0f,
+                bezel.getRight() - bezelRadius, bezel.getY() + 1.0f, 1.6f);
+
+    g.setColour (juce::Colours::white.withAlpha (0.11f));
+    g.drawLine (bezel.getX() + bezelRadius, bezel.getBottom() - 0.75f,
+                bezel.getRight() - bezelRadius, bezel.getBottom() - 0.75f, 1.5f);
+
+    // -- the halo, outside the bezel, before the cap -------------------------
+    if (on && enabled)
+    {
+        g.setColour (lit.withAlpha (0.22f));
+        g.fillRoundedRectangle (full.expanded (3.5f), bezelRadius + 3.5f);
+
+        g.setColour (lit.withAlpha (0.28f));
+        g.fillRoundedRectangle (full.expanded (1.5f), bezelRadius + 1.5f);
+    }
+
+    // -- 2. the cap ---------------------------------------------------------
+    //
+    // Pressed, it sits lower in its hole and loses a pixel of height: the
+    // travel is what says "this moved", and a switch that lights without
+    // moving is a lamp with a legend on it.
+    const float travel = on ? 2.0f : 0.0f;
+
+    auto cap = bezel.reduced (3.0f, 3.0f)
+                    .withTrimmedTop (travel)
+                    .translated (0.0f, on ? 0.5f : -0.5f);
+
+    const auto capBase = on ? (enabled ? lit.withAlpha (0.92f) : lit.withAlpha (0.25f))
+                            : juce::Colour { 0xff4c5055 }.withAlpha (enabled ? 1.0f : 0.5f);
+
+    const float capRadius = 2.5f;
+
+    g.setGradientFill (on
+        // Pressed: lit from below, because the face has tipped away from the
+        // light. This inversion is most of the "it went in" reading.
+        ? juce::ColourGradient (capBase.darker (0.30f), cap.getCentreX(), cap.getY(),
+                                capBase.brighter (0.18f), cap.getCentreX(), cap.getBottom(), false)
+        : juce::ColourGradient (capBase.brighter (0.55f), cap.getCentreX(), cap.getY(),
+                                capBase.darker (0.42f), cap.getCentreX(), cap.getBottom(), false));
+    g.fillRoundedRectangle (cap, capRadius);
+
+    // -- 3. the chamfer -----------------------------------------------------
+    g.setColour (juce::Colours::white.withAlpha (on ? 0.10f : (enabled ? 0.32f : 0.12f)));
+    g.drawLine (cap.getX() + capRadius, cap.getY() + 0.75f,
+                cap.getRight() - capRadius, cap.getY() + 0.75f, 1.5f);
+
+    g.setColour (juce::Colours::black.withAlpha (on ? 0.20f : 0.42f));
+    g.drawLine (cap.getX() + capRadius, cap.getBottom() - 0.75f,
+                cap.getRight() - capRadius, cap.getBottom() - 0.75f, 1.5f);
+
+    // The sides, half as strong: a moulded cap is rounded across its width too.
+    g.setColour (juce::Colours::black.withAlpha (0.22f));
+    g.drawRoundedRectangle (cap.reduced (0.5f), capRadius, 1.0f);
+
+    if (highlighted || down)
+    {
+        g.setColour (juce::Colours::white.withAlpha (down ? 0.14f : 0.07f));
+        g.fillRoundedRectangle (cap, capRadius);
+    }
+
+    // -- 4. the legend ------------------------------------------------------
+    //
+    // Cut into the cap rather than printed on it: a dark legend on a lit cap
+    // and a light one on a dead cap, each with the faintest opposite shadow
+    // offset by a pixel, which is what engraving looks like from a metre away.
+    // Translated, not repositioned: `withY` takes an absolute coordinate and
+    // `getY()` is where this button sits in its *parent*, so the first version
+    // pushed the legend clean off the cap and the switch came out a blank red
+    // slab. The legend rides the cap's travel, which is one pixel.
+    const auto legend = getLocalBounds().translated (0, juce::roundToInt (travel));
+
+    g.setFont (juce::FontOptions (juce::jmin (11.5f, cap.getHeight() * 0.55f),
+                                  juce::Font::bold));
+
+    g.setColour (on ? juce::Colours::white.withAlpha (enabled ? 0.22f : 0.08f)
+                    : juce::Colours::black.withAlpha (enabled ? 0.45f : 0.15f));
+    g.drawText (getButtonText(), legend.translated (0, 1), juce::Justification::centred, false);
+
+    g.setColour (on ? juce::Colours::black.withAlpha (enabled ? 0.80f : 0.30f)
+                    : juce::Colour { 0xffb9bdc2 }.withAlpha (enabled ? 1.0f : 0.35f));
+    g.drawText (getButtonText(), legend, juce::Justification::centred, false);
+}
 
 ParameterCell::ParameterCell (juce::String parameterId, const juce::String& name, ui::Palette palette)
     : id_ (std::move (parameterId)), palette_ (palette)
@@ -500,7 +703,7 @@ ParameterCell::ParameterCell (juce::String parameterId, const juce::String& name
     label_.setText (name.toUpperCase(), juce::dontSendNotification);
     label_.setJustificationType (juce::Justification::centred);
     label_.setColour (juce::Label::textColourId, palette_.dimText);
-    label_.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    label_.setFont (juce::FontOptions (design::current().labelSize, juce::Font::bold));
     label_.setMinimumHorizontalScale (0.65f);
     addAndMakeVisible (label_);
 
@@ -511,9 +714,44 @@ ParameterCell::ParameterCell (juce::String parameterId, const juce::String& name
     setComponentID (id_);
 }
 
+void ParameterCell::setTint (juce::Colour tint)
+{
+    // **The name takes its group's colour too**, mixed toward the dim grey
+    // rather than used at full.
+    //
+    // A page of saturated labels is a page where the loudest thing is the
+    // words, and the words are the part you already know after a week. Mixed,
+    // a group reads as *warm* or *cool* before it reads as red or blue, which
+    // is the level a navigation cue wants to sit at -- and it stays legible,
+    // because every accent here is lighter than the dim grey it is mixed with,
+    // so the blend can only raise contrast against the plate.
+    const float amount = design::current().labelTint;
+
+    if (amount <= 0.0f)
+        return;
+
+    tint_ = tint;
+    label_.setColour (juce::Label::textColourId,
+                      palette_.dimText.interpolatedWith (tint, amount));
+    label_.repaint();
+}
+
 void ParameterCell::resized()
 {
     label_.setBounds (getLocalBounds().removeFromTop (kCellLabelHeight));
+}
+
+int ParameterCell::valueHeight()
+{
+    return design::current().valueHeight;
+}
+
+juce::Colour ParameterCell::labelColour() const
+{
+    const float amount = design::current().labelTint;
+
+    return amount <= 0.0f ? palette_.dimText
+                          : palette_.dimText.interpolatedWith (tint_, amount);
 }
 
 juce::Rectangle<int> ParameterCell::controlBounds() const
@@ -526,7 +764,17 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
     : ParameterCell (parameterId, name, palette)
 {
     slider_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, kCellValueHeight);
+    // The size goes on before the box is made: `setTextBoxStyle` is what calls
+    // `createSliderTextBox`, and the label is built exactly once.
+    slider_.getProperties().set (
+        "tezlaValueSize",
+        design::emphasisOf (parameterId) == design::Emphasis::lead
+            ? design::current().valueSizeLead
+            : design::current().valueSize);
+
+    slider_.getProperties().set ("tezlaValueBold", design::current().valueBold);
+
+    slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, valueHeight());
     slider_.setColour (juce::Slider::textBoxTextColourId, palette_.text);
     slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     slider_.setTooltip (tooltip);
@@ -542,6 +790,8 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
     ui::noWheel (slider_);
 
     slider_.getProperties().set ("tezlaRelief", design::current().knobRelief);
+    slider_.getProperties().set ("tezlaSkirt", design::current().knobSkirt);
+    slider_.getProperties().set ("tezlaTintTrack", design::current().tintTrack);
 
     addAndMakeVisible (slider_);
 
@@ -551,6 +801,8 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
 
 void KnobCell::setTint (juce::Colour tint)
 {
+    ParameterCell::setTint (tint);
+
     slider_.getProperties().set ("tezlaTint",
                                  static_cast<juce::int64> (tint.getARGB()));
     slider_.repaint();
@@ -566,7 +818,7 @@ void KnobCell::setControlEnabled (bool enabled)
                        enabled ? palette_.text : palette_.dimText.withAlpha (0.4f));
 
     label_.setColour (juce::Label::textColourId,
-                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+                      enabled ? labelColour() : labelColour().withAlpha (0.35f));
     slider_.repaint();
     label_.repaint();
 }
@@ -597,7 +849,7 @@ void KnobCell::resized()
     {
         // The value text under the knob keeps its height whatever the knob
         // does, so a row of mixed sizes still has its numbers on one line.
-        auto value = area.removeFromBottom (kCellValueHeight);
+        auto value = area.removeFromBottom (valueHeight());
 
         const int wanted = juce::roundToInt (static_cast<float> (area.getHeight()) * scale);
         const int width = juce::jmin (area.getWidth(),
@@ -643,6 +895,8 @@ BarCell::BarCell (juce::AudioProcessorValueTreeState& state, const juce::String&
 
 void BarCell::setTint (juce::Colour tint)
 {
+    ParameterCell::setTint (tint);
+
     slider_.setColour (juce::Slider::trackColourId, tint.withAlpha (0.55f));
     slider_.repaint();
 }
@@ -653,7 +907,7 @@ void BarCell::setControlEnabled (bool enabled)
     slider_.setColour (juce::Slider::textBoxTextColourId,
                        enabled ? palette_.text : palette_.dimText.withAlpha (0.4f));
     label_.setColour (juce::Label::textColourId,
-                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+                      enabled ? labelColour() : labelColour().withAlpha (0.35f));
     slider_.repaint();
     label_.repaint();
 }
@@ -771,7 +1025,7 @@ void MorphCell::setControlEnabled (bool enabled)
     slider_.setEnabled (enabled);
     slider_.setAlpha (enabled ? 1.0f : 0.35f);
     label_.setColour (juce::Label::textColourId,
-                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.4f));
+                      enabled ? labelColour() : labelColour().withAlpha (0.4f));
 }
 
 void MorphCell::resized()
@@ -812,7 +1066,7 @@ void ChoiceCell::setControlEnabled (bool enabled)
 {
     box_.setEnabled (enabled);
     label_.setColour (juce::Label::textColourId,
-                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+                      enabled ? labelColour() : labelColour().withAlpha (0.35f));
     label_.repaint();
 }
 
@@ -854,6 +1108,8 @@ ToggleCell::ToggleCell (juce::AudioProcessorValueTreeState& state, const juce::S
 
 void ToggleCell::setTint (juce::Colour tint)
 {
+    ParameterCell::setTint (tint);
+
     if (auto* lamp = dynamic_cast<LampButton*> (button_.get()))
         lamp->setTint (tint);
 }
@@ -862,7 +1118,7 @@ void ToggleCell::setControlEnabled (bool enabled)
 {
     button_->setEnabled (enabled);
     label_.setColour (juce::Label::textColourId,
-                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+                      enabled ? labelColour() : labelColour().withAlpha (0.35f));
     label_.repaint();
     button_->repaint();
 }
@@ -878,11 +1134,16 @@ void ToggleCell::resized()
         // Big enough to hit and to read, and no bigger. Filling the cell made
         // the one switch on the page the largest object on it, which is a
         // hierarchy nobody asked for -- a lamp is a lamp, not a billboard.
-        const int width = juce::jlimit (54, 108, getWidth() - 16);
+        // A bevelled cap needs height for its chamfer to read as one; a flat
+        // lamp does not. 34 against 30 is the difference between a switch and
+        // a coloured strip.
+        const bool bevel = design::current().switchStyle == design::Switch::bevel;
+        const int height = bevel ? 34 : 30;
+        const int width = juce::jlimit (54, bevel ? 100 : 108, getWidth() - 16);
 
-        button_->setBounds (juce::Rectangle<int> { width, 30 }
+        button_->setBounds (juce::Rectangle<int> { width, height }
                                 .withCentre (getLocalBounds().getCentre())
-                                .withY (area.getY() + (area.getHeight() - 30) / 2));
+                                .withY (area.getY() + (area.getHeight() - height) / 2));
         return;
     }
 

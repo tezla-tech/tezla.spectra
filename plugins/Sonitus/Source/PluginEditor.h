@@ -92,6 +92,17 @@ public:
     void paintButton (juce::Graphics&, bool highlighted, bool down) override;
 
 private:
+    /// A flat plate that lights.
+    void paintLamp (juce::Graphics&, juce::Colour lit, bool on, bool enabled,
+                    bool highlighted, bool down);
+
+    /// A moulded cap in a recessed bezel: the fat industrial switch, which
+    /// moves as well as lighting. Both are here rather than in two classes
+    /// because they are one control drawn two ways, and the attachment, the
+    /// hit area and the legend are identical.
+    void paintBevel (juce::Graphics&, juce::Colour lit, bool on, bool enabled,
+                     bool highlighted, bool down);
+
     ui::Palette palette_;
     juce::Colour tint_;
 };
@@ -105,10 +116,11 @@ public:
 
     virtual void setControlEnabled (bool enabled) = 0;
 
-    /// The group's colour, for a design that gives each group its own. The
-    /// default takes the heading's word for it and tints nothing, so a cell
-    /// that has no colourable part is not forced to invent one.
-    virtual void setTint (juce::Colour) {}
+    /// The group's colour, for a design that gives each group its own.
+    ///
+    /// The base tints the *name*, which every cell has; an override adds
+    /// whatever else that cell can colour and calls this first.
+    virtual void setTint (juce::Colour tint);
 
     void resized() override;
 
@@ -116,9 +128,18 @@ protected:
     /// Where the control goes: everything under the name.
     [[nodiscard]] juce::Rectangle<int> controlBounds() const;
 
+    /// The name's colour, group tint mixed in. Held as a method rather than a
+    /// value because the enabled/disabled paths both need it and neither
+    /// should have to remember the mix.
+    [[nodiscard]] juce::Colour labelColour() const;
+
+    /// The height the value row wants, which a design may grow.
+    [[nodiscard]] static int valueHeight();
+
     juce::String id_;
     ui::Palette  palette_;
     juce::Label  label_;
+    juce::Colour tint_ { palette_.accent };
 };
 
 class KnobCell final : public ParameterCell

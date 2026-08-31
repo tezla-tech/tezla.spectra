@@ -130,7 +130,17 @@ public:
         // which is itself a lightened panel, and a track defined relative to
         // `panel` disappears against it -- which it did, and a page of knobs at
         // their minimum read as a page of bare pointers.
-        arc (startAngle, endAngle, palette_.dimText.withAlpha (on ? 0.26f : 0.12f), thickness);
+        // The unfilled travel. With `tezlaTintTrack` it takes the group's own
+        // colour at a low alpha instead of the neutral grey, so a group hums
+        // one hue even with every control sitting at zero -- which is most of
+        // a page's controls most of the time.
+        const bool tintTrack = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaTintTrack", false));
+
+        arc (startAngle, endAngle,
+             tintTrack ? tint.withAlpha (on ? 0.24f : 0.10f)
+                       : palette_.dimText.withAlpha (on ? 0.26f : 0.12f),
+             thickness);
 
         // The body: a shallow gradient, dark at the bottom. Enough to lift the
         // knob off the panel without pretending to be a photograph of one.
@@ -204,6 +214,38 @@ public:
                 // the panel highlight: it is what gives a dark circle an edge.
                 g.setColour (juce::Colours::white.withAlpha (on ? 0.07f : 0.03f));
                 g.drawEllipse (body.reduced (0.5f), 1.0f);
+            }
+        }
+
+        // **The skirt**: tick marks machined into the panel around the knob.
+        //
+        // Drawn outside the track, under everything else, so it reads as part
+        // of the *panel* rather than part of the control -- which is what it is
+        // on a real unit, where the ticks are silkscreen and the knob turns
+        // over them. Eleven of them across the travel, which is enough to read
+        // as a scale and few enough not to become a texture.
+        if (static_cast<bool> (slider.getProperties().getWithDefault ("tezlaSkirt", false))
+            && radius > 12.0f)
+        {
+            const float from = radius + 2.0f;
+            const float to = radius + juce::jmax (3.0f, radius * 0.16f);
+
+            for (int tick = 0; tick <= 10; ++tick)
+            {
+                const float at = startAngle
+                               + static_cast<float> (tick) / 10.0f * (endAngle - startAngle);
+
+                // The ends and the middle are longer, the way a real scale
+                // marks its extremes and its centre.
+                const bool major = tick == 0 || tick == 5 || tick == 10;
+                const float outer = major ? to + 1.5f : to;
+
+                g.setColour (juce::Colours::white.withAlpha (
+                    on ? (major ? 0.30f : 0.16f) : (major ? 0.12f : 0.06f)));
+
+                g.drawLine ({ { centre.x + from * std::sin (at), centre.y - from * std::cos (at) },
+                              { centre.x + outer * std::sin (at), centre.y - outer * std::cos (at) } },
+                            major ? 1.5f : 1.0f);
             }
         }
 
@@ -296,7 +338,22 @@ public:
         label->setColour (juce::Label::outlineWhenEditingColourId, palette_.accent);
         label->setColour (juce::Label::backgroundWhenEditingColourId, palette_.background);
         label->setColour (juce::Label::textWhenEditingColourId, palette_.text);
-        label->setFont (juce::FontOptions (11.5f));
+        // **The value's size is the caller's to choose.**
+        //
+        // The number under a knob is the thing actually read while a patch is
+        // being dialled -- more than the name, which is learnt after a week --
+        // and one size for every control on the panel says the opposite. A
+        // property rather than an argument because `createSliderTextBox` is
+        // called from inside `setTextBoxStyle`, so the caller sets the property
+        // first and the two arrive together.
+        const auto& wanted = slider.getProperties()["tezlaValueSize"];
+
+        const bool bold = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaValueBold", false));
+
+        label->setFont (juce::FontOptions (wanted.isVoid() ? 11.5f
+                                                           : static_cast<float> (wanted),
+                                           bold ? juce::Font::bold : juce::Font::plain));
         label->setJustificationType (juce::Justification::centred);
 
         return label;
