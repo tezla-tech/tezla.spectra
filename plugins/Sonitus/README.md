@@ -881,6 +881,26 @@ id, so the check covers them. Seen red by replacing the step strip's
 `addAndMakeVisible` with a bare `setVisible` — which is the bug that shipped in
 v0.1.0 — and the run exits 1 with "no component with id steps".
 
+### Phase 4 presets
+
+Seven more, three that use the new feedback controls musically and four that
+do not hold back. Measured at A1 and A3: every one is finite, peaks between
+0.62 and 0.87, and decays to under 1e-10 after release.
+
+| preset | what it is |
+|---|---|
+| **FM reese -- teeth without unison** | The reese made with operator feedback instead of a big detuned stack: same bite, a third of the voices, and mono-compatible because the harmonics are generated per voice rather than by cancellation between them. Env 1 opens the feedback after the transient. |
+| **Operator bass -- two sines, all index** | Two sines and nothing else -- no filter movement, no unison, no comb. The counter-argument to every other preset here: the cleanest way to a hard bass is often not to mangle a saw. |
+| **Cross-bite -- the loop, on a leash** | A modulates B *and* B modulates A, at depths where the loop growls rather than tears. Solo each direction to hear the asymmetry: the reverse path is a sample late, so they do not sound alike at the same number. |
+| **SCREAMFACE -- every guard at once** | Both operators at full feedback, the loop closed hard both ways, folder wide, ring, kargyraa, resonant comb. No clean signal anywhere in it. 24 partials, brightness centroid **7.49** against a plain saw's 5.73. |
+| **Neural collapse -- the loop, re-decided per step** | The *sequencer* drives the reverse PM depth, so the loop's character is re-decided sixteen times a bar -- and a loop through two nonlinearities does not respond linearly to its own depth, so each step lands somewhere unrelated to the last. Deterministic, so it prints. |
+| **Tearout larynx -- a throat that screams** | Formant filter locked to the note's own harmonics, kargyraa doubling the period the way a real kargyraa singer's false folds do, both operators feeding back hard enough to give the vowel something to filter. The vowel walks on a synced LFO. |
+| **Gravel storm -- noise with a pitch bolted on** | No oscillator plays the note at all: the pitch is the comb's resonance tracking the key, and the note number chooses a delay length. A feedback sine ring-modulates the noise for teeth. Brightness centroid **11.91**, the brightest thing the instrument makes. |
+
+These lean on every bound in the instrument at once -- the feedback cap, the
+folder's ADAA, the comb's limit, the safety limiter -- and that is deliberate.
+A preset that exercises every guard simultaneously is the honest stress test.
+
 ### v0.1.0
 
 First version. Oscillators with hard sync and PM, unison, ZDF filter, three

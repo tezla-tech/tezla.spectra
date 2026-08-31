@@ -35,20 +35,38 @@ public:
     void setAmount (double amount) noexcept
     {
         amount_ = std::clamp (amount, 0.0, 1.0);
+
+        // **Zero is the bypass here, not sixteen bits.** The two readings of
+        // "16 bits" -- "the control is off" and "the depth is maximal" -- are
+        // the same everywhere a control can reach and separate below an amount
+        // of about 2.4e-16, where `16 - 15 * amount` rounds to exactly 16.
+        // This branch keeps the amount-driven reading exactly as five shipped
+        // plugins have always had it; `setBits` below states the other one.
         bypassed_ = amount_ <= 0.0;
 
-        const double bits = kMaxBits - amount_ * (kMaxBits - kMinBits);
-
-        // Fractional bit depths are meaningful and make the control smooth to
-        // automate: the step size is continuous even though "bits" is not.
-        levels_ = std::pow (2.0, bits - 1.0);
-        inverseLevels_ = 1.0 / levels_;
+        applyBits (kMaxBits - amount_ * (kMaxBits - kMinBits));
     }
 
-    [[nodiscard]] double getBits() const noexcept
+    /// Sets the depth directly, in bits, for callers that think in bits rather
+    /// than in a 0-to-1 amount -- a telephone codec, say, where 8 is a
+    /// specification rather than a position on a knob.
+    ///
+    /// **`kMaxBits` is bypassed exactly**, because `round(x * 32768) / 32768`
+    /// is not the identity for an arbitrary double and a control at the top of
+    /// its range must mean off.
+    void setBits (double bits) noexcept
     {
-        return kMaxBits - amount_ * (kMaxBits - kMinBits);
+        const double clamped = std::clamp (bits, kMinBits, kMaxBits);
+
+        bypassed_ = clamped >= kMaxBits;
+        amount_ = (kMaxBits - clamped) / (kMaxBits - kMinBits);
+
+        applyBits (clamped);
     }
+
+    [[nodiscard]] double getBits() const noexcept { return bits_; }
+
+    [[nodiscard]] double getAmount() const noexcept { return amount_; }
 
     [[nodiscard]] double process (double x) const noexcept
     {
@@ -59,7 +77,17 @@ public:
     }
 
 private:
+    /// Fractional bit depths are meaningful and make the control smooth to
+    /// automate: the step size is continuous even though "bits" is not.
+    void applyBits (double bits) noexcept
+    {
+        bits_ = bits;
+        levels_ = std::pow (2.0, bits_ - 1.0);
+        inverseLevels_ = 1.0 / levels_;
+    }
+
     double amount_        { 0.0 };
+    double bits_          { kMaxBits };
     double levels_        { 32768.0 };
     double inverseLevels_ { 1.0 / 32768.0 };
     bool   bypassed_      { true };

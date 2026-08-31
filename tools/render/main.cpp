@@ -44,8 +44,6 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
-extern juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter();
-
 namespace
 {
 constexpr double kSampleRate = 48000.0;
@@ -224,11 +222,14 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
                 const int span = juce::jmin (blockSize, total - written);
                 buffer.setSize (2, span, false, false, true);
 
-                for (int i = 0; i < span; ++i)
+                // `n` rather than `i`: the loop over the command line above
+                // already owns that name, and -Wshadow is right that reusing
+                // it here is asking for trouble.
+                for (int n = 0; n < span; ++n)
                 {
                     const double value = source (index++) * gain;
-                    buffer.setSample (0, i, value);
-                    buffer.setSample (1, i, value * 0.85);
+                    buffer.setSample (0, n, value);
+                    buffer.setSample (1, n, value * 0.85);
                 }
 
                 processor.processBlock (buffer, midi);
@@ -419,6 +420,45 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             continue;
         }
 
+        // "press:id@x,y" and "release:id@x,y" hold a mouse button down on a
+        // component and let go of it, which a plain click cannot express.
+        //
+        // Crossbar's keypad is why: it is one component that draws twenty-eight
+        // pads and plays a tone *while the button is down*, so "clicked it"
+        // proves nothing -- the note-on, the sounding mask coming back from the
+        // audio thread and the key lighting up all happen between the press and
+        // the release. Anything else with press-and-hold behaviour gets the
+        // same handle for free.
+        if (id.startsWith ("press:") || id.startsWith ("release:"))
+        {
+            const bool down = id.startsWith ("press:");
+            const auto spec = id.fromFirstOccurrenceOf (":", false, false);
+            const auto target = spec.upToFirstOccurrenceOf ("@", false, false);
+            const auto where = spec.fromFirstOccurrenceOf ("@", false, false);
+            const float x = where.upToFirstOccurrenceOf (",", false, false).getFloatValue();
+            const float y = where.fromFirstOccurrenceOf (",", false, false).getFloatValue();
+
+            if (auto* found = findById (*editor, target))
+            {
+                const auto event = eventAt (*found, x, y);
+
+                if (down)
+                    found->mouseDown (event);
+                else
+                    found->mouseUp (event);
+
+                std::printf ("  %s %s at (%.0f, %.0f)\n", down ? "pressed" : "released",
+                             target.toRawUTF8(), x, y);
+            }
+            else
+            {
+                std::fprintf (stderr, "  no component with id %s\n", target.toRawUTF8());
+                ++failures;
+            }
+
+            continue;
+        }
+
         // "id@x,y" moves the pointer over that component instead of clicking
         // it, for anything that only shows itself under a cursor.
         //
@@ -557,7 +597,8 @@ int main (int argc, char** argv)
     {
         std::printf ("usage: tezla-render <samples> <blockSize> <out.raw> [id=value ...]\n"
                      "       tezla-render params\n"
-                     "       tezla-render editor [componentId | id@x,y | hit:id | shot:out.png\n"
+                     "       tezla-render editor [componentId | id@x,y | press:id@x,y\n"
+                     "                            | release:id@x,y | hit:id | shot:out.png\n"
                      "                            | audio:secs[@gain] | tick:n | size:WxH\n"
                      "                            | id=value | reopen ...]\n");
         return 2;

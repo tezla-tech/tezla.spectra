@@ -279,6 +279,18 @@ public:
         return voices_[static_cast<std::size_t> (std::clamp (index, 0, kMaxVoices - 1))];
     }
 
+    /// Operator feedback, applied to every voice in the stack.
+    ///
+    /// Per voice rather than on the summed output, and that is the point: each
+    /// detuned copy is its own operator, feeding back on its own phase at its
+    /// own pitch. Feeding the *sum* back into all of them would lock the stack
+    /// into one shared timbre and lose the reason for detuning it.
+    void setFeedback (double cycles) noexcept
+    {
+        for (auto& voice : voices_)
+            voice.setFeedback (cycles);
+    }
+
     /// One sample, into a stereo pair. `phaseMod` is applied to every voice.
     void process (double phaseMod, double& left, double& right) noexcept
     {

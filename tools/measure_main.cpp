@@ -43,6 +43,8 @@
 #include "AnvilEngine.hpp"
 #include "FerriteEngine.hpp"
 #include "CapstoneEngine.hpp"
+#include "CrossbarEngine.hpp"
+#include "SyrinxEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
 #include "MalleusEngine.hpp"
@@ -2763,7 +2765,6 @@ int runMalleus (const Args& args)
     using namespace malleusMeasure;
 
     const double rate = args.sampleRate;
-    constexpr std::size_t window = 1 << 15;
 
     // ---- 1. the mode tables, which are the instrument ------------------------
 
@@ -3078,6 +3079,778 @@ int runMalleus (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Crossbar -- the telephone tone instrument
+// ---------------------------------------------------------------------------
+
+namespace crossbarMeasure {
+
+using namespace tezla::crossbar;
+
+/// Hann-windowed amplitude at a frequency, normalised so a pure sine of
+/// amplitude A reads A. RMS rather than peak, per CLAUDE.md section 10.
+double amplitudeAt (const std::vector<double>& x, std::size_t from, std::size_t to,
+                    double hz, double rate)
+{
+    double re = 0.0;
+    double im = 0.0;
+    double windowSum = 0.0;
+
+    const double span = static_cast<double> (to - from);
+
+    for (std::size_t n = from; n < to && n < x.size(); ++n)
+    {
+        const double along = static_cast<double> (n - from) / span;
+        const double window = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * along);
+        const double phase = 2.0 * std::numbers::pi * hz
+                               * static_cast<double> (n - from) / rate;
+
+        re += window * x[n] * std::cos (phase);
+        im -= window * x[n] * std::sin (phase);
+        windowSum += window;
+    }
+
+    return windowSum <= 0.0 ? 0.0 : 2.0 * std::hypot (re, im) / windowSum;
+}
+
+CrossbarEngine::Parameters plain()
+{
+    CrossbarEngine::Parameters p;
+    p.attackSeconds = 0.002;
+    p.decaySeconds = 0.1;
+    p.sustain = 1.0;
+    p.releaseSeconds = 0.02;
+    p.band = BandMode::off;
+    p.rateIndex = 0;
+    p.codec = tezla::dsp::CompandingLaw::off;
+    return p;
+}
+
+std::vector<double> render (CrossbarEngine& engine, int note, double seconds, double rate)
+{
+    const auto total = static_cast<std::size_t> (seconds * rate);
+    std::vector<double> out (total, 0.0);
+
+    engine.noteOn (note, 1.0);
+
+    for (std::size_t n = 0; n < total; n += 128)
+        engine.process (out.data() + n,
+                        nullptr,
+                        static_cast<int> (std::min<std::size_t> (128, total - n)));
+
+    return out;
+}
+
+/// A boxcar RMS envelope with a threshold at 1/sqrt(2) of the peak: the only
+/// shape whose crossings are unbiased on both edges, so a burst measures the
+/// length it actually is. See tests/test_Crossbar.cpp for what the two wrong
+/// shapes did.
+std::vector<double> crossings (const std::vector<double>& x, double rate)
+{
+    const auto window = static_cast<std::size_t> (0.040 * rate);
+    std::vector<double> envelope (x.size(), 0.0);
+    double sum = 0.0;
+
+    for (std::size_t n = 0; n < x.size(); ++n)
+    {
+        sum += x[n] * x[n];
+
+        if (n >= window)
+            sum -= x[n - window] * x[n - window];
+
+        envelope[n] = std::sqrt (sum / static_cast<double> (window));
+    }
+
+    const double threshold = *std::max_element (envelope.begin(), envelope.end())
+                               / std::numbers::sqrt2;
+
+    std::vector<double> found;
+    bool above = false;
+
+    for (std::size_t n = 0; n < envelope.size(); ++n)
+    {
+        const bool nowAbove = envelope[n] > threshold;
+
+        if (n > 0 && nowAbove != above)
+            found.push_back (static_cast<double> (n) / rate);
+
+        above = nowAbove;
+    }
+
+    return found;
+}
+
+double snrForSine (const tezla::dsp::Compander& compander, double levelDb, double rate)
+{
+    const auto length = static_cast<std::size_t> (10.0 * rate);
+    const double amplitude = tezla::dsp::dbToGain (levelDb);
+
+    double signalPower = 0.0;
+    double errorPower = 0.0;
+
+    for (std::size_t n = 0; n < length; ++n)
+    {
+        const double x = amplitude
+                           * std::sin (2.0 * std::numbers::pi * 997.0
+                                         * static_cast<double> (n) / rate);
+        const double y = compander.process (x);
+
+        signalPower += x * x;
+        errorPower += (y - x) * (y - x);
+    }
+
+    return errorPower <= 0.0 ? 999.0 : 10.0 * std::log10 (signalPower / errorPower);
+}
+
+} // namespace crossbarMeasure
+
+int runCrossbar (const Args& args)
+{
+    using namespace tezla;
+    using namespace crossbarMeasure;
+
+    const double rate = args.sampleRate;
+
+    // ---- 1. the DTMF matrix, against ITU-T Q.23 ------------------------------
+
+    std::printf ("The sixteen DTMF pairs, measured at the engine's output against the\n");
+    std::printf ("Q.23 figures. A real receiver accepts 1.5%%; the error here is the\n");
+    std::printf ("analysis window's, not the generator's.\n\n");
+
+    std::printf ("  %-4s %10s %10s %10s %10s %10s\n",
+                 "key", "low asked", "measured", "high asked", "measured", "twist dB");
+
+    double worstError = 0.0;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        const auto tone = static_cast<Tone> (i);
+
+        int row = 0, column = 0;
+        dtmfIndices (tone, row, column);
+
+        CrossbarEngine engine;
+        engine.prepare (rate);
+        engine.setParameters (plain());
+
+        const auto out = render (engine, noteForTone (tone), 0.45, rate);
+
+        const auto from = static_cast<std::size_t> (0.10 * rate);
+        const auto to = static_cast<std::size_t> (0.40 * rate);
+
+        // The peak of a windowed DFT swept either side of the asked frequency
+        // is where the tone actually is.
+        const auto peakNear = [&] (double asked)
+        {
+            double best = asked;
+            double bestAmplitude = 0.0;
+
+            for (double hz = asked - 6.0; hz <= asked + 6.0; hz += 0.05)
+            {
+                const double amplitude = amplitudeAt (out, from, to, hz, rate);
+
+                if (amplitude > bestAmplitude)
+                {
+                    bestAmplitude = amplitude;
+                    best = hz;
+                }
+            }
+
+            return std::pair { best, bestAmplitude };
+        };
+
+        const auto [lowHz, lowAmplitude] = peakNear (kDtmfRowHz[row]);
+        const auto [highHz, highAmplitude] = peakNear (kDtmfColHz[column]);
+
+        worstError = std::max ({ worstError,
+                                 std::abs (lowHz - kDtmfRowHz[row]),
+                                 std::abs (highHz - kDtmfColHz[column]) });
+
+        std::printf ("  %-4s %10.0f %10.2f %10.0f %10.2f %10.3f\n",
+                     nameFor (tone), kDtmfRowHz[row], lowHz,
+                     kDtmfColHz[column], highHz,
+                     20.0 * std::log10 (highAmplitude / lowAmplitude));
+    }
+
+    std::printf ("\n  Worst frequency error over all 32 tones: %.3f Hz, which is %.4f%% of\n",
+                 worstError, 100.0 * worstError / 697.0);
+    std::printf ("  the lowest one -- against the 1.5%% a receiver tolerates.\n");
+
+    // ---- 2. what else is in there -------------------------------------------
+
+    {
+        CrossbarEngine engine;
+        engine.prepare (rate);
+        engine.setParameters (plain());
+
+        const auto out = render (engine, noteForTone (Tone::digit5), 0.5, rate);
+        const auto from = static_cast<std::size_t> (0.10 * rate);
+        const auto to = static_cast<std::size_t> (0.40 * rate);
+
+        double worst = 0.0;
+        double worstHz = 0.0;
+
+        for (double hz = 100.0; hz <= 20000.0; hz += 25.0)
+        {
+            if (std::abs (hz - 770.0) < 150.0 || std::abs (hz - 1336.0) < 150.0)
+                continue;
+
+            const double amplitude = amplitudeAt (out, from, to, hz, rate);
+
+            if (amplitude > worst)
+            {
+                worst = amplitude;
+                worstHz = hz;
+            }
+        }
+
+        std::printf ("\n  Loudest component anywhere else, 100 Hz to 20 kHz: %.3e at %.0f Hz,\n",
+                     worst, worstHz);
+        std::printf ("  which is %.1f dB down. A sine has no harmonics to fold, which is why\n",
+                     20.0 * std::log10 (worst / 0.4427));
+        std::printf ("  this instrument oversamples nowhere.\n");
+    }
+
+    // ---- 3. cadences, at four sample rates ----------------------------------
+
+    std::printf ("\nCadence timing across sample rates. The tables state seconds and the\n");
+    std::printf ("coefficients come from the actual rate, so these must not move.\n\n");
+
+    std::printf ("  %-10s %12s %12s %12s\n", "rate", "burst (s)", "period (s)", "UK gap (s)");
+
+    for (double fs : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        CrossbarEngine bell;
+        bell.prepare (fs);
+        bell.setParameters (plain());
+
+        const auto busy = crossings (render (bell, noteForTone (Tone::busy), 2.6, fs), fs);
+
+        auto uk = plain();
+        uk.region = Region::unitedKingdom;
+
+        CrossbarEngine bt;
+        bt.prepare (fs);
+        bt.setParameters (uk);
+
+        const auto ring = crossings (render (bt, noteForTone (Tone::ringback), 3.5, fs), fs);
+
+        std::printf ("  %-10.0f %12.4f %12.4f %12.4f\n", fs,
+                     busy.size() >= 2 ? busy[1] - busy[0] : -1.0,
+                     busy.size() >= 3 ? busy[2] - busy[0] : -1.0,
+                     ring.size() >= 3 ? ring[2] - ring[1] : -1.0);
+    }
+
+    std::printf ("\n  Asked: 0.5 burst, 1.0 period, 0.2 UK gap.\n");
+
+    // ---- 4. G.711, which is where the sound comes from -----------------------
+
+    std::printf ("\nThe line's codec: signal-to-noise against level, on a 997 Hz sine.\n");
+    std::printf ("A companding law's noise follows the signal down; a linear quantiser's\n");
+    std::printf ("does not, and that difference IS the difference between a telephone and\n");
+    std::printf ("a sampler.\n\n");
+
+    std::printf ("  %-10s %10s %10s %10s\n", "level dB", "mu-law", "A-law", "linear 8");
+
+    dsp::Compander mu;
+    mu.setLaw (dsp::CompandingLaw::muLaw);
+
+    dsp::Compander a;
+    a.setLaw (dsp::CompandingLaw::aLaw);
+
+    dsp::Compander linear;
+    linear.setLaw (dsp::CompandingLaw::linear);
+    linear.setBits (8);
+
+    double muTop = -999.0, muBottom = 999.0;
+    double linearTop = -999.0, linearBottom = 999.0;
+
+    for (double levelDb = 0.0; levelDb >= -40.001; levelDb -= 10.0)
+    {
+        const double muSnr = snrForSine (mu, levelDb, rate);
+        const double aSnr = snrForSine (a, levelDb, rate);
+        const double linearSnr = snrForSine (linear, levelDb, rate);
+
+        muTop = std::max (muTop, muSnr);
+        muBottom = std::min (muBottom, muSnr);
+        linearTop = std::max (linearTop, linearSnr);
+        linearBottom = std::min (linearBottom, linearSnr);
+
+        std::printf ("  %-10.0f %10.2f %10.2f %10.2f\n", levelDb, muSnr, aSnr, linearSnr);
+    }
+
+    std::printf ("\n  Spread over the 40 dB: mu-law %.2f dB, linear %.2f dB.\n",
+                 muTop - muBottom, linearTop - linearBottom);
+    std::printf ("  Ceilings the structure implies: mu-law %.6f, A-law %.6f.\n",
+                 dsp::Compander::kMuPeak, dsp::Compander::kAPeak);
+
+    // ---- 5. the band, and the aliasing that is on purpose -------------------
+
+    std::printf ("\nThe band edges, measured on the DTMF constituent tones, and the image\n");
+    std::printf ("the rate reduction is SUPPOSED to make.\n\n");
+
+    {
+        const auto through = [&] (BandMode band, Tone tone, double hz)
+        {
+            CrossbarEngine engine;
+            engine.prepare (rate);
+
+            auto p = plain();
+            p.band = band;
+            engine.setParameters (p);
+
+            const auto out = render (engine, noteForTone (tone), 0.5, rate);
+
+            return amplitudeAt (out, static_cast<std::size_t> (0.15 * rate),
+                                static_cast<std::size_t> (0.45 * rate), hz, rate);
+        };
+
+        std::printf ("  %-10s %10s %10s %10s\n", "probe", "off", "toll dB", "wide dB");
+
+        const Tone probes[] { Tone::row697, Tone::row941, Tone::col1633,
+                              Tone::singleFrequency };
+        const double hz[] { 697.0, 941.0, 1633.0, 2600.0 };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            const double reference = through (BandMode::off, probes[i], hz[i]);
+
+            std::printf ("  %-10.0f %10.4f %10.3f %10.3f\n", hz[i], reference,
+                         20.0 * std::log10 (through (BandMode::toll, probes[i], hz[i])
+                                              / reference),
+                         20.0 * std::log10 (through (BandMode::wideband, probes[i], hz[i])
+                                              / reference));
+        }
+
+        const auto image = [&] (int rateIndex)
+        {
+            CrossbarEngine engine;
+            engine.prepare (rate);
+
+            auto p = plain();
+            p.rateIndex = rateIndex;
+            engine.setParameters (p);
+
+            const auto out = render (engine, noteForTone (Tone::col1477), 0.5, rate);
+
+            return amplitudeAt (out, static_cast<std::size_t> (0.10 * rate),
+                                static_cast<std::size_t> (0.40 * rate), 2523.0, rate);
+        };
+
+        std::printf ("\n  1477 Hz held and sampled at 4 kHz images at 2523 Hz:\n");
+        std::printf ("    rate off  %.3e (%.1f dB)\n", image (0),
+                     20.0 * std::log10 (std::max (image (0), 1.0e-12)));
+        std::printf ("    4 kHz     %.3e (%.1f dB)\n", image (7),
+                     20.0 * std::log10 (std::max (image (7), 1.0e-12)));
+        std::printf ("  That is CLAUDE.md section 7's documented exception, on purpose.\n");
+    }
+
+    // ---- 6. what it costs ---------------------------------------------------
+
+    std::printf ("\nCPU, as a percentage of one core at %.0f Hz.\n\n", rate);
+
+    {
+        const auto costOf = [&] (const char* label, int voices, bool line)
+        {
+            CrossbarEngine engine;
+            engine.prepare (rate);
+
+            auto p = plain();
+
+            if (line)
+            {
+                p.band = BandMode::toll;
+                p.rateIndex = kDefaultRateIndex;
+                p.codec = dsp::CompandingLaw::muLaw;
+                p.noise = 0.3;
+            }
+
+            engine.setParameters (p);
+
+            for (int i = 0; i < voices; ++i)
+                engine.noteOn (noteForTone (Tone::dialTone) + i, 1.0);
+
+            const auto total = static_cast<std::size_t> (4.0 * rate);
+            std::vector<double> buffer (512, 0.0);
+
+            const auto start = std::chrono::steady_clock::now();
+
+            for (std::size_t n = 0; n < total; n += 512)
+                engine.process (buffer.data(), nullptr, 512);
+
+            const auto elapsed = std::chrono::duration<double> (
+                std::chrono::steady_clock::now() - start).count();
+
+            std::printf ("  %-40s %6.2f%%\n", label,
+                         100.0 * elapsed / (static_cast<double> (total) / rate));
+        };
+
+        costOf ("one tone, line off", 1, false);
+        costOf ("16 tones, line off", 16, false);
+        costOf ("16 tones, full line (toll/8k/mu/hiss)", 16, true);
+        costOf ("idle, full line", 0, true);
+    }
+
+    if (! args.outPath.empty())
+        std::printf ("\n  (--out is accepted for consistency; this command prints tables "
+                     "rather than writing a CSV.)\n");
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// syrinx
+// ---------------------------------------------------------------------------
+
+namespace syrinxMeasure {
+
+using namespace tezla::syrinx;
+
+/// A voice-shaped probe. `sibilant` swaps the body of the voice for a
+/// high-band burst of the same total energy, which is what makes the de-esser's
+/// level-independence claim testable: the two differ in *spectrum*, not level.
+double voiceAt (std::size_t index, double rate, double levelDb, bool sibilant)
+{
+    const double t = static_cast<double> (index) / rate;
+    const double twoPi = 2.0 * std::numbers::pi;
+
+    const double body = 1.00 * std::sin (twoPi * 180.0 * t)
+                      + 0.50 * std::sin (twoPi * 360.0 * t)
+                      + 0.30 * std::sin (twoPi * 720.0 * t)
+                      + 0.12 * std::sin (twoPi * 2400.0 * t);
+
+    // Two high partials beating, which is as close to broadband /s/ noise as a
+    // deterministic probe gets -- and deterministic matters, because the whole
+    // measurement is a comparison across levels.
+    const double hiss = 0.9 * std::sin (twoPi * 7300.0 * t)
+                            * std::sin (twoPi * 5100.0 * t + 1.0)
+                      + 0.5 * std::sin (twoPi * 9700.0 * t);
+
+    return tezla::dsp::dbToGain (levelDb) * 0.4 * (sibilant ? body * 0.25 + hiss : body);
+}
+
+/// Runs the probe through a strip and returns the worst reduction each stage
+/// reached.
+///
+/// **The first 100 ms are discarded**, and that is not tidiness. Every filter
+/// in the chain starts from zero state, and a sine switched on at phase zero
+/// is a step: the settling transient is broadband, so it looks to the de-esser
+/// exactly like sibilance. Measuring from sample zero reported 2.96 dB of
+/// reduction on a pure vowel -- a defect that existed only in the harness.
+SyrinxEngine::Meters worstOf (const SyrinxEngine::Settings& settings, double rate,
+                              double seconds, double levelDb, bool sibilant)
+{
+    SyrinxEngine engine;
+    engine.prepare (rate);
+    engine.setSettings (settings);
+
+    const auto settle = static_cast<std::size_t> (0.1 * rate);
+    SyrinxEngine::Meters worst;
+
+    for (std::size_t n = 0; n < static_cast<std::size_t> (seconds * rate); ++n)
+    {
+        double left = voiceAt (n, rate, levelDb, sibilant);
+        double right = left;
+
+        engine.process (&left, &right, 1);
+
+        if (n < settle)
+            continue;
+
+        const auto m = engine.getMeters();
+        worst.gateDb = std::min (worst.gateDb, m.gateDb);
+        worst.deEssDb = std::min (worst.deEssDb, m.deEssDb);
+        worst.levellerDb = std::min (worst.levellerDb, m.levellerDb);
+        worst.peakDb = std::min (worst.peakDb, m.peakDb);
+    }
+
+    return worst;
+}
+
+} // namespace syrinxMeasure
+
+int runSyrinx (const Args& args)
+{
+    using namespace syrinxMeasure;
+
+    const double rate = args.sampleRate > 0.0 ? args.sampleRate : 48000.0;
+
+    std::printf ("tezla-measure syrinx -- %.0f Hz\n\n", rate);
+
+    // -----------------------------------------------------------------------
+    // The claim the plugin is built around
+    // -----------------------------------------------------------------------
+
+    std::printf ("De-esser: reduction against input level\n");
+    std::printf ("  The point of measuring sibilance as a RATIO rather than a level:\n");
+    std::printf ("  the same /s/ at different levels must be reduced by the same amount,\n");
+    std::printf ("  and a vowel must not be reduced at any level.\n\n");
+    std::printf ("  %-12s %14s %14s\n", "level", "on an /s/", "on a vowel");
+
+    {
+        SyrinxEngine::Settings s;
+
+        // Range wide open, deliberately. CLAUDE.md section 10: a guard at the
+        // end of a chain makes every measurement of the guarded quantity true.
+        // Range **is** such a guard -- it clamps the reduction -- and with it
+        // at 12 dB every level read exactly -12.000, which looks like perfect
+        // level independence and is really just the clamp. What has to be
+        // measured is what the detector asked for, so the cap is put out of
+        // reach and the reduction is detector-limited.
+        s.deEss.rangeDb = 36.0;
+        s.deEss.thresholdDb = -12.0;
+
+        double worstSpread = 0.0;
+        double firstSibilant = 0.0;
+        bool haveFirst = false;
+        double worstVowel = 0.0;
+
+        for (const double levelDb : { -36.0, -30.0, -24.0, -18.0, -12.0, -6.0 })
+        {
+            const double onS = worstOf (s, rate, 0.6, levelDb, true).deEssDb;
+            const double onVowel = worstOf (s, rate, 0.6, levelDb, false).deEssDb;
+
+            std::printf ("  %8.0f dB %11.3f dB %11.3f dB\n", levelDb, onS, onVowel);
+
+            if (! haveFirst)
+            {
+                firstSibilant = onS;
+                haveFirst = true;
+            }
+
+            worstSpread = std::max (worstSpread, std::abs (onS - firstSibilant));
+            worstVowel = std::min (worstVowel, onVowel);
+        }
+
+        std::printf ("\n  spread across 30 dB of input   %.3f dB\n", worstSpread);
+        std::printf ("  worst reduction on a vowel     %.3f dB\n", worstVowel);
+        std::printf ("  A level-thresholded de-esser would track the level one for one:\n");
+        std::printf ("  30 dB in would be about 30 dB of spread.\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Compressors: asked against measured
+    // -----------------------------------------------------------------------
+
+    std::printf ("\nCompressor: measured ratio against asked\n");
+    std::printf ("  %-10s %14s %12s\n", "asked", "measured", "error");
+
+    for (const double ratio : { 2.0, 4.0, 8.0, 16.0 })
+    {
+        // Well above the knee, so the curve's straight section is what is
+        // being measured rather than its corner.
+        tezla::dsp::CompressorCore compressor;
+        compressor.prepare (rate);
+        compressor.setThresholdDb (-40.0);
+        compressor.setRatio (ratio);
+        compressor.setKneeDb (0.0);
+
+        // Slow, and that is the measurement rather than a setting. "Ratio"
+        // names the **static** curve, so the gain has to be steady across a
+        // cycle of the probe. With a 1 ms release the follower lets go between
+        // the peaks of a 220 Hz tone -- the gain then modulates within each
+        // cycle, which raises the output and read 16:1 as 14.5:1. That is the
+        // compressor behaving correctly and the harness asking the wrong
+        // question. Switching peak-picking to RMS did not fix it, which is
+        // what said the fault was in the time constants and not the amplitude.
+        compressor.setAttackMs (1.0);
+        compressor.setReleaseMs (200.0);
+
+        // **RMS, never peak, for the amplitude of a sine** -- CLAUDE.md
+        // section 10, and this harness proved it again. Peak-picking read
+        // 16:1 as 14.484:1, because at a high ratio the envelope follower
+        // ripples and the peak lands on the ripple rather than on the level.
+        const auto steadyOutput = [&] (double inputDb)
+        {
+            compressor.reset();
+
+            const double amplitude = tezla::dsp::dbToGain (inputDb);
+            double sumOfSquares = 0.0;
+            std::size_t counted = 0;
+
+            for (std::size_t n = 0; n < static_cast<std::size_t> (0.5 * rate); ++n)
+            {
+                const double phase = 2.0 * std::numbers::pi * 220.0
+                                       * static_cast<double> (n) / rate;
+                const double out = compressor.process (amplitude * std::sin (phase));
+
+                if (n > static_cast<std::size_t> (0.4 * rate))
+                {
+                    sumOfSquares += out * out;
+                    ++counted;
+                }
+            }
+
+            const double rms = std::sqrt (sumOfSquares / static_cast<double> (counted));
+
+            return 20.0 * std::log10 (rms * std::numbers::sqrt2);
+        };
+
+        const double lowOut = steadyOutput (-20.0);
+        const double highOut = steadyOutput (-8.0);
+        const double measured = 12.0 / (highOut - lowOut);
+
+        std::printf ("  %6.1f:1 %12.3f:1 %10.3f\n", ratio, measured, measured - ratio);
+    }
+
+    // -----------------------------------------------------------------------
+    // Gate: the hysteresis window
+    // -----------------------------------------------------------------------
+
+    std::printf ("\nGate: transitions on a tone sitting ON the threshold\n");
+    std::printf ("  A vocal tail sits at whatever threshold you set, because that is how\n");
+    std::printf ("  you set it. Counted over two seconds of a 400 Hz tone wobbling\n");
+    std::printf ("  +/-0.5 dB at 5 Hz, centred exactly on -30 dB.\n\n");
+    std::printf ("  %-14s %-12s %12s\n", "hysteresis", "hold", "transitions");
+
+    for (const auto& [hysteresisDb, holdMs] : { std::pair { 0.0, 0.0 },
+                                               std::pair { 0.0, 40.0 },
+                                               std::pair { 3.0, 0.0 },
+                                               std::pair { 3.0, 40.0 } })
+    {
+        Gate gate;
+        gate.prepare (rate);
+        gate.setThresholdDb (-30.0);
+        gate.setHysteresisDb (hysteresisDb);
+        gate.setRangeDb (24.0);
+        gate.setHoldMs (holdMs);
+        gate.setAttackMs (1.0);
+        gate.setReleaseMs (50.0);
+
+        int transitions = 0;
+        bool wasOpen = gate.isOpen();
+
+        for (std::size_t n = 0; n < static_cast<std::size_t> (2.0 * rate); ++n)
+        {
+            const double t = static_cast<double> (n) / rate;
+            const double wobbleDb = 0.5 * std::sin (2.0 * std::numbers::pi * 5.0 * t);
+            const double amplitude = tezla::dsp::dbToGain (-30.0 + wobbleDb);
+
+            (void) gate.process (amplitude
+                                   * std::sin (2.0 * std::numbers::pi * 400.0 * t));
+
+            if (gate.isOpen() != wasOpen)
+            {
+                ++transitions;
+                wasOpen = gate.isOpen();
+            }
+        }
+
+        std::printf ("  %9.1f dB %9.0f ms %12d\n", hysteresisDb, holdMs, transitions);
+    }
+
+    // -----------------------------------------------------------------------
+    // Section 7: the strip is permanently in the path
+    // -----------------------------------------------------------------------
+
+    std::printf ("\nNeutral is the identity, bit for bit\n");
+
+    {
+        SyrinxEngine engine;
+        engine.prepare (rate);
+        engine.setSettings (SyrinxEngine::Settings {});
+
+        std::size_t exact = 0;
+        std::size_t total = 0;
+        double worst = 0.0;
+
+        for (int i = -20000; i <= 20000; ++i)
+        {
+            double left = static_cast<double> (i) / 19997.0;
+            double right = -left * 0.37;
+            const double original = left;
+
+            engine.process (&left, &right, 1);
+            ++total;
+
+            if (tezla::dsp::isExactly (left, original))
+                ++exact;
+
+            worst = std::max (worst, std::abs (left - original));
+        }
+
+        std::printf ("  %zu of %zu samples bit-identical, worst difference %.3e\n",
+                     exact, total, worst);
+        std::printf ("  isIdentity() reports %s\n",
+                     SyrinxEngine::isIdentity (SyrinxEngine::Settings {}) ? "true" : "false");
+    }
+
+    // -----------------------------------------------------------------------
+    // CPU
+    // -----------------------------------------------------------------------
+
+    std::printf ("\nCPU, stereo, 480-sample blocks\n");
+
+    {
+        const auto costOf = [&] (const char* label, const SyrinxEngine::Settings& settings)
+        {
+            SyrinxEngine engine;
+            engine.prepare (rate);
+
+            constexpr int kBlock = 480;
+            const int blocks = static_cast<int> (rate) / kBlock;
+
+            std::vector<double> source (static_cast<std::size_t> (blocks * kBlock));
+
+            for (std::size_t n = 0; n < source.size(); ++n)
+                source[n] = voiceAt (n, rate, -12.0, n % 19200 < 3840);
+
+            std::vector<double> left (kBlock, 0.0);
+            std::vector<double> right (kBlock, 0.0);
+            double sink = 0.0;
+
+            const auto start = std::chrono::steady_clock::now();
+
+            for (int block = 0; block < blocks; ++block)
+            {
+                const auto* from = source.data() + static_cast<std::size_t> (block) * kBlock;
+                std::copy (from, from + kBlock, left.begin());
+                std::copy (from, from + kBlock, right.begin());
+
+                engine.setSettings (settings);
+                engine.process (left.data(), right.data(), kBlock);
+                sink += left[0];
+            }
+
+            const auto elapsed = std::chrono::duration<double> (
+                std::chrono::steady_clock::now() - start).count();
+
+            std::printf ("  %-40s %6.2f%%   (sink %g)\n", label,
+                         100.0 * elapsed * rate / static_cast<double> (blocks * kBlock),
+                         sink);
+        };
+
+        costOf ("everything neutral", SyrinxEngine::Settings {});
+
+        SyrinxEngine::Settings working;
+        working.highpassHz = 90.0;
+        working.gate.thresholdDb = -40.0;
+        working.gate.rangeDb = 18.0;
+        working.deEss.rangeDb = 9.0;
+        working.deEss.thresholdDb = -12.0;
+        working.leveller.thresholdDb = -24.0;
+        working.leveller.ratio = 2.5;
+        working.leveller.makeupDb = 3.0;
+        working.leveller.programDependent = true;
+        working.peak.thresholdDb = -12.0;
+        working.peak.ratio = 6.0;
+        working.peak.attackMs = 2.0;
+        working.peak.releaseMs = 80.0;
+        working.eq.lowShelfDb = -2.0;
+        working.eq.midDb = 1.5;
+        working.eq.highShelfDb = 2.5;
+        working.outputTrimDb = -1.0;
+
+        costOf ("every stage working", working);
+    }
+
+    if (! args.outPath.empty())
+        std::printf ("\n  (--out is accepted for consistency; this command prints tables "
+                     "rather than writing a CSV.)\n");
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -3097,6 +3870,8 @@ void printUsage()
     std::printf ("  svarayantra     [--fs]  soundfont engine aliasing and CPU per voice\n");
     std::printf ("  ferrite         [--fs --out FILE]  tape loops, losses, aliasing, wobble, CPU\n");
     std::printf ("  malleus         [--fs --out FILE]  mode tables, lock, decay, bow onset, CPU\n");
+    std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
+    std::printf ("  syrinx          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
 }
 
 } // namespace
@@ -3128,6 +3903,8 @@ int main (int argc, char** argv)
     if (command == "svarayantra")     return runSvarayantra (args);
     if (command == "ferrite")         return runFerrite (args);
     if (command == "malleus")         return runMalleus (args);
+    if (command == "crossbar")        return runCrossbar (args);
+    if (command == "syrinx")          return runSyrinx (args);
 
     printUsage();
     return 1;

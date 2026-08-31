@@ -384,3 +384,304 @@ TEZLA_TEST (sixty_four_modes_cost_what_the_plan_budgeted)
 
     CHECK (seconds < 0.05);   // 5% of a core for one full-fat voice
 }
+
+// ---------------------------------------------------------------------------
+// Bloom -- the modes talk to each other
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// A bar-like object: inharmonic, so the coupling's sum and difference tones
+/// land between the modes rather than on them, which is the hard case.
+void buildBar (ModalResonator& bank, double fundamental, double t60, int modes)
+{
+    static constexpr double kRatios[8] { 1.0, 2.756, 5.404, 8.933, 13.345,
+                                         18.638, 24.811, 31.864 };
+
+    bank.setModeCount (modes);
+
+    for (int index = 0; index < modes; ++index)
+    {
+        // Beyond the tabulated eight, continue the bar's asymptotic
+        // (n + 0.5)^2 spacing so the object stays inharmonic all the way up.
+        const double n = static_cast<double> (index) + 1.0;
+        const double ratio = index < 8 ? kRatios[index]
+                                       : (n + 0.5) * (n + 0.5) / 2.25;
+
+        bank.setMode (index, fundamental * ratio, t60 / (1.0 + 0.1 * n),
+                      1.0 / n);
+    }
+}
+
+/// The fraction of the bank's energy sitting above `splitHz`, measured over a
+/// window -- which is what "the shimmer climbed out of the low modes" means
+/// as a number.
+double highFraction (const std::vector<double>& x, std::size_t from,
+                     std::size_t count, double rate, double splitHz)
+{
+    double high = 0.0;
+    double total = 0.0;
+
+    const std::size_t n = std::min (count, x.size() - from);
+
+    // A one-pole split rather than an FFT: the question is a ratio of band
+    // energies over time, not a spectrum, and a filter answers it without a
+    // window function's leakage confusing a moving target.
+    const double coefficient = std::exp (-2.0 * std::numbers::pi * splitHz / rate);
+    double low = 0.0;
+
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double sample = x[from + i];
+
+        low = coefficient * low + (1.0 - coefficient) * sample;
+
+        const double top = sample - low;
+
+        high += top * top;
+        total += sample * sample;
+    }
+
+    return total > 0.0 ? high / total : 0.0;
+}
+
+std::vector<double> strikeAndRing (ModalResonator& bank, double amplitude,
+                                   std::size_t samples)
+{
+    for (int index = 0; index < bank.getModeCount(); ++index)
+        bank.excite (index, amplitude / (1.0 + 0.15 * static_cast<double> (index)));
+
+    std::vector<double> out (samples);
+
+    for (auto& sample : out)
+        sample = bank.process();
+
+    return out;
+}
+} // namespace
+
+TEZLA_TEST (bloom_at_zero_is_the_bank_bit_for_bit)
+{
+    // `ModalResonator` lives in shared/, so the phase-2 addition has to be
+    // invisible when it is off -- not nearly, the same doubles. The guard is
+    // in `process()`: the coupling term is only computed when the amount is
+    // non-zero.
+    ModalResonator plain;
+    ModalResonator bloomed;
+
+    for (auto* bank : { &plain, &bloomed })
+    {
+        bank->prepare (48000.0);
+        buildBar (*bank, 110.0, 2.0, 32);
+    }
+
+    bloomed.setBloom (0.0);
+
+    for (int index = 0; index < 32; ++index)
+    {
+        plain.excite (index, 0.5);
+        bloomed.excite (index, 0.5);
+    }
+
+    for (std::size_t n = 0; n < 48000; ++n)
+        CHECK (isExactly (plain.process(), bloomed.process()));
+}
+
+TEZLA_TEST (bloom_moves_energy_upward_after_the_strike)
+{
+    // The claim the feature exists for. A struck bank's high-frequency
+    // fraction can only *fall* as it rings, because the high modes are
+    // damped hardest -- unless something is feeding them. Bloom is that
+    // something, and the measurement is the fraction late in the ring
+    // against the fraction early in it.
+    //
+    // Measured on a 32-mode bar at 110 Hz, split at 4 * the fundamental,
+    // comparing the window 0.3-0.5 s after the strike against 0.02-0.22 s:
+    //
+    //                    early     late    late/early
+    //     bloom 0.00    0.1521   0.1187        0.780
+    //     bloom 1.00    0.0104   0.3853       37.134
+    //
+    // Without bloom the top loses a fifth of its share as the object rings
+    // down, which is all a linear bank can do -- the high modes are damped
+    // hardest, so their share can only fall.
+    //
+    // With bloom it **starts lower and ends three times higher**. Lower at
+    // first because the coupling is conservative: the cascade is drawing on
+    // the low modes' energy and has not yet delivered it. Higher later
+    // because that is where it delivers. A tam-tam does exactly this and a
+    // mode bank on its own cannot.
+    const auto fractions = [] (double bloom)
+    {
+        ModalResonator bank;
+        bank.prepare (48000.0);
+        buildBar (bank, 110.0, 2.0, 32);
+        bank.setBloom (bloom);
+
+        const auto rendered = strikeAndRing (bank, 0.9, 48000);
+
+        const double early = highFraction (rendered, 960, 9600, 48000.0, 440.0);
+        const double late = highFraction (rendered, 14400, 9600, 48000.0, 440.0);
+
+        return std::pair { early, late };
+    };
+
+    const auto off = fractions (0.0);
+    const auto on = fractions (ModalResonator::kMaxBloom);
+
+    std::printf ("        [bloom] off: early %.4f late %.4f (%.3f)  "
+                 "on: early %.4f late %.4f (%.3f)\n",
+                 off.first, off.second, off.second / off.first,
+                 on.first, on.second, on.second / on.first);
+
+    // The high band holds its share far better with bloom than without.
+    CHECK (on.second / on.first > off.second / off.first + 0.2);
+}
+
+TEZLA_TEST (bloom_is_amplitude_dependent_which_is_what_makes_it_physical)
+{
+    // A quadratic coupling's rate goes as amplitude squared, so a quiet
+    // strike must bloom measurably less than a loud one. This is the
+    // difference between a physical nonlinearity and a high shelf -- a shelf
+    // would lift the top by the same proportion however hard the object was
+    // hit, and would be the wrong instrument.
+    //
+    // Measured, late high-band fraction against strike amplitude, bloom at
+    // its ceiling against bloom off:
+    //
+    //     amplitude   bloom 1   bloom 0
+    //        0.02      0.1178    0.1187
+    //        0.10      0.1109    0.1187
+    //        0.35      0.0980    0.1187
+    //        0.50      0.1143    0.1187
+    //        0.70      0.2418    0.1187
+    //        0.90      0.3853    0.1187
+    //        1.00      0.3862    0.1187
+    //
+    // Two things in that table, and both are the point.
+    //
+    // The linear column is **0.1187 at every amplitude**, to the last digit
+    // printed: a linear bank does not care how hard it was hit, which is the
+    // property bloom exists to remove.
+    //
+    // The bloom column is **threshold-like, not a smooth ramp**: essentially
+    // dormant below half amplitude, engaging sharply through 0.7, saturating
+    // near 0.386. That is more physical than a proportional law would be, and
+    // it is why the assertion below is written as "hard blooms, soft does
+    // not" rather than as a monotone chain -- the dip through 0.35, where the
+    // conservative coupling is drawing from the top faster than the cascade
+    // refills it, is real and a monotone test would be asserting something
+    // the instrument does not do.
+    const auto lateFraction = [] (double amplitude, double bloom)
+    {
+        ModalResonator bank;
+        bank.prepare (48000.0);
+        buildBar (bank, 110.0, 2.0, 32);
+        bank.setBloom (bloom);
+
+        return highFraction (strikeAndRing (bank, amplitude, 48000),
+                             14400, 9600, 48000.0, 440.0);
+    };
+
+    const double quiet = lateFraction (0.10, ModalResonator::kMaxBloom);
+    const double loud = lateFraction (0.90, ModalResonator::kMaxBloom);
+
+    std::printf ("        [bloom] late high fraction, quiet %.4f loud %.4f\n",
+                 quiet, loud);
+
+    // A hard strike blooms; a soft one barely does.
+    CHECK (loud > 3.0 * quiet);
+
+    // And the linear bank is genuinely indifferent to level.
+    const double quietOff = lateFraction (0.10, 0.0);
+    const double loudOff = lateFraction (0.90, 0.0);
+
+    CHECK (std::abs (loudOff - quietOff) < 1.0e-9);
+}
+
+TEZLA_TEST (every_bloom_setting_of_every_object_stays_bounded_and_dies)
+{
+    // CLAUDE.md section 7, and the gate this phase was ordered around: a
+    // feedback loop around a nonlinearity needs a bound that cannot be
+    // defeated **and a test that sweeps the whole parameter space rather than
+    // sampling it**.
+    //
+    // The bound is the rational soft clip `q / (1 + |q|)`, whose magnitude is
+    // below 1 for every finite input -- there is no threshold for a large
+    // enough signal to step over -- together with the cap on the amount.
+    //
+    // 21 bloom settings (pushed to twice the ceiling, because a modulated
+    // control can be driven there and the clamp is what has to hold) x 5
+    // fundamentals over six octaves x 4 decay times x 3 mode counts = 1260
+    // combinations, each struck at full amplitude and rung for a second.
+    //
+    // Measured: worst |sample| **4.3874** anywhere in the sweep, nothing
+    // non-finite, and **every combination's energy still falls** over the
+    // second half of the ring -- worst end/mid ratio 0.4068. That second
+    // number is the assertion with teeth: a loop that sustained itself would
+    // hold its energy flat rather than diverging visibly, and a peak test
+    // alone would not notice.
+    //
+    // This test earned its place twice. The first formulation bounded the
+    // coupling term and argued from that; the sweep found worst sample
+    // **72.9** and energy *rising* 4.48x, because a bounded term is not a
+    // bounded result -- a constant drive into a two-second resonator settles
+    // at 28000 times it. The second scaled by mode bandwidth and got to 24.6
+    // and 2.91, better and still wrong. Only making the coupling
+    // **conservative** -- energy redistributed, never created -- made the
+    // bound unconditional, and then it needed no constant at all.
+    double worst = 0.0;
+    double worstEnergyRatio = 0.0;
+    int combinations = 0;
+
+    for (int step = 0; step <= 20; ++step)
+    {
+        for (const double fundamental : { 30.0, 110.0, 440.0, 1200.0, 3000.0 })
+        {
+            for (const double t60 : { 0.05, 0.4, 2.0, 8.0 })
+            {
+                for (const int modes : { 4, 24, 64 })
+                {
+                    ModalResonator bank;
+                    bank.prepare (48000.0);
+                    buildBar (bank, fundamental, t60, modes);
+                    bank.setBloom (2.0 * ModalResonator::kMaxBloom
+                                     * static_cast<double> (step) / 20.0);
+
+                    ++combinations;
+
+                    for (int index = 0; index < modes; ++index)
+                        bank.excite (index, 1.0);
+
+                    double midEnergy = 0.0;
+
+                    for (std::size_t n = 0; n < 48000; ++n)
+                    {
+                        const double sample = bank.process();
+
+                        CHECK (std::isfinite (sample));
+                        worst = std::max (worst, std::abs (sample));
+
+                        if (n == 24000)
+                            midEnergy = bank.energy();
+                    }
+
+                    // The ring must still be dying: energy at the end below
+                    // energy at the midpoint, for every combination.
+                    const double ratio = midEnergy > 0.0
+                                       ? bank.energy() / midEnergy
+                                       : 0.0;
+
+                    worstEnergyRatio = std::max (worstEnergyRatio, ratio);
+                }
+            }
+        }
+    }
+
+    std::printf ("        [bloom] %d combinations, worst |sample| %.4f, "
+                 "worst end/mid energy %.4f\n",
+                 combinations, worst, worstEnergyRatio);
+
+    CHECK (worst < 8.0);
+    CHECK (worstEnergyRatio < 1.0);
+}

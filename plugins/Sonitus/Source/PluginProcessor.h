@@ -43,6 +43,11 @@ inline constexpr auto semitonesB  = "semitonesB";
 inline constexpr auto centsB      = "centsB";
 inline constexpr auto widthB      = "widthB";
 inline constexpr auto morphB      = "morphB";
+
+/// Phase 4. Appended, never reordered -- CLAUDE.md section 8.
+inline constexpr auto feedbackA   = "feedbackA";
+inline constexpr auto feedbackB   = "feedbackB";
+inline constexpr auto pmReverse   = "pmReverse";
 inline constexpr auto unisonB     = "unisonB";
 inline constexpr auto detuneB     = "detuneB";
 inline constexpr auto spreadB     = "spreadB";
@@ -246,7 +251,8 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "Detune A", "Detune B", "Osc mix",
                                          "Sub level", "Ring", "Fold",
                                          "Pitch", "Pitch B", "Level",
-                                         "Kargyraa", "Morph A", "Morph B" };
+                                         "Kargyraa", "Morph A", "Morph B",
+                                         "Feedback A", "Feedback B", "PM reverse" };
 
 /// How many oscillator cycles one kargyraa modulator cycle spans.
 ///
@@ -330,8 +336,11 @@ static_assert (static_cast<int> (ModDestination::none)     == 0
             && static_cast<int> (ModDestination::level)    == 15
             && static_cast<int> (ModDestination::kargyraa) == 16
             && static_cast<int> (ModDestination::morphA)   == 17
-            && static_cast<int> (ModDestination::morphB)   == 18
-            && static_cast<int> (ModDestination::count)    == 19,
+            && static_cast<int> (ModDestination::morphB)    == 18
+            && static_cast<int> (ModDestination::feedbackA) == 19
+            && static_cast<int> (ModDestination::feedbackB) == 20
+            && static_cast<int> (ModDestination::pmReverse) == 21
+            && static_cast<int> (ModDestination::count)     == 22,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0

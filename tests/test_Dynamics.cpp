@@ -14,6 +14,8 @@
 
 #include <tezla/dsp/Decibels.hpp>
 #include <tezla/dsp/EnvelopeFollower.hpp>
+#include <limits>
+
 #include <tezla/dsp/GainComputer.hpp>
 
 using namespace tezla::dsp;
@@ -233,4 +235,181 @@ TEZLA_TEST (limiter_holds_a_sine_below_the_ceiling)
     // honest. Anything more than a dB would not be.
     CHECK (worstOutputDb <= ceilingDb + 1.0);
     CHECK (worstOutputDb >= ceilingDb - 2.0);
+}
+
+// ---------------------------------------------------------------------------
+// The ratio generalisation (Syrinx V1)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// The curve exactly as it stood before a ratio existed, written out here so
+/// the bit-exactness claim is checked against the real thing rather than
+/// against a memory of it.
+[[nodiscard]] double limiterCurveAsItWas (double levelDb, double ceilingDb,
+                                          double kneeDb)
+{
+    const double kneeWidth = 2.0 * kneeDb;
+    const double overshoot = levelDb - ceilingDb;
+
+    if (kneeWidth <= 0.0)
+        return overshoot <= 0.0 ? 0.0 : -overshoot;
+
+    if (overshoot <= -kneeDb)
+        return 0.0;
+
+    if (overshoot >= kneeDb)
+        return -overshoot;
+
+    const double intoKnee = overshoot + kneeDb;
+    return -(intoKnee * intoKnee) / (2.0 * kneeWidth);
+}
+} // namespace
+
+TEZLA_TEST (an_infinite_ratio_is_the_limiter_this_class_used_to_be)
+{
+    // The load-bearing test of the whole generalisation. Capstone is built on
+    // this class and has shipped, so a curve that moved its output by one ulp
+    // would have changed every project using it. Bit-for-bit, over a swept
+    // level and several knees -- not CHECK_NEAR.
+    //
+    // Break-checked, and the numbers are the argument for it existing:
+    // perturbing the knee constant by one part in 1e10 fails this test 8088
+    // times, and CAPSTONE'S OWN TEN TESTS STILL PASS. Capstone's suite cannot
+    // see a change to the curve it is built on; this is what can.
+    //
+    // A second attempt at breaking it is worth recording because it is not a
+    // break at all: reordering the knee expression to multiply by the slope
+    // before dividing rather than after leaves every bit identical, because
+    // at infinite ratio the slope is exactly 1.0 and multiplying by exactly
+    // 1.0 is the identity whichever side of the division it sits. The test is
+    // not weak there -- the change genuinely does nothing.
+    GainComputer computer;
+
+    for (const double knee : { 0.0, 0.5, 6.0, 24.0 })
+        for (const double ceiling : { -0.3, -6.0, 0.0, 3.0 })
+        {
+            computer.setCeilingDb (ceiling);
+            computer.setKneeDb (knee);
+
+            // Default ratio, untouched: the state Capstone leaves it in.
+            CHECK (std::isinf (computer.getRatio()));
+
+            for (double level = -60.0; level <= 24.0; level += 0.03125)
+                CHECK (computer.computeGainReductionDb (level)
+                         == limiterCurveAsItWas (level, ceiling, knee));
+        }
+
+    // And explicitly asking for it changes nothing either.
+    computer.setCeilingDb (-0.3);
+    computer.setKneeDb (6.0);
+    computer.setRatio (std::numeric_limits<double>::infinity());
+
+    for (double level = -60.0; level <= 24.0; level += 0.03125)
+        CHECK (computer.computeGainReductionDb (level)
+                 == limiterCurveAsItWas (level, -0.3, 6.0));
+}
+
+TEZLA_TEST (a_finite_ratio_realises_exactly_that_ratio_above_the_knee)
+{
+    // Above the knee a compressor's job is arithmetic: N dB over the
+    // threshold comes out as N/ratio dB over it. Checked as the realised
+    // OUTPUT level rather than as the reduction, because that is the claim
+    // the control makes to the user.
+    GainComputer computer;
+    computer.setThresholdDb (-20.0);
+    computer.setKneeDb (0.0);          // hard corner: no knee to blur it
+
+    for (const double ratio : { 1.5, 2.0, 3.0, 4.0, 8.0, 20.0 })
+    {
+        computer.setRatio (ratio);
+
+        for (const double over : { 1.0, 4.0, 12.0, 30.0 })
+        {
+            const double level = -20.0 + over;
+            const double outputDb = level + computer.computeGainReductionDb (level);
+
+            CHECK_NEAR (outputDb - (-20.0), over / ratio, 1.0e-12);
+        }
+    }
+
+    // Below the threshold, nothing, at any ratio.
+    for (const double ratio : { 1.5, 4.0, 20.0 })
+    {
+        computer.setRatio (ratio);
+
+        for (double level = -60.0; level < -20.0; level += 0.5)
+            CHECK (computer.computeGainReductionDb (level) == 0.0);
+    }
+}
+
+TEZLA_TEST (one_to_one_is_bit_exact_bypass)
+{
+    // CLAUDE.md section 7: a neutral setting is identity, not nearly
+    // identity. At 1:1 the slope is exactly 0, so every branch returns a
+    // signed zero -- and a signed zero in dB is a gain of exactly 1.
+    GainComputer computer;
+    computer.setRatio (1.0);
+
+    for (const double knee : { 0.0, 6.0, 24.0 })
+    {
+        computer.setKneeDb (knee);
+        computer.setThresholdDb (-24.0);
+
+        for (double level = -60.0; level <= 24.0; level += 0.125)
+        {
+            const double reduction = computer.computeGainReductionDb (level);
+
+            CHECK (reduction == 0.0);                    // -0.0 == 0.0 in IEEE
+            CHECK (dbToGain (reduction) == 1.0);         // and the gain is exact
+        }
+    }
+
+    // A ratio below 1 would be an upward expander -- a different curve. It is
+    // clamped rather than silently produced.
+    computer.setRatio (0.25);
+    CHECK (computer.getRatio() == 1.0);
+}
+
+TEZLA_TEST (the_knee_is_continuous_in_value_and_slope_at_every_ratio)
+{
+    // The knee exists to remove the corner; a knee that is continuous in
+    // value but not in slope still audibly clicks into compression, and the
+    // quadratic form is chosen precisely to be C1 at both ends.
+    GainComputer computer;
+    computer.setThresholdDb (-18.0);
+    computer.setKneeDb (6.0);
+
+    constexpr double h = 1.0e-6;
+
+    for (const double ratio : { 2.0, 4.0, 10.0,
+                                std::numeric_limits<double>::infinity() })
+    {
+        computer.setRatio (ratio);
+
+        for (const double corner : { -18.0 - 6.0, -18.0 + 6.0 })
+        {
+            const double below = computer.computeGainReductionDb (corner - h);
+            const double at    = computer.computeGainReductionDb (corner);
+            const double above = computer.computeGainReductionDb (corner + h);
+
+            CHECK_NEAR (below, at, 1.0e-5);              // value
+            CHECK_NEAR (at, above, 1.0e-5);
+
+            const double slopeBelow = (at - below) / h;  // slope
+            const double slopeAbove = (above - at) / h;
+
+            CHECK_NEAR (slopeBelow, slopeAbove, 1.0e-3);
+        }
+
+        // Monotone: more input never means less reduction.
+        double previous = 0.0;
+
+        for (double level = -60.0; level <= 24.0; level += 0.125)
+        {
+            const double reduction = computer.computeGainReductionDb (level);
+            CHECK (reduction <= previous + 1.0e-12);
+            previous = reduction;
+        }
+    }
 }

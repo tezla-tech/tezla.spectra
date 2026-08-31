@@ -172,6 +172,22 @@ public:
     /// width is silence, and a control that reaches it has a dead end on it.
     static constexpr double kMinimumWidth = 0.02;
 
+    /// The most phase deviation operator feedback may ask for, in cycles.
+    ///
+    /// One whole cycle, which is about where the DX-series tops out and about
+    /// where the sound stops being useful: past a cycle of self-deviation the
+    /// waveform is noise rather than a bright waveform, and the band-limiting
+    /// has nothing left to correct. Measured aliasing against this cap is in
+    /// `tests/test_Oscillator.cpp`.
+    static constexpr double kMaxFeedback = 1.0;
+
+    /// The most a triangle may reach before it is held. Chosen from
+    /// measurement, not from a round number: a correct triangle peaks at 1.82
+    /// at its worst across every width and pitch, so this never touches one.
+    /// Public because the sweep test asserts against it -- a bound nobody can
+    /// check is a comment.
+    static constexpr double kTriangleCeiling = 4.0;
+
     void reset (double startPhase = 0.0) noexcept
     {
         phase_ = std::clamp (startPhase, 0.0, 1.0);
@@ -181,7 +197,52 @@ public:
         wrapFraction_ = 0.0;
         pendingSync_ = false;
         pendingSyncFrac_ = 0.0;
+        history_[0] = 0.0;
+        history_[1] = 0.0;
     }
+
+    /// **Operator feedback**: the oscillator's own output modulating its own
+    /// phase, in cycles. Zero is off and is bit-exact.
+    ///
+    /// This is the classic FM-operator control, and on a sine it walks
+    /// continuously from sine towards saw as it rises -- which is why it earns
+    /// its place on a reese: more teeth without another oscillator.
+    ///
+    /// ---------------------------------------------------------------------
+    /// Why this loop cannot run away, and what it can still do
+    /// ---------------------------------------------------------------------
+    ///
+    /// CLAUDE.md section 7 requires a feedback loop around a nonlinearity to
+    /// carry a bound that cannot be defeated. Here the bound is structural
+    /// rather than bolted on, and it is worth being precise about which:
+    ///
+    /// **Amplitude cannot diverge**, because phase modulation is applied to
+    /// the *reading* of the waveform, not to the accumulator. Whatever phase
+    /// is asked for, the value returned is the shape function of a wrapped
+    /// phase, and every shape here is bounded to [-1, 1]. So the loop gain on
+    /// amplitude is zero by construction: a bigger feedback does not make a
+    /// bigger output, it makes a differently-shaped one. Adding a soft clip
+    /// inside the loop would be theatre.
+    ///
+    /// **What it can do is oscillate at Nyquist.** Feeding back a single
+    /// sample lets the operator flip between the two extremes of the waveform
+    /// on alternating samples -- bounded, and completely useless. So the
+    /// modulator is the mean of the **last two** outputs, which is a one-zero
+    /// lowpass with a null at exactly Nyquist and therefore kills that mode by
+    /// construction. This is what the DX7 does and for the same reason; it is
+    /// documented behaviour of a published instrument rather than anybody's
+    /// code (`docs/DSP-REFERENCES.md`).
+    ///
+    /// The remaining failure mode is aliasing, which is spectral and is what
+    /// `kMaxFeedback` is chosen against. The full sweep in the tests asserts
+    /// boundedness and finiteness across the whole parameter space rather than
+    /// sampling it, per section 7.
+    void setFeedback (double cycles) noexcept
+    {
+        feedback_ = std::clamp (cycles, 0.0, kMaxFeedback);
+    }
+
+    [[nodiscard]] double getFeedback() const noexcept { return feedback_; }
 
     void setShape (OscShape shape) noexcept
     {
@@ -196,6 +257,11 @@ public:
     void setWidth (double width) noexcept
     {
         width_ = std::clamp (width, kMinimumWidth, 1.0 - kMinimumWidth);
+
+        // Precomputed rather than divided per sample. Exactly 1.0 at the
+        // symmetric default, which is what keeps the default triangle
+        // bit-exact -- see the integration step in advance().
+        triangleNormalise_ = 1.0 / (4.0 * width_ * (1.0 - width_));
     }
 
     [[nodiscard]] double getWidth() const noexcept { return width_; }
@@ -426,15 +492,23 @@ public:
                                           / 9007199254740992.0) - 1.0;
 
             noiseLowpass_ += noiseCoefficient_ * (white - noiseLowpass_);
-            return noiseLowpass_;
+            return remember (noiseLowpass_);
         }
 
         // ---- read the waveform where the phase is now ------------------------
         //
         // Phase modulation is applied to the *reading*, not to the accumulator,
         // so it cannot drift the oscillator's own cycle -- the wrap below still
-        // happens on the oscillator's own period, and so does sync.
-        const double read = wrapUnit (phase_ + phaseOffset);
+        // happens on the oscillator's own period, and so does sync. It is also
+        // why the feedback loop below cannot diverge: see setFeedback().
+        double requested = phase_ + phaseOffset;
+
+        // Guarded rather than always added, so feedback at zero is the
+        // identity by inspection and not by an argument about signed zero.
+        if (! isExactlyZero (feedback_))
+            requested += feedback_ * 0.5 * (history_[0] + history_[1]);
+
+        const double read = wrapUnit (requested);
         double value = valueAtPhase (read);
 
         // ---- schedule every discontinuity in the coming sample, in order -----
@@ -466,15 +540,79 @@ public:
         {
             // A triangle is the integral of a square, and integrating the
             // *corrected* square is what makes the triangle band-limited too.
-            // Leaky, or any asymmetry in the square walks it off centre.
-            triangleState_ += 4.0 * increment_ * value - kTriangleLeak * triangleState_;
-            return triangleState_;
+            //
+            // ---------------------------------------------------------------
+            // The square has to be zero-mean BEFORE it is integrated
+            // ---------------------------------------------------------------
+            //
+            // A square of duty w has mean 2w - 1, and an integrator integrates
+            // a mean into a ramp. The leak below was carrying that job alone
+            // and is nowhere near strong enough for it: the steady state it
+            // settles at is (2w - 1) * 4 * increment / leak, which at 110 Hz
+            // and a duty of 0.02 is **88 times full scale**. Measured across
+            // the whole width range at 110 Hz, before this line existed:
+            //
+            //     width   0.02   0.25   0.40   0.45   0.50   0.55   0.98
+            //     peak   88.08  46.58  19.29  10.15   1.46  10.15  88.08
+            //
+            // Only the symmetric triangle was ever right. Every skewed one was
+            // a ramp with a waveform riding on it, and the further the skew
+            // the bigger the ramp -- which is why it was never noticed at the
+            // default and is unmissable one notch either side of it.
+            //
+            // Subtracting the mean makes the integrand zero-mean by
+            // construction, so the state cannot wander at all and the leak
+            // goes back to what a leak is for: mopping up numerical drift.
+            // At width 0.5 the mean is exactly zero, so the default triangle
+            // -- and every project using it -- is bit-for-bit unchanged.
+            // Removing the mean leaves a second, smaller problem: the swing of
+            // an integrated zero-mean square is 8 * increment * w * (1 - w),
+            // so a skewed triangle comes out *quieter*. That makes Width a
+            // volume control on this shape, and it also makes the audio path
+            // disagree with `naiveShapeSample` -- which the panel draws, and
+            // which spans -1..+1 at every width. Normalising by 4w(1-w) puts
+            // the swing back where the picture says it is and leaves Width a
+            // timbre control, which is what a skew is.
+            //
+            // At w = 0.5 the factor is 4 * 0.5 * 0.5 = exactly 1.0, so the
+            // default triangle multiplies by exactly one and every project
+            // using it is unchanged to the bit.
+            const double squareMean = 2.0 * width_ - 1.0;
+
+            triangleState_ += 4.0 * increment_ * (value - squareMean) * triangleNormalise_
+                                - kTriangleLeak * triangleState_;
+
+            // A bound that cannot be defeated, per CLAUDE.md section 7, for
+            // the case the mean removal cannot reach: under phase modulation
+            // the reading jumps around the cycle, so the *effective* duty is
+            // not `width_` and a DC term survives. A correct triangle never
+            // exceeds 1.47 at any width or pitch, so a ceiling of 4 never
+            // touches a working one and caps a modulated one well before it
+            // becomes a speaker hazard. Measured without it: 25.7 at the PM
+            // depth the Sonitus control already reaches.
+            triangleState_ = std::clamp (triangleState_, -kTriangleCeiling, kTriangleCeiling);
+
+            return remember (triangleState_);
         }
+
+        return remember (value);
+    }
+
+private:
+    /// Records an output for the feedback path and returns it unchanged.
+    ///
+    /// Every return from `advance()` goes through here, including the noise
+    /// shape's -- a shape that ignores feedback still has to keep the history
+    /// honest, or switching shapes mid-note would feed the next one a stale
+    /// pair of samples from before the switch.
+    [[nodiscard]] double remember (double value) noexcept
+    {
+        history_[1] = history_[0];
+        history_[0] = value;
 
         return value;
     }
 
-private:
     /// How much the waveform jumps at the phase-zero edge.
     [[nodiscard]] double edgeHeight() const noexcept
     {
@@ -804,6 +942,8 @@ private:
     /// offset cannot accumulate over a held chord.
     static constexpr double kTriangleLeak = 1.0e-4;
 
+    /// 1 / (4 w (1 - w)), so a skewed triangle keeps its swing. See advance().
+
     /// A fraction past the end of the sample: "this does not happen".
     static constexpr double kNoEvent = 2.0;
 
@@ -846,6 +986,14 @@ private:
     double noiseCoefficient_ { 1.0 };
 
     double triangleState_ { 0.0 };
+    double triangleNormalise_ { 1.0 };
+
+    /// The last two outputs, for operator feedback. Two rather than one
+    /// because their mean is a one-zero lowpass with a null at Nyquist, which
+    /// is what stops the loop flipping between the waveform's extremes on
+    /// alternating samples. See setFeedback().
+    double history_[2] { 0.0, 0.0 };
+    double feedback_ { 0.0 };
 
     bool   wrapped_      { false };
     double wrapFraction_ { 0.0 };
