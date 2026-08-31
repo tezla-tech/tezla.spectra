@@ -2342,6 +2342,322 @@ const std::vector<Preset>& presets()
             }
         },
 
+        // ===================================================================
+        // Phase 4: the feedback presets
+        // ===================================================================
+
+        // -------------------------------------------------------------------
+        {
+            // The reese, made with teeth instead of with more oscillators.
+            //
+            // The classic reese gets its bite from unison detune -- a comb
+            // whose notches beat. This one keeps a modest stack and gets the
+            // bite from **operator feedback** instead: each saw modulates its
+            // own phase, which sharpens it without adding voices. The result
+            // is the same aggression at a third of the CPU, and it stays
+            // mono-compatible because the extra harmonics are generated per
+            // voice rather than by cancellation between voices.
+            //
+            // Env 1 opens the feedback as the note sustains, so the bite
+            // arrives after the transient rather than fighting it.
+            "FM reese -- teeth without unison",
+            {
+                { ids::levelB, 1.0f }, { ids::centsB, 7.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 11.0f }, { ids::spreadA, 0.5f },
+                { ids::unisonB, 2.0f }, { ids::detuneB, 13.0f }, { ids::spreadB, 0.7f },
+                { ids::driftA, 3.0f }, { ids::driftB, 3.0f },
+
+                { ids::feedbackA, 0.30f }, { ids::feedbackB, 0.22f },
+
+                { ids::subLevel, 0.5f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 1400.0f }, { ids::resonance, 0.25f },
+                { ids::filterTrack, 0.35f },
+
+                { ids::ampAttack, 0.004f }, { ids::ampSustain, 0.95f },
+                { ids::ampRelease, 0.11f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.025f },
+
+                // Env 1 brings the feedback in over the first half second.
+                { ids::env1Attack, 0.45f }, { ids::env1Sustain, 1.0f },
+                { ids::env1Release, 0.3f },
+                { ids::modSource (0), 2.0f },     // mod envelope 1
+                { ids::modDest (0), 19.0f },      // feedback A
+                { ids::modDepth (0), 0.55f },
+
+                { ids::tubeDrive, 4.0f },
+                { ids::output, -5.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // Two sines and nothing else -- the whole sound is the modulation.
+            //
+            // This is the DX-style operator bass: a sine carrier, a sine
+            // modulator an octave up, and the index under the envelope so the
+            // attack is bright and the sustain is nearly pure. Feedback on the
+            // modulator adds the extra series that a two-operator pair cannot
+            // reach on its own.
+            //
+            // No filter movement, no unison, no comb. It is here as the
+            // counter-argument to every other preset in the list: the cleanest
+            // way to get a hard bass is often not to mangle a saw.
+            "Operator bass -- two sines, all index",
+            {
+                { ids::shapeA, 3.0f },            // sine
+                { ids::shapeB, 3.0f },            // sine
+                { ids::octaveB, 1.0f },           // the modulator, an octave up
+                { ids::levelB, 0.0f },            // heard only through the PM
+
+                { ids::pmIndex, 3.2f },
+                { ids::feedbackB, 0.42f },
+
+                { ids::subLevel, 0.4f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 8000.0f }, { ids::filterTrack, 0.2f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampDecay, 0.18f },
+                { ids::ampSustain, 0.75f }, { ids::ampRelease, 0.09f },
+
+                // The index is the envelope: bright on the hit, pure after.
+                { ids::env1Attack, 0.001f }, { ids::env1Decay, 0.22f },
+                { ids::env1Sustain, 0.0f },
+                { ids::modSource (0), 2.0f },
+                { ids::modDest (0), 4.0f },       // PM index
+                { ids::modDepth (0), 0.62f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.01f },
+                { ids::output, -3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The loop, held on a leash.** A modulates B and B modulates A,
+            // which is the pair the forward path only half-made. Both depths
+            // are moderate on purpose: this is the setting where the loop is
+            // a growl rather than a texture, and turning either one up is how
+            // you find the edge.
+            //
+            // The reverse path is a sample late, so the two directions do not
+            // sound alike at the same depth -- worth hearing by soloing each.
+            "Cross-bite -- the loop, on a leash",
+            {
+                { ids::shapeA, 0.0f },            // saw
+                { ids::shapeB, 3.0f },            // sine
+                { ids::levelB, 0.55f },
+                { ids::semitonesB, 7.0f },        // a fifth: harmonic, not beating
+
+                { ids::pmIndex, 2.4f },
+                { ids::pmReverse, 1.8f },
+                { ids::feedbackA, 0.18f },
+
+                { ids::subLevel, 0.55f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 1900.0f }, { ids::resonance, 0.38f },
+                { ids::filterDrive, 3.0f }, { ids::filterTrack, 0.3f },
+
+                { ids::ampAttack, 0.003f }, { ids::ampSustain, 0.9f },
+                { ids::ampRelease, 0.13f },
+
+                // LFO 1 walks the reverse depth, so the growl moves.
+                { ids::lfo1Rate, 5.5f }, { ids::lfo1Wave, 0.0f },
+                { ids::modSource (0), 7.0f },     // LFO 1
+                { ids::modDest (0), 21.0f },      // PM reverse
+                { ids::modDepth (0), 0.35f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.02f },
+                { ids::tubeDrive, 6.0f },
+                { ids::output, -2.0f },
+            }
+        },
+
+        // ===================================================================
+        // The ones with no restraint. Every safety in the instrument is doing
+        // real work in these -- the feedback bound, the fold's ADAA, the
+        // comb's cap, the safety limiter -- and that is the point of shipping
+        // them: a preset that leans on every guard at once is the honest
+        // stress test, and it is where this instrument is supposed to live.
+        // ===================================================================
+
+        // -------------------------------------------------------------------
+        {
+            // Everything at once, and it holds together because each stage is
+            // bounded on its own: both operators at full feedback, the loop
+            // closed hard in both directions, the folder wide, ring
+            // modulation, kargyraa period-doubling and a resonant comb after
+            // it. There is no clean signal anywhere in this patch.
+            //
+            // Mono and glided, because a chord of this would be a wall.
+            "SCREAMFACE -- every guard at once",
+            {
+                { ids::shapeA, 0.0f }, { ids::shapeB, 6.0f },   // saw + double saw
+                { ids::morphB, 0.4f },
+                { ids::levelB, 0.9f }, { ids::centsB, 13.0f },
+                { ids::unisonA, 3.0f }, { ids::detuneA, 19.0f }, { ids::spreadA, 0.8f },
+                { ids::unisonB, 3.0f }, { ids::detuneB, 23.0f }, { ids::spreadB, 0.9f },
+
+                { ids::feedbackA, 0.85f }, { ids::feedbackB, 0.72f },
+                { ids::pmIndex, 5.5f }, { ids::pmReverse, 4.0f },
+
+                { ids::ringAmount, 0.35f },
+                { ids::foldAmount, 0.55f },
+                { ids::kargyraa, 0.4f }, { ids::kargyraaRasp, 0.5f },
+
+                { ids::subLevel, 0.6f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 2800.0f }, { ids::resonance, 0.55f },
+                { ids::filterDrive, 6.0f }, { ids::filterTrack, 0.45f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampSustain, 0.92f },
+                { ids::ampRelease, 0.14f },
+
+                { ids::combMode, 1.0f }, { ids::combTime, 3.1f },
+                { ids::combFeed, -0.68f }, { ids::combMix, 0.7f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.03f },
+                { ids::tubeDrive, 9.0f },
+                { ids::output, -3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // A sound that comes apart while you hold the note.
+            //
+            // The trick is that the *sequencer* drives the reverse PM depth,
+            // so the loop's character is re-decided sixteen times a bar --
+            // and a loop through two nonlinearities does not respond linearly
+            // to its own depth, so each step lands somewhere unrelated to the
+            // one before it. ADV 1, looping and snapped to the grid, opens
+            // the filter underneath.
+            //
+            // Deterministic, not random: the same bar gives the same collapse
+            // every pass, so it prints.
+            "Neural collapse -- the loop, re-decided per step",
+            {
+                { ids::shapeA, 7.0f }, { ids::morphA, 0.3f },   // harmonic
+                { ids::shapeB, 3.0f },                          // sine
+                { ids::levelB, 0.4f }, { ids::octaveB, 1.0f },
+
+                { ids::pmIndex, 4.0f },
+                { ids::feedbackA, 0.5f },
+
+                { ids::seqRate, 8.0f }, { ids::seqLength, 16.0f },
+                { ids::modSource (0), 9.0f },     // sequencer
+                { ids::modDest (0), 21.0f },      // PM reverse
+                { ids::modDepth (0), 0.8f },
+
+                { ids::modSource (1), 9.0f },
+                { ids::modDest (1), 20.0f },      // feedback B
+                { ids::modDepth (1), 0.5f },
+
+                { "adv1Enable", 1.0f }, { "adv1Loop", 1.0f }, { "adv1Snap", 1.0f },
+                { "adv1Points", 3.0f }, { "adv1Sustain", 3.0f }, { "adv1LoopStart", 1.0f },
+                { "adv1T1", 0.08f }, { "adv1L1", 1.0f }, { "adv1C1", 0.7f },
+                { "adv1T2", 0.19f }, { "adv1L2", 0.15f }, { "adv1C2", -0.6f },
+                { "adv1T3", 0.13f }, { "adv1L3", 0.6f }, { "adv1C3", 0.3f },
+
+                { ids::modSource (2), 10.0f },    // ADV 1
+                { ids::modDest (2), 1.0f },       // cutoff
+                { ids::modDepth (2), -0.5f },
+
+                { ids::subLevel, 0.45f }, { ids::subOctave, -1.0f },
+                { ids::cutoff, 3200.0f }, { ids::resonance, 0.48f },
+
+                { ids::ampAttack, 0.003f }, { ids::ampSustain, 0.95f },
+                { ids::ampRelease, 0.12f },
+
+                { ids::keyMode, 1.0f },
+                { ids::foldAmount, 0.3f },
+                { ids::tubeDrive, 7.0f },
+                { ids::output, -9.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // A throat rather than an instrument: the formant filter locked to
+            // the note's own harmonics, kargyraa doubling the period the way
+            // an actual kargyraa singer's false folds do, and both operators
+            // feeding back hard enough to give the vowel something to filter.
+            //
+            // The vowel walks on a synced LFO, so it says something different
+            // every bar. Hold a low note and it screams; hold a high one and
+            // it whistles.
+            "Tearout larynx -- a throat that screams",
+            {
+                { ids::shapeA, 0.0f }, { ids::shapeB, 0.0f },
+                { ids::levelB, 0.75f }, { ids::centsB, 5.0f },
+                { ids::unisonA, 2.0f }, { ids::detuneA, 8.0f },
+
+                { ids::feedbackA, 0.62f }, { ids::feedbackB, 0.44f },
+                { ids::pmReverse, 2.2f },
+
+                { ids::kargyraa, 0.7f }, { ids::kargyraaRasp, 0.65f },
+                { ids::kargyraaDivisor, 0.0f },   // /2, the true kargyraa
+
+                { ids::formantMix, 0.7f }, { ids::formantSharp, 0.6f },
+                { ids::formantLock, 1.0f }, { ids::formantHarmonic, 4.0f },
+                { ids::formantNotch, 1.0f }, { ids::formantNotchDepth, 0.4f },
+
+                { ids::subLevel, 0.25f }, { ids::subOctave, -1.0f },
+                { ids::cutoff, 7500.0f }, { ids::filterTrack, 0.5f },
+
+                { ids::ampAttack, 0.01f }, { ids::ampSustain, 0.95f },
+                { ids::ampRelease, 0.2f },
+
+                { ids::lfo2Sync, 1.0f }, { ids::lfo2Div, 3.0f },
+                { ids::globalSource (0), 2.0f },  // LFO 2
+                { ids::globalDest (0), 5.0f },    // vowel
+                { ids::globalDepth (0), 0.7f },
+
+                { ids::keyMode, 1.0f }, { ids::glide, 0.04f },
+                { ids::tubeDrive, 8.0f },
+                { ids::output, 3.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // Noise, given a pitch by a comb and then given teeth by a
+            // feedback operator ring-modulating it. There is no oscillator
+            // playing the note at all -- the pitch you hear is the comb's
+            // resonance tracking the key, and the note number is choosing a
+            // delay length rather than a frequency.
+            //
+            // The nastiest texture the instrument makes, and the one most
+            // likely to need Capstone after it.
+            "Gravel storm -- noise with a pitch bolted on",
+            {
+                { ids::shapeA, 8.0f }, { ids::morphA, 0.25f },   // noise
+                { ids::shapeB, 3.0f },                            // sine
+                { ids::levelB, 0.0f },
+
+                { ids::feedbackB, 0.9f },
+                { ids::ringAmount, 0.8f },
+
+                { ids::combMode, 1.0f },
+                { ids::combTrack, 1.0f },          // the comb *is* the pitch
+                { ids::combFeed, 0.88f }, { ids::combDamp, 0.25f },
+                { ids::combMix, 1.0f }, { ids::combSpread, 0.6f },
+
+                { ids::subLevel, 0.35f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 6000.0f }, { ids::resonance, 0.2f },
+
+                { ids::ampAttack, 0.006f }, { ids::ampSustain, 0.9f },
+                { ids::ampRelease, 0.25f },
+
+                { ids::env1Attack, 0.002f }, { ids::env1Decay, 0.4f },
+                { ids::env1Sustain, 0.2f },
+                { ids::modSource (0), 2.0f },
+                { ids::modDest (0), 1.0f },        // cutoff
+                { ids::modDepth (0), 0.45f },
+
+                { ids::polyphony, 4.0f },
+                { ids::tubeDrive, 5.0f },
+                { ids::output, -4.0f },
+            }
+        },
+
     };
 
     return list;
