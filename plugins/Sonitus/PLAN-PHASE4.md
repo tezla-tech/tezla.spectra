@@ -176,7 +176,7 @@ beyond this file and CLAUDE.md.
 |---|---|
 | P4-0 plan | done |
 | P4-1 operator feedback + cross PM | done |
-| P4-2 FM ratio readout | pending |
+| P4-2 FM ratio readout | done |
 | P4-3 filter Morph | pending |
 | P4-4 scale-locked comb | pending |
 | P4-5 four macros | pending |

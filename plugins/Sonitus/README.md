@@ -767,6 +767,23 @@ eight-point build reopens bit for bit unchanged (verified by rendering it
 before and after), and the handles' grab radius shrinks with density so a
 sixteen-point envelope's segment curves stay draggable.
 
+**The OSC page states the FM ratio.** Two oscillators tuned in octaves,
+semitones and cents is the right interface for detuning and the wrong one for
+FM, where the only question is the ratio and whether it is simple: 2:1 and 3:2
+fuse into one instrument, 2.03:1 beats, 4.76:1 is a bell. The SYNC AND PM
+heading now says which you have — `B:A 3:2  harmonic`, or
+`B:A 2.030  26c sharp of 2:1` when it is not, or the plain decimal past four
+octaves where no small pair describes it. No new parameter; it is computed from
+the six pitch knobs that were already there.
+
+Nearness is measured in **cents**, not as a difference of ratios — a fixed
+ratio tolerance would be eight times as forgiving at 8:1 as at 1:1 and an ear
+is not. `shared/tezla-dsp/include/tezla/dsp/Ratio.hpp`, which is deliberately
+*not* `Tuning.hpp`'s `nearestFraction`: that one recovers p/q only when the
+double **is** p/q to within a few ulps and refuses tempered intervals, because
+a tuning table printing "442/295" for an equal-tempered degree would be a lie.
+Both are right; merging them would break one.
+
 **The envelopes have a ruler.** With Snap on, an ADV graph draws the grid it is
 snapping to: bar lines in the accent colour, beats and subdivisions behind them,
 numbered bars along a strip at the bottom, and the note each leg landed on
