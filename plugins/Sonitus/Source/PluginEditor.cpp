@@ -7,6 +7,10 @@
 
 #include "PluginEditor.h"
 
+#include <tezla/ui/ScrollWheel.hpp>
+
+#include "DesignVariants.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -166,17 +170,23 @@ const PageAccent kPageAccents[] {
 // 35-pixel knob and a 14-pixel number, and every one of those is legible.
 constexpr int kCellLabelHeight = 12;
 constexpr int kCellValueHeight = 14;
-constexpr int kMinCellHeight = 62;
-constexpr int kMaxCellHeight = 80;
+
+// The grid's numbers now come from the chosen design rather than from four
+// constants, so a layout question can be answered by looking at it. See
+// DesignVariants.hpp -- and note that these are *functions*: a constant would
+// be initialised before the environment is read on some toolchains, and the
+// panel would come out in whichever variant the linker felt like.
+[[nodiscard]] int minCellHeight() { return design::current().cellHeightMin; }
+[[nodiscard]] int maxCellHeight() { return design::current().cellHeightMax; }
 
 /// Cells stop widening past this, and the grid centres instead. A four-column
 /// group on a wide window used to stretch each cell to two hundred pixels of
 /// which thirty-nine were the knob; capping the width is most of the answer to
 /// "too much space used".
-constexpr int kMaxCellWidth = 172;
+[[nodiscard]] int maxCellWidth() { return design::current().cellWidthMax; }
 
 constexpr int kHeadingHeight = 19;
-constexpr int kGroupGap = 10;
+[[nodiscard]] int groupGap() { return design::current().groupGap; }
 constexpr int kPagePad = 5;
 
 /// The strip along the bottom of the *editor* that carries the current page's
@@ -189,10 +199,10 @@ constexpr int kNoteHeight = 38;
 // The envelope page's block: a heading, then a graph beside two rows of knobs.
 constexpr int kEnvKnobRows = 3;
 constexpr int kEnvKnobColumns = 3;
-constexpr int kEnvBodyHeight = kEnvKnobRows * kMinCellHeight + 4;
-constexpr int kEnvBlockHeight = kHeadingHeight + kEnvBodyHeight + 4;
+[[nodiscard]] int envBodyHeight() { return kEnvKnobRows * minCellHeight() + 4; }
+[[nodiscard]] int envBlockHeight() { return kHeadingHeight + envBodyHeight() + 4; }
 
-/// A folded ADV row: the heading and its enable pill, nothing else.
+/// A folded ADV row: the heading and its enable lamp, nothing else.
 constexpr int kAdvStripHeight = kHeadingHeight + 44;
 
 constexpr int kMinWidth  = 880;
@@ -225,7 +235,8 @@ constexpr int kStepStripHeight = 108;
 /// and a **one-pixel highlight along the top edge**. That highlight is how every
 /// piece of real hardware catches the light in a photograph, and it costs a
 /// single line.
-void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds)
+void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds,
+                      juce::Colour spine = juce::Colours::transparentBlack)
 {
     const auto area = bounds.toFloat();
 
@@ -249,16 +260,40 @@ void paintGroupPanel (juce::Graphics& g, juce::Rectangle<int> bounds)
     g.setColour (juce::Colours::black.withAlpha (0.28f));
     g.drawLine (area.getX() + 5.0f, area.getBottom() - 0.5f,
                 area.getRight() - 5.0f, area.getBottom() - 0.5f, 1.0f);
+
+    // **The spine**: a bar of the group's own colour down its left edge.
+    //
+    // A coloured heading tells you which group you are reading once you are
+    // already reading it. A spine tells you at a glance, from the far side of
+    // the window, and it does it in the one place a scanning eye is already
+    // going -- the left edge, where every row of the group starts.
+    if (! spine.isTransparent())
+    {
+        juce::Path bar;
+        bar.addRoundedRectangle (area.getX() + 1.0f, area.getY() + 4.0f,
+                                 3.0f, area.getHeight() - 8.0f,
+                                 1.5f, 1.5f, true, false, true, false);
+
+        g.setColour (spine.withAlpha (0.30f));
+        g.fillPath (bar, juce::AffineTransform::scale (2.6f, 1.0f, area.getX() + 1.0f,
+                                                       area.getCentreY()));
+
+        g.setColour (spine.withAlpha (0.85f));
+        g.fillPath (bar);
+    }
 }
 
 /// Draws a group's heading: its name, its explanation, and a rule running out
 /// to the right edge so the group reads as one thing.
 void paintHeading (juce::Graphics& g, const ui::Palette& palette, juce::Rectangle<int> row,
-                   const juce::String& name, const juce::String& detail)
+                   const juce::String& name, const juce::String& detail,
+                   juce::Colour tint = juce::Colours::transparentBlack)
 {
+    const auto accent = tint.isTransparent() ? palette.accent : tint;
+
     const auto text = row.reduced (8, 0);
 
-    g.setColour (palette.accent);
+    g.setColour (accent);
     g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
 
     const auto nameWidth = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), name);
@@ -281,7 +316,7 @@ void paintHeading (juce::Graphics& g, const ui::Palette& palette, juce::Rectangl
 
     if (x < text.getRight())
     {
-        g.setColour (palette.accent.withAlpha (0.16f));
+        g.setColour (accent.withAlpha (0.16f));
         g.drawHorizontalLine (row.getCentreY(), static_cast<float> (x),
                               static_cast<float> (text.getRight()));
     }
@@ -382,6 +417,80 @@ void WrappingLabel::paint (juce::Graphics& g)
 // Cells
 // ---------------------------------------------------------------------------
 
+LampButton::LampButton (const juce::String& name, ui::Palette palette)
+    : juce::Button (name), palette_ (palette), tint_ (palette.accent)
+{
+    setButtonText (name.toUpperCase());
+}
+
+void LampButton::setTint (juce::Colour tint)
+{
+    tint_ = tint;
+    repaint();
+}
+
+void LampButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    const auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+    const float radius = 3.0f;
+
+    const bool on = getToggleState();
+    const bool enabled = isEnabled();
+
+    // **Lit, not ticked.** The whole plate carries the state: a filled, glowing
+    // rectangle against a dark recessed one. Three cues at once -- fill, text
+    // and halo -- because on a panel of sixty controls any single cue is one
+    // somebody's eye slides past.
+    if (on && enabled)
+    {
+        // The halo first, under everything, so the button reads as a source of
+        // light rather than as a coloured rectangle. Two passes at different
+        // alphas is the same trick the knob's value arc uses.
+        g.setColour (tint_.withAlpha (0.20f));
+        g.fillRoundedRectangle (bounds.expanded (3.0f), radius + 3.0f);
+
+        g.setColour (tint_.withAlpha (0.30f));
+        g.fillRoundedRectangle (bounds.expanded (1.5f), radius + 1.5f);
+    }
+
+    const auto fill = on ? (enabled ? tint_.withAlpha (0.82f) : tint_.withAlpha (0.22f))
+                         : palette_.background.darker (enabled ? 0.30f : 0.10f);
+
+    g.setGradientFill (juce::ColourGradient (fill.brighter (on ? 0.14f : 0.05f),
+                                             bounds.getCentreX(), bounds.getY(),
+                                             fill.darker (0.18f),
+                                             bounds.getCentreX(), bounds.getBottom(), false));
+    g.fillRoundedRectangle (bounds, radius);
+
+    // The rim. Bright and in the tint when lit; a dark inset lip when not, so
+    // the dark state reads as a recess rather than as a flat patch.
+    g.setColour (on ? tint_.brighter (0.5f).withAlpha (enabled ? 0.9f : 0.3f)
+                    : juce::Colours::black.withAlpha (enabled ? 0.45f : 0.2f));
+    g.drawRoundedRectangle (bounds.reduced (0.5f), radius, 1.0f);
+
+    if (! on)
+    {
+        g.setColour (juce::Colours::white.withAlpha (enabled ? 0.07f : 0.03f));
+        g.drawLine (bounds.getX() + radius, bounds.getBottom() - 1.0f,
+                    bounds.getRight() - radius, bounds.getBottom() - 1.0f, 1.0f);
+    }
+
+    if (highlighted || down)
+    {
+        g.setColour (juce::Colours::white.withAlpha (down ? 0.12f : 0.06f));
+        g.fillRoundedRectangle (bounds, radius);
+    }
+
+    // The word inside, because a lamp with its name beside it is two things to
+    // look at and a lamp with its name on it is one.
+    g.setColour (on ? juce::Colours::black.withAlpha (enabled ? 0.82f : 0.35f)
+                    : palette_.dimText.withAlpha (enabled ? 0.85f : 0.35f));
+    g.setFont (juce::FontOptions (juce::jmin (11.0f, bounds.getHeight() * 0.62f),
+                                  juce::Font::bold));
+    g.drawText (getButtonText(), getLocalBounds(), juce::Justification::centred, false);
+}
+
+
 ParameterCell::ParameterCell (juce::String parameterId, const juce::String& name, ui::Palette palette)
     : id_ (std::move (parameterId)), palette_ (palette)
 {
@@ -429,10 +538,22 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
         slider_.setDoubleClickReturnValue (
             true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
 
+    // The wheel scrolls the page, never the control -- see ui/ScrollWheel.hpp.
+    ui::noWheel (slider_);
+
+    slider_.getProperties().set ("tezlaRelief", design::current().knobRelief);
+
     addAndMakeVisible (slider_);
 
     attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         state, parameterId, slider_);
+}
+
+void KnobCell::setTint (juce::Colour tint)
+{
+    slider_.getProperties().set ("tezlaTint",
+                                 static_cast<juce::int64> (tint.getARGB()));
+    slider_.repaint();
 }
 
 void KnobCell::setControlEnabled (bool enabled)
@@ -453,7 +574,98 @@ void KnobCell::setControlEnabled (bool enabled)
 void KnobCell::resized()
 {
     ParameterCell::resized();
-    slider_.setBounds (controlBounds().reduced (2, 0));
+
+    auto area = controlBounds().reduced (2, 0);
+
+    // **Emphasis is a size, and a size is the one hierarchy cue that survives
+    // being glanced at.** A lead control is drawn bigger than its neighbours so
+    // the eye lands on it first; a trim is drawn smaller so it stops competing.
+    // The cell keeps its footprint either way -- the grid is a grid -- and only
+    // the control inside it moves.
+    const auto& variant = design::current();
+
+    float scale = variant.controlScale;
+
+    switch (design::emphasisOf (id_))
+    {
+        case design::Emphasis::lead:   scale *= variant.leadScale; break;
+        case design::Emphasis::trim:   scale *= variant.trimScale; break;
+        case design::Emphasis::normal: break;
+    }
+
+    if (! juce::approximatelyEqual (scale, 1.0f))
+    {
+        // The value text under the knob keeps its height whatever the knob
+        // does, so a row of mixed sizes still has its numbers on one line.
+        auto value = area.removeFromBottom (kCellValueHeight);
+
+        const int wanted = juce::roundToInt (static_cast<float> (area.getHeight()) * scale);
+        const int width = juce::jmin (area.getWidth(),
+                                      juce::roundToInt (static_cast<float> (area.getWidth()) * scale));
+
+        area = juce::Rectangle<int> { width, juce::jmin (wanted, area.getHeight()) }
+                   .withCentre ({ area.getCentreX(), area.getCentreY() })
+                   .withBottom (area.getBottom());
+
+        area = area.getUnion (value.withX (area.getX()).withWidth (area.getWidth()));
+    }
+
+    slider_.setBounds (area);
+}
+
+// ---------------------------------------------------------------------------
+
+BarCell::BarCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                  const juce::String& name, const juce::String& tooltip, ui::Palette palette)
+    : ParameterCell (parameterId, name, palette)
+{
+    // `LinearBar` draws the value inside the track, which is the whole point of
+    // this variant: the number is readable without hovering and without a
+    // second row of text under every control.
+    slider_.setSliderStyle (juce::Slider::LinearBar);
+    slider_.setTextBoxStyle (juce::Slider::TextBoxAbove, false, 0, 0);
+    slider_.setColour (juce::Slider::textBoxTextColourId, palette_.text);
+    slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    slider_.setTooltip (tooltip);
+    label_.setTooltip (tooltip);
+
+    ui::noWheel (slider_);
+
+    if (auto* parameter = state.getParameter (parameterId))
+        slider_.setDoubleClickReturnValue (
+            true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
+
+    addAndMakeVisible (slider_);
+
+    attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        state, parameterId, slider_);
+}
+
+void BarCell::setTint (juce::Colour tint)
+{
+    slider_.setColour (juce::Slider::trackColourId, tint.withAlpha (0.55f));
+    slider_.repaint();
+}
+
+void BarCell::setControlEnabled (bool enabled)
+{
+    slider_.setEnabled (enabled);
+    slider_.setColour (juce::Slider::textBoxTextColourId,
+                       enabled ? palette_.text : palette_.dimText.withAlpha (0.4f));
+    label_.setColour (juce::Label::textColourId,
+                      enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
+    slider_.repaint();
+    label_.repaint();
+}
+
+void BarCell::resized()
+{
+    ParameterCell::resized();
+
+    auto area = controlBounds().reduced (3, 2);
+
+    slider_.setBounds (area.withHeight (juce::jmin (area.getHeight(), 18))
+                           .withY (area.getY() + (area.getHeight() - 18) / 2));
 }
 
 WaveCell::WaveCell (juce::AudioProcessorValueTreeState& state, const juce::String& shapeId,
@@ -542,6 +754,8 @@ MorphCell::MorphCell (juce::AudioProcessorValueTreeState& state, const juce::Str
     slider_.setTooltip (tooltip);
     label_.setTooltip (tooltip);
 
+    ui::noWheel (slider_);
+
     if (auto* parameter = state.getParameter (parameterId))
         slider_.setDoubleClickReturnValue (
             true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
@@ -586,6 +800,7 @@ ChoiceCell::ChoiceCell (juce::AudioProcessorValueTreeState& state, const juce::S
     box_.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.10f));
     box_.setColour (juce::ComboBox::textColourId, palette_.text);
     box_.setTooltip (tooltip);
+    ui::noWheel (box_);
     label_.setTooltip (tooltip);
     addAndMakeVisible (box_);
 
@@ -613,28 +828,65 @@ ToggleCell::ToggleCell (juce::AudioProcessorValueTreeState& state, const juce::S
                         const juce::String& name, const juce::String& tooltip, ui::Palette palette)
     : ParameterCell (parameterId, name, palette)
 {
-    button_.setButtonText ("");
-    button_.setTooltip (tooltip);
+    if (design::current().lampToggles)
+    {
+        // The name goes **inside** the lamp, so the cell's own label can go --
+        // a lit button that says ON above a word that says SYNC B is two
+        // readings of the same fact.
+        button_ = std::make_unique<LampButton> (name, palette_);
+        label_.setVisible (false);
+    }
+    else
+    {
+        auto toggle = std::make_unique<juce::ToggleButton>();
+        toggle->setButtonText ("");
+        button_ = std::move (toggle);
+    }
+
+    button_->setClickingTogglesState (true);
+    button_->setTooltip (tooltip);
     label_.setTooltip (tooltip);
-    addAndMakeVisible (button_);
+    addAndMakeVisible (*button_);
 
     attachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
-        state, parameterId, button_);
+        state, parameterId, *button_);
+}
+
+void ToggleCell::setTint (juce::Colour tint)
+{
+    if (auto* lamp = dynamic_cast<LampButton*> (button_.get()))
+        lamp->setTint (tint);
 }
 
 void ToggleCell::setControlEnabled (bool enabled)
 {
-    button_.setEnabled (enabled);
+    button_->setEnabled (enabled);
     label_.setColour (juce::Label::textColourId,
                       enabled ? palette_.dimText : palette_.dimText.withAlpha (0.35f));
     label_.repaint();
+    button_->repaint();
 }
 
 void ToggleCell::resized()
 {
     ParameterCell::resized();
+
     auto area = controlBounds();
-    button_.setBounds (area.withSizeKeepingCentre (40, 20).withY (area.getY() + 6));
+
+    if (design::current().lampToggles)
+    {
+        // Big enough to hit and to read, and no bigger. Filling the cell made
+        // the one switch on the page the largest object on it, which is a
+        // hierarchy nobody asked for -- a lamp is a lamp, not a billboard.
+        const int width = juce::jlimit (54, 108, getWidth() - 16);
+
+        button_->setBounds (juce::Rectangle<int> { width, 30 }
+                                .withCentre (getLocalBounds().getCentre())
+                                .withY (area.getY() + (area.getHeight() - 30) / 2));
+        return;
+    }
+
+    button_->setBounds (area.withSizeKeepingCentre (40, 20).withY (area.getY() + 6));
 }
 
 // ---------------------------------------------------------------------------
@@ -1102,14 +1354,18 @@ void ControlPage::addHeading (const juce::String& text, int columns, bool sameRo
 
     // The first group on a page has nothing to sit beside, whatever it asks
     // for -- so the flag is cleared rather than trusted.
+    const auto tint = design::tintFor (palette_.accent,
+                                       static_cast<int> (groups_.size()),
+                                       design::current().groupHueStep);
+
     groups_.push_back ({ parts.first, parts.second, juce::jmax (1, columns),
-                         sameRow && ! groups_.empty(), {}, {} });
+                         sameRow && ! groups_.empty(), {}, tint, {} });
 }
 
 ControlPage::Group& ControlPage::currentGroup()
 {
     if (groups_.empty())
-        groups_.push_back ({ {}, {}, 5, false, {}, {} });
+        groups_.push_back ({ {}, {}, 5, false, {}, palette_.accent, {} });
 
     return groups_.back();
 }
@@ -1117,6 +1373,12 @@ ControlPage::Group& ControlPage::currentGroup()
 void ControlPage::add (std::unique_ptr<ParameterCell> cell)
 {
     auto* raw = cell.get();
+
+    // Tinted once, here, rather than in `paint`: a cell's colour is a property
+    // of which group it went into, and that is decided exactly now and never
+    // again.
+    if (design::current().grouping == design::Grouping::tinted && raw != nullptr)
+        raw->setTint (currentGroup().tint);
 
     addAndMakeVisible (*raw);
     owned_.push_back (std::move (cell));
@@ -1147,7 +1409,13 @@ void ControlPage::setGroupDetail (const juce::String& headingName, const juce::S
 void ControlPage::addKnob (const juce::String& parameterId, const juce::String& name,
                            const juce::String& tooltip)
 {
-    add (std::make_unique<KnobCell> (state_, parameterId, name, tooltip, palette_));
+    // The *page* asks for a control, not for a knob. Which one it gets is the
+    // design's answer, which is the whole reason a variant can be looked at
+    // without editing two hundred call sites.
+    if (design::current().control == design::Control::bar)
+        add (std::make_unique<BarCell> (state_, parameterId, name, tooltip, palette_));
+    else
+        add (std::make_unique<KnobCell> (state_, parameterId, name, tooltip, palette_));
 }
 
 void ControlPage::addChoice (const juce::String& parameterId, const juce::String& name,
@@ -1186,9 +1454,35 @@ void ControlPage::setControlEnabled (const juce::String& parameterId, bool enabl
             cell->setControlEnabled (enabled);
 }
 
-int ControlPage::rowsIn (const Group& group) const
+int ControlPage::columnsFor (const Group& group, int width) const
 {
-    return (static_cast<int> (group.cells.size()) + group.columns - 1) / group.columns;
+    const int asked = juce::jmax (1, group.columns);
+    const int cells = juce::jmax (1, static_cast<int> (group.cells.size()));
+
+    if (! design::current().fillRow || width <= 0)
+        return asked;
+
+    const int fits = juce::jmax (asked, width / juce::jmax (16, design::current().cellWidthMin));
+
+    // **Balanced rows, not a full row and an orphan.**
+    //
+    // Taking as many columns as fit is the obvious rule and it is wrong: a
+    // group of twelve in a band that fits eleven puts eleven across and leaves
+    // the twelfth alone on the left, which looks like a bug rather than a
+    // layout. Deciding how many *rows* first and then dividing the controls
+    // between them gives twelve as one row of twelve when that fits and two of
+    // six when it does not, and never one of eleven and one of one.
+    const int rows = juce::jmax (1, (cells + fits - 1) / fits);
+    const int balanced = (cells + rows - 1) / rows;
+
+    return juce::jlimit (asked, juce::jmax (asked, cells), juce::jmax (asked, balanced));
+}
+
+int ControlPage::rowsIn (const Group& group, int width) const
+{
+    const int columns = columnsFor (group, width);
+
+    return (static_cast<int> (group.cells.size()) + columns - 1) / columns;
 }
 
 int ControlPage::totalRows() const
@@ -1207,7 +1501,7 @@ int ControlPage::totalRows() const
             band = 0;
         }
 
-        band = juce::jmax (band, rowsIn (group));
+        band = juce::jmax (band, rowsIn (group, getWidth() - 12));
     }
 
     return rows + band;
@@ -1227,8 +1521,8 @@ int ControlPage::bandCount() const
 int ControlPage::getPreferredHeight() const
 {
     return 2 * kPagePad
-         + bandCount() * (kHeadingHeight + 4 + kGroupGap)
-         + totalRows() * kMinCellHeight;
+         + bandCount() * (kHeadingHeight + 4 + groupGap())
+         + totalRows() * minCellHeight();
 }
 
 void ControlPage::paint (juce::Graphics& g)
@@ -1249,11 +1543,15 @@ void ControlPage::paint (juce::Graphics& g)
         if (group.bounds.isEmpty())
             continue;
 
-        paintGroupPanel (g, group.bounds);
+        const bool tinted = design::current().grouping == design::Grouping::tinted;
+        const auto tint = tinted ? group.tint : juce::Colours::transparentBlack;
+
+        paintGroupPanel (g, group.bounds,
+                         design::current().groupSpine ? tint : juce::Colours::transparentBlack);
 
         if (group.heading.isNotEmpty())
             paintHeading (g, palette_, group.bounds.withHeight (kHeadingHeight),
-                          group.heading, group.detail);
+                          group.heading, group.detail, tint);
     }
 }
 
@@ -1266,11 +1564,11 @@ void ControlPage::resized()
 
     const int rows = totalRows();
     const int bands = bandCount();
-    const int available = bounds.getHeight() - bands * (kHeadingHeight + 4 + kGroupGap);
+    const int available = bounds.getHeight() - bands * (kHeadingHeight + 4 + groupGap());
 
     const int cellHeight = rows > 0
-        ? juce::jlimit (kMinCellHeight, kMaxCellHeight, available / rows)
-        : kMinCellHeight;
+        ? juce::jlimit (minCellHeight(), maxCellHeight(), available / rows)
+        : minCellHeight();
 
     int y = bounds.getY();
 
@@ -1290,9 +1588,17 @@ void ControlPage::resized()
         int totalColumns = 0;
 
         for (std::size_t i = first; i < last; ++i)
-        {
-            tallest = juce::jmax (tallest, rowsIn (groups_[i]));
             totalColumns += groups_[i].columns;
+
+        // The band's width is shared first, because how many rows a group takes
+        // depends on how many columns fit in the width it is about to be given
+        // -- and with `fillRow` on, that is not the number it asked for.
+        for (std::size_t i = first; i < last; ++i)
+        {
+            const int share = bounds.getWidth() * groups_[i].columns / juce::jmax (1, totalColumns);
+            const int inner = juce::jmax (1, share - 8 - (design::current().groupSpine ? 4 : 0));
+
+            tallest = juce::jmax (tallest, rowsIn (groups_[i], inner));
         }
 
         const int bandHeight = kHeadingHeight + tallest * cellHeight + 4;
@@ -1313,12 +1619,17 @@ void ControlPage::resized()
 
             auto inner = group.bounds.reduced (4, 2).withTrimmedTop (kHeadingHeight);
 
+            if (design::current().groupSpine)
+                inner.removeFromLeft (4);
+
             // A group with fewer controls than columns centres on what it has
             // rather than on what it was allowed.
-            const int used = juce::jmax (1, juce::jmin (group.columns,
+            const int columns = columnsFor (group, inner.getWidth());
+
+            const int used = juce::jmax (1, juce::jmin (columns,
                                                         static_cast<int> (group.cells.size())));
 
-            const int cellWidth = juce::jmin (kMaxCellWidth, inner.getWidth() / group.columns);
+            const int cellWidth = juce::jmin (maxCellWidth(), inner.getWidth() / columns);
             const int left = inner.getX() + (inner.getWidth() - cellWidth * used) / 2;
 
             for (std::size_t cell = 0; cell < group.cells.size(); ++cell)
@@ -1326,8 +1637,8 @@ void ControlPage::resized()
                 if (group.cells[cell] == nullptr)
                     continue;
 
-                const int column = static_cast<int> (cell) % group.columns;
-                const int row = static_cast<int> (cell) / group.columns;
+                const int column = static_cast<int> (cell) % columns;
+                const int row = static_cast<int> (cell) / columns;
 
                 group.cells[cell]->setBounds ({ left + column * cellWidth,
                                                 inner.getY() + row * cellHeight,
@@ -1337,11 +1648,11 @@ void ControlPage::resized()
             x += width;
         }
 
-        y += bandHeight + kGroupGap;
+        y += bandHeight + groupGap();
         first = last;
     }
 
-    contentHeight_ = y - bounds.getY() - kGroupGap + 2 * kPagePad;
+    contentHeight_ = y - bounds.getY() - groupGap() + 2 * kPagePad;
 }
 
 // ---------------------------------------------------------------------------
@@ -2661,10 +2972,10 @@ void EnvelopePage::refresh (const SonitusProcessor& processor)
 int EnvelopePage::getPreferredHeight() const
 {
     int height = 2 * kPagePad
-               + static_cast<int> (blocks_.size()) * (kEnvBlockHeight + kGroupGap);
+               + static_cast<int> (blocks_.size()) * (envBlockHeight() + groupGap());
 
     for (const auto& row : advRows_)
-        height += (row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight) + kGroupGap;
+        height += (row.shownEnabled ? envBlockHeight() : kAdvStripHeight) + groupGap();
 
     return height;
 }
@@ -2707,24 +3018,24 @@ void EnvelopePage::resized()
     // tall-window screenshot showed.
     int advTotal = 0;
     for (const auto& row : advRows_)
-        advTotal += (row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight) + kGroupGap;
+        advTotal += (row.shownEnabled ? envBlockHeight() : kAdvStripHeight) + groupGap();
 
     const int blocks = juce::jmax (1, static_cast<int> (blocks_.size()));
-    const int height = juce::jmax (kEnvBlockHeight,
-                                   (bounds.getHeight() - advTotal - blocks * kGroupGap) / blocks);
+    const int height = juce::jmax (envBlockHeight(),
+                                   (bounds.getHeight() - advTotal - blocks * groupGap()) / blocks);
 
     for (auto& block : blocks_)
     {
         block.bounds = bounds.removeFromTop (height);
-        bounds.removeFromTop (kGroupGap);
+        bounds.removeFromTop (groupGap());
 
         auto inner = block.bounds.reduced (5, 3).withTrimmedTop (kHeadingHeight);
 
         const int columns = kEnvKnobColumns;
         const int rows = kEnvKnobRows;
 
-        const int cellWidth = juce::jlimit (76, kMaxCellWidth, inner.getWidth() / (2 * columns));
-        const int cellHeight = juce::jlimit (kMinCellHeight, kMaxCellHeight, inner.getHeight() / rows);
+        const int cellWidth = juce::jlimit (76, maxCellWidth(), inner.getWidth() / (2 * columns));
+        const int cellHeight = juce::jlimit (minCellHeight(), maxCellHeight(), inner.getHeight() / rows);
 
         auto knobArea = inner.removeFromRight (cellWidth * columns);
 
@@ -2743,10 +3054,10 @@ void EnvelopePage::resized()
 
     for (auto& row : advRows_)
     {
-        const int rowHeight = row.shownEnabled ? kEnvBlockHeight : kAdvStripHeight;
+        const int rowHeight = row.shownEnabled ? envBlockHeight() : kAdvStripHeight;
 
         row.bounds = bounds.removeFromTop (rowHeight);
-        bounds.removeFromTop (kGroupGap);
+        bounds.removeFromTop (groupGap());
 
         auto inner = row.bounds.reduced (5, 3).withTrimmedTop (kHeadingHeight);
 
@@ -2760,8 +3071,8 @@ void EnvelopePage::resized()
 
         // Enabled: enable + the five cells in two columns on the right, the
         // graph taking the rest.
-        const int cellWidth = juce::jlimit (76, kMaxCellWidth, inner.getWidth() / 6);
-        const int cellHeight = juce::jlimit (kMinCellHeight, kMaxCellHeight, inner.getHeight() / 3);
+        const int cellWidth = juce::jlimit (76, maxCellWidth(), inner.getWidth() / 6);
+        const int cellHeight = juce::jlimit (minCellHeight(), maxCellHeight(), inner.getHeight() / 3);
 
         auto cellArea = inner.removeFromRight (2 * cellWidth);
 
@@ -3929,6 +4240,14 @@ void SonitusEditor::paint (juce::Graphics& g)
 
 void SonitusEditor::resized()
 {
+    // **The net, not the rule.** Every control is built with the wheel off at
+    // its own construction site (`ui::noWheel`), which is where the intent
+    // belongs and where it is readable. This catches the ones a page grows
+    // later -- an ADV envelope unfolding, a modulation row appearing -- because
+    // one forgotten call site out of sixty is a silent regression of exactly
+    // the kind ScrollWheel.hpp describes, and a tree walk on resize is free.
+    ui::sweepNoWheel (*this);
+
     auto bounds = getLocalBounds();
 
     header_->setBounds (bounds.removeFromTop (ui::HeaderBar::getPreferredHeight()));

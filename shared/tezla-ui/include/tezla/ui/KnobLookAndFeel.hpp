@@ -90,7 +90,30 @@ public:
                            + static_cast<float> (anchorProportion (slider)) * (endAngle - startAngle);
 
         const bool on = slider.isEnabled();
-        const auto fill = (on ? palette_.accent : palette_.dimText.withAlpha (0.30f));
+
+        // **A knob may carry its own colour and its own relief.**
+        //
+        // Component properties rather than `Slider::rotarySliderFillColourId`,
+        // because that id already has a stock default and "has the caller set
+        // it" is then unanswerable -- a knob nobody tinted and a knob tinted to
+        // the default look identical from in here. A property is absent until
+        // somebody puts it there, which is the question actually being asked.
+        const auto tint = [&]
+        {
+            const auto& value = slider.getProperties()["tezlaTint"];
+
+            return value.isVoid() ? palette_.accent
+                                  : juce::Colour (static_cast<juce::uint32> (
+                                        static_cast<juce::int64> (value)));
+        }();
+
+        const auto tintBright = tint == palette_.accent ? palette_.accentBright
+                                                        : tint.brighter (0.45f);
+
+        const bool relief = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaRelief", false));
+
+        const auto fill = (on ? tint : palette_.dimText.withAlpha (0.30f));
 
         const auto arc = [&] (float from, float to, juce::Colour colour, float width_)
         {
@@ -118,16 +141,70 @@ public:
             const auto body = juce::Rectangle<float> { bodyRadius * 2.0f, bodyRadius * 2.0f }
                                 .withCentre (centre);
 
-            g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.22f), body.getCentreX(),
-                                                     body.getY(),
-                                                     palette_.background, body.getCentreX(),
-                                                     body.getBottom(), false));
-            g.fillEllipse (body);
+            if (relief)
+            {
+                // **A socket, then a cap.**
+                //
+                // The flat body below is a dark circle on a dark plate, and
+                // the two are within a few points of the same lightness -- so
+                // the knob reads as a shade of the panel rather than as a thing
+                // bolted to it. A real panel separates them with geometry: the
+                // knob sits in a countersunk well, and the well's shadow is
+                // what the eye actually reads as an edge.
+                //
+                // Three passes, no images: the well, the shadow it casts on its
+                // own upper lip, and a cap whose gradient runs the other way
+                // from the well's so the two cannot be confused.
+                const auto well = body.expanded (juce::jmax (2.0f, bodyRadius * 0.16f));
 
-            // A hairline round the body, brighter at the top. The same trick as
-            // the panel highlight: it is what gives a dark circle an edge.
-            g.setColour (juce::Colours::white.withAlpha (on ? 0.07f : 0.03f));
-            g.drawEllipse (body.reduced (0.5f), 1.0f);
+                g.setColour (juce::Colours::black.withAlpha (0.42f));
+                g.fillEllipse (well.translated (0.0f, 1.0f));
+
+                g.setColour (juce::Colours::black.withAlpha (0.30f));
+                g.fillEllipse (well);
+
+                g.setColour (juce::Colours::white.withAlpha (0.06f));
+                g.drawEllipse (well.reduced (0.5f), 1.0f);
+
+                // The cap, lit from above and **clearly** lighter than the
+                // plate rather than a step darker than it.
+                //
+                // Literal greys rather than `panel.brighter()`, because
+                // `brighter` works in HSB and its steps are not perceptually
+                // even -- the first attempt asked for 0.62 of brighter and
+                // landed the cap at RGB 93 against a plate at 57, which is a
+                // difference you have to go looking for. These are measured
+                // against the group plate at 0x34373a: the cap runs 0x86 down
+                // to 0x4a, so its lit half is half again as light as the plate
+                // and its shaded half still clears it.
+                g.setGradientFill (juce::ColourGradient (
+                    juce::Colour { 0xff86898d }, body.getCentreX(), body.getY(),
+                    juce::Colour { 0xff4a4d51 }, body.getCentreX(), body.getBottom(), false));
+                g.fillEllipse (body);
+
+                // A specular sliver across the top third. One ellipse, and it
+                // is what stops a flat gradient reading as a disc of paint.
+                g.setColour (juce::Colours::white.withAlpha (on ? 0.10f : 0.04f));
+                g.fillEllipse (body.reduced (body.getWidth() * 0.18f)
+                                   .withHeight (body.getHeight() * 0.34f)
+                                   .translated (0.0f, body.getHeight() * 0.10f));
+
+                g.setColour (juce::Colours::white.withAlpha (on ? 0.22f : 0.08f));
+                g.drawEllipse (body.reduced (0.5f), 1.0f);
+            }
+            else
+            {
+                g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.22f), body.getCentreX(),
+                                                         body.getY(),
+                                                         palette_.background, body.getCentreX(),
+                                                         body.getBottom(), false));
+                g.fillEllipse (body);
+
+                // A hairline round the body, brighter at the top. The same trick as
+                // the panel highlight: it is what gives a dark circle an edge.
+                g.setColour (juce::Colours::white.withAlpha (on ? 0.07f : 0.03f));
+                g.drawEllipse (body.reduced (0.5f), 1.0f);
+            }
         }
 
         // The value, from the anchor -- with a wide, very transparent stroke
@@ -142,7 +219,7 @@ public:
         if (std::abs (angle - anchor) > 1.0e-4f)
         {
             if (on)
-                arc (anchor, angle, palette_.accent.withAlpha (0.18f), thickness * 2.4f);
+                arc (anchor, angle, tint.withAlpha (0.18f), thickness * 2.4f);
 
             arc (anchor, angle, fill, thickness);
         }
@@ -158,11 +235,16 @@ public:
 
             if (on)
             {
-                g.setColour (palette_.accentBright.withAlpha (0.22f));
+                g.setColour (tintBright.withAlpha (0.22f));
                 g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f) * 2.6f);
             }
 
-            g.setColour (on ? palette_.accentBright : palette_.dimText.withAlpha (0.35f));
+            // On a relief cap the pointer sits on a light grey, where a dim
+            // grey line disappears -- so the disabled pointer goes dark rather
+            // than pale, and the lit one keeps its bright tint.
+            g.setColour (on ? tintBright
+                            : (relief ? juce::Colours::black.withAlpha (0.45f)
+                                      : palette_.dimText.withAlpha (0.35f)));
             g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f));
         }
 
