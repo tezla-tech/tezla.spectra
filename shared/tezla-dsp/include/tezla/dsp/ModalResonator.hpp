@@ -207,6 +207,55 @@ public:
 
     [[nodiscard]] double getBloom() const noexcept { return bloom_; }
 
+    /// **Damp -- a hand on the object.** Zero is off, and off is exact.
+    ///
+    /// Percussion is *played* with damping: a palm on a drum head, fingers on
+    /// a cymbal's edge, the heel of a hand stopping a gong. Without it the only
+    /// way to shorten a note is to have set Decay shorter before playing it,
+    /// which is not the same instrument.
+    ///
+    /// **The loss is proportional to frequency**, and that is the whole design
+    /// rather than a curve chosen to sound nice. Soft tissue is a
+    /// constant-loss-factor absorber: the energy it takes per cycle is roughly
+    /// fixed, so the loss per *second* rises with the frequency and a mode at
+    /// 4 kHz dies sixteen times faster than one at 250 Hz. That is why a
+    /// damped cymbal goes **dull before it goes quiet**. A flat multiplier on
+    /// every decay would be a volume pedal, and would sound like one.
+    ///
+    /// In numbers: at full damp a mode at `kDampReferenceHz` loses 60 dB in
+    /// `kDampT60AtReference` on top of whatever its own decay was doing, and
+    /// the added loss scales linearly with frequency from there. Decays
+    /// combine as rates, not as times -- 1/T = 1/T_own + 1/T_added -- so a
+    /// mode already dying faster than the damping is barely touched, which is
+    /// correct: a hand cannot make a click shorter.
+    ///
+    /// State-preserving and no-op guarded, like `setMode`: a ringing object
+    /// changes how fast it is dying without any discontinuity in what it is
+    /// doing, so this can be pushed from an aftertouch or a pedal every
+    /// control chunk.
+    void setDamp (double amount) noexcept
+    {
+        const double wanted = amount < 0.0 ? 0.0 : amount > 1.0 ? 1.0 : amount;
+
+        if (isExactly (wanted, damp_))
+            return;
+
+        damp_ = wanted;
+
+        // Every mode's radius depends on it, and rebuilding a pole touches no
+        // state -- so a bank ringing through a damping sweep glides rather
+        // than steps.
+        for (int index = 0; index < kMaxModes; ++index)
+            rebuildPole (index);
+    }
+
+    [[nodiscard]] double getDamp() const noexcept { return damp_; }
+
+    /// Where the damping law is anchored: at full damp a mode here loses 60 dB
+    /// in `kDampT60AtReference` seconds on top of its own decay.
+    static constexpr double kDampReferenceHz = 1000.0;
+    static constexpr double kDampT60AtReference = 0.10;
+
     /// Advances every active mode one sample with no input and returns the
     /// bank's output.
     [[nodiscard]] double process() noexcept
@@ -413,7 +462,25 @@ private:
     {
         // r from T60: amplitude falls 60 dB over t60 seconds, so per sample
         // r = 10^(-3 / (t60 * fs)).
-        const double r = std::pow (10.0, -3.0 / (t60_[index] * sampleRate_));
+        double r = std::pow (10.0, -3.0 / (t60_[index] * sampleRate_));
+
+        // The hand, if there is one. `exp(-0)` is exactly 1 and `r * 1.0` is
+        // exactly `r`, so damp 0 would be bit-exact with no branch at all --
+        // this one is a **fast path**, skipping a transcendental per mode per
+        // rebuild, and saying so rather than claiming it is what makes the
+        // neutral setting exact.
+        if (! isExactlyZero (damp_))
+        {
+            // Loss adds as a *rate*: nepers per second, proportional to the
+            // mode's frequency. 3 ln(10) nepers is 60 dB, so the reference
+            // T60 converts to a rate the same way the natural decay does.
+            const double referenceRate = 3.0 * std::numbers::ln10 / kDampT60AtReference;
+            const double added = damp_ * referenceRate
+                                   * (clampFrequency (frequencyHz_[index]) / kDampReferenceHz);
+
+            r *= std::exp (-added / sampleRate_);
+        }
+
         const double frequency = clampFrequency (frequencyHz_[index]);
         const double omega = 2.0 * std::numbers::pi * frequency / sampleRate_;
 
@@ -429,6 +496,7 @@ private:
     int modeCount_ { 1 };
 
     double bloom_ { 0.0 };
+    double damp_ { 0.0 };
     double previousOutput_ { 0.0 };
     double couplingWeight_[kMaxModes] {};
     double poleRadius_[kMaxModes] {};

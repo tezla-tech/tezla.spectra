@@ -664,12 +664,16 @@ multiply:
 | **FM punch** | Two-operator FM the DX way: a silent 3:1 modulator, a sine carrier, the PM index riding a fast-decay envelope. The brightness *is* the envelope |
 | **Bell foundry** | The same two operators pushed inharmonic (4.76:1), with an ADV envelope giving the index a strike, a duck, a shimmer-back and a slow fade no ADSR draws. Chords ring like a gamelan |
 | **Vintage swell** | The analogue curve doing pad work: RC-softened saws, drift, both envelopes snapped so the swell lands on the grid, a two-bar LFO on the vowel |
+| **Sixteen-step gate** | Sixteen 1/16 legs of one ADV envelope on Level, looped and snapped: a step sequencer with *curves* between the steps. The ENV ruler draws the bar underneath it |
+| **Bar riser** | The same sixteen points as a shape rather than a gate — a stepped climb whose acceleration is drawn leg by leg, sweeping cutoff, filter type and drive together |
+| **Two-hand macro** | Two knobs, eight destinations: MACRO 1 is aggression, MACRO 2 is size. Play with one hand on each |
+| **Morph wah** | A wah that changes filter *type* rather than cutoff — a bar-synced LFO swinging lowpass to bandpass and back. No cutoff sweep makes that sound |
 
 ---
 
 ## What is not proved
 
-Steinberg's validator passes 47/47 on Linux and **665 DSP tests pass on x86-64**.
+Steinberg's validator passes 47/47 on Linux and **931 DSP tests pass on x86-64**.
 The last four-platform run was at 579 tests; ARM64 and macOS are paused on
 purpose while the Windows build is finished, so those figures are older than the
 count — CLAUDE.md §2.3.
@@ -875,6 +879,19 @@ double **is** p/q to within a few ulps and refuses tempered intervals, because
 a tuning table printing "442/295" for an equal-tempered degree would be a lie.
 Both are right; merging them would break one.
 
+**Four presets for the four new things, and a headroom pass that came out of
+measuring them.** *Sixteen-step gate* and *Bar riser* are the sixteen-point ADV
+envelopes used the two opposite ways — as a rhythm and as a shape; *Two-hand
+macro* is the macros; *Morph wah* is the filter morph on a bar-synced LFO. The
+numbers are in the phase-4 section below.
+
+Rendering them beside the existing presets found **four presets above full scale
+on a single note** — *Scale drone* at 1.949, nearly +6 dB over, from the phase-4
+close-out an hour earlier. On a sixteen-voice instrument that leaves no headroom
+at all for a chord. Fixed by trimming Output and nothing else. No test could have
+caught it: a preset's level is not a claim any test makes, so the rule now lives
+beside the preset table in the source, with the measurement that produced it.
+
 **The envelopes have a ruler.** With Snap on, an ADV graph draws the grid it is
 snapping to: bar lines in the accent colour, beats and subdivisions behind them,
 numbered bars along a strip at the bottom, and the note each leg landed on
@@ -1038,6 +1055,40 @@ do not hold back. Measured at A1 and A3: every one is finite, peaks between
 These lean on every bound in the instrument at once -- the feedback cap, the
 folder's ADAA, the comb's limit, the safety limiter -- and that is deliberate.
 A preset that exercises every guard simultaneously is the honest stress test.
+
+### Phase 4 showcase presets, and a headroom pass
+
+Four more, one per feature added since the phase-3 batch: the sixteen-point ADV
+envelopes twice (as a gate and as a shape), the macros, and the filter morph.
+Rendered through the JUCE layer at note 45, five seconds, note held for three:
+
+| preset | rms | peak | what it shows |
+|---|---|---|---|
+| **Sixteen-step gate -- one bar, drawn** | 0.135 | 0.847 | ADV 1 at sixteen points, all 1/16, looped and snapped, straight onto Level. Per-1/16 RMS across the bar: `0.27 0.16 0.17 0.12 0.17 0.14 0.04 0.12 0.25 0.18 0.17 0.14 0.25 0.23 0.07 0.11` -- sixteen distinct steps, and the second bar repeats them |
+| **Bar riser -- sixteen legs of climb** | 0.124 | 0.411 | The same ceiling drawn as a monotone climb into cutoff, morph and drive at once. Brightness per 1/8 across the bar: `0.043 0.052 0.066 0.067 0.065 0.073 0.115 0.125` |
+| **Two-hand macro -- aggression and size** | 0.214 | 0.812 | MACRO 1 to four destinations, MACRO 2 to four more across both matrices. Macro 1 from 0 to 1 takes brightness `0.027 → 0.145`; macro 2 takes RMS `0.165 → 0.208`. Peak across the whole 5 × 5 grid of the two knobs: **0.934** |
+| **Morph wah -- the filter type is the LFO** | 0.232 | 0.744 | A 1-bar triangle LFO on filter morph at 0.85 depth. Brightness per 1/4: `0.027 0.048 0.041 0.024 0.026 0.036` -- one cycle a bar, and the fifth quarter repeats the first |
+
+**Measuring them found four older presets above full scale on a single note**,
+which on a sixteen-voice instrument means no headroom at all for a chord. Fixed
+in the same pass, by trimming Output and nothing else:
+
+| preset | was | peak | now | peak |
+|---|---|---|---|---|
+| Reese -- the classic | -9 dB | 1.132 | -12 dB | 0.801 |
+| Clockwork wobble | -4 dB | 1.089 | -7 dB | 0.771 |
+| Morphing pluck | -4 dB | 1.153 | -7 dB | 0.817 |
+| Scale drone | -6 dB | **1.949** | -14 dB | 0.776 |
+
+Scale drone is the one worth naming: a comb at 88% feedback locked to the
+tuning is a resonator being fed its own notes, so it builds, and 1.949 is nearly
++6 dB over. It shipped that way in the phase-4 close-out and no test could have
+caught it -- a preset's level is not a claim any test makes, which is why the
+rule is now written down beside the table in `PluginProcessor.cpp`.
+
+**Init is deliberately untouched** at 1.065. It is the parameter defaults by
+definition, so trimming it would change the plugin's neutral output gain for
+every new instance rather than edit a preset. One saw at unity is that loud.
 
 ### DICEROLL
 
