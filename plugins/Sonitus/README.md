@@ -611,6 +611,85 @@ below −240 dBFS for a second with no voice sounding, the render and the
 decimation filters are skipped. The clocks keep running, so a slow LFO is where
 it would have been when the next note arrives.
 
+### The ×8 stress case, measured, and what was done about it
+
+The case that pins the meter: **16 voices, unison 7 + 7 (224 oscillators), a
+6 s release, every voice sounding for the whole window**, 48 kHz, 512-sample
+blocks. `tezla-measure sonitus-stress` reproduces it, on any machine. Measured
+here on 2026-09-01, GCC 13 on x86-64 Linux, best of three, in milliseconds of
+CPU per second of audio (÷10 = % of one core):
+
+| oversampling | internal rate | ms/s | core |
+|---|---|---|---|
+| off | 48 kHz | 252 | 25 % |
+| ×2 | 96 kHz | 489 | 49 % |
+| ×4 (Auto at 48 k) | 192 kHz | 975 | 98 % |
+| ×8 | 384 kHz | **1973** | **197 %** |
+
+**Exactly linear in the factor**, to the percent, because the whole voice —
+oscillators, filters, fold, envelopes — runs at the internal rate. ×8 at 48 kHz
+is 384 kHz internally, past anything the anti-aliasing here needs (the policy
+in CLAUDE.md §6 targets ~192 kHz effective); it exists as the deliberate
+CPU-for-headroom trade and costs precisely what it says.
+
+**Where the ×8 time goes**, from callgrind (share of all instructions) and
+from removing one feature at a time (share of the bill):
+
+| stage | profile | removed | saves |
+|---|---|---|---|
+| polyBLEP oscillators + unison summing | 60 % | unison 7+7 → 1+1 | 42 % |
+| SVF filters, of which the rail `tanh` | 14 % | filter drive 0.5 → 0 | 21 % |
+| fold (ADAA) | 8 % | fold 0.3 → 0 | 11 % |
+| tube stage (`pow`, per mix sample) | 6 % | tube 12 dB → 0 | 7 % |
+| sine sub (libm `sin`) | 9.5 % | sub off | 5 % |
+| per-chunk control (`applyControls`) | 4 % | | |
+| halfband down-sampler | 1.7 % | | |
+
+The drive column is the interesting disagreement: removing drive saves three
+times the profile's `tanh` share, because with drive the integrator states
+spend most of their time past the rail's knee, where the `tanh` is doing real
+work. Below the knee the rail is already the identity, bit for bit, with an
+early return — so there is nothing free to take there.
+
+**Link-time optimisation is not the lever.** Same harness, five builds:
+
+| | gcc | gcc `-flto=auto` | clang | clang thin | clang full |
+|---|---|---|---|---|---|
+| ×8 | 1973 | 2077 (+5 %) | 2382 | 2247 (−6 %) | 2374 (±0) |
+
+Best case −6 %; GCC's LTO is 5–9 % *slower*. 93 % of the time is inside one
+function into which everything is already inlined, so there is no boundary for
+LTO to cross. MSVC on the rig is unmeasured — run the command there with and
+without `-lto` — and the same structural argument applies.
+
+**What was done, under the rule that the output must not change by a single
+bit.** Every change was checked against 32 golden renders — eight patches (the
+stress case, PM with feedback, hard sync, pulse/triangle with morph,
+envelope-to-cutoff with filter FM, formant with flange, ring with kargyraa,
+drift) at each of the four factors — rendered before the change and compared
+byte for byte after it, plus the full test suite:
+
+- **Change-guards on four per-chunk setters** (`Oscillator::setShape` and
+  `setWidth`, `UnisonBank::setMorph`, and the SVF's cutoff update no longer
+  recomputing the resonance `pow`): 32/32 identical, 1002/1002; ×8 1973 →
+  1928 ms/s (**−2.3 %**), off 252 → 245 (−2.7 %).
+- **The right-channel filter adopts the left's cutoff coefficient** instead of
+  evaluating the same `tan`: 32/32 identical, 1002/1002; and honestly **not
+  measurable** — 970 → 976 ms/s at ×4 on the envelope-to-cutoff patch, inside
+  the noise, because the saved `tan` is about 2 % of the work. Kept because it
+  is strictly less work for the same bits.
+
+**What was not done, because it would change the sound**, however slightly,
+and the user's brief was that nothing may: replacing the sub's `sin`, the
+rail's `tanh` or the tube's `pow` with cheaper evaluations (~−20 % together,
+but different bits); updating filter coefficients per control chunk instead of
+per sample (a different sweep); skipping the formant bank at mix 0 (its state
+would be cold the instant the knob moved); and the structural fix — running
+the band-limited oscillators at the base rate and oversampling only the
+nonlinear stages, roughly halving ×8 — which changes the signal path and needs
+the aliasing and rate-independence measurements again. All four are on the
+roadmap with what would unpark them.
+
 ### Tails, and what oversampling multiplies
 
 Two things decide the bill when chords are played over each other, and they
