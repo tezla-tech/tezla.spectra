@@ -193,14 +193,16 @@ SvarayantraEditor::SvarayantraEditor (SvarayantraProcessor& processorToUse)
                              const juce::String& name, const juce::String& tip)
     {
         slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 68, 16);
+
+        // What a house knob is lives in ui/HouseControls.hpp: relief, a
+        // machined skirt, a tinted track, the value font, and the wheel turned
+        // off so it scrolls the panel instead of editing.
+        ui::styleKnob (slider, palette_, palette_.accent);
         slider.setTooltip (tip);
         fontPage_.addAndMakeVisible (slider);
 
         label.setText (name, juce::dontSendNotification);
-        label.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        label.setColour (juce::Label::textColourId, palette_.dimText);
-        label.setJustificationType (juce::Justification::centred);
+        ui::styleName (label, palette_, palette_.accent);
         fontPage_.addAndMakeVisible (label);
     };
 

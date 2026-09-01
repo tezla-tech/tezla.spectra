@@ -20,12 +20,34 @@ const juce::Colour kEmber        { 0xffd8722c };
 const juce::Colour kEmberBright  { 0xfff2a03d };
 const juce::Colour kReduction    { 0xff4f9fd8 };
 
+/// The house palette wearing Emberdrive's colours. Built here rather than
+/// assembled twice: the editor's meters and header want it, and so does every
+/// control the pages build.
+[[nodiscard]] ui::Palette housePalette()
+{
+    ui::Palette palette;
+
+    palette.accent       = kEmber;
+    palette.accentBright = kEmberBright;
+    palette.secondary    = kReduction;
+
+    return palette;
+}
+
+/// The control this plugin is *about*. Drawn larger than its neighbours so the
+/// eye lands on it first -- see PanelDesign.hpp for why a size is the hierarchy
+/// cue that survives being glanced at.
+[[nodiscard]] ui::design::Emphasis emphasisOf (const juce::String& id) noexcept
+{
+    return id == ids::drive ? ui::design::Emphasis::lead
+                            : ui::design::Emphasis::normal;
+}
+
 constexpr float kMeterFloorDb   = -60.0f;
 constexpr float kMeterTopDb     = 6.0f;
 constexpr float kReductionMaxDb = 24.0f;
 
-constexpr int kLabelHeight = 16;
-constexpr int kValueHeight = 18;
+constexpr int kLabelHeight = 14;
 
 /// Cap on how tall one grid cell may grow. Without it a page with a single row
 /// -- MANGLE has two controls -- stretches that row to the full page height,
@@ -78,19 +100,17 @@ void ControlPage::addKnob (const char* parameterId, const juce::String& name, co
     auto knob = std::make_unique<Knob>();
 
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 96, kValueHeight);
-    knob->slider.setColour (juce::Slider::rotarySliderFillColourId, kEmber);
-    knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId, kPanel.brighter (0.25f));
-    knob->slider.setColour (juce::Slider::thumbColourId, kEmberBright);
-    knob->slider.setColour (juce::Slider::textBoxTextColourId, kText);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    // What a house knob is lives in ui/HouseControls.hpp: relief, a machined
+    // skirt, a tinted track, the value font, and the wheel turned off so it
+    // scrolls the panel instead of editing.
+    ui::styleKnob (knob->slider, housePalette(), kEmber, emphasisOf (parameterId));
+    ui::resetsToDefault (knob->slider, state_, parameterId);
     knob->slider.setTooltip (tooltip);
     addAndMakeVisible (knob->slider);
 
     knob->label.setText (name, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.setColour (juce::Label::textColourId, kDimText);
-    knob->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (knob->label, housePalette(), kEmber);
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
@@ -115,16 +135,12 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name, 
     else
         jassertfalse;   // addChoice used on something that is not a choice parameter
 
-    choice->box.setColour (juce::ComboBox::backgroundColourId, kPanel.brighter (0.15f));
-    choice->box.setColour (juce::ComboBox::textColourId, kText);
-    choice->box.setColour (juce::ComboBox::outlineColourId, kPanel.brighter (0.3f));
+    ui::styleChoice (choice->box, housePalette(), kEmber);
     choice->box.setTooltip (tooltip);
     addAndMakeVisible (choice->box);
 
     choice->label.setText (name, juce::dontSendNotification);
-    choice->label.setJustificationType (juce::Justification::centred);
-    choice->label.setColour (juce::Label::textColourId, kDimText);
-    choice->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (choice->label, housePalette(), kEmber);
     choice->label.setTooltip (tooltip);
     addAndMakeVisible (choice->label);
 
@@ -137,11 +153,9 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name, 
 
 void ControlPage::addToggle (const char* parameterId, const juce::String& name, const juce::String& tooltip)
 {
-    auto toggle = std::make_unique<Toggle>();
+    auto toggle = std::make_unique<Toggle> (name);
 
-    toggle->button.setButtonText (name);
-    toggle->button.setColour (juce::ToggleButton::textColourId, kText);
-    toggle->button.setColour (juce::ToggleButton::tickColourId, kEmber);
+    toggle->button.setClickingTogglesState (true);
     toggle->button.setTooltip (tooltip);
     addAndMakeVisible (toggle->button);
 
@@ -223,7 +237,10 @@ void ControlPage::resized()
             {
                 auto& knob = *knobs_[static_cast<std::size_t> (cells_[i].index)];
                 knob.label.setBounds (cell.removeFromTop (kLabelHeight));
-                knob.slider.setBounds (cell.reduced (4, 0));
+                // **Emphasis is a size.** The cell keeps its footprint -- the
+                // grid is a grid -- and only the control inside it moves.
+                knob.slider.setBounds (ui::emphasised (cell.reduced (4, 0),
+                                                       emphasisOf (knob.id)));
 
                 // Exactly over the knob, so the ring can ask the LookAndFeel
                 // where the rotary is in the same coordinates the slider does.
@@ -242,9 +259,17 @@ void ControlPage::resized()
             }
             case Cell::Kind::toggle:
             {
+                // `sized` adds the glow margin: the button is larger than the
+                // switch drawn in it so the lit halo is not clipped away. JUCE
+                // throws away anything painted past a component's own bounds,
+                // silently.
                 auto& toggle = *toggles_[static_cast<std::size_t> (cells_[i].index)];
-                toggle.button.setBounds (cell.withSizeKeepingCentre (
-                    juce::jmin (cell.getWidth() - 8, 130), 26));
+
+                const int width = juce::jlimit (54, 120,
+                    cell.getWidth() - 8 - 2 * ui::LampButton::kGlowMargin);
+
+                toggle.button.setBounds (
+                    ui::LampButton::sized (width, 34).withCentre (cell.getCentre()));
                 break;
             }
             case Cell::Kind::gap:
@@ -260,9 +285,12 @@ void ControlPage::resized()
 EmberdriveEditor::EmberdriveEditor (EmberdriveProcessor& processorToUse)
     : juce::AudioProcessorEditor (&processorToUse), processor_ (processorToUse)
 {
-    palette_.accent       = kEmber;
-    palette_.accentBright = kEmberBright;
-    palette_.secondary    = kReduction;
+    palette_ = housePalette();
+
+    // The house look and feel, installed on the editor so every page inherits
+    // it: JUCE walks up the parent chain to find one.
+    knobLook_ = std::make_unique<ui::KnobLookAndFeel> (palette_);
+    setLookAndFeel (knobLook_.get());
 
     header_ = std::make_unique<ui::HeaderBar> (processor_.getValueTreeState(), "EMBERDRIVE",
                                                "saturation + limiter", ids::bypass, palette_);
@@ -767,6 +795,11 @@ void EmberdriveEditor::timerCallback()
     // Only the page you are looking at. Refreshing the other three would repaint
     // rings nobody can see.
     pages_[static_cast<std::size_t> (currentPage_)]->refreshModulation();
+}
+
+EmberdriveEditor::~EmberdriveEditor()
+{
+    setLookAndFeel (nullptr);
 }
 
 void EmberdriveEditor::paint (juce::Graphics& g)

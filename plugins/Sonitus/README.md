@@ -770,6 +770,23 @@ on a control surface. What landed:
   over Detune on the way down, the page does not move, and the patch has
   silently changed by three cents.
 
+**The ADV envelope graphs zoom.** Wheel over one and the time axis zooms about
+the pointer, up to 32×; shift-wheel scrolls it, and so does dragging the strip
+that appears along the bottom; double-click puts the whole envelope back. That
+is the one place the wheel does something other than scroll the page, and the
+reason is that it changes *nothing* — no parameter moves, and the graph in front
+of you answers what happened. Sixteen points across 900 pixels is 56 of them a
+leg, and a point's time, level and tension have no knobs at all, so this graph
+is the only way to reach them.
+
+Dragging a point at 8× moves it an eighth as far per pixel, which is the whole
+point: zooming in has to make the gesture *finer*, and taking the scale from the
+plot's width instead of the axis would have made it coarser. Zooming out fully
+hands the next notch to the page, so the wheel is never dead over a graph; and
+zoom in, pan, double-click leaves the panel **bit-identical** to one that was
+never touched — checked by rendering both and differencing them, and seen to
+fail with the reset aimed at 1.02× instead of 1×.
+
 Two bugs fell out of photographing the result, both older than the design work:
 
 - **The lit switch's glow was being thrown away.** JUCE clips a component's

@@ -483,6 +483,16 @@ Detail lives in `docs/PLUGIN-CONVENTIONS.md`; the short version:
   sub bass, reese, mix glue, and a genuinely clean setting.
 - UI is resizable and readable on a high-DPI display. Function before flourish;
   clear metering beats skeuomorphic decoration.
+- **The panel design is one thing, shared.** `shared/tezla-ui/.../PanelDesign.hpp`
+  holds the numbers, `HouseControls.hpp` the four functions that apply them, and
+  `LampButton.hpp` the switch. A new plugin gets the house look by installing
+  `ui::KnobLookAndFeel` and calling those; it does not restyle a knob by hand.
+  **Never a tick box**, anywhere. Transpectus is the one exception to all of it,
+  at the user's request: it is analysis windows rather than knobs on plates.
+- **The wheel scrolls the panel and never moves a control** -- `ui::noWheel` at
+  construction, `ui::sweepNoWheel` as a net. The documented exception is a
+  *graph*, which may take the wheel as a view gesture (zoom, pan) because
+  nothing it does is a parameter change; the conditions are in ScrollWheel.hpp.
 - The plugin's own name, vendor "Tezla Tech", and a unique 4-character plugin
   code — **registered in `plugins/README.md`** so codes never collide. That file
   also holds reserved names for plugins already sketched out (`Ferrite` for the

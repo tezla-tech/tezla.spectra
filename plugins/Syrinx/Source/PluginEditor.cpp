@@ -309,10 +309,8 @@ StagePanel::StagePanel (juce::AudioProcessorValueTreeState& state, ui::Palette p
     if (enableId_ == nullptr)
         return;
 
-    enableButton_ = std::make_unique<juce::ToggleButton>();
-    enableButton_->setColour (juce::ToggleButton::tickColourId, palette_.accentBright);
-    enableButton_->setColour (juce::ToggleButton::tickDisabledColourId,
-                              palette_.dimText.withAlpha (0.5f));
+    enableButton_ = std::make_unique<ui::LampButton> ("ON");
+    enableButton_->setClickingTogglesState (true);
     enableButton_->setTooltip (
         "Switches this stage out of the chain. Off is the stage's own neutral "
         "setting, which is a bit-exact identity -- the samples pass through "
@@ -329,20 +327,17 @@ void StagePanel::addKnob (const char* parameterId, const juce::String& name,
     auto knob = std::make_unique<Knob>();
 
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 78, kValueHeight);
-    knob->slider.setColour (juce::Slider::rotarySliderFillColourId, palette_.accent);
-    knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId,
-                            palette_.panel.brighter (0.25f));
-    knob->slider.setColour (juce::Slider::thumbColourId, palette_.accentBright);
-    knob->slider.setColour (juce::Slider::textBoxTextColourId, palette_.text);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    // What a house knob is lives in ui/HouseControls.hpp: relief, a machined
+    // skirt, a tinted track, the value font, and the wheel turned off so it
+    // scrolls the panel instead of editing.
+    ui::styleKnob (knob->slider, palette_, palette_.accent);
+    ui::resetsToDefault (knob->slider, state_, parameterId);
     knob->slider.setTooltip (tooltip);
     addAndMakeVisible (knob->slider);
 
     knob->label.setText (name, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.setColour (juce::Label::textColourId, palette_.dimText);
-    knob->label.setFont (juce::FontOptions (11.0f));
+    ui::styleName (knob->label, palette_, palette_.accent);
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
@@ -356,11 +351,9 @@ void StagePanel::addKnob (const char* parameterId, const juce::String& name,
 void StagePanel::addToggle (const char* parameterId, const juce::String& name,
                             const juce::String& tooltip)
 {
-    auto toggle = std::make_unique<Toggle>();
+    auto toggle = std::make_unique<Toggle> (name);
 
-    toggle->button.setButtonText (name);
-    toggle->button.setColour (juce::ToggleButton::textColourId, palette_.dimText);
-    toggle->button.setColour (juce::ToggleButton::tickColourId, palette_.accent);
+    toggle->button.setClickingTogglesState (true);
     toggle->button.setTooltip (tooltip);
     addAndMakeVisible (toggle->button);
 
@@ -448,7 +441,7 @@ void StagePanel::paint (juce::Graphics& g)
 
     g.setColour (on ? palette_.text : palette_.dimText);
     g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
-    g.drawText (title_, titleArea.reduced (enableButton_ != nullptr ? 26.0f : 6.0f, 0.0f),
+    g.drawText (title_, titleArea.reduced (enableButton_ != nullptr ? 52.0f : 6.0f, 0.0f),
                 juce::Justification::centred);
 }
 
@@ -458,7 +451,11 @@ void StagePanel::resized()
     auto titleArea = bounds.removeFromTop (kStageTitleHeight);
 
     if (enableButton_ != nullptr)
-        enableButton_->setBounds (titleArea.removeFromLeft (24).withSizeKeepingCentre (20, 20));
+        // `sized` adds the glow margin -- the button is larger than the switch
+        // drawn in it, so the lit halo has somewhere to land rather than being
+        // clipped away by the component's own bounds.
+        enableButton_->setBounds (ui::LampButton::sized (34, 18)
+                                    .withCentre (titleArea.removeFromLeft (50).getCentre()));
 
     if (bar_ != nullptr)
         bar_->setBounds (bounds.removeFromBottom (kBarHeight).reduced (2, 2));
@@ -467,10 +464,19 @@ void StagePanel::resized()
     // rather than settings and grouping them keeps the knob grid regular.
     if (! toggles_.empty())
     {
-        auto toggleArea = bounds.removeFromBottom (static_cast<int> (toggles_.size()) * 20 + 4);
+        // Each row is the switch plus its glow margin on both sides -- the
+        // button is larger than the switch drawn in it so the lit halo is not
+        // clipped away by the component's own bounds.
+        const int rowHeight = 22 + 2 * ui::LampButton::kGlowMargin;
+
+        auto toggleArea = bounds.removeFromBottom (
+            static_cast<int> (toggles_.size()) * rowHeight + 4);
 
         for (auto& toggle : toggles_)
-            toggle->button.setBounds (toggleArea.removeFromTop (20).reduced (4, 1));
+            toggle->button.setBounds (
+                ui::LampButton::sized (juce::jmax (54, toggleArea.getWidth() - 8
+                                                        - 2 * ui::LampButton::kGlowMargin), 22)
+                  .withCentre (toggleArea.removeFromTop (rowHeight).getCentre()));
     }
 
     if (knobs_.empty())

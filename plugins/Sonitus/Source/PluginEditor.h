@@ -412,7 +412,8 @@ private:
 /// drawn with EnvelopeEditor::segment, the shared tension arithmetic, so the
 /// picture is the DSP's own curve. The sustain point wears a ring; the loop
 /// region is shaded while Loop is on.
-class MultiEnvelopeEditor final : public juce::Component
+class MultiEnvelopeEditor final : public juce::Component,
+                                  public juce::SettableTooltipClient
 {
 public:
     MultiEnvelopeEditor (juce::AudioProcessorValueTreeState& state, int envelopeIndex,
@@ -425,6 +426,8 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
     struct Layout
@@ -467,9 +470,35 @@ private:
         float thickness { 1.0f };
     };
 
+    /// Seconds to pixels, through the view.
+    ///
+    /// One place, because six paint passes and two mouse handlers all turn a
+    /// time into an x and every one of them would otherwise have to remember
+    /// the zoom. `x = originX + seconds * perSecond`, and the inverse is the
+    /// only arithmetic a drag needs.
+    struct TimeAxis
+    {
+        float originX { 0.0f };    ///< where t = 0 lands, which can be off-screen
+        double perSecond { 0.0 };
+    };
+
     [[nodiscard]] Layout layoutNow() const;
+    [[nodiscard]] TimeAxis timeAxis (double total) const noexcept;
     [[nodiscard]] juce::Rectangle<float> plotArea() const;
     [[nodiscard]] juce::Rectangle<float> rulerArea() const;
+
+    /// The strip along the bottom of the plot showing which slice of the
+    /// envelope is on screen. Drawn only when there is a slice to show, and
+    /// draggable, because a scrollbar you can only read is half a scrollbar.
+    [[nodiscard]] juce::Rectangle<float> viewBarArea() const;
+    void paintViewBar (juce::Graphics&);
+
+    /// Moves the view, clamped so the window can never run past either end and
+    /// so 1x is always the whole envelope.
+    ///
+    /// Refuses a no-op: a wheel event that changes nothing must not repaint,
+    /// and at the zoom limits every further notch is exactly that.
+    void setView (float zoom, float offset);
 
     void paintMusicalRuler (juce::Graphics&, const Layout&);
     void paintSecondsRuler (juce::Graphics&, const Layout&);
@@ -495,6 +524,25 @@ private:
     float dragStartTension_ { 0.0f };
     float dragStartY_ { 0.0f };
     juce::String gestureField_;
+
+    // -- the view ------------------------------------------------------------
+    //
+    // A sixteen-point envelope across 900 pixels gives each leg 56 of them, and
+    // a point's time, level and tension have no knobs -- the graph is the only
+    // way to reach them. So the graph zooms.
+
+    /// How much of the envelope is on screen: 1 is all of it, 32 is a
+    /// thirty-second of it.
+    float zoom_ { 1.0f };
+
+    /// Where the left edge sits, as a fraction of the whole envelope.
+    float offset_ { 0.0f };
+
+    /// Dragging the view bar rather than a point.
+    bool draggingView_ { false };
+    float dragViewGrab_ { 0.0f };   ///< where in the thumb the drag started
+
+    static constexpr float kMaxZoom = 32.0f;
 };
 
 /// An ADSR drawn as the shape it is, and dragged by its corners.

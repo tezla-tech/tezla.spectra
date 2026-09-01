@@ -12,6 +12,9 @@
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/HeaderBar.hpp>
 #include <tezla/ui/LevelMeter.hpp>
+#include <tezla/ui/HouseControls.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 
 #include "PluginProcessor.h"
@@ -96,10 +99,15 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
     };
 
+    /// **Never a tick box.** A tick box says "an option in a list"; an on/off
+    /// control on an instrument is a switch, and reads faster as one -- see
+    /// ui/LampButton.hpp.
     struct Toggle
     {
-        juce::String       id;
-        juce::ToggleButton button;
+        explicit Toggle (const juce::String& name) : button (name) {}
+
+        juce::String    id;
+        ui::LampButton  button;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
@@ -127,7 +135,11 @@ class CapstoneEditor final : public juce::AudioProcessorEditor,
 {
 public:
     explicit CapstoneEditor (CapstoneProcessor& processorToUse);
-    ~CapstoneEditor() override = default;
+    /// Declared rather than defaulted: a look and feel must be detached from
+    /// every component using it *before* it is destroyed, and the editor itself
+    /// is one of them. JUCE asserts on a dangling one, and only in a debug
+    /// build -- a release plugin would just read freed memory.
+    ~CapstoneEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -147,6 +159,11 @@ private:
     ui::TooltipHost tooltips_ { *this };
 
     ui::Palette palette_;
+
+    /// The house look and feel. Declared after `palette_` so the initialiser
+    /// list can hand it one, and installed on the editor so every page
+    /// inherits it -- JUCE walks up the parent chain to find one.
+    ui::KnobLookAndFeel knobLook_ { palette_ };
     std::unique_ptr<ui::HeaderBar> header_;
 
     static constexpr int kNumPages = 3;

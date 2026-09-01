@@ -157,7 +157,8 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
         // defaults. A display whose whole job is to show what a control does
         // cannot be checked at one setting: the picture that matters is the
         // difference between two.
-        if (id.contains ("=") && ! id.startsWith ("audio:") && ! id.startsWith ("slider:"))
+        if (id.contains ("=") && ! id.startsWith ("audio:") && ! id.startsWith ("slider:")
+              && ! id.startsWith ("wheel:"))
         {
             const auto name = id.upToFirstOccurrenceOf ("=", false, false);
             const auto text = id.fromFirstOccurrenceOf ("=", false, false);
@@ -540,9 +541,58 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
         // audio thread and the key lighting up all happen between the press and
         // the release. Anything else with press-and-hold behaviour gets the
         // same handle for free.
-        if (id.startsWith ("press:") || id.startsWith ("release:"))
+        // "wheel:id@x,y=delta" turns the wheel over a component, and
+        // "...=delta+shift" holds shift while doing it.
+        //
+        // The wheel is a gesture with no other way in: a control that zooms on
+        // it is otherwise only testable by looking at a screenshot and
+        // believing it. `MouseWheelDetails` is a plain struct, so this is
+        // exactly what the platform hands JUCE.
+        if (id.startsWith ("wheel:"))
+        {
+            const auto spec = id.fromFirstOccurrenceOf ("wheel:", false, false);
+            const auto target = spec.upToFirstOccurrenceOf ("@", false, false);
+            const auto rest = spec.fromFirstOccurrenceOf ("@", false, false);
+            const auto where = rest.upToFirstOccurrenceOf ("=", false, false);
+            const auto amount = rest.fromFirstOccurrenceOf ("=", false, false);
+
+            const float x = where.upToFirstOccurrenceOf (",", false, false).getFloatValue();
+            const float y = where.fromFirstOccurrenceOf (",", false, false).getFloatValue();
+
+            const bool shift = amount.contains ("+shift");
+            const float delta = amount.upToFirstOccurrenceOf ("+", false, false).getFloatValue();
+
+            if (auto* found = findById (*editor, target))
+            {
+                juce::MouseWheelDetails wheel {};
+                wheel.deltaY = delta;
+                wheel.isSmooth = false;
+                wheel.isReversed = false;
+
+                const auto held = shift ? juce::ModifierKeys::shiftModifier
+                                        : juce::ModifierKeys::noModifiers;
+
+                juce::ModifierKeys::currentModifiers = juce::ModifierKeys (held);
+                found->mouseWheelMove (eventAt (*found, x, y), wheel);
+                juce::ModifierKeys::currentModifiers = juce::ModifierKeys::noModifiers;
+
+                std::printf ("  wheeled %s by %.3f%s at (%.0f, %.0f)\n", target.toRawUTF8(),
+                             delta, shift ? " with shift" : "", x, y);
+            }
+            else
+            {
+                std::fprintf (stderr, "  no component with id %s\n", target.toRawUTF8());
+                ++failures;
+            }
+
+            continue;
+        }
+
+        if (id.startsWith ("press:") || id.startsWith ("release:")
+              || id.startsWith ("dclick:"))
         {
             const bool down = id.startsWith ("press:");
+            const bool doubled = id.startsWith ("dclick:");
             const auto spec = id.fromFirstOccurrenceOf (":", false, false);
             const auto target = spec.upToFirstOccurrenceOf ("@", false, false);
             const auto where = spec.fromFirstOccurrenceOf ("@", false, false);
@@ -553,12 +603,15 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             {
                 const auto event = eventAt (*found, x, y);
 
-                if (down)
+                if (doubled)
+                    found->mouseDoubleClick (event);
+                else if (down)
                     found->mouseDown (event);
                 else
                     found->mouseUp (event);
 
-                std::printf ("  %s %s at (%.0f, %.0f)\n", down ? "pressed" : "released",
+                std::printf ("  %s %s at (%.0f, %.0f)\n",
+                             doubled ? "double-clicked" : (down ? "pressed" : "released"),
                              target.toRawUTF8(), x, y);
             }
             else
@@ -710,6 +763,7 @@ int main (int argc, char** argv)
                      "       tezla-render params\n"
                      "       tezla-render editor [componentId | id@x,y | press:id@x,y\n"
                      "                            | release:id@x,y | hit:id | shot:out.png\n"
+                     "                            | wheel:id@x,y=delta[+shift] | dclick:id@x,y\n"
                      "                            | audio:secs[@gain] | tick:n | size:WxH\n"
                      "                            | dump | dump:paramId | slider:id=value\n"
                      "                            | roundtrip\n"

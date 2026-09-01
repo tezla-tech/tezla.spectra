@@ -22,6 +22,20 @@ const juce::Colour kGlow        { 0xffd9b24a };
 const juce::Colour kGlowBright  { 0xfff2d888 };
 const juce::Colour kHarmonics   { 0xff54c7c0 };
 
+/// The house palette wearing Halo's colours. Built here rather than assembled
+/// twice: the editor's meters and header want it, and so does every control the
+/// pages build.
+[[nodiscard]] ui::Palette housePalette()
+{
+    ui::Palette palette;
+
+    palette.accent       = kGlow;
+    palette.accentBright = kGlowBright;
+    palette.secondary    = kHarmonics;
+
+    return palette;
+}
+
 constexpr int kLabelHeight = 16;
 constexpr int kValueHeight = 18;
 
@@ -47,6 +61,17 @@ constexpr int kMinWidth  = 760;
 constexpr int kMinHeight = 620;
 constexpr int kMaxWidth  = 1520;
 constexpr int kMaxHeight = 1240;
+/// The control this plugin is *about* -- the amount of harmonics added is what this plugin is for.
+///
+/// Drawn larger than its neighbours so the eye lands on it first; see
+/// PanelDesign.hpp for why a size is the hierarchy cue that survives being
+/// glanced at.
+[[nodiscard]] ui::design::Emphasis emphasisOf (const juce::String& id) noexcept
+{
+    return id == ids::amount ? ui::design::Emphasis::lead
+                        : ui::design::Emphasis::normal;
+}
+
 } // namespace
 
 float HarmonicsMeter::positionFor (float db) noexcept
@@ -86,19 +111,17 @@ void ControlPage::addKnob (const char* parameterId, const juce::String& name, co
     auto knob = std::make_unique<Knob>();
 
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 96, kValueHeight);
-    knob->slider.setColour (juce::Slider::rotarySliderFillColourId, kGlow);
-    knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId, kPanel.brighter (0.25f));
-    knob->slider.setColour (juce::Slider::thumbColourId, kGlowBright);
-    knob->slider.setColour (juce::Slider::textBoxTextColourId, kText);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    // What a house knob is lives in ui/HouseControls.hpp: relief, a machined
+    // skirt, a tinted track, the value font, and the wheel turned off so it
+    // scrolls the panel instead of editing.
+    ui::styleKnob (knob->slider, housePalette(), kGlow, emphasisOf (parameterId));
+    ui::resetsToDefault (knob->slider, state_, parameterId);
     knob->slider.setTooltip (tooltip);
     addAndMakeVisible (knob->slider);
 
     knob->label.setText (name, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.setColour (juce::Label::textColourId, kDimText);
-    knob->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (knob->label, housePalette(), kGlow);
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
@@ -122,16 +145,12 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name, 
     else
         jassertfalse;   // addChoice used on something that is not a choice parameter
 
-    choice->box.setColour (juce::ComboBox::backgroundColourId, kPanel.brighter (0.15f));
-    choice->box.setColour (juce::ComboBox::textColourId, kText);
-    choice->box.setColour (juce::ComboBox::outlineColourId, kPanel.brighter (0.3f));
+    ui::styleChoice (choice->box, housePalette(), kGlow);
     choice->box.setTooltip (tooltip);
     addAndMakeVisible (choice->box);
 
     choice->label.setText (name, juce::dontSendNotification);
-    choice->label.setJustificationType (juce::Justification::centred);
-    choice->label.setColour (juce::Label::textColourId, kDimText);
-    choice->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (choice->label, housePalette(), kGlow);
     choice->label.setTooltip (tooltip);
     addAndMakeVisible (choice->label);
 
@@ -145,11 +164,9 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name, 
 
 void ControlPage::addToggle (const char* parameterId, const juce::String& name, const juce::String& tooltip)
 {
-    auto toggle = std::make_unique<Toggle>();
+    auto toggle = std::make_unique<Toggle> (name);
 
-    toggle->button.setButtonText (name);
-    toggle->button.setColour (juce::ToggleButton::textColourId, kText);
-    toggle->button.setColour (juce::ToggleButton::tickColourId, kGlow);
+    toggle->button.setClickingTogglesState (true);
     toggle->button.setTooltip (tooltip);
     addAndMakeVisible (toggle->button);
 
@@ -270,7 +287,10 @@ void ControlPage::resized()
             {
                 auto& knob = *knobs_[static_cast<std::size_t> (cells_[i].index)];
                 knob.label.setBounds (cell.removeFromTop (kLabelHeight));
-                knob.slider.setBounds (cell.reduced (4, 0));
+                // **Emphasis is a size.** The cell keeps its footprint -- the
+                // grid is a grid -- and only the control inside it moves.
+                knob.slider.setBounds (ui::emphasised (cell.reduced (4, 0),
+                                                       emphasisOf (knob.id)));
 
                 // Exactly over the knob, so the ring can ask the LookAndFeel
                 // where the rotary is in the same coordinates the slider does.
@@ -289,9 +309,17 @@ void ControlPage::resized()
             }
             case Cell::Kind::toggle:
             {
+                // `sized` adds the glow margin: the button is larger than the
+                // switch drawn in it so the lit halo is not clipped away. JUCE
+                // throws away anything painted past a component's own bounds,
+                // silently.
                 auto& toggle = *toggles_[static_cast<std::size_t> (cells_[i].index)];
-                toggle.button.setBounds (cell.withSizeKeepingCentre (
-                    juce::jmin (cell.getWidth() - 8, 130), 26));
+
+                const int width = juce::jlimit (54, 120,
+                    cell.getWidth() - 8 - 2 * ui::LampButton::kGlowMargin);
+
+                toggle.button.setBounds (
+                    ui::LampButton::sized (width, 34).withCentre (cell.getCentre()));
                 break;
             }
             case Cell::Kind::gap:
@@ -309,9 +337,12 @@ HaloEditor::HaloEditor (HaloProcessor& processorToUse)
     // Halo's own accent, over the house dark panel. Bypass keeps the shared
     // warning orange whatever the accent is, so its state reads the same in
     // every plugin.
-    palette_.accent       = kGlow;
-    palette_.accentBright = kGlowBright;
-    palette_.secondary    = kHarmonics;
+    palette_ = housePalette();
+
+    // The house look and feel, installed on the editor so every page inherits
+    // it: JUCE walks up the parent chain to find one.
+    knobLook_ = std::make_unique<ui::KnobLookAndFeel> (palette_);
+    setLookAndFeel (knobLook_.get());
 
     header_ = std::make_unique<ui::HeaderBar> (halo_.getValueTreeState(), "HALO",
                                                "harmonic exciter", ids::bypass, palette_);
@@ -795,6 +826,11 @@ void HaloEditor::timerCallback()
 
         spectrum_->update (halo_.getInputCapture(), halo_.getOutputCapture());
     }
+}
+
+HaloEditor::~HaloEditor()
+{
+    setLookAndFeel (nullptr);
 }
 
 void HaloEditor::paint (juce::Graphics& g)

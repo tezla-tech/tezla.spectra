@@ -42,6 +42,32 @@
 // on, a modulation row appearing when a slot is filled -- and one forgotten
 // call site in a plugin with sixty of them is a silent regression of exactly
 // the kind above. Call it as a net; do not rely on it as the rule.
+//
+// ---------------------------------------------------------------------------
+// The one exception: a graph is not a control
+// ---------------------------------------------------------------------------
+//
+// The rule above is about *editing*. A wheel that edits a parameter is a trap
+// because the parameter changed and nothing said so. A wheel that changes what
+// part of a graph you are looking at changes nothing at all -- no parameter
+// moves, no sound changes, and the graph in front of you visibly answers what
+// happened.
+//
+// So a display may take the wheel as a view gesture, and Sonitus's ADV envelope
+// graphs do: the wheel zooms the time axis, shift-wheel scrolls it, and a
+// double-click puts the whole envelope back. Sixteen points across 900 pixels
+// is 56 of them a leg, and a point's time, level and tension have no knobs --
+// that graph is the only way to reach them, so it has to be reachable.
+//
+// Two conditions on doing this anywhere else, and they are what keep it from
+// being a hole in the rule:
+//
+//  - **Nothing it does is a parameter change.** The moment a wheel gesture
+//    writes to the value tree it is the trap again, whatever it is drawn on.
+//  - **There is a way out, and the wheel is never dead.** A graph zoomed fully
+//    out passes the next notch to its parent, so the page scrolls -- a control
+//    that swallowed the event and did nothing with it would read as broken, and
+//    a graph with no way back to 1x would have swallowed its own exit.
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
