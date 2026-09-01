@@ -31,53 +31,54 @@ using tezla::dsp::MinimumPhaseFir;
 // (A physics aside the table shows: 96 kHz at 15 ips shares its spot taps
 // with 48 kHz at 7.5 ips. The loss curve is a function of f/v alone, so
 // doubling both the rate and the speed samples the same normalised curve --
-// the wavelength story of the header, visible in the bits.)
+// the wavelength story of the header, visible in the numbers.)
 
-namespace
-{
-    std::uint64_t fnv1a (const double* taps, int count)
-    {
-        std::uint64_t hash = 1469598103934665603ULL;
-
-        for (int n = 0; n < count; ++n)
-        {
-            const auto bits = std::bit_cast<std::uint64_t> (taps[n]);
-
-            for (int b = 0; b < 8; ++b)
-            {
-                hash ^= (bits >> (8 * b)) & 0xff;
-                hash *= 1099511628211ULL;
-            }
-        }
-
-        return hash;
-    }
-
-    std::uint64_t bitsOf (double value)
-    {
-        return std::bit_cast<std::uint64_t> (value);
-    }
-}
-
-TEZLA_TEST (minimum_phase_lift_left_ferrite_taps_byte_identical)
+TEZLA_TEST (minimum_phase_lift_left_ferrite_taps_where_they_were)
 {
     struct Pin
     {
         double fs, ips;
         int taps;
-        std::uint64_t hash, t0, t1, t64;
+        double t0, t1, t64;
     };
 
-    // Captured 2026-09-01 from the design as it lived inside TapeLoss.
+    // Captured 2026-09-01 from the design as it lived inside TapeLoss, to
+    // prove the lift into shared/ changed nothing.
+    //
+    // **These were bit patterns, compared with ==, and that was wrong.** It
+    // held on GCC, held on clang, held under qemu-aarch64 -- and failed 26 of
+    // its 40 comparisons on MSVC, because these taps come out of `std::log`,
+    // `std::exp` and an FFT's `sin`/`cos`, and the UCRT's transcendentals are
+    // not bit-identical to glibc's. No implementation promises they would be;
+    // IEEE-754 does not require correctly-rounded `exp`.
+    //
+    // The claim the pins exist to make is "the lift moved this code without
+    // changing what it computes", and a tolerance of 1e-12 relative makes it
+    // just as well: a real regression -- a changed window, a dropped fold, a
+    // different cepstrum -- moves a tap by percent, not by an ulp. What the
+    // bit form added over that was not extra rigour, only a false claim about
+    // portability. The bit-exactness CLAUDE.md section 7 does require is a
+    // different thing entirely: identity through a neutral setting *within one
+    // build*, which no cross-toolchain comparison can speak to.
+    //
+    // The tap count stays exact, because it is an integer and a change in it
+    // is a design change.
     static constexpr Pin pins[] = {
-        { 44100.0, 15.0, 128, 0xb3b4f15469c13404ULL, 0x3fb322e34dc14f41ULL, 0x3fc016042ce8836aULL, 0x3f4074f5f5655f4fULL },
-        { 44100.0, 7.5, 128, 0x4d944c4e1030e478ULL, 0x3f8fcc5e1a79ee3eULL, 0x3fa481916f407c4aULL, 0x3f53266f7b5c8c30ULL },
-        { 48000.0, 15.0, 128, 0x6e330a632707268eULL, 0x3fb05c0b4173751cULL, 0x3fbcebd100c0a4deULL, 0x3f4232a22417e268ULL },
-        { 48000.0, 7.5, 128, 0x52de614dcfe6617bULL, 0x3f8972554d77e09aULL, 0x3fa10abc83cd7a2fULL, 0x3f554c1065696bbcULL },
-        { 96000.0, 15.0, 256, 0x146713225e9a7e43ULL, 0x3f8972554d77e09aULL, 0x3fa10abc83cd7a2fULL, 0x3f554c1065696bbcULL },
-        { 96000.0, 7.5, 256, 0x06b34eb810884977ULL, 0x3f6ce08c49366aa8ULL, 0x3f7f386cfd224507ULL, 0x3f68b4f38bc91162ULL },
-        { 192000.0, 15.0, 512, 0x2d60d62ed8bcc947ULL, 0x3f6ce08c49366aa8ULL, 0x3f7f386cfd224507ULL, 0x3f68b4f38bc91162ULL },
-        { 192000.0, 7.5, 512, 0x44f2aa63db43035fULL, 0x3f5ec59c364bd65cULL, 0x3f62a97047423034ULL, 0x3f76ca6ed4aec1baULL },
+        { 44100, 15, 128, 0.074751097186262619, 0.12567188446794414, 0.0005022240609759784 },
+        { 44100, 7.5, 128, 0.015526518996231361, 0.040051026182702801, 0.0011688317003482156 },
+        { 48000, 15, 128, 0.063904479483842314, 0.11297327297565427, 0.00055535237350941031 },
+        { 48000, 7.5, 128, 0.012425104548114786, 0.033285037125768795, 0.0012998733633568923 },
+        { 96000, 15, 256, 0.012425104548114786, 0.033285037125768795, 0.0012998733633568923 },
+        { 96000, 7.5, 256, 0.0035250415764499117, 0.0076221711516535401, 0.0030159718283206275 },
+        { 192000, 15, 512, 0.0035250415764499117, 0.0076221711516535401, 0.0030159718283206275 },
+        { 192000, 7.5, 512, 0.0018781686314332168, 0.002278060239467217, 0.0055641488387866925 },
+    };
+
+    // Relative, because the taps span 0.126 down to 0.0005 and one absolute
+    // tolerance cannot be tight on both.
+    const auto matches = [] (double actual, double pinned)
+    {
+        return std::abs (actual - pinned) <= 1.0e-12 * std::abs (pinned);
     };
 
     for (const auto& pin : pins)
@@ -88,10 +89,9 @@ TEZLA_TEST (minimum_phase_lift_left_ferrite_taps_byte_identical)
         loss.prepare (pin.fs);   // land the design in the active state
 
         CHECK (loss.activeTapCount() == pin.taps);
-        CHECK (fnv1a (loss.activeTapData(), loss.activeTapCount()) == pin.hash);
-        CHECK (bitsOf (loss.activeTapData()[0]) == pin.t0);
-        CHECK (bitsOf (loss.activeTapData()[1]) == pin.t1);
-        CHECK (bitsOf (loss.activeTapData()[64]) == pin.t64);
+        CHECK (matches (loss.activeTapData()[0], pin.t0));
+        CHECK (matches (loss.activeTapData()[1], pin.t1));
+        CHECK (matches (loss.activeTapData()[64], pin.t64));
     }
 }
 

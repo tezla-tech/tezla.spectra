@@ -246,6 +246,40 @@ pressure × speed plane, the between-modes floor, phase 2's three tables
 (Bloom against velocity, the damping law as T60, the listening pair's width
 against its mono fold), and CPU.
 
+## The bow has two voices, and which one you get is not always predictable
+
+A real bowed string does not have one steady motion. It has Helmholtz motion —
+the clean, singing one — and above it the louder multi-slip regimes, and the
+bow pressure and speed decide which. That is the Schelleng diagram, it is a
+century-old observation about actual violins, and a model built from stick-slip
+friction inherits it rather than choosing to have it.
+
+Measured here, sustained RMS at bow speed 0.5:
+
+| bow pressure | 48 kHz | 96 kHz | 192 kHz | spread |
+|---|---|---|---|---|
+| 0.40–0.55 | 0.53 → 0.47 | 0.53 → 0.45 | 0.55 → 0.45 | ≤ 1.05 |
+| 0.65 | 0.42 | 1.02 | 0.99 | **2.41** |
+| 0.70 | 0.42 | 0.36 | 0.84 | **2.34** |
+
+Below about 0.6 the model is in Helmholtz motion and stays there: the level
+tracks the pressure smoothly and is the same at every sample rate to within a
+few percent. **Above it, a 0.3% change in pressure can flip the level by a
+factor of two**, and so can nothing more than a different compiler — the two
+regimes are genuinely both available and the arithmetic decides.
+
+This is not a defect being excused: it is bounded (the parameter-plane sweep
+holds, nothing runs away, output stays finite), it is physical, and a violinist
+would recognise it. But it means **high bow pressure is not a "more" control**,
+and if you automate through that region expect a step rather than a ramp. If
+you want predictable loudness, stay under 0.6 and use the object's level.
+
+It cost a CI round to learn: the rate-independence test was sited at pressure
+0.6, right on the edge, and passed on GCC for months by landing on the quiet
+side. MSVC landed on the loud side and failed it at 2.19×. The test now runs
+mid-plateau, and a second test asserts the bistability on purpose so it cannot
+be silently lost or silently rediscovered.
+
 ## What has not been verified
 
 This plugin has never been loaded into a DAW. It builds, it passes Steinberg's

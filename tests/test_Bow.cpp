@@ -288,12 +288,31 @@ TEZLA_TEST (the_bow_locks_to_the_objects_modes)
 TEZLA_TEST (the_bow_speaks_the_same_at_every_rate)
 {
     // Section 6 for a self-oscillator: the limit cycle's strength must not
-    // follow the host rate. Measured sustained RMS at 48/96/192 kHz sits
-    // within a few percent (the injection is momentum per second and the
-    // hair corners are in Hz); pinned at 10%.
-    const BowRun a = runBow (48000.0, 8, 110.0, 2.0, 0.29, 0.6, 0.5, 1.5);
-    const BowRun b = runBow (96000.0, 8, 110.0, 2.0, 0.29, 0.6, 0.5, 1.5);
-    const BowRun c = runBow (192000.0, 8, 110.0, 2.0, 0.29, 0.6, 0.5, 1.5);
+    // follow the host rate. The injection is momentum per second and the hair
+    // corners are in Hz, so it should not -- and in the Helmholtz regime it
+    // does not, within a few percent.
+    //
+    // **This ran at pressure 0.6 and passed here for months by luck.** MSVC
+    // failed it at 192 kHz with 1.033 against 0.4719, a factor of 2.19, and
+    // the diagnosis is not a rate dependence at all: the model is *bistable*
+    // near that pressure, and last-bit arithmetic decides which regime it
+    // settles in. Measured by sweeping pressure at all three rates:
+    //
+    //   p=0.40   48k 0.5295   96k 0.5304   192k 0.5451   spread x1.029
+    //   p=0.45   48k 0.5097   96k 0.5007   192k 0.4900   spread x1.040
+    //   p=0.55   48k 0.4722   96k 0.4504   192k 0.4483   spread x1.053
+    //   p=0.65   48k 0.4218   96k 1.0179   192k 0.9858   spread x2.413
+    //   p=0.70   48k 0.4186   96k 0.3603   192k 0.8441   spread x2.343
+    //
+    // and, at the old operating point, a 0.3% nudge in pressure flips the RMS
+    // between 0.43 and 1.14 *at every rate equally*. So the old site was a
+    // cliff edge, and the test was reporting which side of it GCC happened to
+    // land on. It now runs at 0.45, mid-plateau, where the claim it is making
+    // is the claim it can actually check. The bistability itself is asserted
+    // by the test below rather than quietly moved away from.
+    const BowRun a = runBow (48000.0, 8, 110.0, 2.0, 0.29, 0.45, 0.5, 1.5);
+    const BowRun b = runBow (96000.0, 8, 110.0, 2.0, 0.29, 0.45, 0.5, 1.5);
+    const BowRun c = runBow (192000.0, 8, 110.0, 2.0, 0.29, 0.45, 0.5, 1.5);
 
     std::printf ("        [bow rates] rms 48k %.4g, 96k %.4g, 192k %.4g\n",
                  a.rms, b.rms, c.rms);
@@ -302,6 +321,47 @@ TEZLA_TEST (the_bow_speaks_the_same_at_every_rate)
     CHECK (a.rms > 0.1);
     CHECK_NEAR (b.rms / a.rms, 1.0, 0.1);
     CHECK_NEAR (c.rms / a.rms, 1.0, 0.1);
+}
+
+TEZLA_TEST (the_bow_is_bistable_above_the_helmholtz_plateau_and_stays_bounded)
+{
+    // The property the test above used to trip over, asserted on purpose so
+    // that nobody "fixes" it by accident and nobody is surprised by it.
+    //
+    // A real bowed string has more than one steady motion -- Helmholtz, and
+    // the louder multi-slip regimes above it -- and which one it falls into
+    // depends on bow pressure and speed. That is the Schelleng diagram, it is
+    // physics rather than a numerical artefact, and a model built from
+    // stick-slip friction inherits it. What is NOT allowed is for it to be
+    // unbounded, and that is what this checks: the level may jump by a factor
+    // of two on a small nudge, but it stays finite and stays bounded.
+    //
+    // Pinned from the sweep above: p >= 0.65 spans both regimes, so the ratio
+    // across rates there is ~2.4 rather than ~1.0.
+    double lowest = 1e9;
+    double highest = 0.0;
+
+    for (const double pressure : { 0.65, 0.70, 0.80 })
+    {
+        for (const double fs : { 48000.0, 96000.0, 192000.0 })
+        {
+            const BowRun r = runBow (fs, 8, 110.0, 2.0, 0.29, pressure, 0.5, 1.5);
+
+            CHECK (r.finite);
+            CHECK (r.rms > 0.05);       // it is always speaking, never dead
+            CHECK (r.peak < 8.0);       // and never running away
+
+            lowest = std::min (lowest, r.rms);
+            highest = std::max (highest, r.rms);
+        }
+    }
+
+    std::printf ("        [bow bistable] rms spans %.4g to %.4g (x%.2f)\n",
+                 lowest, highest, highest / lowest);
+
+    // The regimes are genuinely distinct -- if this ever reads ~1.0 the model
+    // has lost a behaviour a bowed string has, which is worth knowing about.
+    CHECK (highest / lowest > 1.5);
 }
 
 TEZLA_TEST (the_whole_bow_parameter_plane_stays_bounded)
