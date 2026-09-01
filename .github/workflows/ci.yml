@@ -506,21 +506,7 @@ jobs:
         shell: bash
         env:
           PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
-          RUN_TESTS: ${{ needs.plan.outputs.run_tests }}
         run: |
-          # A build with the tests skipped says so before anything else. It is
-          # not necessarily untested -- the usual reason is that they already
-          # passed on this exact commit and a runner was unavailable -- but the
-          # person downloading it is entitled to know which.
-          if [ "$RUN_TESTS" != "true" ]; then
-            {
-              echo "> **The DSP tests did not run in this build.** They were"
-              echo "> skipped deliberately; check the commit's own notes for"
-              echo "> where they last passed on this revision."
-              echo
-            } > release-notes.md
-          fi
-
           # A subset release says so first. `ALL` is the ordinary case and needs
           # no explanation; anything else is a release that does not contain
           # what the repository's plugin list would lead you to expect, and a
@@ -535,9 +521,9 @@ jobs:
               echo "full suite. Everything else in the repository is unchanged and"
               echo "simply was not compiled for this run."
               echo
-            } >> release-notes.md
+            } > release-notes.md
           else
-            touch release-notes.md
+            : > release-notes.md
           fi
 
           cat >> release-notes.md <<'NOTES'
