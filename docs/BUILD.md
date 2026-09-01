@@ -601,7 +601,17 @@ build\bin\Release\tezla-measure emberdrive --freq 1000 --out emberdrive.csv
 build\bin\Release\tezla-measure filter-response --freq 1000 --q 0.707 --out response.csv
 build\bin\Release\tezla-measure anvil
 build\bin\Release\tezla-measure sonitus
+build\bin\Release\tezla-measure sonitus-stress                  :: CPU worst case at off/x2/x4/x8
+build\bin\Release\tezla-measure sonitus-stress --os x8 --voices 16 --unison 7
 ```
+
+`sonitus-stress` is the one to run **on the rig**, with and without `-lto`, if
+you want to know what a build option does to Sonitus's CPU meter: it plays many
+voices in wide unison through a long release at each oversampling factor and
+prints milliseconds of CPU per second of audio, which divided by ten is the
+percentage of one core. Measured here on Linux the cost is exactly linear in
+the factor and LTO makes no useful difference; the rig's own number is the one
+that counts.
 
 `selftest` verifies the analysis chain itself before you trust any number it
 produces about a plugin.
