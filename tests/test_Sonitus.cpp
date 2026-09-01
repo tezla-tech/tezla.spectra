@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <numbers>
 #include <string>
 #include <vector>
@@ -26,6 +27,21 @@ using namespace tezla::dsp;
 
 namespace
 {
+/// A Sonitus engine is **414 kB** -- 32 voices, each with its oscillators,
+/// filters, envelopes and modulation. One on the stack is fine anywhere. Two
+/// is 0.79 MB, and MSVC gives a thread **1 MB** of stack by default against
+/// Linux's 8 MB, so a test holding two overflowed the stack and took the whole
+/// binary down with it: CI reported `tezla-dsp (SEGFAULT)` on Windows while
+/// the identical suite passed here for weeks. The frame is what changed, not
+/// the DSP -- the engine simply grew past half the budget.
+///
+/// So any test needing more than one engine takes them from the heap. `*ptr`
+/// bound to a reference keeps the rest of the test body reading unchanged.
+[[nodiscard]] auto heapEngine()
+{
+    return std::make_unique<Engine>();
+}
+
 struct Buffers
 {
     std::vector<double> left;
@@ -151,6 +167,27 @@ double amplitudeAt (const std::vector<double>& signal, double frequency, double 
 // ---------------------------------------------------------------------------
 // The things it must never do
 // ---------------------------------------------------------------------------
+
+TEZLA_TEST (one_engine_still_fits_in_a_windows_stack_frame)
+{
+    // Not a DSP claim -- a portability one, and the only test here that failed
+    // first on somebody else's machine. MSVC gives a thread **1 MB** of stack
+    // by default; Linux gives 8. This suite therefore ran green here for weeks
+    // while `tezla-dsp` died with SEGFAULT on the Windows runner, because four
+    // tests held two to four engines on the stack at once and an engine had
+    // quietly grown to 414 kB. Two is 0.79 MB before anything else in the
+    // frame; four is 1.6 MB and hopeless.
+    //
+    // Those four now take their engines from the heap (`heapEngine` above).
+    // This guards the assumption that survived: that ONE on the stack is still
+    // safe. Half the budget leaves room for the locals, the buffers and the
+    // frames above -- and if the engine grows past it the answer is to move
+    // the remaining single-engine tests to the heap too, not to raise the
+    // number, because the 1 MB is not ours to change.
+    //
+    // Break-check: 256 * 1024 fails at the measured 414096.
+    CHECK (sizeof (Engine) < 512u * 1024u);
+}
 
 TEZLA_TEST (an_instrument_with_no_note_is_exactly_silent)
 {
@@ -1399,14 +1436,16 @@ TEZLA_TEST (the_overtone_controls_are_neutral_by_default)
     released.formantLock = 1.0;
     released.formantHarmonic = 9.0;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.prepare (rate, 256);
     engine.setParameters (released);
 
     Buffers buffers (256);
     engine.process (buffers.pointers, 256);
 
-    Engine reference;
+    const auto referencePtr = heapEngine();
+    auto& reference = *referencePtr;
     reference.prepare (rate, 256);
     reference.setParameters (parameters);
     reference.process (buffers.pointers, 256);
@@ -2046,7 +2085,8 @@ TEZLA_TEST (kargyraa_at_zero_is_bit_exact)
     auto parameters = brutal();
     parameters.voice.kargyraaDepth = 0.0;
 
-    Engine reference;
+    const auto referencePtr = heapEngine();
+    auto& reference = *referencePtr;
     reference.prepare (rate, 128);
     const auto without = play (reference, parameters, 40, samples, 128);
 
@@ -2056,7 +2096,8 @@ TEZLA_TEST (kargyraa_at_zero_is_bit_exact)
     parameters.voice.kargyraaRasp = 1.0;
     parameters.voice.kargyraaDivisor = 4;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.prepare (rate, 128);
     const auto with = play (engine, parameters, 40, samples, 128);
 
@@ -2249,12 +2290,14 @@ TEZLA_TEST (split_off_is_the_pure_path_a_dc_blocker_and_nothing_else)
     constexpr int kBlock = 256;
     constexpr int kBlocks = 200;
 
-    Engine off;
+    const auto offPtr = heapEngine();
+    auto& off = *offPtr;
     off.setParameters (pure);
     off.prepare (48000.0, kBlock);
     off.noteOn (31, 0.9);
 
-    Engine on;
+    const auto onPtr = heapEngine();
+    auto& on = *onPtr;
     on.setParameters (withSplit);
     on.prepare (48000.0, kBlock);
     on.noteOn (31, 0.9);
@@ -2279,14 +2322,16 @@ TEZLA_TEST (split_off_is_the_pure_path_a_dc_blocker_and_nothing_else)
     wide.voice.detuneA = 30.0;
     wide.voice.spreadA = 1.0;
 
-    Engine wideOff;
+    const auto wideOffPtr = heapEngine();
+    auto& wideOff = *wideOffPtr;
     wideOff.setParameters (wide);
     wideOff.prepare (48000.0, kBlock);
     wideOff.noteOn (24, 0.9);   // 32.7 Hz, far below the 120 Hz split
 
     wide.subSplit = true;
 
-    Engine wideOn;
+    const auto wideOnPtr = heapEngine();
+    auto& wideOn = *wideOnPtr;
     wideOn.setParameters (wide);
     wideOn.prepare (48000.0, kBlock);
     wideOn.noteOn (24, 0.9);
@@ -3025,8 +3070,10 @@ TEZLA_TEST (the_new_phase_four_paths_are_all_bit_exact_at_their_defaults)
 
     EngineParameters same = neutral;
 
-    Engine a;
-    Engine b;
+    const auto aPtr = heapEngine();
+    const auto bPtr = heapEngine();
+    auto& a = *aPtr;
+    auto& b = *bPtr;
 
     for (auto* engine : { &a, &b })
     {
