@@ -69,8 +69,34 @@ cmake -B build-arm -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
       -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
       -DCMAKE_EXE_LINKER_FLAGS=-static -DTEZLA_PLUGINS=NONE
 cmake --build build-arm
-qemu-aarch64 build-arm/bin/tezla-tests
+TEZLA_EMULATED=1 qemu-aarch64 build-arm/bin/tezla-tests
 ```
+
+### `TEZLA_EMULATED`, and why the budget tests need it
+
+**Set it whenever you run the suite under an emulator, and never otherwise.**
+A wall-clock CPU budget is a claim about real hardware; under emulation it
+measures the emulator. Measured on this tree, `qemu-aarch64` costs **8.8× to
+29.8×** native:
+
+| budget test | native x86-64 | under qemu-aarch64 |
+|---|---|---|
+| Ferrite, one stereo instance | 15.8% of a core | 139.4% |
+| lowpass gate | 0.24% | 4.31% |
+| Malleus, 16 bowed voices | 17.9% | 497.4% |
+| Malleus, dead engine | 0.36% | 9.30% |
+| 64-mode resonator | 0.37% | 11.02% |
+| Phonoss full strip | 1.33% | 20.59% |
+
+All six failed on the first emulated run of the grown suite, and not one was a
+defect. With the variable set, `CHECK_CPU_BUDGET` still runs the work — so a
+crash, a hang or a NaN is still caught — still prints the figure, and marks it
+`NOT ASSERTED`. Only the comparison is withheld, and it is withheld visibly.
+
+The binary cannot detect this for itself: a cross-built AArch64 binary is
+identical whether it runs under qemu or on an Apple Silicon Mac, and guessing
+from the architecture would be wrong in the one case that matters — **real ARM64
+hardware must assert**, so it sets nothing.
 
 ## 2. Plugin builds, downloadable
 

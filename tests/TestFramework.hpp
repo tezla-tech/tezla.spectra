@@ -38,7 +38,40 @@ int runAll (const std::string& filter = {});
 /// every problem rather than only the first.
 void reportFailure (const std::string& message, const char* file, int line);
 
+/// Whether a wall-clock CPU budget means anything on this run.
+///
+/// A budget is a claim about real hardware. Under an emulator it measures the
+/// emulator, and by a large factor: the same five budget tests were measured
+/// on this tree at 8.8x to 29.8x native under `qemu-aarch64` -- Ferrite 15.8%
+/// of a core became 139.4%, the 64-mode resonator 0.37% became 11.02%. Every
+/// one of them failed, and not one of them was a defect.
+///
+/// So the run is *told* it is emulated, by whoever launched it, through
+/// `TEZLA_EMULATED=1`. The binary cannot work this out for itself -- a
+/// cross-built AArch64 binary is identical whether it runs under qemu or on an
+/// Apple Silicon machine -- and guessing from the architecture would be wrong
+/// in exactly the case that matters, since real ARM64 hardware must assert.
+///
+/// **This is the instrument being declared invalid, not the requirement being
+/// dropped**, which is the distinction CLAUDE.md section 10 draws. The work
+/// still runs under emulation, so a crash, a hang or a NaN is still caught,
+/// and `checkCpuBudget` still prints the measurement. Only the comparison is
+/// withheld, and it says so in the output rather than passing quietly.
+[[nodiscard]] bool cpuBudgetsAreMeasurable();
+
+/// Assert `seconds < budget`, or -- on an emulated run -- report the figure
+/// and say plainly that it was not asserted. `what` names the budget in the
+/// output, e.g. "16 bowed voices".
+void checkCpuBudget (double seconds, double budget, const std::string& what,
+                     const char* file, int line);
+
 } // namespace tezla::test
+
+/// A CPU budget assertion. Use this rather than a bare CHECK on a duration:
+/// see cpuBudgetsAreMeasurable() for why a raw comparison is a defect report
+/// on an emulator and nothing else.
+#define CHECK_CPU_BUDGET(seconds, budget, what)                                 \
+    ::tezla::test::checkCpuBudget ((seconds), (budget), (what), __FILE__, __LINE__)
 
 #define TEZLA_CONCAT_INNER(a, b) a##b
 #define TEZLA_CONCAT(a, b) TEZLA_CONCAT_INNER(a, b)

@@ -710,8 +710,19 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
         -DCMAKE_EXE_LINKER_FLAGS=-static -DTEZLA_PLUGINS=NONE
-  cmake --build build-arm && qemu-aarch64 build-arm/bin/tezla-tests
+  cmake --build build-arm
+  TEZLA_EMULATED=1 qemu-aarch64 build-arm/bin/tezla-tests
   ```
+- **`TEZLA_EMULATED=1` belongs on every emulated run and on no other.** A
+  wall-clock CPU budget is a claim about real hardware; under an emulator it
+  measures the emulator, and by 8.8× to 29.8× here (Ferrite 15.8% of a core
+  reads 139.4%; the 64-mode resonator 0.37% reads 11.02%). All six budget
+  assertions failed the first time the grown suite ran under qemu and not one
+  was a defect. `CHECK_CPU_BUDGET` then still runs the work, still prints the
+  figure, and marks it `NOT ASSERTED` — the instrument is declared invalid, the
+  requirement is not dropped. The binary cannot detect this itself: the same
+  AArch64 binary runs under qemu and on an Apple Silicon Mac, and **real ARM64
+  hardware must assert**, so it sets nothing.
 - **A Linux build is a cheap dress rehearsal for the Windows one.** The plugin
   target builds and validates on Linux with the X11/ALSA dev packages listed in
   `docs/BUILD.md`, which catches wrapper mistakes long before they reach the

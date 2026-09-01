@@ -601,5 +601,5 @@ TEZLA_TEST (the_strip_costs_little_enough_to_go_on_every_take)
     // quiet machine. What it rules out is the regression that matters: a filter
     // redesign or an allocation creeping into the per-sample path, either of
     // which costs orders of magnitude rather than percent.
-    CHECK (seconds < 0.15);
+    CHECK_CPU_BUDGET (seconds, 0.15, "phonoss full strip, stereo");
 }

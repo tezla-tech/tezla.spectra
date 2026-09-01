@@ -245,10 +245,21 @@ jobs:
       - name: Build
         run: cmake --build build-arm64 --parallel
 
+      # TEZLA_EMULATED tells the suite that wall-clock CPU budgets cannot be
+      # trusted on this run. Measured on this tree, qemu-aarch64 costs 8.8x to
+      # 29.8x native -- Ferrite's 15.8% of a core reads 139.4%, the 64-mode
+      # resonator's 0.37% reads 11.02% -- so all five budget tests failed here
+      # and not one of them was a defect. The work still runs and the figures
+      # are still printed and labelled NOT ASSERTED; only the comparison is
+      # withheld. A real Apple Silicon machine sets nothing and asserts.
       - name: Run the suite under emulation
+        env:
+          TEZLA_EMULATED: '1'
         run: qemu-aarch64 build-arm64/bin/tezla-tests
 
       - name: Verify the measurement harness
+        env:
+          TEZLA_EMULATED: '1'
         run: qemu-aarch64 build-arm64/bin/tezla-measure selftest
 
   # ---------------------------------------------------------------------------

@@ -382,7 +382,7 @@ TEZLA_TEST (sixty_four_modes_cost_what_the_plan_budgeted)
     std::printf ("        [modal cpu] 64 modes: %.2f%% of one core (sink %g)\n",
                  100.0 * seconds, sink);
 
-    CHECK (seconds < 0.05);   // 5% of a core for one full-fat voice
+    CHECK_CPU_BUDGET (seconds, 0.05, "64 modes");   // 5% of a core, one full-fat voice
 }
 
 // ---------------------------------------------------------------------------

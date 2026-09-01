@@ -691,5 +691,5 @@ TEZLA_TEST (one_stereo_instance_is_affordable)
     std::printf ("        [ferrite cpu] %.1f%% of one core per stereo instance\n",
                  100.0 * perSecond);
 
-    CHECK (perSecond < 0.5);
+    CHECK_CPU_BUDGET (perSecond, 0.5, "ferrite, one stereo instance");
 }

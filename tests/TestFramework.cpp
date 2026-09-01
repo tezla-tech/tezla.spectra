@@ -8,6 +8,7 @@
 #include "TestFramework.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,42 @@ void reportFailure (const std::string& message, const char* file, int line)
 {
     ++failuresInCurrentTest;
     std::printf ("      %s:%d\n        %s\n", file, line, message.c_str());
+}
+
+bool cpuBudgetsAreMeasurable()
+{
+    // Read once. The environment cannot change under us mid-run, and a budget
+    // test that answered differently in two places would be worse than either
+    // answer -- see the header for why the caller is the one who knows.
+    static const bool measurable = [] {
+        const char* flag = std::getenv ("TEZLA_EMULATED");
+        return flag == nullptr || flag[0] == '\0' || std::string (flag) == "0";
+    }();
+
+    return measurable;
+}
+
+void checkCpuBudget (double seconds, double budget, const std::string& what,
+                     const char* file, int line)
+{
+    if (! cpuBudgetsAreMeasurable())
+    {
+        // Loud on purpose. A budget silently not checked is a budget nobody
+        // knows is unchecked, which is the failure mode this whole mechanism
+        // exists to avoid -- the number is still here to read.
+        std::printf ("        [%s] %.4f s against a %.4f s budget"
+                     " -- NOT ASSERTED, emulated run (TEZLA_EMULATED)\n",
+                     what.c_str(), seconds, budget);
+        return;
+    }
+
+    if (seconds < budget)
+        return;
+
+    reportFailure ("CPU budget exceeded: " + what + " took "
+                       + std::to_string (seconds) + " s against a budget of "
+                       + std::to_string (budget) + " s",
+                   file, line);
 }
 
 int runAll (const std::string& filter)
