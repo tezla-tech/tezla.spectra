@@ -159,7 +159,7 @@ Windows and macOS build the actual plugins and upload them as run artifacts:
 | Platform | Formats | Architecture |
 |---|---|---|
 | Windows | VST3 | x86-64 |
-| macOS | VST3 + Audio Unit | universal (arm64 + x86_64) |
+| macOS | VST3 + Audio Unit | arm64 by default in CI (`mac_arch` input); universal on request, and always for a local build |
 
 **Only Windows, unless you ask for more.** The "platforms" box on the Run
 workflow form takes `windows` (the default) or `all`; a tag push covers Windows.
@@ -298,13 +298,21 @@ compiled on a Mac. It is simply about four times the work on three quarters of
 the cores: two architectures times two plugin formats.
 
 A twelve-plugin universal macOS build therefore **does not reliably fit in a
-GitHub-hosted job.** The options, each costing something real, none to be
-chosen without asking:
+GitHub-hosted job.** The options, each costing something real:
 
 - **arm64 only** — roughly halves the compile, loses Intel Mac support;
 - **the `plugins` input** — a few plugins per run, no single whole-suite zip;
 - **split the matrix** per format or per architecture — more jobs, and the
   release layout changes.
+
+**The user chose the first, on 2026-09-01, as the CI default.** The `mac_arch`
+input (`arm64` | `universal`) drives `CMAKE_OSX_ARCHITECTURES` on the macOS
+leg, and the architecture is baked into the artefact name —
+`macos-arm64-vst3-au` or `macos-universal-vst3-au` — so the zip says what it
+is and the release notes read the name back rather than guess. What changed is
+the *CI default*, not the target: a local build is still universal unless
+`-DTEZLA_UNIVERSAL_BINARY=OFF` is passed, because a local build has no six-hour
+limit. Intel Mac users of a CI release self-compile for now; the notes say so.
 
 A Windows-only release says which of these two situations it is in: the notes
 distinguish "macOS was never asked for" from "macOS was asked for and did not

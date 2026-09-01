@@ -68,6 +68,12 @@ on:
         required: false
         default: false
         type: boolean
+      mac_arch:
+        description: 'macOS architectures. arm64 = Apple Silicon only, fits in a CI job. universal adds Intel and, for the whole suite, does not (6h04m measured, 6h cap).'
+        required: false
+        default: arm64
+        type: choice
+        options: [arm64, universal]
 
 # Named so a dispatched run says what it is doing in the runs list, rather than
 # repeating the commit subject of whatever happened to be at the top.
@@ -106,6 +112,8 @@ jobs:
       arm64: ${{ steps.decide.outputs.arm64 }}
       selection: ${{ steps.decide.outputs.selection }}
       run_tests: ${{ steps.decide.outputs.run_tests }}
+      mac_arch: ${{ steps.decide.outputs.mac_arch }}
+      osx_archs: ${{ steps.decide.outputs.osx_archs }}
     steps:
       - id: decide
         shell: bash
@@ -119,10 +127,26 @@ jobs:
           INPUT_PLATFORMS: ${{ inputs.platforms }}
           INPUT_PLUGINS: ${{ inputs.plugins }}
           INPUT_SKIP_TESTS: ${{ inputs.skip_tests }}
+          INPUT_MAC_ARCH: ${{ inputs.mac_arch }}
         run: |
           # Empty on a tag push, because a tag carries no inputs. Windows is
           # the default there for the same reason it is the default here.
           platforms="${INPUT_PLATFORMS:-windows}"
+
+          # macOS architectures, arm64 by default. The reason is measured, not
+          # assumed: a universal build of the whole suite ran 6h04m on run 51
+          # and GitHub kills a hosted job at six hours (see the Build step).
+          # Universal stays available here for a subset run, and stays the
+          # default for a LOCAL build, which has no such limit -- that is
+          # TEZLA_UNIVERSAL_BINARY in the root CMakeLists.txt. What changed is
+          # the CI default, not the target. Validated like `plugins` above:
+          # this reaches a -D flag.
+          mac_arch="${INPUT_MAC_ARCH:-arm64}"
+          case "$mac_arch" in
+            arm64)     osx_archs="arm64" ;;
+            universal) osx_archs="arm64;x86_64" ;;
+            *) echo "::error::mac_arch must be arm64 or universal, not '$mac_arch'."; exit 1 ;;
+          esac
 
           # Which plugins the build job compiles. ALL on a tag push, for the
           # same reason. Validated rather than trusted: this string reaches a
@@ -170,7 +194,11 @@ jobs:
           # duration note below.
           if [ "$platforms" = "all" ]; then
             tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-14","name":"macOS"}]'
-            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-14","name":"macOS","artifact":"macos-vst3-au"}]'
+            # The architecture is baked into the artefact name, so the zip on
+            # the release page says what it is and the release notes can read
+            # it back rather than guess: macos-arm64-vst3-au or
+            # macos-universal-vst3-au. $mac_arch was validated above.
+            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-14","name":"macOS","artifact":"macos-'"$mac_arch"'-vst3-au"}]'
             arm64=true
           else
             # Linux stays even on a Windows run: it is 47 seconds, it is the
@@ -187,6 +215,8 @@ jobs:
           echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
           echo "run_tests=$run_tests" >> "$GITHUB_OUTPUT"
+          echo "mac_arch=$mac_arch" >> "$GITHUB_OUTPUT"
+          echo "osx_archs=$osx_archs" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Covering: $platforms"
@@ -194,6 +224,7 @@ jobs:
             echo "- Plugins built: \`$selection\`"
             echo "- DSP tests: $(echo "$tests" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ') (always the whole tree)"
             echo "- ARM64 (emulated): $arm64"
+            [ "$platforms" = "all" ] && echo "- macOS architectures: $mac_arch (\`$osx_archs\`)"
             echo "- Plugin builds on: $(echo "$plugins" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
             if [ "$platforms" != "all" ]; then
               echo
@@ -299,7 +330,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # The plugins themselves. Windows gets VST3; macOS gets VST3 and Audio Unit,
-  # universal for Apple Silicon and Intel.
+  # for Apple Silicon only by default and universal on request (`mac_arch`).
   # ---------------------------------------------------------------------------
   build:
     name: Plugins (${{ matrix.name }})
@@ -408,13 +439,28 @@ jobs:
         shell: bash
         env:
           PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
+          OSX_ARCHS: ${{ needs.plan.outputs.osx_archs }}
+          MATRIX_NAME: ${{ matrix.name }}
         run: |
+          # The macOS leg gets its architectures from the `mac_arch` input,
+          # arm64 by default (see the plan job). Passed on the command line
+          # because the root CMakeLists.txt only applies its own universal
+          # default when CMAKE_OSX_ARCHITECTURES is not already defined -- and
+          # because it is read before project(), it has to arrive this way
+          # rather than be set anywhere later. An array, so the semicolon in
+          # "arm64;x86_64" survives intact.
+          extra=()
+          if [ "$MATRIX_NAME" = "macOS" ]; then
+            extra+=("-DCMAKE_OSX_ARCHITECTURES=$OSX_ARCHS")
+            echo "macOS architectures: $OSX_ARCHS"
+          fi
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DTEZLA_PLUGINS="$PLUGIN_SELECTION" \
                 -DTEZLA_JUCE_PATH="${{ github.workspace }}/JUCE" \
                 -DTEZLA_BUILD_TESTS=OFF \
-                -DTEZLA_BUILD_TOOLS=OFF
+                -DTEZLA_BUILD_TOOLS=OFF \
+                "${extra[@]}"
 
       # **A twelve-plugin universal macOS build does not fit in six hours.**
       # Measured on run 51, both legs from the same commit, same JUCE cache:
@@ -484,7 +530,7 @@ jobs:
             echo "Download from the **Artifacts** section at the bottom of this run."
             echo
             if [ "${{ runner.os }}" = "macOS" ]; then
-              echo "macOS builds are universal and unsigned. Clear the quarantine"
+              echo "macOS builds are unsigned. Clear the quarantine"
               echo "attribute before your DAW will load them:"
               echo
               echo '```bash'
@@ -680,10 +726,24 @@ jobs:
           Windows builds are VST3, 64-bit only.
           NOTES
 
+          # Which architectures the Mac zip holds is read off its NAME, which the
+          # plan job derived from the `mac_arch` input -- so the notes describe
+          # the file that is actually attached, never the intention.
           if ls release/*-macos-*.zip >/dev/null 2>&1; then
+          if ls release/*-macos-universal-*.zip >/dev/null 2>&1; then
           cat >> release-notes.md <<'NOTES'
           macOS builds are universal (Apple Silicon and Intel) and include both
           VST3 and Audio Unit — Logic and GarageBand load nothing but AU.
+          NOTES
+          else
+          cat >> release-notes.md <<'NOTES'
+          macOS builds are **Apple Silicon only** (arm64) — they will not load
+          on an Intel Mac. Both VST3 and Audio Unit are included; Logic and
+          GarageBand load nothing but AU. An Intel or universal build can be
+          made locally in a few minutes: see the macOS build guide below.
+          NOTES
+          fi
+          cat >> release-notes.md <<'NOTES'
 
           Full instructions: [docs/BUILD.md](docs/BUILD.md) and
           [docs/BUILD-MACOS.md](docs/BUILD-MACOS.md).
