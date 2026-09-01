@@ -429,7 +429,7 @@ CLAUDE.md.
 |---|---|
 | MB0 plan + registry + references | done |
 | MB1 MicPattern + SphereDiffraction | done |
-| MB2 MinimumPhaseFir lift + CapsuleEq | pending |
+| MB2 MinimumPhaseFir lift + CapsuleEq | done |
 | MB3 PresenceTracker | pending |
 | MB4 DetailLift | pending |
 | MB5 MembranaEngine | pending |
