@@ -59,6 +59,7 @@
 // returns the input verbatim, never x + 0 * HP(x): the -0.0 trap.
 
 #include <cmath>
+#include <cstddef>
 
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
@@ -69,6 +70,7 @@ namespace tezla::membrana {
 class PresenceTracker
 {
 public:
+    static constexpr int kChannels = 2;
     static constexpr double kKneeDb = 12.0;
     static constexpr double kAttackSeconds = 0.120;    // lift falling
     static constexpr double kReleaseSeconds = 0.400;   // lift rising
@@ -82,16 +84,21 @@ public:
         sampleRate_ = sampleRate;
         attackAlpha_ = std::exp (-1.0 / (kAttackSeconds * sampleRate));
         releaseAlpha_ = std::exp (-1.0 / (kReleaseSeconds * sampleRate));
-        shelf_.prepare (sampleRate);
-        shelf_.setMode (tezla::dsp::SvfMode::highpass);
-        shelf_.setCutoffHz (frequencyHz_);
+        for (auto& shelf : shelf_)
+        {
+            shelf.prepare (sampleRate);
+            shelf.setMode (tezla::dsp::SvfMode::highpass);
+            shelf.setCutoffHz (frequencyHz_);
+        }
         gain_.prepare (sampleRate, kGainSmoothingSeconds);
         reset();
     }
 
     void reset() noexcept
     {
-        shelf_.reset();
+        for (auto& shelf : shelf_)
+            shelf.reset();
+
         liftSmoothedDb_ = 0.0;
         gain_.setCurrentAndTarget (0.0);
         gainCountdown_ = 1;
@@ -109,7 +116,9 @@ public:
             return;
 
         frequencyHz_ = hz;
-        shelf_.setCutoffHz (hz);
+
+        for (auto& shelf : shelf_)
+            shelf.setCutoffHz (hz);
     }
 
     /// The explicit threshold, dBFS. Levels at or above it get no ridden
@@ -128,17 +137,18 @@ public:
     /// activity lane and the curve tests.
     [[nodiscard]] double currentLiftDb() const noexcept { return liftSmoothedDb_; }
 
-    [[nodiscard]] double process (double x) noexcept
+    /// The shared control path: one decision for however many channels
+    /// listen (the Phonoss linking pattern -- an unlinked gain ride would
+    /// pull the centre image sideways, CLAUDE.md section 7). Feed it the
+    /// LINKED magnitude -- max of the channels -- and apply the returned
+    /// gain to every channel.
+    [[nodiscard]] double computeGain (double linkedMagnitude) noexcept
     {
-        if (isNeutral())
-            return x;   // verbatim: the -0.0 trap forbids x + 0 * HP(x)
-
         // Instantaneous level in dB, floored so silence cannot produce
         // -inf. The smoother after the curve does the averaging a detector
         // would otherwise do -- that placement is the paper's point.
-        const double magnitude = std::abs (x);
-        const double levelDb = magnitude > kSilenceFloorLinear
-                                   ? 20.0 * std::log10 (magnitude)
+        const double levelDb = linkedMagnitude > kSilenceFloorLinear
+                                   ? 20.0 * std::log10 (linkedMagnitude)
                                    : kSilenceFloorDb;
 
         // Static curve.
@@ -159,7 +169,21 @@ public:
             gain_.setTarget (std::pow (10.0, liftSmoothedDb_ / 20.0) - 1.0);
         }
 
-        return x + gain_.next() * shelf_.process (x);
+        return gain_.next();
+    }
+
+    /// One channel's shelf, driven by the shared gain.
+    [[nodiscard]] double applyTo (int channel, double x, double gain) noexcept
+    {
+        return x + gain * shelf_[static_cast<std::size_t> (channel)].process (x);
+    }
+
+    [[nodiscard]] double process (double x) noexcept
+    {
+        if (isNeutral())
+            return x;   // verbatim: the -0.0 trap forbids x + 0 * HP(x)
+
+        return applyTo (0, x, computeGain (std::abs (x)));
     }
 
     void processBlock (double* samples, int count) noexcept
@@ -181,7 +205,7 @@ private:
     double liftSmoothedDb_ { 0.0 };
     int gainCountdown_ { 1 };
 
-    tezla::dsp::SvfFilter shelf_;
+    tezla::dsp::SvfFilter shelf_[kChannels];
     tezla::dsp::SmoothedValue<double> gain_;
 };
 

@@ -71,6 +71,7 @@
 // the suite already pays.
 
 #include <cmath>
+#include <cstddef>
 
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Exact.hpp>
@@ -80,6 +81,7 @@ namespace tezla::membrana {
 class DetailLift
 {
 public:
+    static constexpr int kChannels = 2;
     static constexpr double kWindowDb = 20.0;      // T_d = floor + this
     static constexpr double kKneeDb = 15.0;
     static constexpr double kFloorEaseDb = 6.0;
@@ -101,9 +103,13 @@ public:
 
     void reset() noexcept
     {
-        lpState_ = 0.0;
-        sidechain1_.reset();
-        sidechain2_.reset();
+        for (int c = 0; c < kChannels; ++c)
+        {
+            lpState_[c] = 0.0;
+            sidechain1_[c].reset();
+            sidechain2_[c].reset();
+        }
+
         detectorMean_ = 0.0;
         liftSmoothedDb_ = 0.0;
         gain_ = 0.0;
@@ -152,18 +158,20 @@ public:
     /// The smoothed lift currently applied, for the activity lane.
     [[nodiscard]] double currentLiftDb() const noexcept { return liftSmoothedDb_; }
 
-    [[nodiscard]] double process (double x) noexcept
+    /// One channel's steep sidechain view of the input -- the linked level
+    /// is the max of these across channels.
+    [[nodiscard]] double detectorMagnitude (int channel, double x) noexcept
     {
-        if (isNeutral())
-            return x;   // verbatim: never x + 0 * h
+        const auto c = static_cast<std::size_t> (channel);
+        return std::abs (sidechain2_[c].process (sidechain1_[c].process (x)));
+    }
 
-        // The audio split: exactly complementary, x == lp + h always.
-        lpState_ += lpCoeff_ * (x - lpState_);
-        const double h = x - lpState_;
-
-        // The detector's steeper view: a vowel alone must read as nothing.
-        const double detected = sidechain2_.process (sidechain1_.process (x));
-        detectorMean_ += meanCoeff_ * (std::abs (detected) - detectorMean_);
+    /// The shared control path (the Phonoss linking pattern): 5 ms mean,
+    /// the curve, the branching smoother, the gain. One decision for all
+    /// channels, so the ride cannot pull the image sideways.
+    [[nodiscard]] double computeGain (double linkedDetectorMagnitude) noexcept
+    {
+        detectorMean_ += meanCoeff_ * (linkedDetectorMagnitude - detectorMean_);
         const double levelDb = detectorMean_ > kSilenceFloorLinear
                                    ? 20.0 * std::log10 (detectorMean_)
                                    : kSilenceFloorDb;
@@ -174,8 +182,25 @@ public:
         liftSmoothedDb_ += (1.0 - alpha) * (liftDb - liftSmoothedDb_);
 
         gain_ = std::pow (10.0, liftSmoothedDb_ / 20.0) - 1.0;
+        return gain_;
+    }
 
-        return x + gain_ * h;
+    /// One channel's complementary split and recombination with the shared
+    /// gain.
+    [[nodiscard]] double applyTo (int channel, double x, double gain) noexcept
+    {
+        const auto c = static_cast<std::size_t> (channel);
+        lpState_[c] += lpCoeff_ * (x - lpState_[c]);
+        return x + gain * (x - lpState_[c]);
+    }
+
+    [[nodiscard]] double process (double x) noexcept
+    {
+        if (isNeutral())
+            return x;   // verbatim: never x + 0 * h
+
+        const double gain = computeGain (detectorMagnitude (0, x));
+        return applyTo (0, x, gain);
     }
 
     void processBlock (double* samples, int count) noexcept
@@ -191,10 +216,16 @@ private:
         lpCoeff_ = 1.0 - std::exp (-2.0 * 3.141592653589793 * splitHz_ / sampleRate_);
 
         // 4th-order Butterworth highpass: Q pair 0.5412, 1.3066.
-        sidechain1_.setCoefficients (tezla::dsp::design::highpass (
-            splitHz_, 0.5411961001461969, sampleRate_));
-        sidechain2_.setCoefficients (tezla::dsp::design::highpass (
-            splitHz_, 1.3065629648763766, sampleRate_));
+        const auto stage1 = tezla::dsp::design::highpass (
+            splitHz_, 0.5411961001461969, sampleRate_);
+        const auto stage2 = tezla::dsp::design::highpass (
+            splitHz_, 1.3065629648763766, sampleRate_);
+
+        for (int c = 0; c < kChannels; ++c)
+        {
+            sidechain1_[c].setCoefficients (stage1);
+            sidechain2_[c].setCoefficients (stage2);
+        }
     }
 
     double sampleRate_ { 48000.0 };
@@ -206,13 +237,13 @@ private:
     double floorDb_ { -55.0 };
 
     double lpCoeff_ { 0.0 };
-    double lpState_ { 0.0 };
+    double lpState_[kChannels] {};
     double meanCoeff_ { 0.0 };
     double detectorMean_ { 0.0 };
     double liftSmoothedDb_ { 0.0 };
     double gain_ { 0.0 };
 
-    tezla::dsp::Biquad<double> sidechain1_, sidechain2_;
+    tezla::dsp::Biquad<double> sidechain1_[kChannels], sidechain2_[kChannels];
 };
 
 } // namespace tezla::membrana
