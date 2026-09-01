@@ -103,6 +103,8 @@
 #include <cmath>
 #include <complex>
 
+#include <tezla/dsp/Exact.hpp>
+
 namespace tezla::membrana {
 
 struct SphereDiffraction
@@ -142,7 +144,7 @@ struct SphereDiffraction
     {
         using cd = std::complex<double>;
 
-        if (mu == 0.0)
+        if (tezla::dsp::isExactlyZero (mu))
         {
             if (termsUsed != nullptr)
                 *termsUsed = 0;

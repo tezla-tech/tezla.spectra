@@ -22,6 +22,8 @@ and DnB. Rap vocals first, sung vocals second.
 ```
   take
    │
+   ├─ Membrana           mic body · position · presence · detail  ← the mic
+   │
    ├─ Phonoss            gate · de-ess · level · peak · tone      ← the strip
    │
    ├─ Emberdrive        grit, multiband, on the body only        ← optional
@@ -33,7 +35,14 @@ and DnB. Rap vocals first, sung vocals second.
    └─ Transpectus       checking, not processing                 ← anywhere
 ```
 
-**Phonoss first, Capstone last.** Everything between them is taste, and most
+**Membrana before Phonoss, Capstone last.** Mic character exists before any
+processing hears it -- Membrana re-images where the singer stood, and the
+strip's detectors should react to THAT take, not have their work re-imaged
+afterwards. If you use only one of the two, the strip is the one to keep;
+Membrana is at its best fixing a take recorded at the wrong distance
+(*De-Boom*, *Close & Warm*) or riding presence on a dynamic singer.
+
+**Phonoss first among the processors, Capstone last.** Everything between them is taste, and most
 takes need one of the three rather than all of them.
 
 The one hard rule: **Capstone goes last**, on the track and on the master. It

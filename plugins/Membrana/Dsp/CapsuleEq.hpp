@@ -170,6 +170,41 @@ public:
         return posNeutral_ && firNeutral_ && tezla::dsp::isExactly (trimLinear_, 1.0);
     }
 
+    /// The same question asked of a SETTINGS set that has not been pushed
+    /// yet -- the engine's static isIdentity goes through here so the two
+    /// predicates cannot drift apart (the Phonoss/Crossbar lesson: a panel
+    /// asking before the first callback must not answer from defaults).
+    /// Mirrors redesign()'s arithmetic exactly: cos(0.0) is exactly 1, so
+    /// the reference position lands the predicates without tolerance, and
+    /// an omni ((1 - pattern) == 0) is position-neutral at any distance.
+    [[nodiscard]] static bool isNeutralFor (double pattern01, double distanceMetres,
+                                            double axisDegrees, double character01,
+                                            double grille01, bool autoLevel) noexcept
+    {
+        const double a = 1.0 - pattern01;
+        const double cosTheta = std::cos (axisDegrees * kPi / 180.0);
+        const double d = MicPattern::level (a, cosTheta);
+        const double b0 = MicPattern::gradientWeight (a, cosTheta)
+                          * MicPattern::kSpeedOfSound / distanceMetres;
+        const double a0 = (1.0 - a) * MicPattern::kSpeedOfSound / kReferenceMetres;
+
+        const bool posNeutral = tezla::dsp::isExactly (d, 1.0)
+                                && tezla::dsp::isExactly (b0, a0);
+
+        const bool sphereNeutral =
+            tezla::dsp::isExactly (distanceMetres, kReferenceMetres)
+            && tezla::dsp::isExactlyZero (axisDegrees);
+        const bool firNeutral =
+            (tezla::dsp::isExactlyZero (character01) || sphereNeutral)
+            && tezla::dsp::isExactlyZero (grille01);
+
+        const bool trimNeutral =
+            autoLevel ? (posNeutral && firNeutral)
+                      : tezla::dsp::isExactly (distanceMetres, kReferenceMetres);
+
+        return posNeutral && firNeutral && trimNeutral;
+    }
+
     [[nodiscard]] static int latencySamples() noexcept { return 0; }
 
     [[nodiscard]] double process (double x) noexcept

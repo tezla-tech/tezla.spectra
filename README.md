@@ -148,8 +148,9 @@ are both latency-matched to the sample. See
 | **[Malleus](plugins/Malleus/)** | **Instrument** — modal percussion: objects derived from the physics, with **Overtone Lock** quantising their own partials onto the loaded scale | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Crossbar](plugins/Crossbar/)** | **Instrument** — the telephone: every DTMF pair and call-progress tone to the published standards, a dialler, and a G.711 line — 300–3400 Hz, 8 kHz, eight *logarithmic* bits | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Phonoss](plugins/Phonoss/)** | Effect — the vocal channel strip: gate, de-esser, two compressors and tone, in the order a vocal is actually mixed. Sibilance is detected as a **ratio** of high-band to body energy, so the same /s/ is reduced identically across 30 dB of input | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Membrana](plugins/Membrana/)** | Effect — the microphone stage, before Phonoss: pattern, body diffraction (the exact rigid-sphere series at finite range), distance and angle from the physics, plus presence that **rides** (leans in when the singer backs off) and a floored detail lift — consonants up, hiss exactly untouched | v0.1.0 — 47/47 on Steinberg's validator |
 
-806 framework-free DSP tests pass on Linux x86-64, which is where development
+1000 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS
