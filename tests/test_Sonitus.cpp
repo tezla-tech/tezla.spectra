@@ -168,25 +168,45 @@ double amplitudeAt (const std::vector<double>& signal, double frequency, double 
 // The things it must never do
 // ---------------------------------------------------------------------------
 
-TEZLA_TEST (one_engine_still_fits_in_a_windows_stack_frame)
+TEZLA_TEST (no_sonitus_object_of_this_size_goes_on_a_test_stack)
 {
-    // Not a DSP claim -- a portability one, and the only test here that failed
-    // first on somebody else's machine. MSVC gives a thread **1 MB** of stack
-    // by default; Linux gives 8. This suite therefore ran green here for weeks
-    // while `tezla-dsp` died with SEGFAULT on the Windows runner, because four
-    // tests held two to four engines on the stack at once and an engine had
-    // quietly grown to 414 kB. Two is 0.79 MB before anything else in the
-    // frame; four is 1.6 MB and hopeless.
+    // Not a DSP claim -- a portability one, and the only rule here that was
+    // taught by somebody else's machine twice running.
     //
-    // Those four now take their engines from the heap (`heapEngine` above).
-    // This guards the assumption that survived: that ONE on the stack is still
-    // safe. Half the budget leaves room for the locals, the buffers and the
-    // frames above -- and if the engine grows past it the answer is to move
-    // the remaining single-engine tests to the heap too, not to raise the
-    // number, because the 1 MB is not ours to change.
+    // MSVC gives a thread **1 MB** of stack by default; Linux gives 8. An
+    // Engine is 414 kB and a VoiceManager 404 kB, so this suite ran green here
+    // for weeks while `tezla-dsp` died with SEGFAULT on the Windows runner.
     //
-    // Break-check: 256 * 1024 fails at the measured 414096.
-    CHECK (sizeof (Engine) < 512u * 1024u);
+    // The first fix moved the four tests holding two-to-four engines to the
+    // heap and kept a guard saying "one on the stack is still fine". **That
+    // assumption was wrong**, and the next run said so: it crashed instead in
+    // `legato_retriggers_only_from_silence`, whose lambda holds exactly one
+    // manager -- but is inlined twice into the same frame, and MSVC allocates
+    // a slot per inlined scope rather than reusing one. 0.79 MB again, from
+    // code that looked like it obeyed the rule.
+    //
+    // So the rule is not "how many" -- you cannot count what the optimiser
+    // will inline. Every Engine and VoiceManager in tests/ now comes from the
+    // heap, all 60 of them, and this asserts the *reason* rather than a count:
+    // these types are far too big for a 1 MB frame, so none of them belongs in
+    // one. If it ever fires, something got smaller and the comment above needs
+    // rewriting -- it is not licence to put them back.
+    //
+    // **The check that actually measures this is `-fstack-usage`**, and it is
+    // worth more than this assertion because it needs no foresight about which
+    // type is large. Building the suite with it and sorting the `.su` files:
+    //
+    //   legato_retriggers_only_from_silence   812288 -> 17120 bytes
+    //   largest frame in tests/ afterwards    149488 bytes (Malleus)
+    //
+    // The command is in docs/CI.md. Note what does NOT work: running the suite
+    // under `ulimit -s 1024` on Linux passes even with the bug present, so it
+    // is not a reproduction -- GCC reuses slots between scopes where MSVC
+    // allocates one per inlined scope. That was checked rather than assumed.
+    //
+    // Break-check: flipping either `>` to `<` fails on the measured sizes.
+    CHECK (sizeof (Engine) > 64u * 1024u);
+    CHECK (sizeof (VoiceManager) > 64u * 1024u);
 }
 
 TEZLA_TEST (an_instrument_with_no_note_is_exactly_silent)
@@ -197,7 +217,8 @@ TEZLA_TEST (an_instrument_with_no_note_is_exactly_silent)
     // playing.
     for (const double rate : { 44100.0, 48000.0, 96000.0 })
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
         engine.setParameters (brutal());
 
@@ -223,7 +244,8 @@ TEZLA_TEST (the_whole_instrument_stays_bounded)
 {
     // Every nonlinearity at once, a chord rather than a note, and the note
     // released half way so the release tail runs through the same chain.
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.prepare (48000.0, 512);
 
     auto parameters = brutal();
@@ -298,7 +320,8 @@ TEZLA_TEST (the_output_is_block_size_independent)
 
     const auto renderIn = [&] (int blockSize)
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
         engine.setParameters (parameters);
 
@@ -418,7 +441,8 @@ TEZLA_TEST (aliasing_stays_below_sixty_decibels_across_the_bass_range)
 
         // The parameters before prepare, so the graph is built at the right
         // factor rather than rebuilt on the first block -- which stops the note.
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (local);
         engine.prepare (rate, 512);
         engine.tuning().setReference (60, hz);
@@ -514,7 +538,8 @@ TEZLA_TEST (the_wave_folder_is_antialiased_rather_than_merely_oversampled)
 
         const double hz = tezla::measure::binExactFrequency (110.0, rate, window);
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (rate, 512);
         engine.tuning().setReference (60, hz);
@@ -581,7 +606,8 @@ TEZLA_TEST (the_oversampling_control_actually_does_something)
 
     for (const auto& item : cases)
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
 
         auto parameters = brutal();
@@ -601,7 +627,8 @@ TEZLA_TEST (the_oversampling_control_actually_does_something)
     // And Auto follows the host rate rather than being a fixed number.
     for (const double hostRate : { 44100.0, 96000.0, 192000.0 })
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (hostRate, 512);
 
         auto parameters = brutal();
@@ -648,7 +675,8 @@ TEZLA_TEST (the_sub_band_bypasses_the_mangle_and_is_mono)
         auto local = parameters;
         local.subMono = mono;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
         engine.setParameters (local);
         engine.noteOn (33, 1.0);        // A1, 55 Hz -- well below the split
@@ -714,7 +742,8 @@ TEZLA_TEST (the_order_switch_makes_a_different_instrument)
         auto local = parameters;
         local.order = order;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
 
         return play (engine, local, 40, 24000);
@@ -763,7 +792,8 @@ TEZLA_TEST (the_sequencer_can_step_the_lfos_rate)
         auto local = parameters;
         local.sequencerToLfo1Rate = depth;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
         engine.setParameters (local);
         engine.noteOn (40, 1.0);
@@ -821,7 +851,8 @@ TEZLA_TEST (the_tilt_is_a_balance_rather_than_a_volume)
         auto local = parameters;
         local.tilt = tilt;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 512);
 
         return play (engine, local, 45, 32000);
@@ -850,7 +881,8 @@ TEZLA_TEST (the_engine_survives_a_sample_rate_change_and_a_reset)
     // prepareToPlay clears all state -- CLAUDE.md section 7. No pops when the
     // transport restarts, no state leaking between projects, and a rate change
     // mid-life is a thing hosts do.
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
 
     for (const double rate : { 44100.0, 96000.0, 192000.0, 48000.0 })
     {
@@ -919,7 +951,8 @@ TEZLA_TEST (a_global_slot_sweeps_the_comb_over_octaves)
         auto swept = parameters;
         swept.globalSlots[0] = { GlobalSource::lfo1, GlobalDestination::combTime, depth };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
         engine.setParameters (swept);
         engine.noteOn (40, 1.0);
@@ -989,7 +1022,8 @@ TEZLA_TEST (positive_global_modulation_raises_the_comb_rather_than_lowering_it)
         auto set = parameters;
         set.globalSlots[0] = { GlobalSource::sequencer, GlobalDestination::combTime, depth };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 256);
         engine.setParameters (set);
         engine.noteOn (40, 1.0);
@@ -1064,7 +1098,8 @@ TEZLA_TEST (every_global_destination_reaches_its_control)
         auto set = base;
         set.globalSlots[0] = { GlobalSource::sequencer, destination, depth };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 256);
 
         const auto out = play (engine, set, 40, samples);
@@ -1139,7 +1174,8 @@ TEZLA_TEST (an_unpointed_global_matrix_changes_nothing_at_all)
 
     const auto render = [&] (const EngineParameters& set)
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 256);
 
         return play (engine, set, 40, samples);
@@ -1196,7 +1232,8 @@ TEZLA_TEST (an_idle_instrument_stops_doing_arithmetic)
     parameters.voice.amp.sustain = 1.0;
     parameters.oversampling = OversamplingMode::X4;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (rate, 512);
 
@@ -1258,7 +1295,8 @@ TEZLA_TEST (the_idle_skip_never_cuts_a_tail)
         parameters.combDamping = 0.0;
         parameters.voice.amp.release = 0.02;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (rate, 512);
 
@@ -1327,7 +1365,8 @@ TEZLA_TEST (the_lfos_keep_running_while_the_instrument_is_idle)
     parameters.lfo1RateHz = 0.5;
     parameters.oversampling = OversamplingMode::Off;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (rate, 512);
 
@@ -1369,7 +1408,8 @@ TEZLA_TEST (the_harmonic_lock_follows_the_note_through_the_engine)
     parameters.formantHarmonic = 6.0;
     parameters.keyboard = KeyboardMode::mono;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (rate, 256);
 
@@ -1409,7 +1449,8 @@ TEZLA_TEST (the_overtone_controls_are_neutral_by_default)
 
     const auto render = [&] (const EngineParameters& set)
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 256);
 
         return play (engine, set, 40, samples);
@@ -1484,7 +1525,8 @@ TEZLA_TEST (an_envelope_can_drive_a_global_destination)
 
     parameters.globalSlots[0] = { GlobalSource::ampEnvelope, GlobalDestination::combTime, 1.0 };
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (rate, 256);
 
@@ -1539,7 +1581,8 @@ TEZLA_TEST (the_lfo_retriggers_on_a_note_and_free_runs_without_one)
         parameters.lfo1Retrigger = retrigger;
         parameters.keyboard = KeyboardMode::mono;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (rate, 256);
 
@@ -1586,7 +1629,8 @@ TEZLA_TEST (the_lfo_rate_can_follow_the_played_note)
         parameters.lfo1Retrigger = true;
         parameters.keyboard = KeyboardMode::mono;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (rate, 64);
 
@@ -1663,7 +1707,8 @@ TEZLA_TEST (an_lfo_reaches_the_top_of_its_range_without_being_clamped)
         // source, not from anything downstream of it.
         parameters.globalSlots[0] = { GlobalSource::none, GlobalDestination::none, 0.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
         engine.setParameters (parameters);
         engine.noteOn (note, 1.0);
@@ -1778,7 +1823,8 @@ TEZLA_TEST (a_slow_lfo_on_pitch_sweeps_the_period)
         parameters.lfo1RateHz = hz;
         parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::pitch, 100.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
 
         const auto out = play (engine, parameters, 45, samples, 64);
@@ -1845,7 +1891,8 @@ TEZLA_TEST (a_fast_lfo_on_pitch_makes_sidebands)
         parameters.lfo1RateHz = hz;
         parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::pitch, 100.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
 
         // A4, so both sidebands land well clear of zero and of each other.
@@ -1939,7 +1986,8 @@ TEZLA_TEST (kargyraa_puts_a_subharmonic_where_the_throat_puts_one)
         parameters.voice.kargyraaRasp = 0.5;
         parameters.voice.kargyraaDivisor = divisor;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
 
         // A2 at 110 Hz, so f/2 is 55 Hz and the split at 40 Hz leaves it alone.
@@ -2025,7 +2073,8 @@ TEZLA_TEST (kargyraa_is_locked_to_the_note_and_cannot_drift)
         parameters.voice.kargyraaRasp = 0.5;
         parameters.voice.kargyraaDivisor = 2;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
 
         const auto out = play (engine, parameters, note, 3 * static_cast<int> (fftSize), 64);
@@ -2134,7 +2183,8 @@ TEZLA_TEST (kargyraa_does_not_alias)
     parameters.voice.kargyraaRasp = 1.0;
     parameters.voice.kargyraaDivisor = 2;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.prepare (rate, 128);
 
     // A5, 880 Hz. The modulator's eight harmonics of 440 Hz reach 3520 Hz, so
@@ -2212,7 +2262,8 @@ TEZLA_TEST (an_lfo_attack_fades_its_depth_in_from_the_note)
         parameters.lfo1AttackSeconds = attackSeconds;
         parameters.globalSlots[0] = { GlobalSource::none, GlobalDestination::none, 0.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.prepare (rate, 64);
         engine.setParameters (parameters);
         engine.noteOn (60, 1.0);
@@ -2404,7 +2455,8 @@ TEZLA_TEST (the_pure_path_still_blocks_dc)
     parameters.voice.shapeA = OscShape::pulse;
     parameters.voice.widthA = 0.05;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (48000.0, 256);
     engine.noteOn (36, 0.9);
@@ -2442,7 +2494,8 @@ TEZLA_TEST (toggling_the_split_mid_note_crossfades_instead_of_clicking)
 
     constexpr int kBlock = 128;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (48000.0, kBlock);
     engine.noteOn (36, 0.9);
@@ -2494,7 +2547,8 @@ TEZLA_TEST (silence_in_silence_out_with_the_split_off)
     EngineParameters parameters;
     parameters.subSplit = false;
 
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.setParameters (parameters);
     engine.prepare (48000.0, 256);
 
@@ -2542,7 +2596,8 @@ TEZLA_TEST (a_synced_lfo_cycle_is_exactly_the_division_at_every_host_rate)
 
         parameters.voice.slots[0] = { ModSource::lfo1, ModDestination::level, 1.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (rate, 256);
         engine.setTransport (-1.0, 120.0, false);   // tempo known, stopped
@@ -2618,7 +2673,8 @@ TEZLA_TEST (a_phase_locked_lfo_repeats_the_bar_after_a_rewind)
 
     const auto renderSpan = [&] (double startPpq)
     {
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (57, 1.0);
@@ -2783,7 +2839,8 @@ TEZLA_TEST (a_snapped_amp_decay_is_the_division_and_unsnapped_is_the_knob)
         parameters.voice.amp.decayTension = 0.0;   // straight, so time reads clean
         parameters.voice.amp.snap = snap;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.setTransport (-1.0, 120.0, false);
@@ -2842,7 +2899,8 @@ TEZLA_TEST (every_shape_plays_through_the_whole_voice_and_dies_away)
         parameters.voice.morphA = 0.6;
         parameters.oversampling = OversamplingMode::X2;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (43, 1.0);
@@ -2904,7 +2962,8 @@ TEZLA_TEST (an_enabled_adv_envelope_modulates_and_a_disabled_one_reads_zero)
         parameters.voice.adv[0].level = { 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
         parameters.voice.slots[0] = { ModSource::advEnv1, ModDestination::cutoff, -4.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (45, 1.0);
@@ -2959,7 +3018,8 @@ TEZLA_TEST (the_global_matrix_reads_the_tracked_notes_adv_envelope)
         parameters.voice.adv[0].level = { 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
         parameters.globalSlots[0] = { GlobalSource::advEnv1, GlobalDestination::output, -1.0 };
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (45, 1.0);
@@ -3010,7 +3070,8 @@ TEZLA_TEST (voices_retire_once_their_release_is_over)
     // the last. Activity is the claim, not silence: CLAUDE.md section 10's
     // Capstone lesson in another key. This drives the real engine loop, the
     // same path that re-applies every envelope setting every control chunk.
-    Engine engine;
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
     engine.prepare (48000.0, 256);
 
     auto parameters = brutal();
@@ -3133,7 +3194,8 @@ TEZLA_TEST (the_cross_pm_loop_cannot_be_driven_to_divergence)
                 parameters.voice.feedbackA = 1.0 * feedback / 6.0;
                 parameters.voice.feedbackB = 1.0 * feedback / 6.0;
 
-                Engine engine;
+                const auto enginePtr = heapEngine();
+                auto& engine = *enginePtr;
                 engine.setParameters (parameters);
                 engine.prepare (48000.0, 128);
                 engine.noteOn (41, 1.0);
@@ -3183,7 +3245,8 @@ TEZLA_TEST (reverse_pm_is_one_sample_late_and_forward_pm_is_not)
         parameters.voice.foldAmount = 0.0;    // out of the way of the comparison
         parameters.voice.ringAmount = 0.0;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (45, 1.0);
@@ -3257,7 +3320,8 @@ TEZLA_TEST (a_macro_at_its_default_changes_nothing_anywhere)
             parameters.globalSlots[0].depth = 0.8;
         }
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (45, 0.9);
@@ -3328,7 +3392,8 @@ TEZLA_TEST (one_macro_drives_both_matrices_from_the_same_value)
     {
         parameters.macros[1] = macro;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (45, 1.0);
@@ -3362,7 +3427,8 @@ TEZLA_TEST (one_macro_drives_both_matrices_from_the_same_value)
     {
         parameters.macros[1] = macro;
 
-        Engine engine;
+        const auto enginePtr = heapEngine();
+        auto& engine = *enginePtr;
         engine.setParameters (parameters);
         engine.prepare (48000.0, 256);
         engine.noteOn (45, 1.0);

@@ -98,6 +98,36 @@ identical whether it runs under qemu or on an Apple Silicon Mac, and guessing
 from the architecture would be wrong in the one case that matters — **real ARM64
 hardware must assert**, so it sets nothing.
 
+### Stack frames, and the Windows-only crash they cause
+
+**MSVC gives a thread 1 MB of stack; Linux gives 8.** A test that holds a big
+object by value passes here and takes the *whole binary* down on the Windows
+runner with `tezla-dsp (SEGFAULT)` — and ctest reports one failed test out of
+one, so the log has to be read to find out which test died.
+
+It has happened twice. A Sonitus `Engine` is 414 kB and a `VoiceManager`
+404 kB; four tests held two-to-four engines, and one lambda holding a *single*
+manager was inlined twice into the same frame. "Only one on the stack" is not a
+safe rule, because you cannot count what the optimiser will inline.
+
+Measure it instead of reasoning about it:
+
+```bash
+cmake -S . -B build-su -DCMAKE_BUILD_TYPE=Release -DTEZLA_PLUGINS=NONE \
+      -DCMAKE_CXX_FLAGS="-fstack-usage"
+cmake --build build-su --target tezla-tests
+cat $(find build-su -name '*.su') | awk -F'\t' '$2+0 > 100000 {print $2, $1}' | sort -rn
+```
+
+Measured on this tree: the offending function used **812,288 bytes** and is
+**17,120** now; the largest frame anywhere in `tests/` is 149,488 (Malleus).
+Anything approaching a few hundred kB should go on the heap.
+
+**What does not work, checked rather than assumed:** running the suite under
+`ulimit -s 1024` on Linux. It passes *with the bug present* — GCC reuses stack
+slots between scopes where MSVC allocates one per inlined scope — so it is not
+a reproduction and must not be quoted as one.
+
 ## 2. Plugin builds, downloadable
 
 Windows and macOS build the actual plugins and upload them as run artifacts:
