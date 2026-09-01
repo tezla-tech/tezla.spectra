@@ -246,6 +246,14 @@ public:
 
     void setShape (OscShape shape) noexcept
     {
+        // Guarded: Sonitus pushes the shape at every oscillator on every control
+        // chunk, and refreshShapeState() is a `pow` loop for the harmonic shape
+        // and an `exp` for vintage. Returning early on the same shape changes
+        // no state and no bit of output; it only stops recomputing what is
+        // already there.
+        if (shape == shape_)
+            return;
+
         shape_ = shape;
         refreshShapeState();
     }
@@ -256,7 +264,13 @@ public:
     /// either end it leans towards a saw. No other shape reads it.
     void setWidth (double width) noexcept
     {
-        width_ = std::clamp (width, kMinimumWidth, 1.0 - kMinimumWidth);
+        // Guarded for the same reason as setShape: pushed at every oscillator
+        // on every control chunk. Same value in, no state touched.
+        const double clamped = std::clamp (width, kMinimumWidth, 1.0 - kMinimumWidth);
+        if (isExactly (clamped, width_))
+            return;
+
+        width_ = clamped;
 
         // Precomputed rather than divided per sample. Exactly 1.0 at the
         // symmetric default, which is what keeps the default triangle

@@ -224,7 +224,7 @@ public:
             return;
 
         cutoffHz_ = wanted;
-        updateCoefficients();
+        updateCutoffCoefficient();
     }
 
     [[nodiscard]] double getCutoffHz() const noexcept { return cutoffHz_; }
@@ -486,6 +486,18 @@ private:
         const double clamped = std::clamp (hz, 1.0, limit);
 
         return std::tan (3.141592653589793 * clamped / sampleRate_);
+    }
+
+    /// The cutoff half of updateCoefficients() on its own. g depends on the
+    /// cutoff and the sample rate; k depends on the resonance and nothing else.
+    /// A cutoff change used to recompute both, which put a `pow` next to the
+    /// `tan` on every sample of a modulated sweep -- Sonitus moves its cutoff
+    /// through a per-sample smoother, so that was two transcendentals per
+    /// filter per sample for a value that had not changed. Same expression,
+    /// same inputs, same bits: this alters nothing but the work done.
+    void updateCutoffCoefficient() noexcept
+    {
+        g_ = prewarp (cutoffHz_);
     }
 
     void updateCoefficients() noexcept
