@@ -140,6 +140,36 @@ const std::vector<Preset>& presets()
                 { ids::detail, 3.0f },
             }
         },
+        // -------------------------------------------------------------------
+        // Appended after v0.1.0 shipped -- new presets go on the END, because
+        // a host recalls a program by INDEX and inserting here would repoint
+        // every project that saved one.
+        {
+            "Turned Away",
+            "The mic rotated 45 degrees off the voice at 25 cm: the body's "
+            "shadow rounds the top and the level drops under a decibel -- "
+            "the classic move for a take that is too pointed, done with the "
+            "physics instead of an EQ dip.",
+            {
+                { ids::axisDeg, 45.0f },
+                { ids::distanceCm, 25.0f },
+                { ids::character, 0.6f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            "Half a Step Closer",
+            "Everything by a hair, which is where this plugin lives: the mic "
+            "at 50 cm, a whisper of ride and a breath of detail. If an A/B "
+            "against bypass is obvious, it is doing too much -- this is the "
+            "setting that should merely make the take feel better recorded.",
+            {
+                { ids::distanceCm, 50.0f },
+                { ids::character, 0.45f },
+                { ids::presence, 1.5f },
+                { ids::detail, 2.0f },
+            }
+        },
     };
 
     return list;
