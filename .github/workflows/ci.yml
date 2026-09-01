@@ -308,10 +308,19 @@ jobs:
     # It was 90 minutes and that was wrong -- a twelve-plugin *universal* macOS
     # build compiles every plugin twice over in two formats, and a healthy one
     # can legitimately run well past an hour. A guard that kills good builds is
-    # worse than no guard: it turns a slow release into a failed one. 300 keeps
-    # the backstop (GitHub's own default is 360) while leaving any real build
-    # room to finish.
-    timeout-minutes: 300
+    # worse than no guard: it turns a slow release into a failed one. So this
+    # is set to twelve hours: never stop a build that is making progress.
+    #
+    # **GitHub caps a hosted job at 6 hours regardless**, so the effective
+    # ceiling is 360 and this number is a statement of intent rather than a
+    # setting that changes anything above it. Left at 720 deliberately: if the
+    # runners ever move to self-hosted, the intent is already recorded.
+    #
+    # And it does NOT address the thing that has actually been failing:
+    # `timeout-minutes` measures how long a job RUNS, not how long it waits for
+    # a runner. A macOS job that never gets assigned one is cancelled by GitHub
+    # on its own schedule, which no workflow setting reaches.
+    timeout-minutes: 720
     strategy:
       fail-fast: false
       matrix:
