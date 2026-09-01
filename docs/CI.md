@@ -291,6 +291,23 @@ side by side:
 | Windows | VST3 | x86-64 | 4 | **37m49s** → uploaded |
 | macOS | VST3 + AU | arm64 + x86_64 | 3 | **6h04m23s** → killed |
 
+And one plugin alone, run 52 (`v0.88.8-sonitus`, Sonitus only, `mac_arch:
+arm64`), same commit family:
+
+| Leg | Formats | Architectures | Cores | Build step |
+|---|---|---|---|---|
+| Windows | VST3 | x86-64 | 4 | **5m15s** → uploaded |
+| macOS | VST3 + AU | arm64 only | 3 | **23m28s** → uploaded |
+
+Read those two rows together and the arithmetic is unforgiving: **a single
+plugin costs about 23 minutes on macOS even arm64-only**, so twelve of them
+in one job is roughly 4.7 hours sequential — inside the six-hour cap only
+if Sonitus is the heaviest plugin by a margin, and universal would double it
+again. Halving the architectures bought a working Sonitus release; it does
+not buy a whole-suite macOS release in one job. That is the structural case
+for one job per plugin, running in parallel, if the suite is ever to ship for
+Mac from CI.
+
 GitHub cancelled the macOS job on its own **360-minute ceiling**, which
 `timeout-minutes` cannot raise. Nothing was wrong with the build — six hours of
 Apple clang with no compile error, the first time this suite has ever been
