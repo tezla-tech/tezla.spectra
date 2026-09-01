@@ -431,7 +431,7 @@ CLAUDE.md.
 | MB1 MicPattern + SphereDiffraction | done |
 | MB2 MinimumPhaseFir lift + CapsuleEq | done |
 | MB3 PresenceTracker | done |
-| MB4 DetailLift | pending |
+| MB4 DetailLift | done |
 | MB5 MembranaEngine | pending |
 | MB6 JUCE layer + measure command | pending |
 | MB7 editor + close-out | pending |
