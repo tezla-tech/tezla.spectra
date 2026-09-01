@@ -723,6 +723,23 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   requirement is not dropped. The binary cannot detect this itself: the same
   AArch64 binary runs under qemu and on an Apple Silicon Mac, and **real ARM64
   hardware must assert**, so it sets nothing.
+- **Build with clang before spending a macOS runner.** clang is installed in
+  the container and costs a couple of minutes:
+  ```
+  cmake -S . -B build-clang -DCMAKE_BUILD_TYPE=Release -DTEZLA_PLUGINS=NONE \
+        -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+  cmake --build build-clang -j$(nproc) && ./build-clang/bin/tezla-tests
+  ```
+  It is not Apple clang and it is glibc rather than libc++, so it cannot
+  promise everything — but it caught both macOS problems found so far, either
+  of which would otherwise have cost a 10x runner: `std::cyl_bessel_j` **does
+  not exist on libc++** (C++17 special maths was never implemented there, so
+  Malleus had never once compiled on macOS, and neither libstdc++ nor MSVC had
+  any reason to say so), and 15 `-Wunused-lambda-capture` warnings GCC does not
+  emit at all. The Bessel evaluation is now `dsp::besselJ`, a trapezoidal rule
+  on Bessel's integral, agreeing with `std::cyl_bessel_j` to 8.861e-15 over the
+  range used. **Prefer a portable implementation to a C++17 library function
+  whose support is patchy**, and check libc++ before relying on one.
 - **A Linux build is a cheap dress rehearsal for the Windows one.** The plugin
   target builds and validates on Linux with the X11/ALSA dev packages listed in
   `docs/BUILD.md`, which catches wrapper mistakes long before they reach the

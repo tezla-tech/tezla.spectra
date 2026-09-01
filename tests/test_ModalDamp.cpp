@@ -221,7 +221,7 @@ TEZLA_TEST (a_damped_object_goes_dull_before_it_goes_quiet)
     const int start = static_cast<int> (0.2 * kRate);
     const int length = static_cast<int> (0.1 * kRate);
 
-    const auto window = [start, length] (const std::vector<double>& all)
+    const auto window = [] (const std::vector<double>& all)
     {
         return std::vector<double> (all.begin() + start, all.begin() + start + length);
     };

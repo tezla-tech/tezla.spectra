@@ -98,6 +98,30 @@ identical whether it runs under qemu or on an Apple Silicon Mac, and guessing
 from the architecture would be wrong in the one case that matters — **real ARM64
 hardware must assert**, so it sets nothing.
 
+### Build with clang before spending a macOS runner
+
+**clang is installed in the development container, and a clang build is a
+near-free dress rehearsal for Apple clang.** Use it:
+
+```bash
+cmake -S . -B build-clang -DCMAKE_BUILD_TYPE=Release -DTEZLA_PLUGINS=NONE \
+      -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+cmake --build build-clang -j$(nproc) && ./build-clang/bin/tezla-tests
+```
+
+It is not the same compiler as Apple's, and it is glibc rather than libc++, so
+it cannot promise everything. But it shares the diagnostics and most of the
+front end, and it would have caught both of the macOS problems found so far
+without a single 10× runner minute:
+
+- **`std::cyl_bessel_j` does not exist on libc++.** C++17's special maths
+  functions were never implemented there, so Apple clang refuses the call and
+  `ModeShapes.hpp` would not compile at all — Malleus had never once built on
+  macOS, and neither libstdc++ nor MSVC had any reason to say so. It is now
+  computed by `tezla::dsp::besselJ`, a trapezoidal rule on Bessel's integral,
+  agreeing with `std::cyl_bessel_j` to 8.861e-15 over the range used.
+- **15 `-Wunused-lambda-capture` warnings**, which GCC does not emit at all.
+
 ### Stack frames, and the Windows-only crash they cause
 
 **MSVC gives a thread 1 MB of stack; Linux gives 8.** A test that holds a big

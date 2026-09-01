@@ -157,7 +157,7 @@ TEZLA_TEST (three_band_splitter_actually_separates)
     splitter.prepare (fs);
     splitter.setCrossovers (120.0, 2500.0);
 
-    const auto bandLevels = [&splitter, fs] (double frequency)
+    const auto bandLevels = [&splitter] (double frequency)
     {
         struct Levels { double low, mid, high; };
         Levels levels {};

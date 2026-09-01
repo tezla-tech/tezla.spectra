@@ -166,7 +166,7 @@ TEZLA_TEST (program_dependent_release_recovers_slower_after_sustained_reduction)
 {
     constexpr double fs = 48000.0;
 
-    const auto recoveryAfter = [fs] (bool programDependent, int heldSamples)
+    const auto recoveryAfter = [] (bool programDependent, int heldSamples)
     {
         EnvelopeFollower envelope;
         envelope.prepare (fs);

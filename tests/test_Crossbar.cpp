@@ -347,7 +347,7 @@ TEZLA_TEST (a_free_running_cadence_does_not_start_when_the_key_does)
     // burst had already gone by.
     constexpr double rate = 48000.0;
 
-    const auto firstBurstLength = [rate] (CadenceMode mode)
+    const auto firstBurstLength = [] (CadenceMode mode)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -387,7 +387,7 @@ TEZLA_TEST (a_steady_cadence_holds_the_first_step_forever)
     // 0.00000 cadenced, because half the blocks are silence.
     constexpr double rate = 48000.0;
 
-    const auto blockRmsRange = [rate] (CadenceMode mode)
+    const auto blockRmsRange = [] (CadenceMode mode)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -527,7 +527,7 @@ TEZLA_TEST (the_rate_reduction_aliases_on_purpose)
     // decibels of deliberate aliasing, which is the point of the control.
     constexpr double rate = 48000.0;
 
-    const auto imageAt = [rate] (int rateIndex)
+    const auto imageAt = [] (int rateIndex)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -565,7 +565,7 @@ TEZLA_TEST (the_band_limits_where_it_says_it_does)
     // says it is.
     constexpr double rate = 48000.0;
 
-    const auto levelThrough = [rate] (BandMode band, Tone tone, double hz)
+    const auto levelThrough = [] (BandMode band, Tone tone, double hz)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -608,7 +608,7 @@ TEZLA_TEST (line_noise_is_exactly_off_at_zero_and_audible_at_one)
     // noise 1.
     constexpr double rate = 48000.0;
 
-    const auto rmsOfSilence = [rate] (double noise)
+    const auto rmsOfSilence = [] (double noise)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -698,7 +698,7 @@ TEZLA_TEST (voices_measurably_die_and_the_death_tracks_the_release)
     // is crawling.
     constexpr double rate = 48000.0;
 
-    const auto samplesUntilSilent = [rate] (double release)
+    const auto samplesUntilSilent = [] (double release)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -756,7 +756,7 @@ TEZLA_TEST (the_engine_does_not_depend_on_the_block_size)
     // finishing.
     constexpr double rate = 48000.0;
 
-    const auto render = [rate] (int blockSize)
+    const auto render = [] (int blockSize)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
@@ -868,7 +868,7 @@ TEZLA_TEST (pulse_dialling_takes_as_long_as_the_digit_is_worth)
     // switch mean something.
     constexpr double rate = 48000.0;
 
-    const auto samplesForDigit = [rate] (const char* number, bool pulse)
+    const auto samplesForDigit = [] (const char* number, bool pulse)
     {
         Dialler dialler;
         dialler.prepare (rate);
@@ -901,7 +901,7 @@ TEZLA_TEST (pulse_dialling_takes_as_long_as_the_digit_is_worth)
     // one burst per break and there are two per pulse -- one for the break and
     // one for the make, as a real dial makes. A '0' therefore rattles twenty
     // times where a tone-dialled '0' is one steady pair of sines.
-    const auto burstCount = [rate] (bool pulse)
+    const auto burstCount = [] (bool pulse)
     {
         CrossbarEngine engine;
         engine.prepare (rate);
