@@ -100,6 +100,7 @@ public:
             shelf.reset();
 
         liftSmoothedDb_ = 0.0;
+        lastTargetDb_ = 0.0;
         gain_.setCurrentAndTarget (0.0);
         gainCountdown_ = 1;
     }
@@ -137,6 +138,12 @@ public:
     /// activity lane and the curve tests.
     [[nodiscard]] double currentLiftDb() const noexcept { return liftSmoothedDb_; }
 
+    /// What the static curve asked for on the last sample, BEFORE the
+    /// branching smoother -- display only. Drawn against currentLiftDb it
+    /// shows the mechanism: the target snapping with the level, the applied
+    /// lift following at the attack and release the header documents.
+    [[nodiscard]] double currentTargetDb() const noexcept { return lastTargetDb_; }
+
     /// The shared control path: one decision for however many channels
     /// listen (the Phonoss linking pattern -- an unlinked gain ride would
     /// pull the centre image sideways, CLAUDE.md section 7). Feed it the
@@ -156,6 +163,7 @@ public:
         xc = xc < 0.0 ? 0.0 : xc > 1.0 ? 1.0 : xc;
         const double eased = xc * xc * (3.0 - 2.0 * xc);
         const double liftDb = amountDb_ * ((1.0 - track_) + track_ * eased);
+        lastTargetDb_ = liftDb;
 
         // Branching smooth one-pole in the log domain (their Eq 16 family):
         // attack while the lift falls, release while it rises.
@@ -203,6 +211,7 @@ private:
     double track_ { 0.65 };
 
     double liftSmoothedDb_ { 0.0 };
+    double lastTargetDb_ { 0.0 };
     int gainCountdown_ { 1 };
 
     tezla::dsp::SvfFilter shelf_[kChannels];

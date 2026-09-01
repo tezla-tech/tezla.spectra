@@ -94,11 +94,16 @@ public:
         double outputDb { 0.0 };
     };
 
-    /// What the panel's activity lanes read.
+    /// What the panel's activity lanes read: for each ride, what the curve
+    /// ASKED for (the un-smoothed target) beside what is APPLIED (the
+    /// smoothed lift) -- the pair that makes the lane show the mechanism
+    /// rather than just activity.
     struct Meters
     {
         double presenceLiftDb { 0.0 };
+        double presenceTargetDb { 0.0 };
         double detailLiftDb { 0.0 };
+        double detailTargetDb { 0.0 };
         double capsuleTrimDb { 0.0 };
     };
 
@@ -237,7 +242,9 @@ public:
     [[nodiscard]] Meters getMeters() const noexcept
     {
         return { presence_.currentLiftDb(),
+                 presence_.currentTargetDb(),
                  detail_.currentLiftDb(),
+                 detail_.currentTargetDb(),
                  capsule_[0].trimDb() };
     }
 

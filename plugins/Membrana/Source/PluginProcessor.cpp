@@ -485,7 +485,9 @@ void MembranaProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     const auto stage = engine_.getMeters();
 
     meters_.presenceLiftDb.store (static_cast<float> (stage.presenceLiftDb), std::memory_order_relaxed);
+    meters_.presenceTargetDb.store (static_cast<float> (stage.presenceTargetDb), std::memory_order_relaxed);
     meters_.detailLiftDb.store (static_cast<float> (stage.detailLiftDb), std::memory_order_relaxed);
+    meters_.detailTargetDb.store (static_cast<float> (stage.detailTargetDb), std::memory_order_relaxed);
     meters_.capsuleTrimDb.store (static_cast<float> (stage.capsuleTrimDb), std::memory_order_relaxed);
     meters_.inputDb.store (peakDb (inputPeak), std::memory_order_relaxed);
     meters_.outputDb.store (peakDb (outputPeak), std::memory_order_relaxed);

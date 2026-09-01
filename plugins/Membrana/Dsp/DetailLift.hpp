@@ -112,6 +112,7 @@ public:
 
         detectorMean_ = 0.0;
         liftSmoothedDb_ = 0.0;
+        lastTargetDb_ = 0.0;
         gain_ = 0.0;
     }
 
@@ -158,6 +159,10 @@ public:
     /// The smoothed lift currently applied, for the activity lane.
     [[nodiscard]] double currentLiftDb() const noexcept { return liftSmoothedDb_; }
 
+    /// What the window asked for on the last sample, before the smoother --
+    /// display only (see PresenceTracker::currentTargetDb).
+    [[nodiscard]] double currentTargetDb() const noexcept { return lastTargetDb_; }
+
     /// One channel's steep sidechain view of the input -- the linked level
     /// is the max of these across channels.
     [[nodiscard]] double detectorMagnitude (int channel, double x) noexcept
@@ -177,6 +182,7 @@ public:
                                    : kSilenceFloorDb;
 
         const double liftDb = curveLiftDb (amountDb_, floorDb_, levelDb);
+        lastTargetDb_ = liftDb;
 
         const double alpha = liftDb < liftSmoothedDb_ ? attackAlpha_ : releaseAlpha_;
         liftSmoothedDb_ += (1.0 - alpha) * (liftDb - liftSmoothedDb_);
@@ -241,6 +247,7 @@ private:
     double meanCoeff_ { 0.0 };
     double detectorMean_ { 0.0 };
     double liftSmoothedDb_ { 0.0 };
+    double lastTargetDb_ { 0.0 };
     double gain_ { 0.0 };
 
     tezla::dsp::Biquad<double> sidechain1_[kChannels], sidechain2_[kChannels];

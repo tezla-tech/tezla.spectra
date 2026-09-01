@@ -95,13 +95,22 @@ reads as *tone*; off, the physical level applies (+24 dB max).
 
 ## The panel
 
-The composed curve at top left is drawn **from the same coefficients the
-audio runs through** — the position section, the LF limit, and a DFT of the
-live FIR taps. It is built to be unable to disagree with the sound. Hover
-for the exact dB at any frequency. THE RIDES at top right shows what the
-two dynamic stages are doing on one clock, growing upward because these
-stages only ever add; the POSITION title carries Auto Level's current trim,
-and the PRESENCE and DETAIL titles carry their live lifts.
+The top row is the instrument. **PATTERN & POSITION** is the polar diagram
+every mic manual opens with, drawn live from `MicPattern::level()` — the
+rear lobe and the null are the physics, not artwork — with the singer as a
+dot: direction is the off-axis angle, position along the ray is the
+distance, and the caption gives the pattern level at that angle.
+**THE RESPONSE** is drawn from the same coefficients the audio runs
+through — the position section, the LF limit, and a DFT of the live FIR
+taps — with the two rides' current shelves composed on top as a bright
+trace that breathes while the voice plays; ticks along the foot mark each
+stage's corner in its own hue, and hovering reads the exact dB.
+**THE RIDES** shows each dynamic stage's applied lift (filled) against
+what its curve *asked* for that instant (the thin amber line) — the gap
+between them is the attack and release, visible. **I/O** is the peak pair
+that says whether Auto Level is keeping its promise. The POSITION title
+carries the current trim and the PRESENCE and DETAIL titles their live
+lifts; the output trim lives in the header, where the suite keeps it.
 
 ## Presets
 

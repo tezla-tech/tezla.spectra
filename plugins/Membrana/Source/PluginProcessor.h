@@ -91,9 +91,11 @@ public:
     /// the audio thread may not block.
     struct MeterValues
     {
-        std::atomic<float> presenceLiftDb { 0.0f };
-        std::atomic<float> detailLiftDb   { 0.0f };
-        std::atomic<float> capsuleTrimDb  { 0.0f };
+        std::atomic<float> presenceLiftDb   { 0.0f };
+        std::atomic<float> presenceTargetDb { 0.0f };
+        std::atomic<float> detailLiftDb     { 0.0f };
+        std::atomic<float> detailTargetDb   { 0.0f };
+        std::atomic<float> capsuleTrimDb    { 0.0f };
 
         std::atomic<float> inputDb  { -100.0f };
         std::atomic<float> outputDb { -100.0f };
