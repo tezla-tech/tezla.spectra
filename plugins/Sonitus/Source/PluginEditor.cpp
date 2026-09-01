@@ -7,6 +7,7 @@
 
 #include "PluginEditor.h"
 
+#include <tezla/ui/HouseControls.hpp>
 #include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/PanelDesign.hpp>
 #include <tezla/ui/ScrollWheel.hpp>
@@ -509,36 +510,16 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
     : ParameterCell (parameterId, name, palette)
 {
     slider_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    // The size goes on before the box is made: `setTextBoxStyle` is what calls
-    // `createSliderTextBox`, and the label is built exactly once.
-    slider_.getProperties().set (
-        "tezlaValueSize",
-        emphasisOf (parameterId) == design::Emphasis::lead ? design::kValueSizeLead
-                                                           : design::kValueSize);
 
-    slider_.getProperties().set ("tezlaValueBold", true);
+    // What a house knob is lives in one place -- relief, skirt, tinted track,
+    // the value font, the wheel off. The tint is set again by `setTint` once
+    // the cell knows which group it landed in; this is the page accent until
+    // then, so a cell that is never tinted still looks like a knob.
+    ui::styleKnob (slider_, palette_, palette_.accent, emphasisOf (parameterId));
+    ui::resetsToDefault (slider_, state, parameterId);
 
-    slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 90, valueHeight());
-    slider_.setColour (juce::Slider::textBoxTextColourId, palette_.text);
-    slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     slider_.setTooltip (tooltip);
     label_.setTooltip (tooltip);
-
-    // Double-click goes back to the parameter's own default rather than to the
-    // middle of its range, which on a skewed range is somewhere else entirely.
-    if (auto* parameter = state.getParameter (parameterId))
-        slider_.setDoubleClickReturnValue (
-            true, parameter->convertFrom0to1 (parameter->getDefaultValue()));
-
-    // The wheel scrolls the page, never the control -- see ui/ScrollWheel.hpp.
-    ui::noWheel (slider_);
-
-    // Relief, skirt and a tinted track: see PanelDesign.hpp. Properties rather
-    // than a look-and-feel flag, because the header bar's own sliders are drawn
-    // by the same object and are not knobs on a plate.
-    slider_.getProperties().set ("tezlaRelief", true);
-    slider_.getProperties().set ("tezlaSkirt", true);
-    slider_.getProperties().set ("tezlaTintTrack", true);
 
     addAndMakeVisible (slider_);
 
@@ -581,33 +562,7 @@ void KnobCell::resized()
     // the eye lands on it first; a trim is drawn smaller so it stops competing.
     // The cell keeps its footprint either way -- the grid is a grid -- and only
     // the control inside it moves.
-    float scale = 1.0f;
-
-    switch (emphasisOf (id_))
-    {
-        case design::Emphasis::lead:   scale = design::kLeadScale; break;
-        case design::Emphasis::trim:   scale = design::kTrimScale; break;
-        case design::Emphasis::normal: break;
-    }
-
-    if (! juce::approximatelyEqual (scale, 1.0f))
-    {
-        // The value text under the knob keeps its height whatever the knob
-        // does, so a row of mixed sizes still has its numbers on one line.
-        auto value = area.removeFromBottom (valueHeight());
-
-        const int wanted = juce::roundToInt (static_cast<float> (area.getHeight()) * scale);
-        const int width = juce::jmin (area.getWidth(),
-                                      juce::roundToInt (static_cast<float> (area.getWidth()) * scale));
-
-        area = juce::Rectangle<int> { width, juce::jmin (wanted, area.getHeight()) }
-                   .withCentre ({ area.getCentreX(), area.getCentreY() })
-                   .withBottom (area.getBottom());
-
-        area = area.getUnion (value.withX (area.getX()).withWidth (area.getWidth()));
-    }
-
-    slider_.setBounds (area);
+    slider_.setBounds (ui::emphasised (area, emphasisOf (id_), valueHeight()));
 }
 
 // ---------------------------------------------------------------------------

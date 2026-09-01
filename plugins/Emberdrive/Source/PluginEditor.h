@@ -11,6 +11,9 @@
 
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/HouseControls.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/LevelMeter.hpp>
 #include <tezla/ui/ModRing.hpp>
 #include <tezla/ui/ModStrip.hpp>
@@ -98,9 +101,14 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
     };
 
+    /// **Never a tick box.** A tick box says "an option in a list"; an on/off
+    /// control on an instrument is a switch, and reads faster as one -- see
+    /// ui/LampButton.hpp.
     struct Toggle
     {
-        juce::ToggleButton button;
+        explicit Toggle (const juce::String& name) : button (name) {}
+
+        ui::LampButton button;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
@@ -127,7 +135,11 @@ class EmberdriveEditor final : public juce::AudioProcessorEditor,
 {
 public:
     explicit EmberdriveEditor (EmberdriveProcessor& processorToUse);
-    ~EmberdriveEditor() override = default;
+    /// Declared rather than defaulted: a look and feel must be detached from
+    /// every component using it *before* it is destroyed, and the editor
+    /// itself is one of them. JUCE asserts on a dangling one, and only in a
+    /// debug build -- a release plugin would just read freed memory.
+    ~EmberdriveEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -148,6 +160,11 @@ private:
     ui::TooltipHost tooltips_ { *this };
 
     ui::Palette palette_;
+
+    /// Held by pointer because the palette it needs is assembled in the
+    /// constructor body, after the member initialiser list has run.
+    std::unique_ptr<ui::KnobLookAndFeel> knobLook_;
+
     std::unique_ptr<ui::HeaderBar> header_;
     std::unique_ptr<ui::ModulationView> modulation_;
     std::unique_ptr<ui::ModStrip> modStrip_;

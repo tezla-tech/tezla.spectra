@@ -12,6 +12,9 @@
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/HeaderBar.hpp>
 #include <tezla/ui/LevelMeter.hpp>
+#include <tezla/ui/HouseControls.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 
 #include "PluginProcessor.h"
@@ -122,7 +125,11 @@ class AnvilEditor final : public juce::AudioProcessorEditor,
 {
 public:
     explicit AnvilEditor (AnvilProcessor& processorToUse);
-    ~AnvilEditor() override = default;
+    /// Declared rather than defaulted: a look and feel must be detached from
+    /// every component using it *before* it is destroyed, and the editor itself
+    /// is one of them. JUCE asserts on a dangling one, and only in a debug
+    /// build -- a release plugin would just read freed memory.
+    ~AnvilEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -142,6 +149,11 @@ private:
     ui::TooltipHost tooltips_ { *this };
 
     ui::Palette palette_;
+
+    /// The house look and feel. Declared after `palette_` so the initialiser
+    /// list can hand it one, and installed on the editor so every page
+    /// inherits it -- JUCE walks up the parent chain to find one.
+    ui::KnobLookAndFeel knobLook_ { palette_ };
     std::unique_ptr<ui::HeaderBar> header_;
 
     static constexpr int kNumPages = 3;

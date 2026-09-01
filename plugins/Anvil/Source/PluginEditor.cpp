@@ -49,6 +49,17 @@ constexpr int kWorkingHeight = 74;
 /// where the transformer starts to give way; past that it is genuinely
 /// saturating, and there is another octave of it worth seeing.
 constexpr float kFluxRange = 2.0f;
+/// The control this plugin is *about* -- gain is what an amplifier is set by.
+///
+/// Drawn larger than its neighbours so the eye lands on it first; see
+/// PanelDesign.hpp for why a size is the hierarchy cue that survives being
+/// glanced at.
+[[nodiscard]] ui::design::Emphasis emphasisOf (const juce::String& id) noexcept
+{
+    return id == ids::gain ? ui::design::Emphasis::lead
+                        : ui::design::Emphasis::normal;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -148,19 +159,17 @@ void ControlPage::addKnob (const char* parameterId, const juce::String& name,
     auto knob = std::make_unique<Knob>();
 
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 96, kValueHeight);
-    knob->slider.setColour (juce::Slider::rotarySliderFillColourId, palette_.accent);
-    knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId, palette_.panel.brighter (0.25f));
-    knob->slider.setColour (juce::Slider::thumbColourId, palette_.accentBright);
-    knob->slider.setColour (juce::Slider::textBoxTextColourId, palette_.text);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    // What a house knob is lives in ui/HouseControls.hpp: relief, a machined
+    // skirt, a tinted track, the value font, and the wheel turned off so it
+    // scrolls the panel instead of editing.
+    ui::styleKnob (knob->slider, palette_, palette_.accent, emphasisOf (parameterId));
+    ui::resetsToDefault (knob->slider, state_, parameterId);
     knob->slider.setTooltip (tooltip);
     addAndMakeVisible (knob->slider);
 
     knob->label.setText (name, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.setColour (juce::Label::textColourId, palette_.dimText);
-    knob->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (knob->label, palette_, palette_.accent);
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
@@ -185,16 +194,12 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name,
     else
         jassertfalse;   // addChoice used on something that is not a choice parameter
 
-    choice->box.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.15f));
-    choice->box.setColour (juce::ComboBox::textColourId, palette_.text);
-    choice->box.setColour (juce::ComboBox::outlineColourId, palette_.panel.brighter (0.3f));
+    ui::styleChoice (choice->box, palette_, palette_.accent);
     choice->box.setTooltip (tooltip);
     addAndMakeVisible (choice->box);
 
     choice->label.setText (name, juce::dontSendNotification);
-    choice->label.setJustificationType (juce::Justification::centred);
-    choice->label.setColour (juce::Label::textColourId, palette_.dimText);
-    choice->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (choice->label, palette_, palette_.accent);
     choice->label.setTooltip (tooltip);
     addAndMakeVisible (choice->label);
 
@@ -297,7 +302,10 @@ void ControlPage::resized()
             {
                 auto& knob = *knobs_[static_cast<std::size_t> (cells_[i].index)];
                 knob.label.setBounds (cell.removeFromTop (kLabelHeight));
-                knob.slider.setBounds (cell.reduced (4, 0));
+                // **Emphasis is a size.** The cell keeps its footprint -- the
+                // grid is a grid -- and only the control inside it moves.
+                knob.slider.setBounds (ui::emphasised (cell.reduced (4, 0),
+                                                       emphasisOf (knob.id)));
                 break;
             }
             case Cell::Kind::choice:
@@ -326,6 +334,10 @@ AnvilEditor::AnvilEditor (AnvilProcessor& processorToUse)
       outputMeter_ (std::make_unique<ui::LevelMeter> (kPalette)),
       workingMeter_ (std::make_unique<WorkingMeter> (kPalette))
 {
+    // The house look and feel, installed on the editor so every page inherits
+    // it: JUCE walks up the parent chain to find one.
+    setLookAndFeel (&knobLook_);
+
     header_ = std::make_unique<ui::HeaderBar> (
         anvil_.getState(), "ANVIL",
         "Valve amplifier, speaker load and cabinet", ids::bypass, palette_);
@@ -660,6 +672,11 @@ void AnvilEditor::timerCallback()
     header_->setOtherSlotFilled (anvil_.getAbCompare().otherSlotFilled());
 
     updateForSwitches();
+}
+
+AnvilEditor::~AnvilEditor()
+{
+    setLookAndFeel (nullptr);
 }
 
 void AnvilEditor::paint (juce::Graphics& g)
