@@ -10,6 +10,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/LevelMeter.hpp>
@@ -70,43 +71,6 @@ public:
 /// that wanted a knob somewhere else had to reimplement the whole cell. Making
 /// the cell own its own layout is what lets the envelope page put six of them
 /// beside a graph without a line of duplicated code.
-/// A glowing on/off button. **Never a tick box.**
-///
-/// The brief was explicit and it is the right call: a tick box says "an option
-/// in a list of options", and a switch on a synth panel is not that -- it is a
-/// thing that is lit or dark, readable from across the room without reading the
-/// word beside it. The pill this replaces was closer, but a travelling dot is
-/// still a shape you have to look *at* rather than a state you see.
-///
-/// So: the label lives inside the button, the whole plate lights, and the lit
-/// state carries a halo the dark state does not. Three cues -- fill, text
-/// colour, glow -- because one of them is always the one a given player's eye
-/// does not pick up.
-class LampButton final : public juce::Button
-{
-public:
-    LampButton (const juce::String& name, ui::Palette palette);
-
-    void setTint (juce::Colour tint);
-
-    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
-
-private:
-    /// A flat plate that lights.
-    void paintLamp (juce::Graphics&, juce::Colour lit, bool on, bool enabled,
-                    bool highlighted, bool down);
-
-    /// A moulded cap in a recessed bezel: the fat industrial switch, which
-    /// moves as well as lighting. Both are here rather than in two classes
-    /// because they are one control drawn two ways, and the attachment, the
-    /// hit area and the legend are identical.
-    void paintBevel (juce::Graphics&, juce::Colour lit, bool on, bool enabled,
-                     bool highlighted, bool down);
-
-    ui::Palette palette_;
-    juce::Colour tint_;
-};
-
 class ParameterCell : public juce::Component
 {
 public:
@@ -147,29 +111,6 @@ class KnobCell final : public ParameterCell
 public:
     KnobCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
               const juce::String& name, const juce::String& tooltip, ui::Palette palette);
-
-    void setControlEnabled (bool enabled) override;
-    void setTint (juce::Colour tint) override;
-    void resized() override;
-
-private:
-    juce::Slider slider_;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment_;
-};
-
-/// A horizontal bar with the value written inside it.
-///
-/// The alternative to a knob for anything that is really a *level*: it reads
-/// without being hovered, it stacks at half a knob's height, and a row of them
-/// compares at a glance in a way a row of pointers does not. What it gives up
-/// is the gesture -- a knob is a thing you turn, and on an instrument that is
-/// not nothing -- which is exactly the trade the Mixer variant exists to put in
-/// front of a pair of eyes.
-class BarCell final : public ParameterCell
-{
-public:
-    BarCell (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
-             const juce::String& name, const juce::String& tooltip, ui::Palette palette);
 
     void setControlEnabled (bool enabled) override;
     void setTint (juce::Colour tint) override;
@@ -229,6 +170,7 @@ public:
                 const juce::String& name, const juce::String& tooltip, ui::Palette palette);
 
     void setControlEnabled (bool enabled) override;
+    void setTint (juce::Colour tint) override;
     void resized() override;
 
 private:
@@ -245,11 +187,10 @@ public:
     void setControlEnabled (bool enabled) override;
     void resized() override;
 
-    void setTint (juce::Colour tint) override;
-
 private:
-    /// A lamp when the design says so, a stock toggle otherwise. Both are
-    /// `juce::Button`, so the attachment does not care which is under it.
+    /// Held by base pointer because the attachment does not care which button
+    /// is under it, and because the cell's own code never needs the switch's
+    /// interface -- only `Button`'s.
     std::unique_ptr<juce::Button> button_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment_;
 };
@@ -429,7 +370,7 @@ private:
         /// component to own.
         std::vector<ParameterCell*> cells;
 
-        /// This group's own colour, when the design tints them. Held rather
+        /// This group's own colour, rotated off the page accent. Held rather
         /// than recomputed, because the cells are tinted once at build time and
         /// the plate is painted thirty times a second.
         juce::Colour tint;
@@ -438,8 +379,9 @@ private:
     };
 
     [[nodiscard]] Group& currentGroup();
-    /// How many columns a group actually gets, which with `fillRow` on is not
-    /// the number its call site asked for -- see DesignVariants.hpp.
+    /// How many columns a group actually gets, which is **not** the number its
+    /// call site asked for: a group may be widened until its row is full, down
+    /// to `design::kCellWidthMin`. See PanelDesign.hpp.
     [[nodiscard]] int columnsFor (const Group& group, int width) const;
 
     [[nodiscard]] int rowsIn (const Group& group, int width) const;

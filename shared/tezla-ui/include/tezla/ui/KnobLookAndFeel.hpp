@@ -425,6 +425,29 @@ public:
     // Boxes, buttons and furniture
     // -----------------------------------------------------------------------
 
+    /// **A dropdown wears its group's colour.**
+    ///
+    /// The version this replaced drew a dark rounded rectangle with a 35%
+    /// accent hairline round it, which on a plate of the same darkness read as
+    /// a caption rather than as a control -- and a choice is exactly the
+    /// control most easily mistaken for one, because it holds a *word* where
+    /// its neighbours hold a number. So it takes the group's hue three ways
+    /// at once: a tab down its leading edge, a wash across the fill, and a
+    /// full-strength outline.
+    ///
+    /// The tint arrives as a component property for the same reason the knob's
+    /// does -- `ComboBox::outlineColourId` has a stock default, so "has the
+    /// caller set it" is unanswerable from in here, whereas a property is
+    /// absent until somebody puts it there.
+    ///
+    /// **And a box nobody tinted is drawn exactly as it was.** This object is
+    /// the whole suite's look and feel, including panels that are not knobs on
+    /// plates at all, so the new treatment is opt-in per control rather than
+    /// applied to every combo box in every plugin at once.
+    /// The tinted tab's width, shared by the drawing and the text inset so the
+    /// two cannot drift apart.
+    static constexpr float kComboTabWidth = 4.0f;
+
     void drawComboBox (juce::Graphics& g, int width, int height, bool,
                        int, int, int, int, juce::ComboBox& box) override
     {
@@ -432,12 +455,51 @@ public:
                                                      static_cast<float> (width),
                                                      static_cast<float> (height) }.reduced (0.5f);
 
-        g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
-        g.fillRoundedRectangle (bounds, 3.0f);
+        const bool on = box.isEnabled();
+        const float radius = 3.0f;
 
-        g.setColour (box.isEnabled() ? palette_.accent.withAlpha (box.isMouseOver() ? 0.7f : 0.35f)
-                                     : palette_.panel.brighter (0.15f));
-        g.drawRoundedRectangle (bounds, 3.0f, 1.0f);
+        const auto& property = box.getProperties()["tezlaTint"];
+        const bool tinted = ! property.isVoid();
+
+        const auto tint = tinted ? juce::Colour (static_cast<juce::uint32> (
+                                       static_cast<juce::int64> (property)))
+                                 : palette_.accent;
+
+        g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
+        g.fillRoundedRectangle (bounds, radius);
+
+        if (tinted)
+        {
+            // The wash. Laid over the background rather than replacing it, so a
+            // caller that set its own `backgroundColourId` still gets it -- the
+            // hue is an addition, not an override.
+            g.setGradientFill (juce::ColourGradient (
+                tint.withAlpha (on ? 0.30f : 0.08f), bounds.getCentreX(), bounds.getY(),
+                tint.withAlpha (on ? 0.11f : 0.03f), bounds.getCentreX(), bounds.getBottom(), false));
+            g.fillRoundedRectangle (bounds, radius);
+
+            // The tab: the group spine, repeated at the scale of one control.
+            // It is the cue that survives being glanced at, because it is the
+            // only saturated thing in the cell.
+            juce::Graphics::ScopedSaveState clip { g };
+
+            juce::Path rounded;
+            rounded.addRoundedRectangle (bounds, radius);
+            g.reduceClipRegion (rounded);
+
+            g.setColour (tint.withAlpha (on ? 1.0f : 0.30f));
+            g.fillRect (bounds.withWidth (kComboTabWidth));
+
+            // The tab's own edge, so it reads as a strip laid on the box rather
+            // than as the outline having thickened on one side.
+            g.setColour (juce::Colours::black.withAlpha (0.35f));
+            g.fillRect (bounds.withX (bounds.getX() + kComboTabWidth).withWidth (1.0f));
+        }
+
+        g.setColour (on ? tint.withAlpha (tinted ? (box.isMouseOver() ? 1.0f : 0.75f)
+                                                 : (box.isMouseOver() ? 0.7f : 0.35f))
+                        : palette_.panel.brighter (0.15f));
+        g.drawRoundedRectangle (bounds, radius, 1.0f);
 
         // A chevron rather than a filled triangle: the same reason the knobs
         // are arcs.
@@ -449,14 +511,21 @@ public:
         chevron.lineTo (cx, cy + 2.0f);
         chevron.lineTo (cx + 3.5f, cy - 1.5f);
 
-        g.setColour (box.isEnabled() ? palette_.dimText : palette_.dimText.withAlpha (0.4f));
+        g.setColour (! on ? palette_.dimText.withAlpha (0.4f)
+                          : (tinted ? tint.brighter (0.30f) : palette_.dimText));
         g.strokePath (chevron, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
                                                      juce::PathStrokeType::rounded));
     }
 
     void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
     {
-        label.setBounds (6, 0, box.getWidth() - 22, box.getHeight());
+        // A tinted box carries a tab down its leading edge, and text starting
+        // on top of it reads as a typo -- so the text steps aside by the tab's
+        // width and its shadow, and only then.
+        const int left = box.getProperties().contains ("tezlaTint")
+                           ? juce::roundToInt (kComboTabWidth) + 6 : 6;
+
+        label.setBounds (left, 0, box.getWidth() - left - 16, box.getHeight());
         label.setFont (getComboBoxFont (box));
     }
 
