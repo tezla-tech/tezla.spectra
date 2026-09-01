@@ -63,6 +63,11 @@ on:
         required: false
         default: ALL
         type: string
+      skip_tests:
+        description: 'Skip the DSP tests and build the plugins directly. ONLY when they have already passed on this exact commit.'
+        required: false
+        default: false
+        type: boolean
 
 # Named so a dispatched run says what it is doing in the runs list, rather than
 # repeating the commit subject of whatever happened to be at the top.
@@ -100,6 +105,7 @@ jobs:
       plugins: ${{ steps.decide.outputs.plugins }}
       arm64: ${{ steps.decide.outputs.arm64 }}
       selection: ${{ steps.decide.outputs.selection }}
+      run_tests: ${{ steps.decide.outputs.run_tests }}
     steps:
       - id: decide
         shell: bash
@@ -112,6 +118,7 @@ jobs:
         env:
           INPUT_PLATFORMS: ${{ inputs.platforms }}
           INPUT_PLUGINS: ${{ inputs.plugins }}
+          INPUT_SKIP_TESTS: ${{ inputs.skip_tests }}
         run: |
           # Empty on a tag push, because a tag carries no inputs. Windows is
           # the default there for the same reason it is the default here.
@@ -136,6 +143,19 @@ jobs:
             exit 1
           fi
 
+          # Skipping the tests is a deliberate, narrow act: it exists because a
+          # runner can be *unavailable* rather than unhappy. The macOS DSP job
+          # sat fifteen minutes without ever being assigned a runner, was
+          # cancelled, and took the plugin build down with it -- while the same
+          # commit passed on Linux, Windows and emulated ARM64. Refusing to
+          # build in that situation protects nothing.
+          #
+          # It does NOT loosen the gate on a test that actually ran and failed:
+          # `build` below still requires success-or-skipped, and a failure is
+          # neither.
+          run_tests=true
+          [ "${INPUT_SKIP_TESTS:-false}" = "true" ] && run_tests=false
+
           if [ "$platforms" = "all" ]; then
             tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"macOS"}]'
             plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-latest","name":"macOS","artifact":"macos-vst3-au"}]'
@@ -151,8 +171,10 @@ jobs:
 
           echo "tests=$tests" >> "$GITHUB_OUTPUT"
           echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
+          [ "$run_tests" = "true" ] || arm64=false
           echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
+          echo "run_tests=$run_tests" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Covering: $platforms"
@@ -176,6 +198,7 @@ jobs:
   test:
     name: DSP tests (${{ matrix.name }})
     needs: plan
+    if: needs.plan.outputs.run_tests == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -274,7 +297,7 @@ jobs:
     # `always()`, so a genuine ARM64 failure still stops the build.
     if: >-
       ${{ !cancelled()
-          && needs.test.result == 'success'
+          && (needs.test.result == 'success' || needs.test.result == 'skipped')
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
     # A ceiling, not an estimate. Run 38's macOS job sat in a monolithic LTO
@@ -420,7 +443,7 @@ jobs:
     if: >-
       ${{ !cancelled()
           && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != '')
-          && needs.test.result == 'success'
+          && (needs.test.result == 'success' || needs.test.result == 'skipped')
           && needs.build.result == 'success'
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     needs: [plan, test, test-arm64, build]
@@ -483,7 +506,21 @@ jobs:
         shell: bash
         env:
           PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
+          RUN_TESTS: ${{ needs.plan.outputs.run_tests }}
         run: |
+          # A build with the tests skipped says so before anything else. It is
+          # not necessarily untested -- the usual reason is that they already
+          # passed on this exact commit and a runner was unavailable -- but the
+          # person downloading it is entitled to know which.
+          if [ "$RUN_TESTS" != "true" ]; then
+            {
+              echo "> **The DSP tests did not run in this build.** They were"
+              echo "> skipped deliberately; check the commit's own notes for"
+              echo "> where they last passed on this revision."
+              echo
+            } > release-notes.md
+          fi
+
           # A subset release says so first. `ALL` is the ordinary case and needs
           # no explanation; anything else is a release that does not contain
           # what the repository's plugin list would lead you to expect, and a
@@ -498,9 +535,9 @@ jobs:
               echo "full suite. Everything else in the repository is unchanged and"
               echo "simply was not compiled for this run."
               echo
-            } > release-notes.md
+            } >> release-notes.md
           else
-            : > release-notes.md
+            touch release-notes.md
           fi
 
           cat >> release-notes.md <<'NOTES'
