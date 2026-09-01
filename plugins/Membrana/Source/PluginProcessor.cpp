@@ -6,6 +6,7 @@
 // GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
 
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -570,9 +571,7 @@ void MembranaProcessor::setCurrentProgram (int index)
 
 juce::AudioProcessorEditor* MembranaProcessor::createEditor()
 {
-    // The house-design editor is MB7's phase; until it lands, the generic
-    // editor keeps every control reachable and the state testable.
-    return new juce::GenericAudioProcessorEditor (*this);
+    return new MembranaEditor (*this);
 }
 
 } // namespace tezla::membrana

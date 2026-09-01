@@ -263,7 +263,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **945 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar and Phonoss included, all eleven plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **1000 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all twelve plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -758,10 +758,11 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   `plugins/Malleus/PLAN-PHASE2.md` are complete and stay as the worked examples
   of the shape. Sonitus **phase 4 is complete**; Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
-  positions). **Membrana is in flight** — the microphone stage (`Tzmb`, before
-  Phonoss in the vocal chain), tracked in `plugins/Membrana/PLAN.md`; its three
-  source papers are user-supplied PDFs read first-hand, statuses in
-  `docs/DSP-REFERENCES.md`. Prism remains parked at the user's request.
+  positions); **Membrana is complete through MB7** — the microphone stage
+  (`Tzmb`, before Phonoss in the vocal chain), `plugins/Membrana/PLAN.md` is
+  the worked example of a plan whose three source papers were user-supplied
+  PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). No plugin is
+  currently in flight; Prism remains parked at the user's request.
 - Prefer a working, measurable, minimal version early over a large unproven
   one. Get it building on Windows, get it loading in FL Studio, then refine
   the sound with the user in the loop — the user's ears are the acceptance test.

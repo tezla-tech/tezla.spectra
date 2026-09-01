@@ -14,5 +14,6 @@ tezla_add_plugin(
     VST3_CATEGORIES Fx EQ Dynamics
     SOURCES
         Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
     INCLUDE_DIRS
         "${CMAKE_CURRENT_LIST_DIR}/Dsp")

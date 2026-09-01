@@ -434,9 +434,27 @@ CLAUDE.md.
 | MB4 DetailLift | done |
 | MB5 MembranaEngine | done |
 | MB6 JUCE layer + measure command | done |
-| MB7 editor + close-out | pending |
+| MB7 editor + close-out | done |
 
-**To resume** (a later phase, or a fix): read CLAUDE.md in full, then this
+**All eight phases are done; Membrana v0.1.0 ships.** What remains is not a
+phase: it is the rig test -- nobody has loaded this into FL Studio, and no
+vocal has been through it. That is the acceptance test, and the numbers
+below do not substitute for it.
+
+Measured at close-out (`tezla-measure membrana`, 48 kHz):
+
+| claim | figure |
+|---|---|
+| neutral identity | **40001 of 40001 samples bit-identical** |
+| capsule fit, rendered vs analytic | worst **0.023 dB** (700 Hz-20 kHz) |
+| rate independence 44.1/48/96/192 | worst spread **0.012 dB** |
+| autoLevel holding 1 kHz over the distance sweep | worst **0.0004 dB** |
+| gain-ride modulation residue, maximum settings | **-149.8 dBFS RMS** |
+| hiss below the floor, full detail | lifted **0.000000000 dB** |
+| a vowel alone, any level, full detail | **exactly zero** lift |
+| CPU, everything engaged, stereo 48 kHz / 480 | **1.36%** of a core |
+
+**To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
 file; take the first `pending` phase. The non-negotiables that every phase
 here honours, in one place:
 
