@@ -156,15 +156,18 @@ jobs:
           run_tests=true
           [ "${INPUT_SKIP_TESTS:-false}" = "true" ] && run_tests=false
 
-          # `macos-14` rather than `macos-latest`, and it is an experiment, not
-          # a fix: four macOS jobs in a row have been cancelled at exactly
-          # 15m01s with no runner ever assigned, while Windows picks one up in
-          # three seconds. That pattern says the account has no macOS runner
-          # entitlement, which no label reaches -- but a different runner pool
-          # costs nothing to try, because the leg now runs in parallel with
-          # Windows and no longer blocks the release. If a macOS build appears,
-          # the cause is confounded between the label and capacity recovering;
-          # say so rather than crediting the label.
+          # `macos-14` rather than `macos-latest`. This started as an
+          # experiment against four macOS jobs cancelled at exactly 15m01s with
+          # no runner ever assigned, and on run 51 a runner was assigned in
+          # **three seconds**, so starvation is no longer the failure mode.
+          #
+          # The cause stays confounded and should be reported that way: the
+          # label changed at the same moment capacity may simply have
+          # recovered, and one run cannot separate them. Keep `macos-14`
+          # because it works, not because it is proven to be why.
+          #
+          # Starvation was replaced by a harder limit -- see the Build step's
+          # duration note below.
           if [ "$platforms" = "all" ]; then
             tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-14","name":"macOS"}]'
             plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-14","name":"macOS","artifact":"macos-vst3-au"}]'
@@ -413,6 +416,25 @@ jobs:
                 -DTEZLA_BUILD_TESTS=OFF \
                 -DTEZLA_BUILD_TOOLS=OFF
 
+      # **A twelve-plugin universal macOS build does not fit in six hours.**
+      # Measured on run 51, both legs from the same commit, same JUCE cache:
+      #
+      #   Windows, VST3, x86-64, 4-core runner        37m49s   -> uploaded
+      #   macOS, VST3 + AU, arm64 + x86_64, 3 cores   6h04m23s -> KILLED
+      #
+      # GitHub cancelled the macOS job at 19:46:07, 6h05m after it started, on
+      # its own 360-minute ceiling -- `timeout-minutes` above cannot raise
+      # that. Nothing was wrong with the build: no compile error in six hours
+      # of Apple clang, which is the first time this suite has ever been
+      # compiled on a Mac.
+      #
+      # It is simply ~4x the work on ~3/4 of the cores: two architectures times
+      # two plugin formats. The fixes, none of which should be applied without
+      # asking, because each costs something real:
+      #   * arm64 only -- roughly halves it, loses Intel Mac support;
+      #   * the `plugins` input -- a few plugins per run, no single suite zip;
+      #   * split the matrix per format or per architecture -- more jobs, and
+      #     the release layout changes.
       - name: Build
         shell: bash
         run: cmake --build build --config Release --parallel
@@ -582,6 +604,11 @@ jobs:
         shell: bash
         env:
           PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
+          # What the run PLANNED to build, which is not the same as what it
+          # produced. Needed to tell "macOS was never asked for" apart from
+          # "macOS was asked for and did not finish" -- see the note at the
+          # bottom of this step.
+          PLANNED_PLATFORMS: ${{ needs.plan.outputs.plugins }}
         run: |
           # A subset release says so first. `ALL` is the ordinary case and needs
           # no explanation; anything else is a release that does not contain
@@ -660,6 +687,25 @@ jobs:
 
           Full instructions: [docs/BUILD.md](docs/BUILD.md) and
           [docs/BUILD-MACOS.md](docs/BUILD-MACOS.md).
+          NOTES
+          # No macOS zip has two very different causes, and telling somebody to
+          # "run with platforms=all" when they already did is worse than saying
+          # nothing. v0.88.8-alpha shipped with exactly that wrong sentence:
+          # platforms WAS all, the macOS job built for six hours, and GitHub
+          # killed it at the 360-minute cap. So decide from what the run
+          # PLANNED, not merely from what it produced.
+          elif printf '%s' "$PLANNED_PLATFORMS" | grep -q '"name":"macOS"'; then
+          cat >> release-notes.md <<'NOTES'
+
+          _This release is **Windows only**, and not by choice: a macOS build
+          was part of this run and did not produce binaries. A twelve-plugin
+          universal macOS build (Apple Silicon **and** Intel, VST3 **and** Audio
+          Unit) does not reliably fit inside GitHub's six-hour job limit._
+
+          _The Windows binaries here are unaffected — they were built,
+          collected and uploaded before that happened._
+
+          Full instructions: [docs/BUILD.md](docs/BUILD.md).
           NOTES
           else
           cat >> release-notes.md <<'NOTES'

@@ -235,42 +235,83 @@ did or did not happen is on the run page rather than only in this file.
 
 ### A cancelled macOS job does not cancel the release
 
-**Observed, four runs in a row (45, 47, 49, 50, 2026-09-01):** the macOS job is
-cancelled by GitHub at *exactly* 15 minutes and 1 second after it is created,
-with `runner_id: 0` — meaning no runner was ever assigned to it. The Windows job
-in the same runs picks up a runner in **three seconds**. Nothing is wrong with
-the workflow, the code, or the label: the account is not being given a macOS
-runner.
+**This is the single most expensive lesson in this file.** Five release runs on
+2026-09-01 produced nothing, and not one of them failed for a reason connected
+to the code.
 
-That used to be fatal to the whole release, and the mechanism is worth writing
-down because it is not obvious. A matrix job's aggregate `result` is
-`cancelled` if **any** leg was cancelled — so one starved macOS leg made
-`needs.test.result` and `needs.build.result` read `cancelled`, which matched
-neither `success` nor `skipped`, which skipped `build` and then `release`. Run
-47 threw away a completed Windows test job and never even started the Windows
-plugin build, for a reason that had nothing to do with either.
+The mechanism is worth writing down because it is not obvious. **A matrix job's
+aggregate `result` is `cancelled` if *any* leg was cancelled.** One dead macOS
+leg therefore made `needs.test.result` and `needs.build.result` read
+`cancelled`, which matched neither `success` nor `skipped`, which skipped
+`build` and then `release`. Run 47 threw away a completed Windows test job and
+never even started the Windows plugin build. Run 50 was thirty minutes into a
+healthy twelve-plugin Windows build whose release had already been doomed by a
+job that died fifteen minutes in.
 
 So `build` and `release` now accept `cancelled` from `test`, `release` accepts
 anything but `skipped` from `build`, and the macOS *build* leg additionally
-carries `continue-on-error`. What still stops a release, deliberately:
+carries `continue-on-error` (keyed on `matrix.name`, not `matrix.os`, so it
+cannot silently stop matching when the runner label moves). Note that
+`continue-on-error` was **not** sufficient on its own: it converts a *failure*,
+and a job cancelled for want of a runner — or killed at a time limit — is not a
+failure. The `if` gates are the load-bearing half.
 
-- a test that **ran and failed** (`failure` is not in either list);
+**Proven, not theorised:** on run 51 the macOS leg was cancelled and the
+release published anyway, carrying the Windows binaries. That also settles a
+documentation ambiguity — `!cancelled()` does *not* block a job whose
+dependency was cancelled; it only blocks when the whole run is cancelled.
+
+What still stops a release, deliberately:
+
+- a test that **ran and failed** (`failure` is in neither list);
 - somebody cancelling the whole run (`!cancelled()`);
 - nothing having been built at all — the Package step exits 1 when no
   artefacts were downloaded, so a run where every leg died publishes nothing
   rather than an empty release.
 
-A Windows-only release still says so: the notes only describe the macOS half
-when a macOS zip is actually present.
+### Two different macOS failures, and only one of them is fixed
 
-**None of this makes a Mac build happen.** It is a workflow that stops
-punishing Windows for it. The fix is on the billing account — macOS runners on
-a private repository need a plan that includes them and a spending limit that
-has not been reached (**Settings → Billing**). As an experiment the label was
-moved from `macos-latest` to `macos-14`, which costs nothing now that the leg
-runs in parallel and blocks nothing; if a macOS build does appear, the cause is
-confounded between the label and capacity recovering, and should be reported
-that way rather than credited to the label.
+Do not conflate these; the first was diagnosed wrongly for several hours.
+
+**1. Starvation (runs 45, 47, 49, 50).** The macOS job cancelled at *exactly*
+15m01s after creation with `runner_id: 0` — no runner ever assigned — while
+Windows picked one up in three seconds. This looked like an account-level
+entitlement problem. On run 51, with the label moved from `macos-latest` to
+`macos-14`, a runner was assigned in **three seconds**. So the entitlement
+reading was probably wrong. **The cause remains confounded** — the label
+changed at the same moment capacity may simply have recovered, and one run
+cannot separate them. Keep `macos-14` because it works, not because it is
+proven to be why.
+
+**2. Duration (run 51) — unresolved.** Same commit, same JUCE cache, both legs
+side by side:
+
+| Leg | Formats | Architectures | Cores | Build step |
+|---|---|---|---|---|
+| Windows | VST3 | x86-64 | 4 | **37m49s** → uploaded |
+| macOS | VST3 + AU | arm64 + x86_64 | 3 | **6h04m23s** → killed |
+
+GitHub cancelled the macOS job on its own **360-minute ceiling**, which
+`timeout-minutes` cannot raise. Nothing was wrong with the build — six hours of
+Apple clang with no compile error, the first time this suite has ever been
+compiled on a Mac. It is simply about four times the work on three quarters of
+the cores: two architectures times two plugin formats.
+
+A twelve-plugin universal macOS build therefore **does not reliably fit in a
+GitHub-hosted job.** The options, each costing something real, none to be
+chosen without asking:
+
+- **arm64 only** — roughly halves the compile, loses Intel Mac support;
+- **the `plugins` input** — a few plugins per run, no single whole-suite zip;
+- **split the matrix** per format or per architecture — more jobs, and the
+  release layout changes.
+
+A Windows-only release says which of these two situations it is in: the notes
+distinguish "macOS was never asked for" from "macOS was asked for and did not
+produce binaries", decided from what the run *planned* rather than from what it
+produced. v0.88.8-alpha shipped before that distinction existed and carries the
+wrong sentence — it tells the reader to re-run with `platforms: all`, which is
+exactly what had been done.
 
 ---
 
