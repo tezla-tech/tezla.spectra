@@ -50,15 +50,18 @@ compiles cleanly, runs happily and does nothing there — which is exactly how a
 denormal guard that only handled x86 reached a release. This job catches that
 class of bug in about a minute on a 1× runner, rather than waiting on a Mac.
 
-**Currently switched off, deliberately — see CLAUDE.md §2.3.** The job is
-skipped on the default `windows` run, and the local reproduction below should
-not be run either, until the x86-64 Windows build is bug-squashed and
-feature-complete. The technique is right; the timing is not, and every minute
-spent here is a minute not spent on the platform the plugins are actually being
-played on. It is written down so it is ready when the gate lifts.
+**Normally switched off, deliberately — see CLAUDE.md §2.3.** The job is
+skipped on the default `windows` run, and the local reproduction below is not
+run either, until the x86-64 Windows build is bug-squashed and feature-complete.
+The technique is right; the timing is not, and every minute spent here is a
+minute not spent on the platform the plugins are actually being played on. It is
+written down so it is ready when the gate lifts.
 
-Reproduce it locally, once it does, with `gcc-aarch64-linux-gnu` and `qemu-user`
-installed:
+It has been run **once** since, on 2026-09-01, because the user asked directly
+for a macOS/Apple-Silicon build — the `v0.88.8-sonitus` and `v0.88.8` runs. That
+was an exception to the gate and not the lifting of it.
+
+Reproduce it locally, with `gcc-aarch64-linux-gnu` and `qemu-user` installed:
 
 ```bash
 cmake -B build-arm -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -82,6 +85,24 @@ Windows and macOS build the actual plugins and upload them as run artifacts:
 workflow form takes `windows` (the default) or `all`; a tag push covers Windows.
 `all` adds the macOS DSP tests, the macOS plugin build and the emulated ARM64
 suite.
+
+**And only some plugins, if you ask for that.** The "plugins" box takes `ALL`
+(the default) or a comma-separated list of names — `Sonitus`, or
+`Emberdrive,Halo`. It narrows the *plugin build* and nothing else: the DSP tests
+still cover the whole tree, because they are framework-free and cost a minute.
+An unknown name fails the configure with the list of real ones; anything that is
+not a plain comma-separated list of names is rejected by the plan job before it
+can reach a `-D` flag.
+
+It exists so an expensive platform can be proved on one plugin before the suite
+is committed to it. That is how the first macOS/Apple-Silicon run was done:
+`v0.88.8-sonitus` built one plugin on both platforms, and `v0.88.8` followed for
+all twelve once it was green. A subset release says so in the first line of its
+own notes, because a download whose contents you have to guess at becomes a bug
+report later.
+
+The plugin job also carries a **90-minute ceiling**. That is a guard, not an
+estimate — see **Cost** below for the six-hour run it exists because of.
 
 That is a phase rather than a policy, and CLAUDE.md §2.3 says when it ends: the
 x86-64 Windows build being finished. The rig is Windows 11 and FL Studio and
@@ -181,6 +202,14 @@ MSVC's LTCG. JUCE's recommended flag is a plain `-flto`, which on Apple clang
 means *monolithic* LTO — the whole program merged into one module and optimised
 on one core — for six plugins in two formats, twice over for a universal binary.
 `TEZLA_LTO` is now **off** by default; see [`BUILD.md`](BUILD.md#a-note-on-tezla_lto).
+The workflow does not pass it, so nothing turns it back on by accident.
+
+Two things guard against the next one. The plugin job has a **90-minute
+`timeout-minutes`**, so a hang costs ninety minutes of a 10× runner rather than
+however long it takes somebody to notice. And the **plugins box** lets an
+expensive platform be proved on one plugin first — which matters more now than
+it did when that table was measured, because there were six plugins then and
+there are twelve today.
 
 If you later want the cheap `test` job back on every push while leaving the
 expensive `build` job manual, split it into a second workflow file with its own
@@ -204,15 +233,27 @@ not have.
 
 ## A caveat about this workflow
 
-It has been reasoned about carefully and its shell steps were run locally
-against real build output, but **it has never executed on a Windows or macOS
-runner** — this project is developed in a Linux container. The first push may
-well need a fix. The likeliest candidates:
+That paragraph used to say the workflow had never run on a Windows or macOS
+runner. It has: run 23 built and uploaded a Windows VST3 bundle and a macOS
+universal VST3 + AU bundle, and run 36 passed the DSP tests on Linux, Windows,
+macOS and emulated ARM64. Bundle collection on Windows — where a VST3 bundle is
+a *folder* containing `Contents/x86_64-win/Name.vst3`, a file with the same
+extension, which is why the workflow matches `-type d` — is settled by those
+runs, and so is quoting under Git Bash.
 
-- **Bundle collection on Windows.** A VST3 bundle there is a *folder* containing
-  `Contents/x86_64-win/Name.vst3`, a file with the same extension. The workflow
-  matches `-type d` for exactly this reason, but that specific case could not be
-  verified here.
-- **Path and quoting behaviour under Git Bash on the Windows runner.** All steps
-  use `shell: bash` for consistency; the plugin names contain spaces.
-- **macOS universal builds** may need a longer timeout than the default.
+**The caveat that remains is the one that matters, and no CI run can retire
+it:** nobody has loaded any of these bundles into a DAW, on either platform.
+This project is developed in a Linux container. "CI is green" means the code
+compiles and the DSP measures correctly. It does not mean FL Studio scans the
+plugin, Logic loads the Audio Unit, or Gatekeeper lets a downloaded build run.
+Say which of those you mean rather than letting one stand for all of them.
+
+Two smaller things are still unproven here:
+
+- **Whether a 90-minute plugin job is enough for a twelve-plugin universal
+  macOS build.** The timeout is a guard chosen against a nine-minute Windows
+  build and a six-hour LTO pathology, not a measurement. If it ever trips, read
+  the job's timing before raising it — a hang and a slow build want different
+  fixes.
+- **The `auval` and `validator` runs**, which happen locally and not here. See
+  **What CI does not do**.
