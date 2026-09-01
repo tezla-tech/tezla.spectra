@@ -758,8 +758,10 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   `plugins/Malleus/PLAN-PHASE2.md` are complete and stay as the worked examples
   of the shape. Sonitus **phase 4 is complete**; Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
-  positions). No plugin is currently in flight; Prism remains parked at the
-  user's request.
+  positions). **Membrana is in flight** — the microphone stage (`Tzmb`, before
+  Phonoss in the vocal chain), tracked in `plugins/Membrana/PLAN.md`; its three
+  source papers are user-supplied PDFs read first-hand, statuses in
+  `docs/DSP-REFERENCES.md`. Prism remains parked at the user's request.
 - Prefer a working, measurable, minimal version early over a large unproven
   one. Get it building on Windows, get it loading in FL Studio, then refine
   the sound with the user in the loop — the user's ears are the acceptance test.

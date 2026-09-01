@@ -38,6 +38,12 @@
 // licence for the fancier construction, and the linear-phase form remains
 // the documented fallback if that match ever degrades.
 //
+// The cepstrum machinery was written here and later lifted, unchanged, to
+// tezla::dsp::MinimumPhaseFir so Membrana's capsule EQ could use it; the
+// byte-identity regression in tests/test_MinimumPhaseFir.cpp pins this
+// file's designed taps to the exact pre-lift bit patterns, so the lift can
+// never quietly re-voice a tape machine already used in a project.
+//
 // The design runs on a 1024-point FFT rebuilt only when speed or geometry
 // moves -- bounded work with no allocation, the same budget as Emberdrive's
 // voicing probe, and every change lands through an equal-power crossfade
@@ -63,6 +69,7 @@
 
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Exact.hpp>
+#include <tezla/dsp/MinimumPhaseFir.hpp>
 
 namespace tezla::ferrite {
 
@@ -218,6 +225,16 @@ public:
         return std::sqrt (re * re + im * im);
     }
 
+    /// The active designed taps, raw. For the byte-identity regression that
+    /// pins the shared MinimumPhaseFir against the design this file carried
+    /// before the machinery was lifted (bit patterns, not tolerances).
+    [[nodiscard]] const double* activeTapData() const noexcept
+    {
+        return states_[active_].taps.data();
+    }
+
+    [[nodiscard]] int activeTapCount() const noexcept { return activeTaps_; }
+
     /// Energy fraction inside the first `front` taps: the minimum-phase
     /// claim, measurable.
     [[nodiscard]] double frontLoadedEnergy (int front) const noexcept
@@ -303,18 +320,22 @@ private:
     }
 
     /// The whole design: sample the analytic magnitude, real-cepstrum it to
-    /// minimum phase, truncate to kTaps. Bounded work, no allocation.
+    /// minimum phase through the shared designer, truncate to the active
+    /// taps. Bounded work, no allocation. The designer was THIS file's code
+    /// before it was lifted to shared/ for Membrana; the byte-identity
+    /// regression in tests/test_MinimumPhaseFir.cpp holds it to these exact
+    /// bits.
     void designInto (int slot) noexcept
     {
-        // 1. Log-magnitude at the FFT bins, symmetric about Nyquist. The
-        // floor keeps the gap null (a true zero) out of the logarithm; a
-        // minimum-phase system cannot carry a zero on the unit circle
-        // anyway. -60 dB rather than lower is a measured choice: at 192 kHz
-        // and 7.5 ips the curve spends most of the band under any floor,
-        // and a deeper one stretches the impulse past what 128 taps carry
-        // -- the match at the -33 dB point read 1.1 dB off with -80 dB here,
-        // 0.2 dB with -60.
-        std::array<double, kFft> logMag {};
+        // Log-magnitude at the FFT bins up to Nyquist. The floor keeps the
+        // gap null (a true zero) out of the logarithm; a minimum-phase
+        // system cannot carry a zero on the unit circle anyway. -60 dB
+        // rather than lower is a measured choice: at 192 kHz and 7.5 ips
+        // the curve spends most of the band under any floor, and a deeper
+        // one stretches the impulse past what 128 taps carry -- the match
+        // at the -33 dB point read 1.1 dB off with -80 dB here, 0.2 with
+        // -60.
+        std::array<double, kFft / 2 + 1> halfLog {};
 
         for (int bin = 0; bin <= kFft / 2; ++bin)
         {
@@ -325,109 +346,17 @@ private:
             if (magnitude < 1.0e-3)
                 magnitude = 1.0e-3;
 
-            logMag[static_cast<std::size_t> (bin)] = std::log (magnitude);
-
-            if (bin > 0 && bin < kFft / 2)
-                logMag[static_cast<std::size_t> (kFft - bin)] =
-                    logMag[static_cast<std::size_t> (bin)];
+            halfLog[static_cast<std::size_t> (bin)] = std::log (magnitude);
         }
 
-        // 2. Real cepstrum: inverse FFT of the log magnitude (real, even).
-        std::array<double, kFft> re {}, im {};
-        fft (logMag.data(), nullptr, re.data(), im.data(), true);
+        tezla::dsp::MinimumPhaseFir<kFft>::design (halfLog.data(),
+                                                   states_[slot].taps.data(),
+                                                   activeTaps_);
 
-        // 3. Fold the anticausal half onto the causal: the minimum-phase
-        // cepstrum keeps c[0] and the Nyquist point, doubles 1..N/2-1, and
-        // zeroes the rest.
-        std::array<double, kFft> folded {};
-        folded[0] = re[0];
-        folded[kFft / 2] = re[kFft / 2];
-
-        for (int n = 1; n < kFft / 2; ++n)
-            folded[static_cast<std::size_t> (n)] = 2.0 * re[static_cast<std::size_t> (n)];
-
-        // 4. Exponentiate in the frequency domain and come back to time.
-        std::array<double, kFft> fre {}, fim {};
-        fft (folded.data(), nullptr, fre.data(), fim.data(), false);
-
-        for (int bin = 0; bin < kFft; ++bin)
-        {
-            const double magnitude = std::exp (fre[static_cast<std::size_t> (bin)]);
-            const double phase = fim[static_cast<std::size_t> (bin)];
-            fre[static_cast<std::size_t> (bin)] = magnitude * std::cos (phase);
-            fim[static_cast<std::size_t> (bin)] = magnitude * std::sin (phase);
-        }
-
-        std::array<double, kFft> hre {}, him {};
-        fft (fre.data(), fim.data(), hre.data(), him.data(), true);
-
-        for (int n = 0; n < activeTaps_; ++n)
-            states_[slot].taps[static_cast<std::size_t> (n)] =
-                hre[static_cast<std::size_t> (n)];
-
-        // 5. The bump, scaled by the amount control.
+        // The bump, scaled by the amount control.
         const double bumpDb = kBaseBumpDb * bumpAmount_;
         states_[slot].bump.setCoefficients (tezla::dsp::design::peak (
             bumpFrequencyFor (speedIps_), kBumpQ, bumpDb, sampleRate_));
-    }
-
-    /// Radix-2 decimation-in-time FFT, 512 points, design-time only. The
-    /// textbook algorithm, written here rather than pulled from a library
-    /// because eighty lines beat a dependency for a prepare-time task.
-    /// `inverse` includes the 1/N.
-    static void fft (const double* inRe, const double* inIm,
-                     double* outRe, double* outIm, bool inverse) noexcept
-    {
-        // Bit-reversed copy in.
-        for (int i = 0; i < kFft; ++i)
-        {
-            int reversed = 0;
-
-            for (int bit = 0; bit < 10; ++bit)   // 2^10 = 1024
-                reversed |= ((i >> bit) & 1) << (9 - bit);
-
-            outRe[reversed] = inRe[i];
-            outIm[reversed] = inIm != nullptr ? inIm[i] : 0.0;
-        }
-
-        for (int length = 2; length <= kFft; length <<= 1)
-        {
-            const double angle = (inverse ? 2.0 : -2.0) * kPi / length;
-            const double wRe = std::cos (angle);
-            const double wIm = std::sin (angle);
-
-            for (int start = 0; start < kFft; start += length)
-            {
-                double twRe = 1.0, twIm = 0.0;
-
-                for (int k = 0; k < length / 2; ++k)
-                {
-                    const int even = start + k;
-                    const int odd = start + k + length / 2;
-
-                    const double oddRe = outRe[odd] * twRe - outIm[odd] * twIm;
-                    const double oddIm = outRe[odd] * twIm + outIm[odd] * twRe;
-
-                    outRe[odd] = outRe[even] - oddRe;
-                    outIm[odd] = outIm[even] - oddIm;
-                    outRe[even] += oddRe;
-                    outIm[even] += oddIm;
-
-                    const double nextRe = twRe * wRe - twIm * wIm;
-                    twIm = twRe * wIm + twIm * wRe;
-                    twRe = nextRe;
-                }
-            }
-        }
-
-        if (inverse)
-        {
-            for (int i = 0; i < kFft; ++i)
-            {
-                outRe[i] /= kFft;
-                outIm[i] /= kFft;
-            }
-        }
     }
 
     double sampleRate_ { 48000.0 };
