@@ -37,6 +37,18 @@ constexpr int kHeaderHeight = 40;
 constexpr int kTabHeight = 28;
 constexpr int kKeypadHeight = 250;
 constexpr int kDialRowHeight = 30;
+/// The control this plugin is *about* -- Band is the telephone line, and
+/// narrowing it is the whole sound.
+///
+/// Drawn larger than its neighbours so the eye lands on it first; see
+/// PanelDesign.hpp for why a size is the hierarchy cue that survives being
+/// glanced at.
+[[nodiscard]] ui::design::Emphasis emphasisOf (const juce::String& id) noexcept
+{
+    return id == ids::band ? ui::design::Emphasis::lead
+                        : ui::design::Emphasis::normal;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -392,21 +404,17 @@ void ControlPage::addKnob (const char* parameterId, const juce::String& name,
     auto knob = std::make_unique<Knob>();
 
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-    knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 96, kValueHeight);
-    knob->slider.setColour (juce::Slider::rotarySliderFillColourId, palette_.accent);
-    knob->slider.setColour (juce::Slider::rotarySliderOutlineColourId,
-                            palette_.panel.brighter (0.25f));
-    knob->slider.setColour (juce::Slider::thumbColourId, palette_.accentBright);
-    knob->slider.setColour (juce::Slider::textBoxTextColourId, palette_.text);
-    knob->slider.setColour (juce::Slider::textBoxOutlineColourId,
-                            juce::Colours::transparentBlack);
+
+    // What a house knob is lives in ui/HouseControls.hpp: relief, a machined
+    // skirt, a tinted track, the value font, and the wheel turned off so it
+    // scrolls the panel instead of editing.
+    ui::styleKnob (knob->slider, palette_, palette_.accent, emphasisOf (parameterId));
+    ui::resetsToDefault (knob->slider, state_, parameterId);
     knob->slider.setTooltip (tooltip);
     addAndMakeVisible (knob->slider);
 
     knob->label.setText (name, juce::dontSendNotification);
-    knob->label.setJustificationType (juce::Justification::centred);
-    knob->label.setColour (juce::Label::textColourId, palette_.dimText);
-    knob->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (knob->label, palette_, palette_.accent);
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
@@ -431,16 +439,12 @@ void ControlPage::addChoice (const char* parameterId, const juce::String& name,
     else
         jassertfalse;   // addChoice used on something that is not a choice parameter
 
-    choice->box.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.15f));
-    choice->box.setColour (juce::ComboBox::textColourId, palette_.text);
-    choice->box.setColour (juce::ComboBox::outlineColourId, palette_.panel.brighter (0.3f));
+    ui::styleChoice (choice->box, palette_, palette_.accent);
     choice->box.setTooltip (tooltip);
     addAndMakeVisible (choice->box);
 
     choice->label.setText (name, juce::dontSendNotification);
-    choice->label.setJustificationType (juce::Justification::centred);
-    choice->label.setColour (juce::Label::textColourId, palette_.dimText);
-    choice->label.setFont (juce::FontOptions (12.0f));
+    ui::styleName (choice->label, palette_, palette_.accent);
     choice->label.setTooltip (tooltip);
     addAndMakeVisible (choice->label);
 
@@ -467,6 +471,17 @@ void ControlPage::setNote (const juce::String& note)
     repaint();
 }
 
+/// The colour `ui::styleName` gave every name on this page.
+///
+/// Held as a function rather than repeated at the two disable sites: a name
+/// greyed back to the plain dim text would lose its accent warmth the first
+/// time a control was switched off and never get it back, which reads as one
+/// label in the wrong colour and is exactly the kind of thing nobody finds.
+[[nodiscard]] juce::Colour ControlPage::nameColour() const
+{
+    return palette_.dimText.interpolatedWith (palette_.accent, ui::design::kLabelTint);
+}
+
 void ControlPage::setControlEnabled (const char* parameterId, bool enabled)
 {
     const juce::String id { parameterId };
@@ -476,8 +491,7 @@ void ControlPage::setControlEnabled (const char* parameterId, bool enabled)
         {
             knob->slider.setEnabled (enabled);
             knob->label.setColour (juce::Label::textColourId,
-                                   enabled ? palette_.dimText
-                                           : palette_.dimText.withAlpha (0.35f));
+                                   enabled ? nameColour() : nameColour().withAlpha (0.35f));
             knob->label.repaint();
         }
 
@@ -486,8 +500,7 @@ void ControlPage::setControlEnabled (const char* parameterId, bool enabled)
         {
             choice->box.setEnabled (enabled);
             choice->label.setColour (juce::Label::textColourId,
-                                     enabled ? palette_.dimText
-                                             : palette_.dimText.withAlpha (0.35f));
+                                     enabled ? nameColour() : nameColour().withAlpha (0.35f));
             choice->label.repaint();
         }
 }
@@ -552,7 +565,10 @@ void ControlPage::resized()
             {
                 auto& knob = *knobs_[static_cast<std::size_t> (cells_[i].index)];
                 knob.label.setBounds (cell.removeFromTop (kLabelHeight));
-                knob.slider.setBounds (cell.reduced (4, 0));
+                // **Emphasis is a size.** The cell keeps its footprint -- the
+                // grid is a grid -- and only the control inside it moves.
+                knob.slider.setBounds (ui::emphasised (cell.reduced (4, 0),
+                                                       emphasisOf (knob.id)));
                 break;
             }
             case Cell::Kind::choice:
@@ -578,6 +594,10 @@ CrossbarEditor::CrossbarEditor (CrossbarProcessor& processorToUse)
       crossbar_ (processorToUse),
       palette_ (kPalette)
 {
+    // The house look and feel, installed on the editor so every page inherits
+    // it: JUCE walks up the parent chain to find one.
+    setLookAndFeel (&knobLook_);
+
     titleLabel_.setText ("CROSSBAR", juce::dontSendNotification);
     titleLabel_.setFont (juce::FontOptions (20.0f, juce::Font::bold));
     titleLabel_.setColour (juce::Label::textColourId, palette_.text);
@@ -682,7 +702,14 @@ CrossbarEditor::CrossbarEditor (CrossbarProcessor& processorToUse)
     startTimerHz (15);
 }
 
-CrossbarEditor::~CrossbarEditor() = default;
+CrossbarEditor::~CrossbarEditor()
+{
+    // A look and feel must be detached from every component using it *before*
+    // it is destroyed, and the editor itself is one of them. JUCE asserts on a
+    // dangling one, and only in a debug build -- a release plugin would just
+    // read freed memory.
+    setLookAndFeel (nullptr);
+}
 
 void CrossbarEditor::buildPages()
 {

@@ -172,6 +172,35 @@ them rather than by drawing mockups. What they say:
   an instruction: the layout raises them until the row is full, down to
   `design::kCellWidthMin`, rather than centring a short group in a sea of metal.
 
+**How a plugin gets it**: install `ui::KnobLookAndFeel` on the editor (JUCE
+walks up the parent chain, so every page inherits it), then call the four
+functions in `shared/tezla-ui/include/tezla/ui/HouseControls.hpp` —
+`styleKnob`, `styleChoice`, `styleName`, `emphasised` — and use
+`ui::LampButton` for every on/off control.
+
+They are functions rather than five lines repeated per editor for a reason.
+`KnobLookAndFeel` draws relief only if the knob *asks*: the properties are
+opt-in, because the same object draws the header bar's sliders and a meter's
+scale and those are not knobs on a plate. Across eleven editors and a couple of
+hundred controls, one that missed a line reads as a knob drawn flat next to ten
+in relief — the same shape of bug as a target nobody built and a guard placed
+at one of two call sites. Put the thing that must be consistent in the object
+that knows, and call it.
+
+Two mechanical things that are easy to get wrong:
+
+- **A look and feel must be detached before it is destroyed.** Declare the
+  editor's destructor and call `setLookAndFeel (nullptr)` in it. JUCE asserts on
+  a dangling one only in a debug build; a release plugin reads freed memory.
+- **A lit switch needs room outside itself.** JUCE clips a component's painting
+  to its own bounds, silently, so a halo drawn past them never reaches the
+  screen. Size the button with `ui::LampButton::sized (w, h)`, which adds the
+  margin.
+
+Transpectus is the deliberate exception: it is mostly analysis windows rather
+than knobs on plates, it has its own look, and it does not use
+`KnobLookAndFeel` at all.
+
 ---
 
 ## Latency and bypass

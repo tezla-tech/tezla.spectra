@@ -15,6 +15,9 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <tezla/ui/HouseControls.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 
@@ -128,6 +131,10 @@ public:
     /// broken plugin.
     void setControlEnabled (const char* parameterId, bool enabled);
 
+    /// The colour every name on this page was given, so switching a control off
+    /// and on again returns it to the right one.
+    [[nodiscard]] juce::Colour nameColour() const;
+
     void paint (juce::Graphics&) override;
     void resized() override;
 
@@ -190,6 +197,11 @@ private:
 
     ui::TooltipHost tooltips_ { *this };
     ui::Palette palette_;
+
+    /// The house look and feel. Declared after `palette_` so the initialiser
+    /// list can hand it one, and installed on the editor so every page inherits
+    /// it -- JUCE walks up the parent chain to find one.
+    ui::KnobLookAndFeel knobLook_ { palette_ };
 
     std::unique_ptr<KeypadView> keypad_;
 

@@ -19,6 +19,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/HouseControls.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/TuningPanel.hpp>

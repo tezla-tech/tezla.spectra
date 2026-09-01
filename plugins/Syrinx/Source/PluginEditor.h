@@ -15,6 +15,9 @@
 
 #include <tezla/ui/HeaderBar.hpp>
 #include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/HouseControls.hpp>
+#include <tezla/ui/KnobLookAndFeel.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 
@@ -135,10 +138,15 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
+    /// **Never a tick box.** A tick box says "an option in a list"; an on/off
+    /// control on an instrument is a switch, and reads faster as one -- see
+    /// ui/LampButton.hpp.
     struct Toggle
     {
-        juce::String       id;
-        juce::ToggleButton button;
+        explicit Toggle (const juce::String& name) : button (name) {}
+
+        juce::String    id;
+        ui::LampButton  button;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
@@ -148,7 +156,7 @@ private:
     const char* enableId_ { nullptr };
     int columns_;
 
-    std::unique_ptr<juce::ToggleButton> enableButton_;
+    std::unique_ptr<ui::LampButton> enableButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> enableAttachment_;
 
     std::vector<std::unique_ptr<Knob>> knobs_;
