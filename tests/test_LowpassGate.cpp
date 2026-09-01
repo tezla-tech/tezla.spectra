@@ -298,5 +298,5 @@ TEZLA_TEST (the_gate_costs_what_a_voice_can_afford)
     std::printf ("        [lpg cpu] %.2f%% of one core (sink %g)\n",
                  100.0 * seconds, sink);
 
-    CHECK (seconds < 0.02);   // 2% of a core
+    CHECK_CPU_BUDGET (seconds, 0.02, "lowpass gate");   // 2% of a core
 }

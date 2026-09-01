@@ -442,7 +442,7 @@ TEZLA_TEST (limiter_true_peak_mode_controls_the_reconstructed_peak)
     // anything else. CLAUDE.md section 10 -- the instrument first.
     constexpr double ceilingDb = -1.0;
 
-    const auto outputTruePeak = [ceilingDb] (int detectorFactor)
+    const auto outputTruePeak = [] (int detectorFactor)
     {
         LimiterCore limiter;
         limiter.prepare (kRate, 1);

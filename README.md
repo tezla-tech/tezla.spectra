@@ -467,6 +467,7 @@ rate. Manual override is always available if you want to spend or save CPU.
 - [`docs/CI.md`](docs/CI.md) — what continuous integration builds and where to get it
 - [`docs/PLUGIN-CONVENTIONS.md`](docs/PLUGIN-CONVENTIONS.md) — parameters, presets, UI, versioning
 - [`docs/DSP-REFERENCES.md`](docs/DSP-REFERENCES.md) — papers and open-source references used, with licences
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — what is parked, and the specific thing that would unpark each item
 - [`plugins/README.md`](plugins/README.md) — plugin registry and how to add a new one
 
 ---

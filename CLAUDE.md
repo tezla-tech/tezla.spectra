@@ -135,6 +135,19 @@ CI already agrees with this. The workflow's `platforms` input defaults to
 `windows`, which skips `test-arm64` and the macOS matrix entries; choosing
 `all` is the deliberate act that opts back in.
 
+**The gate has been lifted once, narrowly, and it is still in force.** On
+2026-09-01 the user asked directly for a macOS/Apple-Silicon build of Sonitus
+and then a full-suite release through CI, which is §1's "the chat wins for that
+task" — so `platforms: all` was run twice (`v0.88.8-sonitus`, then `v0.88.8`)
+and the local `qemu-aarch64` cross-check with it. That was a checkpoint the user
+asked for, not the gate lifting: the standing rule is unchanged and the next
+ARM64 or macOS run needs the same kind of explicit ask, or the real lift, which
+is the user saying the Windows features are finalised and the bugs are gone.
+The workflow's `plugins` input exists because of that run — it builds a named
+subset, so an expensive platform gets proved on one plugin before the suite is
+committed to it. What still has not happened is the thing that matters: nobody
+has loaded any of those bundles in a DAW on either platform.
+
 ---
 
 ## 3. Repository layout
@@ -697,8 +710,36 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
         -DCMAKE_EXE_LINKER_FLAGS=-static -DTEZLA_PLUGINS=NONE
-  cmake --build build-arm && qemu-aarch64 build-arm/bin/tezla-tests
+  cmake --build build-arm
+  TEZLA_EMULATED=1 qemu-aarch64 build-arm/bin/tezla-tests
   ```
+- **`TEZLA_EMULATED=1` belongs on every emulated run and on no other.** A
+  wall-clock CPU budget is a claim about real hardware; under an emulator it
+  measures the emulator, and by 8.8× to 29.8× here (Ferrite 15.8% of a core
+  reads 139.4%; the 64-mode resonator 0.37% reads 11.02%). All six budget
+  assertions failed the first time the grown suite ran under qemu and not one
+  was a defect. `CHECK_CPU_BUDGET` then still runs the work, still prints the
+  figure, and marks it `NOT ASSERTED` — the instrument is declared invalid, the
+  requirement is not dropped. The binary cannot detect this itself: the same
+  AArch64 binary runs under qemu and on an Apple Silicon Mac, and **real ARM64
+  hardware must assert**, so it sets nothing.
+- **Build with clang before spending a macOS runner.** clang is installed in
+  the container and costs a couple of minutes:
+  ```
+  cmake -S . -B build-clang -DCMAKE_BUILD_TYPE=Release -DTEZLA_PLUGINS=NONE \
+        -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+  cmake --build build-clang -j$(nproc) && ./build-clang/bin/tezla-tests
+  ```
+  It is not Apple clang and it is glibc rather than libc++, so it cannot
+  promise everything — but it caught both macOS problems found so far, either
+  of which would otherwise have cost a 10x runner: `std::cyl_bessel_j` **does
+  not exist on libc++** (C++17 special maths was never implemented there, so
+  Malleus had never once compiled on macOS, and neither libstdc++ nor MSVC had
+  any reason to say so), and 15 `-Wunused-lambda-capture` warnings GCC does not
+  emit at all. The Bessel evaluation is now `dsp::besselJ`, a trapezoidal rule
+  on Bessel's integral, agreeing with `std::cyl_bessel_j` to 8.861e-15 over the
+  range used. **Prefer a portable implementation to a C++17 library function
+  whose support is patchy**, and check libc++ before relying on one.
 - **A Linux build is a cheap dress rehearsal for the Windows one.** The plugin
   target builds and validates on Linux with the X11/ALSA dev packages listed in
   `docs/BUILD.md`, which catches wrapper mistakes long before they reach the
@@ -763,6 +804,14 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   the worked example of a plan whose three source papers were user-supplied
   PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). No plugin is
   currently in flight; Prism remains parked at the user's request.
+- **What is parked lives in `docs/ROADMAP.md`** — the other half of the PLAN.md
+  rule. A plan tracks work in flight; the roadmap tracks work deliberately not
+  started, and each item names the reason it was parked and the specific thing
+  that would unpark it. An item nobody can act on without asking a question
+  first has not been written down properly. The first entry is Membrana's
+  threshold recalibration, waiting on one dry unnormalised vocal WAV from the
+  user; it would move default numbers only, never the model, and §2.1 applies to
+  a supplied recording exactly as it does to anything else.
 - Prefer a working, measurable, minimal version early over a large unproven
   one. Get it building on Windows, get it loading in FL Studio, then refine
   the sound with the user in the loop — the user's ears are the acceptance test.

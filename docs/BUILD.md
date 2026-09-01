@@ -184,16 +184,23 @@ merged into one module and optimised on a single core at link time. The macOS
 plugin job does that for six plugins in two formats, twice over for a universal
 binary, and CI run 38 spent **six hours and four minutes** in that one step
 before it was cancelled. The same build on Windows with MSVC's LTCG took seven
-minutes.
+minutes. There were six plugins then; there are twelve now, so the figure to
+beat has doubled.
 
 What it buys is cross-translation-unit inlining, which matters for a binary
 somebody is going to run and matters not at all while the numbers are still
 being measured — and the numbers come from `tezla-tests` and `tezla-measure`,
 neither of which is built with it.
 
-Turn it on for a release build when there is one to make. If you do, prefer
-`-flto=auto` (GCC) or `-flto=thin` (clang) to the plain flag: both parallelise
-the link across cores, and the plain one does not.
+**The released builds do not use it either, deliberately.** `v0.88.8` and its
+Sonitus test run were cut with it off, at the user's instruction, and CI does
+not pass the flag — so nothing turns it back on by accident. That is the right
+default until somebody has actually measured a twelve-plugin universal link with
+it on and found the wait affordable; a release that never finishes linking is
+worth less than one that is a few percent slower.
+
+If you do turn it on, prefer `-flto=auto` (GCC) or `-flto=thin` (clang) to the
+plain flag: both parallelise the link across cores, and the plain one does not.
 
 ### 3.3 Using Ninja instead (faster)
 

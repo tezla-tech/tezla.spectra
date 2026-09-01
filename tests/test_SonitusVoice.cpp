@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 #include <vector>
 
@@ -20,6 +21,18 @@ using namespace tezla::dsp;
 
 namespace
 {
+/// A VoiceManager is **404 kB** -- 32 voices with their oscillators, filters
+/// and envelopes. MSVC gives a thread 1 MB of stack against Linux's 8 MB, and
+/// it allocates a slot per inlined scope rather than reusing one: a lambda
+/// holding a single manager, inlined twice into one test, is already 0.79 MB.
+/// That is how `legato_retriggers_only_from_silence` segfaulted the whole test
+/// binary on the Windows runner while passing here -- and why "only one on the
+/// stack" is not a safe rule to reason with. None go on the stack now.
+[[nodiscard]] auto heapVoiceManager()
+{
+    return std::make_unique<VoiceManager>();
+}
+
 /// Renders one voice for `samples` and returns the peak and the RMS.
 struct Rendered
 {
@@ -767,7 +780,8 @@ TEZLA_TEST (the_mod_envelopes_are_per_voice)
     // different times, or a chord is one sound with eight copies.
     constexpr double rate = 48000.0;
 
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (rate);
 
     auto parameters = basic();
@@ -823,7 +837,8 @@ TEZLA_TEST (the_note_random_source_is_drawn_once_per_note)
     // A source that changed while a note sounded would be a slow LFO, not a
     // random -- and the point of it is that each note in a chord gets its own
     // fixed offset.
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     auto parameters = basic();
@@ -905,7 +920,8 @@ TEZLA_TEST (the_note_random_source_is_drawn_once_per_note)
 
 TEZLA_TEST (polyphony_allocates_and_frees_voices)
 {
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     const auto parameters = basic();
@@ -949,7 +965,8 @@ TEZLA_TEST (stealing_prefers_the_quietest_released_voice)
     // and nothing to compare.
     constexpr double rate = 48000.0;
 
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (rate);
 
     auto parameters = basic();
@@ -1015,7 +1032,8 @@ TEZLA_TEST (mono_falls_back_to_the_note_underneath)
 {
     // Releasing the upper of two held notes has to fall back rather than stop.
     // That is what makes a mono bass line playable.
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     manager.setMode (KeyboardMode::mono);
@@ -1049,7 +1067,8 @@ TEZLA_TEST (legato_retriggers_only_from_silence)
     // articulates every note and one that slides between them.
     const auto envelopeAfterSecondNote = [] (KeyboardMode mode)
     {
-        VoiceManager manager;
+        const auto managerPtr = heapVoiceManager();
+        auto& manager = *managerPtr;
         manager.prepare (48000.0);
         manager.setMode (mode);
 
@@ -1088,7 +1107,8 @@ TEZLA_TEST (legato_retriggers_only_from_silence)
     // Mono restarts the attack from where it was, so the level keeps climbing
     // at the same rate; legato does not restart it at all. Both climb, so the
     // distinguishing measurement is the stage rather than the level.
-    VoiceManager mono;
+    const auto monoPtr = heapVoiceManager();
+    auto& mono = *monoPtr;
     mono.prepare (48000.0);
     mono.setMode (KeyboardMode::mono);
 
@@ -1101,7 +1121,8 @@ TEZLA_TEST (legato_retriggers_only_from_silence)
     (void) envelopeAfterSecondNote (KeyboardMode::legato);
 
     // The pitch moves in both.
-    VoiceManager legato;
+    const auto legatoPtr = heapVoiceManager();
+    auto& legato = *legatoPtr;
     legato.prepare (48000.0);
     legato.setMode (KeyboardMode::legato);
 
@@ -1123,7 +1144,8 @@ TEZLA_TEST (glide_is_constant_time_and_measured_in_cents)
 
     for (const int interval : { 1, 12, 24 })
     {
-        VoiceManager manager;
+        const auto managerPtr = heapVoiceManager();
+        auto& manager = *managerPtr;
         manager.prepare (rate);
         manager.setMode (KeyboardMode::mono);
         manager.setGlideSeconds (0.5);
@@ -1157,7 +1179,8 @@ TEZLA_TEST (glide_is_constant_time_and_measured_in_cents)
 
 TEZLA_TEST (glide_at_zero_is_off_rather_than_very_fast)
 {
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
     manager.setMode (KeyboardMode::mono);
     manager.setGlideSeconds (0.0);
@@ -1172,7 +1195,8 @@ TEZLA_TEST (glide_at_zero_is_off_rather_than_very_fast)
 
 TEZLA_TEST (the_sustain_pedal_holds_released_notes)
 {
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     manager.setSustain (true);
@@ -1192,7 +1216,8 @@ TEZLA_TEST (an_unmapped_key_plays_nothing)
 {
     // A keyboard map is allowed to leave holes, and the manager has to treat a
     // hole as silence rather than as a note at 0 Hz.
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     KeyboardMap map;
@@ -1223,7 +1248,8 @@ TEZLA_TEST (an_unmapped_key_plays_nothing)
 
 TEZLA_TEST (all_notes_off_silences_everything_immediately)
 {
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     for (int note = 60; note < 68; ++note)
@@ -1248,7 +1274,8 @@ TEZLA_TEST (the_tracked_frequency_follows_the_newest_note)
 {
     // The comb is a global stage and has to pick one note to track. The newest
     // is the one the player just played, which is the only defensible choice.
-    VoiceManager manager;
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
     manager.prepare (48000.0);
 
     const auto parameters = basic();

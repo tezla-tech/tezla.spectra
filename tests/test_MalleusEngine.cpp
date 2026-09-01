@@ -530,6 +530,6 @@ TEZLA_TEST (sixteen_voices_cost_what_the_plan_budgeted_and_the_dead_cost_nothing
     std::printf ("        [engine cpu] 16 bowed voices %.1f%%, dead engine %.2f%% of a core (sink %g)\n",
                  100.0 * activeSeconds, 100.0 * idleSeconds, sink);
 
-    CHECK (activeSeconds < 0.5);    // under half a core, fully loaded
-    CHECK (idleSeconds < 0.02);     // dead means baseline, not busy
+    CHECK_CPU_BUDGET (activeSeconds, 0.5, "16 bowed voices");  // under half a core
+    CHECK_CPU_BUDGET (idleSeconds, 0.02, "dead engine");       // baseline, not busy
 }

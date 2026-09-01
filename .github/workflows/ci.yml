@@ -36,6 +36,13 @@ name: CI
 # To cover everything -- before a release, or once macOS testing starts --
 # choose **all** in the "platforms" box. A tag push covers Windows only; tag a
 # release after a manual `all` run has passed if you want Mac binaries in it.
+#
+# **The "plugins" box narrows what gets built**, and only that: the DSP tests
+# always cover the whole tree, because they are framework-free and cost a
+# minute. `ALL` is the default; a comma-separated list builds just those. It
+# exists so an expensive platform can be proved on one plugin before the suite
+# is committed to it -- which is exactly how the first macOS/Apple-Silicon run
+# was done, as `v0.88.8-sonitus`, before `v0.88.8` went for all twelve.
 on:
   push:
     tags: ['v*']
@@ -51,17 +58,23 @@ on:
         default: windows
         type: choice
         options: [windows, all]
+      plugins:
+        description: 'Which plugins to build: ALL, or a comma-separated list (e.g. Sonitus). The DSP tests always cover everything.'
+        required: false
+        default: ALL
+        type: string
 
 # Named so a dispatched run says what it is doing in the runs list, rather than
 # repeating the commit subject of whatever happened to be at the top.
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
-      && format('{0} ({1})',
+      && format('{0} ({1}, {2})',
                 inputs.release_version != ''
                   && format('Release {0}', inputs.release_version)
                   || 'Manual test and build',
-                inputs.platforms)
-      || format('Release {0} (windows)', github.ref_name) }}
+                inputs.platforms,
+                inputs.plugins)
+      || format('Release {0} (windows, ALL)', github.ref_name) }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -86,14 +99,42 @@ jobs:
       tests: ${{ steps.decide.outputs.tests }}
       plugins: ${{ steps.decide.outputs.plugins }}
       arm64: ${{ steps.decide.outputs.arm64 }}
+      selection: ${{ steps.decide.outputs.selection }}
     steps:
       - id: decide
         shell: bash
+        # Through the environment, never interpolated into the script body:
+        # workflow inputs are attacker-controlled on a public repository and
+        # `${{ }}` inside a run block is textual substitution, so a value with
+        # a quote and a semicolon in it would run as shell. The release job
+        # below has taken the version this way since it was written; the same
+        # applies to anything else typed into the form.
+        env:
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+          INPUT_PLUGINS: ${{ inputs.plugins }}
         run: |
           # Empty on a tag push, because a tag carries no inputs. Windows is
           # the default there for the same reason it is the default here.
-          platforms="${{ inputs.platforms }}"
-          [ -n "$platforms" ] || platforms=windows
+          platforms="${INPUT_PLATFORMS:-windows}"
+
+          # Which plugins the build job compiles. ALL on a tag push, for the
+          # same reason. Validated rather than trusted: this string reaches a
+          # -D flag, and CMake would take almost anything.
+          selection="${INPUT_PLUGINS:-ALL}"
+          if ! printf '%s' "$selection" | grep -Eq '^[A-Za-z][A-Za-z0-9]*(,[A-Za-z][A-Za-z0-9]*)*$'; then
+            echo "::error::'$selection' is not ALL or a comma-separated list of plugin names."
+            exit 1
+          fi
+          # NONE is a legal value of TEZLA_PLUGINS and a nonsensical one here:
+          # the build job would compile nothing and then fail on finding no
+          # bundles, several minutes later and for a reason that reads like a
+          # broken workflow. Say it now instead. A run that only wants the
+          # tests is a run with no version typed into the release box; the
+          # artefacts are simply ignored.
+          if [ "$selection" = "NONE" ]; then
+            echo "::error::plugins=NONE would build nothing for the plugin job to collect. Leave the release box empty for a tests-only run."
+            exit 1
+          fi
 
           if [ "$platforms" = "all" ]; then
             tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"macOS"}]'
@@ -111,13 +152,15 @@ jobs:
           echo "tests=$tests" >> "$GITHUB_OUTPUT"
           echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
           echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
+          echo "selection=$selection" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Covering: $platforms"
             echo
-            echo "- DSP tests: $(echo "$tests" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
+            echo "- Plugins built: \`$selection\`"
+            echo "- DSP tests: $(echo "$tests" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ') (always the whole tree)"
             echo "- ARM64 (emulated): $arm64"
-            echo "- Plugins: $(echo "$plugins" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
+            echo "- Plugin builds on: $(echo "$plugins" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
             if [ "$platforms" != "all" ]; then
               echo
               echo "_macOS is skipped. Choose **all** in the platforms box to include it._"
@@ -202,10 +245,21 @@ jobs:
       - name: Build
         run: cmake --build build-arm64 --parallel
 
+      # TEZLA_EMULATED tells the suite that wall-clock CPU budgets cannot be
+      # trusted on this run. Measured on this tree, qemu-aarch64 costs 8.8x to
+      # 29.8x native -- Ferrite's 15.8% of a core reads 139.4%, the 64-mode
+      # resonator's 0.37% reads 11.02% -- so all five budget tests failed here
+      # and not one of them was a defect. The work still runs and the figures
+      # are still printed and labelled NOT ASSERTED; only the comparison is
+      # withheld. A real Apple Silicon machine sets nothing and asserts.
       - name: Run the suite under emulation
+        env:
+          TEZLA_EMULATED: '1'
         run: qemu-aarch64 build-arm64/bin/tezla-tests
 
       - name: Verify the measurement harness
+        env:
+          TEZLA_EMULATED: '1'
         run: qemu-aarch64 build-arm64/bin/tezla-measure selftest
 
   # ---------------------------------------------------------------------------
@@ -223,6 +277,12 @@ jobs:
           && needs.test.result == 'success'
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
+    # A ceiling, not an estimate. Run 38's macOS job sat in a monolithic LTO
+    # link for **six hours and four minutes** before a human cancelled it, and
+    # macOS minutes bill at 10x. TEZLA_LTO is off by default now, which is the
+    # actual fix -- this is the guard for the next thing that hangs, and it
+    # costs nothing on a healthy run (Windows takes about nine minutes).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -258,12 +318,19 @@ jobs:
         shell: bash
         run: git clone --depth 1 --branch "${{ steps.juce.outputs.version }}" https://github.com/juce-framework/JUCE.git JUCE
 
+      # TEZLA_LTO is deliberately left at its default of OFF and not passed
+      # here: JUCE's recommended flag is a plain `-flto`, which on Apple clang
+      # is monolithic whole-program LTO on one core, per format, twice over for
+      # a universal binary. That is what cost run 38 six hours. See the comment
+      # on the option in the root CMakeLists.txt.
       - name: Configure
         shell: bash
+        env:
+          PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
         run: |
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DTEZLA_PLUGINS=ALL \
+                -DTEZLA_PLUGINS="$PLUGIN_SELECTION" \
                 -DTEZLA_JUCE_PATH="${{ github.workspace }}/JUCE" \
                 -DTEZLA_BUILD_TESTS=OFF \
                 -DTEZLA_BUILD_TOOLS=OFF
@@ -414,8 +481,29 @@ jobs:
       # double-quoted shell string would try to interpret.
       - name: Write the release notes
         shell: bash
+        env:
+          PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
         run: |
-          cat > release-notes.md <<'NOTES'
+          # A subset release says so first. `ALL` is the ordinary case and needs
+          # no explanation; anything else is a release that does not contain
+          # what the repository's plugin list would lead you to expect, and a
+          # download whose contents you have to guess at is a bug report later.
+          # The value passed the plan job's `[A-Za-z][A-Za-z0-9,]*` check, so it
+          # is safe to put in the notes as-is.
+          if [ "$PLUGIN_SELECTION" != "ALL" ]; then
+            {
+              echo "## What is in this release"
+              echo
+              echo "**Only \`${PLUGIN_SELECTION}\`** — this was a targeted build, not the"
+              echo "full suite. Everything else in the repository is unchanged and"
+              echo "simply was not compiled for this run."
+              echo
+            } > release-notes.md
+          else
+            : > release-notes.md
+          fi
+
+          cat >> release-notes.md <<'NOTES'
           ## Installing
 
           **Windows** — copy the `.vst3` folder into
@@ -485,13 +573,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+          PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
         run: |
+          # A subset release is marked a pre-release, so it never sits at the
+          # top of the releases page as "Latest" for a suite it is not. The
+          # notes already say what is in it; this is the same statement made
+          # where somebody skimming the list will see it.
+          prerelease=()
+          title="tezla.spectra $VERSION"
+          if [ "$PLUGIN_SELECTION" != "ALL" ]; then
+            prerelease=(--prerelease)
+            title="tezla.spectra $VERSION -- $PLUGIN_SELECTION only"
+          fi
+
           # --target matters on the manual route: there is no tag yet, so gh
           # creates one, and without it the tag would land on the default branch
           # rather than on the commit that was actually built and tested.
           gh release create "$VERSION" release/*.zip \
-            --title "tezla.spectra $VERSION" \
+            --title "$title" \
             --target "$GITHUB_SHA" \
+            "${prerelease[@]}" \
             --notes-file release-notes.md
 
           echo "### Released $VERSION" >> "$GITHUB_STEP_SUMMARY"

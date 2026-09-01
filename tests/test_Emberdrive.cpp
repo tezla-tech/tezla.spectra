@@ -536,7 +536,7 @@ TEZLA_TEST (multiband_solo_and_mute_route_correctly)
 {
     constexpr double fs = 48000.0;
 
-    const auto bandLevelDb = [fs] (double testFrequency, BandState low, BandState mid, BandState high)
+    const auto bandLevelDb = [] (double testFrequency, BandState low, BandState mid, BandState high)
     {
         Parameters parameters;
         parameters.multiband = true;

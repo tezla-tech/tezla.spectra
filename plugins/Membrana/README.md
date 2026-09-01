@@ -138,6 +138,14 @@ for: adding harmonics (Halo), grit (Emberdrive), or a ceiling (Capstone).
 - Everything above is measured in `tests/` and printed by
   `tezla-measure membrana`; the numbers in this README are that tool's
   output, not aspirations.
+- **The thresholds are the one thing here that is still a guess.** Every
+  mechanism is verified, but `presThresh` (−28 dBFS) and `detFloor`
+  (−55 dBFS) were chosen from first principles and checked against
+  synthetic signals — sine bursts, filtered noise, a synthesised vowel.
+  Where they should sit is a property of a particular room, preamp and
+  singer, and no material recorded on one has been through this plugin.
+  Item 1 of [`docs/ROADMAP.md`](../../docs/ROADMAP.md) says exactly what
+  file would settle it and which numbers would move; the model would not.
 
 ## Measured at close-out (`tezla-measure membrana`, 48 kHz)
 
