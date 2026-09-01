@@ -194,7 +194,9 @@ removes the filter from the path entirely.
 **GATE** — Threshold, Hysteresis, Range, Attack, Hold, Release, Sidechain HPF.
 
 **DE-ESS** — Corner, Threshold (a *ratio*, −40 to +20 dB), Ratio, Knee, Range,
-Attack, Release, Listen.
+Attack, Release. **Listen** sits beside the sibilance display rather than in
+this box, because it is the control you reach for while looking at that
+picture.
 
 **LEVELLER** / **PEAK** — Threshold, Ratio, Knee, Attack, Release, Makeup, Mix,
 Sidechain HPF, Auto Release.
@@ -204,11 +206,45 @@ Sidechain HPF, Auto Release.
 Output trim and bypass live in the header, as everywhere in the suite. Every
 control has a tooltip saying what it does and what it costs.
 
-The panel is laid out **as the chain**: six boxes left to right in signal
-order, each with its own switch and its own gain-reduction bar, so the question
-a strip's display exists to answer — which stage is doing the work — is
-answered by looking. Underneath, full width, the de-esser's sibilance history
-with its threshold drawn across it.
+### The panel
+
+Laid out **as the chain**: six boxes left to right in signal order, an arrow in
+each gap, and a hue that rotates along the path — so the colour of a box is a
+*position in the signal* rather than a label. The order is most of the argument
+for this being one strip rather than five plugins, and six boxes in a row said
+nothing about direction.
+
+**Two displays across the top**, because there are two questions and one pane
+answers them both badly:
+
+- **left — sibilance against its threshold.** The identity display: whether the
+  detector is triggering on the right thing. A vowel sits below the line however
+  loud the singer gets; an /s/ crosses it. Hovering reads the history back —
+  the value, **how far past the threshold it is**, and what the stage did about
+  it, because an /s/ 1 dB over and one 9 dB over want completely different
+  settings and look nearly identical as curves.
+- **right — where the work is done.** All four reducing stages on **one time
+  axis**, as four lanes. Four separate meters share no clock, so a de-esser
+  ducking 40 ms before the leveller does looks exactly like the two ducking
+  together; here it does not, and the classic vocal fault — a compressor chewing
+  on an /s/ the de-esser was about to remove — is visible as two lanes dipping
+  in sequence. The gate's lane is scaled to 48 dB and the other three to 18,
+  because a gate legitimately removes 40 dB and a compressor legitimately
+  removes 3.
+
+Each box carries its **live gain reduction in its title bar**, and the title
+brightens with it — so which stage is working is readable in peripheral vision,
+which is where it is useful, because you are looking at a knob at the time.
+Threshold is drawn 1.32× and Knee, Hysteresis and the sidechain filters 0.74×:
+a size is the one hierarchy cue that survives being glanced at, and forty
+identical knobs gave the eye nothing to land on. A stage switched out recedes —
+its knobs grey, its spine dims, its title reads **off** rather than 0.0 dB,
+because a stage doing nothing and a stage not in circuit are different facts.
+
+Every value carries its unit. That sounds like nothing and was not: the panel
+used to show `-45.0`, `3.0`, `40`, `120`, `0`, `6000` and `0.90` side by side
+with nothing saying which were decibels, which milliseconds, which hertz and
+which a Q.
 
 ---
 
