@@ -376,8 +376,16 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
                 }
                 else
                 {
-                    std::printf ("  %s = %.9f\n", wanted.toRawUTF8(),
-                                 static_cast<double> (found->getValue()));
+                    // **The text as well as the number.** A parameter's display
+                    // string is the only part of it the user reads, and it is
+                    // the part with no other way in: Phonoss shipped `-45.0`,
+                    // `40` and `6000` side by side with nothing saying which
+                    // were dB, milliseconds or hertz, because `withLabel` sets
+                    // what a *host* shows and JUCE's own text box never asks
+                    // for it. Printing both makes that checkable.
+                    std::printf ("  %s = %.9f  \"%s\"\n", wanted.toRawUTF8(),
+                                 static_cast<double> (found->getValue()),
+                                 found->getCurrentValueAsText().toRawUTF8());
                 }
 
                 continue;

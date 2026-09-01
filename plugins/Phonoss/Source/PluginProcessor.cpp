@@ -296,9 +296,72 @@ PhonossProcessor::createParameterLayout()
 
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> parameters;
 
+    // **A number with no unit is not a reading.**
+    //
+    // `withLabel` alone was not enough and that is easy to miss: the label is
+    // what a *host* puts beside an automation lane, and JUCE's own text box
+    // never sees it -- `AudioParameterFloat::getText` returns the bare float.
+    // So the panel showed `-45.0`, `3.0`, `12.0`, `1.00`, `40`, `120`, `0`,
+    // `6000` and `0.90` side by side, and nothing on it said which of those
+    // were dB, which were milliseconds, which were hertz and which was a Q.
+    // Every other plugin in the suite formats its own values; this one was the
+    // odd one out because `withLabel` *looks* like it does the job.
+    //
+    // Formatting here rather than in the editor also fixes the host: an
+    // automation lane now reads "6.00 kHz" instead of "6000".
     const auto attributes = [] (const char* label)
     {
-        return juce::AudioParameterFloatAttributes{}.withLabel (label);
+        const juce::String unit { label };
+
+        return juce::AudioParameterFloatAttributes{}
+            .withLabel (unit)
+            .withStringFromValueFunction ([unit] (float value, int)
+            {
+                if (unit == "Hz")
+                {
+                    // Zero is **off** on every frequency control here -- the
+                    // input HPF and the two sidechain filters all use it to
+                    // mean "no filter", which is a change of kind rather than
+                    // of degree and has to read as one.
+                    if (value < 0.5f)
+                        return juce::String ("off");
+
+                    return value < 1000.0f
+                             ? juce::String (juce::roundToInt (value)) + " Hz"
+                             : juce::String (value / 1000.0f, 2) + " kHz";
+                }
+
+                if (unit == "ms")
+                {
+                    // Below a tenth of a millisecond an attack is not a time
+                    // the ear can hold on to; it is the absence of one.
+                    if (value < 0.05f)  return juce::String ("instant");
+                    if (value < 1.0f)   return juce::String (value, 2) + " ms";
+                    if (value < 10.0f)  return juce::String (value, 1) + " ms";
+                    if (value < 1000.0f) return juce::String (juce::roundToInt (value)) + " ms";
+
+                    // A three-second release is a number you read as seconds.
+                    return juce::String (value / 1000.0f, 2) + " s";
+                }
+
+                // A ratio of 1 is not compression at all, and saying so is
+                // more useful than "1.0 : 1".
+                if (unit == ": 1")
+                    return value < 1.05f ? juce::String ("1 : 1 off")
+                                         : juce::String (value, 1) + " : 1";
+
+                if (unit == "%")
+                    return juce::String (juce::roundToInt (value * 100.0f)) + " %";
+
+                if (unit.isEmpty())
+                    return juce::String (value, 2);
+
+                return juce::String (value, 1) + " " + unit;
+            })
+            .withValueFromStringFunction ([] (const juce::String& text)
+            {
+                return text.getFloatValue();
+            });
     };
 
     // ---- INPUT -----------------------------------------------------------
@@ -419,7 +482,7 @@ PhonossProcessor::createParameterLayout()
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::comp1Mix, kSchemaV1 }, "Leveller mix",
-        Range (0.0f, 1.0f, 0.001f), 1.0f));
+        Range (0.0f, 1.0f, 0.001f), 1.0f, attributes ("%")));
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::comp1Sidechain, kSchemaV1 }, "Leveller sidechain",
@@ -459,7 +522,7 @@ PhonossProcessor::createParameterLayout()
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::comp2Mix, kSchemaV1 }, "Peak mix",
-        Range (0.0f, 1.0f, 0.001f), 1.0f));
+        Range (0.0f, 1.0f, 0.001f), 1.0f, attributes ("%")));
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::comp2Sidechain, kSchemaV1 }, "Peak sidechain",
@@ -487,7 +550,7 @@ PhonossProcessor::createParameterLayout()
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::eqMidQ, kSchemaV1 }, "Mid Q",
-        Range (0.2f, 6.0f, 0.01f, 0.5f), 0.9f));
+        Range (0.2f, 6.0f, 0.01f, 0.5f), 0.9f, attributes ("")));
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::eqMidDb, kSchemaV1 }, "Mid gain",
