@@ -31,6 +31,7 @@
 // bit-exactly.
 
 #include <cstdint>
+#include <vector>
 
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Tuning.hpp>
@@ -169,6 +170,13 @@ public:
 
         chosen->noteOn (note, hz, velocity, seed, settings_,
                         tuning_.getScale(), noteOnCount_);
+
+        // `noteOn` rebuilds the bank's poles from scratch, so the two live
+        // controls have to be re-applied after it rather than before -- a
+        // note struck with the hand already down is damped from its first
+        // sample, not from the next control tick.
+        chosen->setBloom (bloom_);
+        chosen->setDamp (damp_);
     }
 
     void noteOff (int note) noexcept
@@ -176,6 +184,17 @@ public:
         for (auto& voice : voices_)
             if (voice.isHeld() && voice.getNote() == note)
                 voice.noteOff();
+    }
+
+    /// The two controls that are played rather than set: pushed to every
+    /// voice at every control tick and at every note-on, so a hand on the
+    /// object and a bloom coming up are heard on the notes already ringing.
+    void setCharacter (double bloom, double damp) noexcept
+    {
+        bloom_ = bloom;
+        damp_ = damp;
+
+        applyCharacter();
     }
 
     void allNotesOff() noexcept
@@ -186,10 +205,13 @@ public:
 
     // -- rendering -------------------------------------------------------
 
-    void process (double* out, int numSamples) noexcept
+    void process (double* left, double* right, int numSamples) noexcept
     {
         for (int n = 0; n < numSamples; ++n)
-            out[n] = 0.0;
+        {
+            left[n] = 0.0;
+            right[n] = 0.0;
+        }
 
         int done = 0;
 
@@ -201,6 +223,7 @@ public:
                 for (auto& voice : voices_)
                     voice.controlTick (kControlIntervalSamples);
 
+                applyCharacter();
                 maintainSympathetic();
                 sinceControl_ = kControlIntervalSamples;
             }
@@ -210,15 +233,53 @@ public:
                                : sinceControl_;
 
             for (auto& voice : voices_)
-                voice.render (out + done, take);
+                voice.render (left + done, right + done, take);
 
+            // **One sympathetic bank, fed the mono sum.** It is a set of
+            // strings sitting near the object, not a pair of them: it hears
+            // what the room hears and rings into both ears. With the two taps
+            // equal -- the default -- `0.5 * (l + r)` is exactly `l`, and
+            // adding the same return to both channels reproduces the mono
+            // engine sample for sample.
             if (sympatheticCount_ > 0)
                 for (int n = done; n < done + take; ++n)
-                    out[n] += sympatheticLevel_ * sympathetic_.process (out[n]);
+                {
+                    const double ring = sympatheticLevel_
+                                          * sympathetic_.process (0.5 * (left[n] + right[n]));
+
+                    left[n] += ring;
+                    right[n] += ring;
+                }
 
             done += take;
             sinceControl_ -= take;
         }
+    }
+
+    /// What a mono host hears: the two listening points summed.
+    ///
+    /// **Not real-time safe** -- it owns a scratch buffer and will allocate if
+    /// handed a block longer than any it has seen. Deliberately so: the plugin
+    /// calls the stereo overload above, and this exists for the tests and the
+    /// measurement tool, where a mono fold is a *measurement* rather than an
+    /// output. Marked rather than made safe, because making it safe would mean
+    /// a maximum block size the offline callers do not have.
+    ///
+    /// Not a convenience -- it is the measurement the stereo feature has to
+    /// answer for. Two taps either side of a mode's node hear it in opposite
+    /// phase, so the sum removes it, and a control that sounds wide and
+    /// disappears in mono is a trap rather than a feature. The mono fold is
+    /// therefore a first-class output with its own tests, and the positions
+    /// that cancel are named in the tooltip rather than quietly avoided.
+    void process (double* out, int numSamples) noexcept
+    {
+        if (monoRight_.size() < static_cast<std::size_t> (numSamples))
+            monoRight_.assign (static_cast<std::size_t> (numSamples), 0.0);
+
+        process (out, monoRight_.data(), numSamples);
+
+        for (int n = 0; n < numSamples; ++n)
+            out[n] = 0.5 * (out[n] + monoRight_[static_cast<std::size_t> (n)]);
     }
 
     // -- what the tests and meters read ----------------------------------
@@ -249,6 +310,15 @@ public:
 
 private:
     static constexpr std::uint64_t kSeedBase = 0x7E21ABA5E0000001ULL;
+
+    void applyCharacter() noexcept
+    {
+        for (auto& voice : voices_)
+        {
+            voice.setBloom (bloom_);
+            voice.setDamp (damp_);
+        }
+    }
 
     void maintainSympathetic() noexcept
     {
@@ -299,6 +369,12 @@ private:
     double sympatheticBrightness_ { 0.6 };
 
     int sinceControl_ { 0 };
+
+    /// Scratch for the mono fold; see the mono `process` overload.
+    std::vector<double> monoRight_;
+
+    double bloom_ { 0.0 };
+    double damp_ { 0.0 };
     long long noteOnCount_ { 0 };
 };
 

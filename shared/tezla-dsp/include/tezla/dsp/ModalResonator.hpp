@@ -59,6 +59,40 @@ public:
     /// itself at any pitch, decay or mode count the instrument reaches.
     static constexpr double kMaxBloom = 1.0;
 
+    /// What counts as a large displacement, in output units.
+    ///
+    /// Chosen by measurement on a **voice**, not on a bare bank, and that is
+    /// the part that matters: a unit test's mode bank and a Malleus note reach
+    /// completely different amplitudes for the same coupling response, so a
+    /// constant calibrated on the first is wrong for the second. The first
+    /// attempt at this number was calibrated on a 32-mode bar and put the
+    /// window at velocities 0.1 to 0.3 -- the control was *off* at a hard hit
+    /// and reversed at full velocity, which is backwards.
+    ///
+    /// Late high-band share of a struck plate against the velocity it was
+    /// struck at, bloom 1 against bloom 0:
+    ///
+    ///     velocity   voice peak   drive 3   drive 4   drive 6   bloom 0
+    ///       0.10       0.0002      0.0006    0.0007    0.0009    0.0005
+    ///       0.25       0.0026      0.0085    0.0145    0.0355    0.0036
+    ///       0.40       0.0072      0.0520    0.0976    0.1209    0.0087
+    ///       0.55       0.0138      0.1505    0.1909    0.9068    0.0124
+    ///       0.70       0.0224      0.2315    0.1860    0.9779    0.0147
+    ///       0.85       0.0330      0.1623    0.9773    0.9853    0.0160
+    ///       1.00       0.0458      0.9077    0.9874    0.9900    0.0168
+    ///
+    /// Four, because it climbs across the whole velocity range without a dip
+    /// and without saturating early. Six is fully on by half velocity, which
+    /// throws away the dynamic; three dips at 0.85.
+    ///
+    /// The **useful window is about 10 dB wide** and that is a real limitation
+    /// of a coupling bounded by `q / (1 + |q|)`: past it the injection swamps
+    /// the state instead of perturbing it and the control reverses. Widening
+    /// it means changing the saturation, which is a redesign of the bound
+    /// rather than a constant, so the window is placed rather than widened.
+    /// `tezla-measure malleus` prints the velocity sweep.
+    static constexpr double kBloomDrive = 4.0;
+
     /// Arithmetic only -- no allocation, safe anywhere. Re-preparing keeps
     /// each mode's frequency/decay/gain request and rebuilds the poles for
     /// the new rate (the coefficients must never embed a stale rate,
@@ -399,6 +433,25 @@ public:
         return index >= 0 && index < kMaxModes ? frequencyHz_[index] : 0.0;
     }
 
+    /// One mode's contribution to the last `process`, gain included -- the
+    /// term that `process` summed for this index.
+    ///
+    /// **Why this exists rather than a second output tap inside the loop.**
+    /// A second listening point on the object is the same sum with different
+    /// per-mode weights, and the obvious place to put it is beside the first
+    /// one in `process`. Then it costs a multiply-add per mode per sample
+    /// whether or not anything is listening twice, or the loop grows a branch,
+    /// or it grows into four variants once bloom is included. Reading the
+    /// terms back out costs the same arithmetic only when a caller actually
+    /// wants a second tap, and leaves the hot loop -- and its bit-exactness --
+    /// untouched by the feature entirely.
+    ///
+    /// Valid after any `process` and until the next one.
+    [[nodiscard]] double modeOutput (int index) const noexcept
+    {
+        return index >= 0 && index < kMaxModes ? gain_[index] * stateIm_[index] : 0.0;
+    }
+
     [[nodiscard]] double getSampleRate() const noexcept { return sampleRate_; }
 
 private:
@@ -411,7 +464,26 @@ private:
     /// The coupling term, from the previous sample. See setBloom().
     [[nodiscard]] double couplingTerm() const noexcept
     {
-        const double x = previousOutput_;
+        // **Referenced to the amplitude the instrument actually runs at.**
+        //
+        // The von Karman term is a large-displacement effect and its rate goes
+        // as amplitude squared, which is the feature -- a quiet hit must bloom
+        // less than a loud one. But "large" has to be measured against
+        // something, and the something was implicitly 1.0, where the unit test
+        // drives it. A Malleus voice at full velocity peaks near **0.046**, so
+        // `x * |x|` came out around 0.002 and the control did nothing at all
+        // in the instrument: measured through the plugin, the late-window
+        // energy shares at 110/220/440 Hz read 0.1797/0.3642/0.4481 with Bloom
+        // off and 0.1917/0.3584/0.4434 with it at maximum. A knob that moves
+        // the fourth decimal place is not a knob.
+        //
+        // `kBloomDrive` puts a full-velocity strike at the top of the curve's
+        // useful range instead. It changes nothing about the bound -- the
+        // quotient below is still under 1 for every finite input, and the
+        // energy renormalisation still caps the whole bank -- and it keeps the
+        // amplitude dependence exactly: a quarter-velocity hit is a quarter of
+        // the drive and a sixteenth of the rate.
+        const double x = kBloomDrive * previousOutput_;
 
         // Quadratic in magnitude, odd in sign: the cascade without the DC.
         const double quadratic = x * (x < 0.0 ? -x : x);

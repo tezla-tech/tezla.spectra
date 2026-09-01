@@ -90,7 +90,30 @@ public:
                            + static_cast<float> (anchorProportion (slider)) * (endAngle - startAngle);
 
         const bool on = slider.isEnabled();
-        const auto fill = (on ? palette_.accent : palette_.dimText.withAlpha (0.30f));
+
+        // **A knob may carry its own colour and its own relief.**
+        //
+        // Component properties rather than `Slider::rotarySliderFillColourId`,
+        // because that id already has a stock default and "has the caller set
+        // it" is then unanswerable -- a knob nobody tinted and a knob tinted to
+        // the default look identical from in here. A property is absent until
+        // somebody puts it there, which is the question actually being asked.
+        const auto tint = [&]
+        {
+            const auto& value = slider.getProperties()["tezlaTint"];
+
+            return value.isVoid() ? palette_.accent
+                                  : juce::Colour (static_cast<juce::uint32> (
+                                        static_cast<juce::int64> (value)));
+        }();
+
+        const auto tintBright = tint == palette_.accent ? palette_.accentBright
+                                                        : tint.brighter (0.45f);
+
+        const bool relief = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaRelief", false));
+
+        const auto fill = (on ? tint : palette_.dimText.withAlpha (0.30f));
 
         const auto arc = [&] (float from, float to, juce::Colour colour, float width_)
         {
@@ -107,7 +130,17 @@ public:
         // which is itself a lightened panel, and a track defined relative to
         // `panel` disappears against it -- which it did, and a page of knobs at
         // their minimum read as a page of bare pointers.
-        arc (startAngle, endAngle, palette_.dimText.withAlpha (on ? 0.26f : 0.12f), thickness);
+        // The unfilled travel. With `tezlaTintTrack` it takes the group's own
+        // colour at a low alpha instead of the neutral grey, so a group hums
+        // one hue even with every control sitting at zero -- which is most of
+        // a page's controls most of the time.
+        const bool tintTrack = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaTintTrack", false));
+
+        arc (startAngle, endAngle,
+             tintTrack ? tint.withAlpha (on ? 0.24f : 0.10f)
+                       : palette_.dimText.withAlpha (on ? 0.26f : 0.12f),
+             thickness);
 
         // The body: a shallow gradient, dark at the bottom. Enough to lift the
         // knob off the panel without pretending to be a photograph of one.
@@ -118,16 +151,102 @@ public:
             const auto body = juce::Rectangle<float> { bodyRadius * 2.0f, bodyRadius * 2.0f }
                                 .withCentre (centre);
 
-            g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.22f), body.getCentreX(),
-                                                     body.getY(),
-                                                     palette_.background, body.getCentreX(),
-                                                     body.getBottom(), false));
-            g.fillEllipse (body);
+            if (relief)
+            {
+                // **A socket, then a cap.**
+                //
+                // The flat body below is a dark circle on a dark plate, and
+                // the two are within a few points of the same lightness -- so
+                // the knob reads as a shade of the panel rather than as a thing
+                // bolted to it. A real panel separates them with geometry: the
+                // knob sits in a countersunk well, and the well's shadow is
+                // what the eye actually reads as an edge.
+                //
+                // Three passes, no images: the well, the shadow it casts on its
+                // own upper lip, and a cap whose gradient runs the other way
+                // from the well's so the two cannot be confused.
+                const auto well = body.expanded (juce::jmax (2.0f, bodyRadius * 0.16f));
 
-            // A hairline round the body, brighter at the top. The same trick as
-            // the panel highlight: it is what gives a dark circle an edge.
-            g.setColour (juce::Colours::white.withAlpha (on ? 0.07f : 0.03f));
-            g.drawEllipse (body.reduced (0.5f), 1.0f);
+                g.setColour (juce::Colours::black.withAlpha (0.42f));
+                g.fillEllipse (well.translated (0.0f, 1.0f));
+
+                g.setColour (juce::Colours::black.withAlpha (0.30f));
+                g.fillEllipse (well);
+
+                g.setColour (juce::Colours::white.withAlpha (0.06f));
+                g.drawEllipse (well.reduced (0.5f), 1.0f);
+
+                // The cap, lit from above and **clearly** lighter than the
+                // plate rather than a step darker than it.
+                //
+                // Literal greys rather than `panel.brighter()`, because
+                // `brighter` works in HSB and its steps are not perceptually
+                // even -- the first attempt asked for 0.62 of brighter and
+                // landed the cap at RGB 93 against a plate at 57, which is a
+                // difference you have to go looking for. These are measured
+                // against the group plate at 0x34373a: the cap runs 0x86 down
+                // to 0x4a, so its lit half is half again as light as the plate
+                // and its shaded half still clears it.
+                g.setGradientFill (juce::ColourGradient (
+                    juce::Colour { 0xff86898d }, body.getCentreX(), body.getY(),
+                    juce::Colour { 0xff4a4d51 }, body.getCentreX(), body.getBottom(), false));
+                g.fillEllipse (body);
+
+                // A specular sliver across the top third. One ellipse, and it
+                // is what stops a flat gradient reading as a disc of paint.
+                g.setColour (juce::Colours::white.withAlpha (on ? 0.10f : 0.04f));
+                g.fillEllipse (body.reduced (body.getWidth() * 0.18f)
+                                   .withHeight (body.getHeight() * 0.34f)
+                                   .translated (0.0f, body.getHeight() * 0.10f));
+
+                g.setColour (juce::Colours::white.withAlpha (on ? 0.22f : 0.08f));
+                g.drawEllipse (body.reduced (0.5f), 1.0f);
+            }
+            else
+            {
+                g.setGradientFill (juce::ColourGradient (palette_.panel.brighter (0.22f), body.getCentreX(),
+                                                         body.getY(),
+                                                         palette_.background, body.getCentreX(),
+                                                         body.getBottom(), false));
+                g.fillEllipse (body);
+
+                // A hairline round the body, brighter at the top. The same trick as
+                // the panel highlight: it is what gives a dark circle an edge.
+                g.setColour (juce::Colours::white.withAlpha (on ? 0.07f : 0.03f));
+                g.drawEllipse (body.reduced (0.5f), 1.0f);
+            }
+        }
+
+        // **The skirt**: tick marks machined into the panel around the knob.
+        //
+        // Drawn outside the track, under everything else, so it reads as part
+        // of the *panel* rather than part of the control -- which is what it is
+        // on a real unit, where the ticks are silkscreen and the knob turns
+        // over them. Eleven of them across the travel, which is enough to read
+        // as a scale and few enough not to become a texture.
+        if (static_cast<bool> (slider.getProperties().getWithDefault ("tezlaSkirt", false))
+            && radius > 12.0f)
+        {
+            const float from = radius + 2.0f;
+            const float to = radius + juce::jmax (3.0f, radius * 0.16f);
+
+            for (int tick = 0; tick <= 10; ++tick)
+            {
+                const float at = startAngle
+                               + static_cast<float> (tick) / 10.0f * (endAngle - startAngle);
+
+                // The ends and the middle are longer, the way a real scale
+                // marks its extremes and its centre.
+                const bool major = tick == 0 || tick == 5 || tick == 10;
+                const float outer = major ? to + 1.5f : to;
+
+                g.setColour (juce::Colours::white.withAlpha (
+                    on ? (major ? 0.30f : 0.16f) : (major ? 0.12f : 0.06f)));
+
+                g.drawLine ({ { centre.x + from * std::sin (at), centre.y - from * std::cos (at) },
+                              { centre.x + outer * std::sin (at), centre.y - outer * std::cos (at) } },
+                            major ? 1.5f : 1.0f);
+            }
         }
 
         // The value, from the anchor -- with a wide, very transparent stroke
@@ -142,7 +261,7 @@ public:
         if (std::abs (angle - anchor) > 1.0e-4f)
         {
             if (on)
-                arc (anchor, angle, palette_.accent.withAlpha (0.18f), thickness * 2.4f);
+                arc (anchor, angle, tint.withAlpha (0.18f), thickness * 2.4f);
 
             arc (anchor, angle, fill, thickness);
         }
@@ -158,11 +277,16 @@ public:
 
             if (on)
             {
-                g.setColour (palette_.accentBright.withAlpha (0.22f));
+                g.setColour (tintBright.withAlpha (0.22f));
                 g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f) * 2.6f);
             }
 
-            g.setColour (on ? palette_.accentBright : palette_.dimText.withAlpha (0.35f));
+            // On a relief cap the pointer sits on a light grey, where a dim
+            // grey line disappears -- so the disabled pointer goes dark rather
+            // than pale, and the lit one keeps its bright tint.
+            g.setColour (on ? tintBright
+                            : (relief ? juce::Colours::black.withAlpha (0.45f)
+                                      : palette_.dimText.withAlpha (0.35f)));
             g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f));
         }
 
@@ -214,7 +338,22 @@ public:
         label->setColour (juce::Label::outlineWhenEditingColourId, palette_.accent);
         label->setColour (juce::Label::backgroundWhenEditingColourId, palette_.background);
         label->setColour (juce::Label::textWhenEditingColourId, palette_.text);
-        label->setFont (juce::FontOptions (11.5f));
+        // **The value's size is the caller's to choose.**
+        //
+        // The number under a knob is the thing actually read while a patch is
+        // being dialled -- more than the name, which is learnt after a week --
+        // and one size for every control on the panel says the opposite. A
+        // property rather than an argument because `createSliderTextBox` is
+        // called from inside `setTextBoxStyle`, so the caller sets the property
+        // first and the two arrive together.
+        const auto& wanted = slider.getProperties()["tezlaValueSize"];
+
+        const bool bold = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaValueBold", false));
+
+        label->setFont (juce::FontOptions (wanted.isVoid() ? 11.5f
+                                                           : static_cast<float> (wanted),
+                                           bold ? juce::Font::bold : juce::Font::plain));
         label->setJustificationType (juce::Justification::centred);
 
         return label;
@@ -286,6 +425,29 @@ public:
     // Boxes, buttons and furniture
     // -----------------------------------------------------------------------
 
+    /// **A dropdown wears its group's colour.**
+    ///
+    /// The version this replaced drew a dark rounded rectangle with a 35%
+    /// accent hairline round it, which on a plate of the same darkness read as
+    /// a caption rather than as a control -- and a choice is exactly the
+    /// control most easily mistaken for one, because it holds a *word* where
+    /// its neighbours hold a number. So it takes the group's hue three ways
+    /// at once: a tab down its leading edge, a wash across the fill, and a
+    /// full-strength outline.
+    ///
+    /// The tint arrives as a component property for the same reason the knob's
+    /// does -- `ComboBox::outlineColourId` has a stock default, so "has the
+    /// caller set it" is unanswerable from in here, whereas a property is
+    /// absent until somebody puts it there.
+    ///
+    /// **And a box nobody tinted is drawn exactly as it was.** This object is
+    /// the whole suite's look and feel, including panels that are not knobs on
+    /// plates at all, so the new treatment is opt-in per control rather than
+    /// applied to every combo box in every plugin at once.
+    /// The tinted tab's width, shared by the drawing and the text inset so the
+    /// two cannot drift apart.
+    static constexpr float kComboTabWidth = 4.0f;
+
     void drawComboBox (juce::Graphics& g, int width, int height, bool,
                        int, int, int, int, juce::ComboBox& box) override
     {
@@ -293,12 +455,51 @@ public:
                                                      static_cast<float> (width),
                                                      static_cast<float> (height) }.reduced (0.5f);
 
-        g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
-        g.fillRoundedRectangle (bounds, 3.0f);
+        const bool on = box.isEnabled();
+        const float radius = 3.0f;
 
-        g.setColour (box.isEnabled() ? palette_.accent.withAlpha (box.isMouseOver() ? 0.7f : 0.35f)
-                                     : palette_.panel.brighter (0.15f));
-        g.drawRoundedRectangle (bounds, 3.0f, 1.0f);
+        const auto& property = box.getProperties()["tezlaTint"];
+        const bool tinted = ! property.isVoid();
+
+        const auto tint = tinted ? juce::Colour (static_cast<juce::uint32> (
+                                       static_cast<juce::int64> (property)))
+                                 : palette_.accent;
+
+        g.setColour (box.findColour (juce::ComboBox::backgroundColourId));
+        g.fillRoundedRectangle (bounds, radius);
+
+        if (tinted)
+        {
+            // The wash. Laid over the background rather than replacing it, so a
+            // caller that set its own `backgroundColourId` still gets it -- the
+            // hue is an addition, not an override.
+            g.setGradientFill (juce::ColourGradient (
+                tint.withAlpha (on ? 0.30f : 0.08f), bounds.getCentreX(), bounds.getY(),
+                tint.withAlpha (on ? 0.11f : 0.03f), bounds.getCentreX(), bounds.getBottom(), false));
+            g.fillRoundedRectangle (bounds, radius);
+
+            // The tab: the group spine, repeated at the scale of one control.
+            // It is the cue that survives being glanced at, because it is the
+            // only saturated thing in the cell.
+            juce::Graphics::ScopedSaveState clip { g };
+
+            juce::Path rounded;
+            rounded.addRoundedRectangle (bounds, radius);
+            g.reduceClipRegion (rounded);
+
+            g.setColour (tint.withAlpha (on ? 1.0f : 0.30f));
+            g.fillRect (bounds.withWidth (kComboTabWidth));
+
+            // The tab's own edge, so it reads as a strip laid on the box rather
+            // than as the outline having thickened on one side.
+            g.setColour (juce::Colours::black.withAlpha (0.35f));
+            g.fillRect (bounds.withX (bounds.getX() + kComboTabWidth).withWidth (1.0f));
+        }
+
+        g.setColour (on ? tint.withAlpha (tinted ? (box.isMouseOver() ? 1.0f : 0.75f)
+                                                 : (box.isMouseOver() ? 0.7f : 0.35f))
+                        : palette_.panel.brighter (0.15f));
+        g.drawRoundedRectangle (bounds, radius, 1.0f);
 
         // A chevron rather than a filled triangle: the same reason the knobs
         // are arcs.
@@ -310,14 +511,21 @@ public:
         chevron.lineTo (cx, cy + 2.0f);
         chevron.lineTo (cx + 3.5f, cy - 1.5f);
 
-        g.setColour (box.isEnabled() ? palette_.dimText : palette_.dimText.withAlpha (0.4f));
+        g.setColour (! on ? palette_.dimText.withAlpha (0.4f)
+                          : (tinted ? tint.brighter (0.30f) : palette_.dimText));
         g.strokePath (chevron, juce::PathStrokeType (1.4f, juce::PathStrokeType::curved,
                                                      juce::PathStrokeType::rounded));
     }
 
     void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
     {
-        label.setBounds (6, 0, box.getWidth() - 22, box.getHeight());
+        // A tinted box carries a tab down its leading edge, and text starting
+        // on top of it reads as a typo -- so the text steps aside by the tab's
+        // width and its shadow, and only then.
+        const int left = box.getProperties().contains ("tezlaTint")
+                           ? juce::roundToInt (kComboTabWidth) + 6 : 6;
+
+        label.setBounds (left, 0, box.getWidth() - left - 16, box.getHeight());
         label.setFont (getComboBoxFont (box));
     }
 

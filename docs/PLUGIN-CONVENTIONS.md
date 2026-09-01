@@ -124,9 +124,48 @@ reset it to 12-TET would be a bug rather than a feature.
 
 - Resizable, readable at high DPI, sane at 100% zoom on a 4K display.
 - Function before flourish. Clear metering beats skeuomorphic decoration.
-- Keyboard: double-click to reset a control to default, shift-drag for fine
-  adjustment, mouse wheel works everywhere.
+- Double-click resets a control to **the parameter's own default**, not to the
+  middle of its range — on a skewed range those are somewhere else entirely.
+  Shift-drag is fine adjustment.
+- **The wheel scrolls the panel. It never moves a control.** These panels
+  scroll, and on a scrolling panel a wheel that also edits is a trap with no
+  feedback: the pointer passes over Detune on the way down, the page does not
+  move, and a patch has silently changed by three cents. Every `Slider` and
+  `ComboBox` is built with the wheel off — `ui::noWheel` at the point of
+  construction, `ui::sweepNoWheel` over the finished tree as a net for controls
+  a page builds later. See `shared/tezla-ui/include/tezla/ui/ScrollWheel.hpp`.
 - No modal dialogs, no splash screens, no network access, no telemetry.
+
+### The house panel design
+
+The numbers live once, in `shared/tezla-ui/include/tezla/ui/PanelDesign.hpp`,
+and were chosen by building eight variants of a real panel and photographing
+them rather than by drawing mockups. What they say:
+
+- **A hue per group**, 18 degrees apart, rotated off the plugin's own accent in
+  hue only — saturation and lightness are held, because those are what each
+  plugin's contrast measurement was made against. The hue is carried by the
+  heading, a spine down the plate's left edge, the control names (mixed 40% of
+  the way from the dim grey, so a group reads as *warm* or *cool* before it
+  reads as coloured), the knob tracks, and the dropdowns.
+- **A size hierarchy.** A group's lead control is drawn 1.32× and a set-once
+  trim 0.74×, so the eye has something to land on. The cell keeps its footprint
+  either way; only the control inside it moves.
+- **Knobs sit in a countersunk well**, lit from above, with a machined skirt.
+  Geometry separates a knob from its plate, not hue — a body drawn a few points
+  lighter than the plate behind it reads as a smudge.
+- **Never a tick box.** An on/off control is `ui::LampButton`: a moulded cap in
+  a recessed bezel that travels when pressed and lights red, with a halo. It is
+  **red on every group** on purpose — a power switch is red on every box in a
+  rack precisely so it can be read without first being identified.
+- **A dropdown wears its group's colour** — a tab down its leading edge, a wash
+  across the fill, a full-strength outline — because it holds a word where its
+  neighbours hold a number, which makes it the control most easily mistaken for
+  a caption. Opt-in per control through a `tezlaTint` component property, so a
+  panel that is not knobs-on-plates is unaffected.
+- **A group fills its row.** Column counts at the call sites are a request, not
+  an instruction: the layout raises them until the row is full, down to
+  `design::kCellWidthMin`, rather than centring a short group in a sea of metal.
 
 ---
 

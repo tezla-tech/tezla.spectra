@@ -736,6 +736,56 @@ ever sit genuinely inside the loop without iterating.
 
 ### Unreleased
 
+**The panel gets its own design, and the wheel stops editing.** Eight variants
+of this panel were built as real editors and photographed; the one chosen is
+now the house design for the whole suite, and its numbers live in
+`shared/tezla-ui/include/tezla/ui/PanelDesign.hpp` rather than in a variant
+table — an environment switch is a thing to decide *with*, not a thing to ship
+on a control surface. What landed:
+
+- **A hue per group**, 18 degrees apart, on the heading, a spine down the
+  plate, the names, the knob tracks and the dropdowns. So MANGLE's four groups
+  are four colours and the eye can find COMB without reading a word.
+- **Cells narrower and taller** (118 × 86–112 against 172 × 62–80), and a group
+  **fills its row** rather than centring in a sea of metal — so the knobs came
+  out both bigger and closer together, which sounds contradictory and is just
+  what happens when a six-column count chosen for a 172 px cell is allowed to
+  become eleven.
+- **A size hierarchy**: CUTOFF and LEVEL at 1.32×, DRIFT and SPREAD at 0.74×.
+- **Knobs in a countersunk well** with a machined skirt. The panel that shipped
+  drew the knob body and the plate behind it within a few points of the same
+  lightness, and the control read as a smudge; geometry separates them, not hue.
+- **Never a tick box.** Every on/off control is a moulded cap in a recessed
+  bezel that travels when pressed and lights red with a halo. It is red on every
+  group deliberately: a power switch is red on every box in a rack precisely so
+  it can be read without first being identified.
+- **Dropdowns wear their group's colour** — tab, wash and outline — because a
+  choice holds a word where its neighbours hold a number, which makes it the one
+  control that reads as a caption.
+- **Bigger numbers**: 14 pt, 16.5 pt on a lead control, bold. The number under a
+  knob is what is actually read, and 11.5 pt was chosen for a much wider cell.
+- **The wheel scrolls the panel and never moves a control.** Six pages of sixty
+  controls do not fit a window, so the wheel is how you reach the bottom of one
+  — and a wheel that also edits is a trap with no feedback: the pointer passes
+  over Detune on the way down, the page does not move, and the patch has
+  silently changed by three cents.
+
+Two bugs fell out of photographing the result, both older than the design work:
+
+- **The lit switch's glow was being thrown away.** JUCE clips a component's
+  painting to its own bounds, and the halo was drawn at `expanded(3.5)` —
+  entirely outside the clip, so all that ever reached the screen was the
+  one-pixel sliver between the bezel and the component edge. The button is now
+  larger than the switch drawn inside it, by `LampButton::kGlowMargin`.
+- **AMPLITUDE's Snap switch was drawn on top of MOD ENVELOPE 1's Attack.** The
+  envelope grid is three by three, filled row by row, and AMPLITUDE carries ten
+  cells — eight stage controls, Velocity and Snap. The tenth went to row three,
+  one row below its own block. It has been doing that since Snap was added, and
+  nothing caught it because there is no layout test; it took a screenshot. The
+  grid now widens instead of overflowing, and fills column-major, so each column
+  is one envelope stage with its tension and its level and the whole-envelope
+  controls fall into the last one.
+
 **Nine oscillator shapes, a Morph slider, and a live waveform preview.** Five
 new shapes join the classic four, each read through a per-oscillator **Morph**
 whose meaning is the shape's own and whose zero is always the classic form —

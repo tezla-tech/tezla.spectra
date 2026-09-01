@@ -3172,7 +3172,215 @@ int runMalleus (const Args& args)
     std::printf ("  injected in closed form, so it carries nothing that was never\n");
     std::printf ("  computed -- which is why this instrument oversamples nowhere.\n");
 
-    // ---- 7. CPU --------------------------------------------------------------
+    // ---- 7. Phase 2: bloom, damping and the listening pair ---------------------
+
+    std::printf ("\n----- Phase 2 -----------------------------------------------\n");
+
+    // Bloom's operating point, measured on a **voice** rather than on a bare
+    // bank -- the first draft of this table built a harmonic bank where
+    // tests/test_ModalResonator.cpp builds an inharmonic bar, and the two
+    // disagreed about where the control engages. Velocity is what a player
+    // has a handle on, so velocity is what this sweeps.
+    std::printf ("\nBloom: the late high-band share of a struck plate, against the\n");
+    std::printf ("velocity it was struck at. A linear bank reads the same figure at\n");
+    std::printf ("every velocity, which is the property Bloom removes.\n\n");
+    std::printf ("  %-10s %-12s %-12s %-12s\n", "velocity", "voice peak", "bloom 1", "bloom 0");
+
+    for (const double velocity : { 0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0 })
+    {
+        double reading[2] {};
+        double peak = 0.0;
+
+        for (int on = 0; on < 2; ++on)
+        {
+            MalleusVoice voice;
+            VoiceSettings settings;
+
+            settings.material = 3.6;
+            settings.partials = 48;
+            settings.decaySeconds = 8.0;
+            settings.tilt = 0.3;
+            settings.position = 0.17;
+            settings.hardness = 0.34;
+
+            voice.prepare (rate);
+            voice.noteOn (45, 110.0, velocity, 1, settings,
+                          dsp::scales::twelveToneEqual(), 0);
+            voice.setBloom (on == 0 ? dsp::ModalResonator::kMaxBloom : 0.0);
+
+            const int total = static_cast<int> (rate);
+            std::vector<double> left (static_cast<std::size_t> (total), 0.0);
+            std::vector<double> right (static_cast<std::size_t> (total), 0.0);
+
+            for (int done = 0; done < total; done += 128)
+            {
+                const int take = std::min (128, total - done);
+
+                voice.controlTick (take);
+                voice.render (left.data() + done, right.data() + done, take);
+            }
+
+            if (on == 1)
+                for (const double sample : left)
+                    peak = std::max (peak, std::abs (sample));
+
+            // The share above four times the fundamental, late in the ring.
+            double high = 0.0;
+            double whole = 0.0;
+
+            for (int partial = 1; partial <= 24; ++partial)
+            {
+                const double hz = 110.0 * partial;
+
+                if (hz > 0.45 * rate)
+                    break;
+
+                double re = 0.0;
+                double im = 0.0;
+                const std::size_t from = 14400;
+                const std::size_t span = 9600;
+
+                for (std::size_t n = 0; n < span && from + n < left.size(); ++n)
+                {
+                    const double along = static_cast<double> (n) / static_cast<double> (span);
+                    const double window = 0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * along);
+                    const double phase = 2.0 * std::numbers::pi * hz
+                                       * static_cast<double> (n) / rate;
+
+                    re += window * left[from + n] * std::cos (phase);
+                    im += window * left[from + n] * std::sin (phase);
+                }
+
+                const double power = re * re + im * im;
+
+                whole += power;
+
+                if (hz >= 440.0)
+                    high += power;
+            }
+
+            reading[on] = whole > 0.0 ? high / whole : 0.0;
+        }
+
+        std::printf ("  %-10.2f %-12.4f %-12.4f %-12.4f\n",
+                     velocity, peak, reading[0], reading[1]);
+    }
+
+    std::printf ("\n  Bloom is a hit-it-hard effect, which is what the physics says a\n");
+    std::printf ("  large-displacement nonlinearity is. The useful window is about\n");
+    std::printf ("  9 dB wide: above it the injection swamps the state rather than\n");
+    std::printf ("  perturbing it, and the control reverses.\n");
+
+    // The damping law, as T60 against frequency.
+    std::printf ("\nDamp: measured T60 in seconds, on modes with a 4 s natural decay.\n");
+    std::printf ("The loss is proportional to frequency, so each doubling of pitch\n");
+    std::printf ("roughly halves the time -- dull before quiet.\n\n");
+    std::printf ("  %-8s %-9s %-9s %-9s %-9s\n", "Hz", "0.00", "0.25", "0.50", "1.00");
+
+    for (const double hz : { 125.0, 250.0, 500.0, 1000.0, 2000.0 })
+    {
+        std::printf ("  %-8.0f", hz);
+
+        for (const double damp : { 0.0, 0.25, 0.5, 1.0 })
+        {
+            dsp::ModalResonator bank;
+            bank.prepare (rate);
+            bank.setModeCount (1);
+            bank.setMode (0, hz, 4.0, 1.0);
+            bank.setDamp (damp);
+            bank.excite (0, 1.0);
+
+            const int limit = static_cast<int> (20.0 * rate);
+            const int period = std::max (2, static_cast<int> (rate / hz));
+
+            double first = 0.0;
+            int sample = 0;
+
+            for (; sample < period * 2 && sample < limit; ++sample)
+                first = std::max (first, std::abs (bank.process()));
+
+            const double target = first * 0.001;
+
+            while (sample < limit)
+            {
+                double loudest = 0.0;
+
+                for (int n = 0; n < period && sample < limit; ++n, ++sample)
+                    loudest = std::max (loudest, std::abs (bank.process()));
+
+                if (loudest <= target)
+                    break;
+            }
+
+            std::printf (" %-9.3f", static_cast<double> (sample) / rate);
+        }
+
+        std::printf ("\n");
+    }
+
+    // The listening pair: width against what survives a mono fold.
+    std::printf ("\nListen: two points on the object, mirrored at (q, 1-q).\n");
+    std::printf ("Width and mono compatibility trade off directly.\n\n");
+    std::printf ("  %-6s %-6s %-14s %-8s\n", "L", "R", "correlation", "mono keeps");
+
+    for (const double q : { 0.05, 0.10, 0.20, 0.29, 0.35, 0.45 })
+    {
+        MalleusVoice voice;
+        VoiceSettings settings;
+
+        settings.material = 1.2;
+        settings.partials = 32;
+        settings.decaySeconds = 2.0;
+        settings.position = 0.29;
+        settings.hardness = 0.6;
+        settings.listenLeft = q;
+        settings.listenRight = 1.0 - q;
+        settings.listenAmount = 1.0;
+
+        voice.prepare (rate);
+        voice.noteOn (57, 220.0, 0.85, 0x9E3779B97F4A7C15ULL, settings,
+                      dsp::scales::twelveToneEqual(), 0);
+
+        const int total = static_cast<int> (0.5 * rate);
+        std::vector<double> left (static_cast<std::size_t> (total), 0.0);
+        std::vector<double> right (static_cast<std::size_t> (total), 0.0);
+
+        for (int done = 0; done < total; done += 128)
+        {
+            const int take = std::min (128, total - done);
+
+            voice.controlTick (take);
+            voice.render (left.data() + done, right.data() + done, take);
+        }
+
+        double dot = 0.0;
+        double energyLeft = 0.0;
+        double energyRight = 0.0;
+        double energyMono = 0.0;
+
+        for (std::size_t n = 0; n < left.size(); ++n)
+        {
+            dot += left[n] * right[n];
+            energyLeft += left[n] * left[n];
+            energyRight += right[n] * right[n];
+
+            const double fold = 0.5 * (left[n] + right[n]);
+            energyMono += fold * fold;
+        }
+
+        const auto count = static_cast<double> (left.size());
+        const double correlation = dot / std::sqrt (energyLeft * energyRight);
+        const double stereo = 0.5 * (std::sqrt (energyLeft / count)
+                                       + std::sqrt (energyRight / count));
+
+        std::printf ("  %-6.2f %-6.2f %+-14.4f %-8.3f\n",
+                     q, 1.0 - q, correlation, std::sqrt (energyMono / count) / stereo);
+    }
+
+    std::printf ("\n  At MATCHED width an asymmetric pair survives better: 0.10/0.75\n");
+    std::printf ("  and 0.20/0.80 are equally wide and keep 0.641 against 0.600.\n");
+
+    // ---- 8. CPU --------------------------------------------------------------
 
     std::printf ("\nCPU, as a percentage of one core, at %.0f Hz.\n\n", rate);
 

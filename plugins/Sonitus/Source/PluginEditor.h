@@ -10,6 +10,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/LevelMeter.hpp>
@@ -79,15 +80,30 @@ public:
 
     virtual void setControlEnabled (bool enabled) = 0;
 
+    /// The group's colour, for a design that gives each group its own.
+    ///
+    /// The base tints the *name*, which every cell has; an override adds
+    /// whatever else that cell can colour and calls this first.
+    virtual void setTint (juce::Colour tint);
+
     void resized() override;
 
 protected:
     /// Where the control goes: everything under the name.
     [[nodiscard]] juce::Rectangle<int> controlBounds() const;
 
+    /// The name's colour, group tint mixed in. Held as a method rather than a
+    /// value because the enabled/disabled paths both need it and neither
+    /// should have to remember the mix.
+    [[nodiscard]] juce::Colour labelColour() const;
+
+    /// The height the value row wants, which a design may grow.
+    [[nodiscard]] static int valueHeight();
+
     juce::String id_;
     ui::Palette  palette_;
     juce::Label  label_;
+    juce::Colour tint_ { palette_.accent };
 };
 
 class KnobCell final : public ParameterCell
@@ -97,6 +113,7 @@ public:
               const juce::String& name, const juce::String& tooltip, ui::Palette palette);
 
     void setControlEnabled (bool enabled) override;
+    void setTint (juce::Colour tint) override;
     void resized() override;
 
 private:
@@ -153,6 +170,7 @@ public:
                 const juce::String& name, const juce::String& tooltip, ui::Palette palette);
 
     void setControlEnabled (bool enabled) override;
+    void setTint (juce::Colour tint) override;
     void resized() override;
 
 private:
@@ -170,7 +188,10 @@ public:
     void resized() override;
 
 private:
-    juce::ToggleButton button_;
+    /// Held by base pointer because the attachment does not care which button
+    /// is under it, and because the cell's own code never needs the switch's
+    /// interface -- only `Button`'s.
+    std::unique_ptr<juce::Button> button_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment_;
 };
 
@@ -349,11 +370,21 @@ private:
         /// component to own.
         std::vector<ParameterCell*> cells;
 
+        /// This group's own colour, rotated off the page accent. Held rather
+        /// than recomputed, because the cells are tinted once at build time and
+        /// the plate is painted thirty times a second.
+        juce::Colour tint;
+
         juce::Rectangle<int> bounds;   ///< filled in by `resized`
     };
 
     [[nodiscard]] Group& currentGroup();
-    [[nodiscard]] int rowsIn (const Group& group) const;
+    /// How many columns a group actually gets, which is **not** the number its
+    /// call site asked for: a group may be widened until its row is full, down
+    /// to `design::kCellWidthMin`. See PanelDesign.hpp.
+    [[nodiscard]] int columnsFor (const Group& group, int width) const;
+
+    [[nodiscard]] int rowsIn (const Group& group, int width) const;
     [[nodiscard]] int totalRows() const;
 
     /// How many bands the page has -- a band being one group, or several

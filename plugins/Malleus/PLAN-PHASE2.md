@@ -171,10 +171,10 @@ Updated **in the same commit as each phase**.
 | M2-0 plan | done |
 | M2-1 Bloom | done |
 | M2-2 Damp | done |
-| M2-3 two exciters + velocity hardness | pending |
-| M2-4 two listening positions | pending |
-| M2-5 JUCE layer and editor | pending |
-| M2-6 close-out | pending |
+| M2-3 two exciters + velocity hardness | done |
+| M2-4 two listening positions | done |
+| M2-5 JUCE layer and editor | done |
+| M2-6 close-out | done |
 
 **To resume**: read CLAUDE.md in full, then `plugins/Malleus/PLAN.md` (phase
 1, complete) and this file; take the first `pending` phase. The

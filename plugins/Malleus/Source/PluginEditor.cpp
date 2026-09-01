@@ -556,6 +556,24 @@ void MalleusEditor::buildPages()
         "gets EXACTLY nothing -- the hollow, clarinet-like sound of a bar hit "
         "in the middle. At 1/3, every third mode goes.");
 
+    object->addKnob (ids::bloom, "Bloom",
+        "The modes talk to each other. Hit a tam-tam hard and the sound BUILDS "
+        "after the strike -- a shimmer that was not there at contact climbing "
+        "out of the low modes -- and that is energy migrating upward through "
+        "the bank, which nothing linear can do. Measured on a 32-mode bar: the "
+        "high band's share falls to 0.78x of its early value with this off and "
+        "rises to 37x with it full. Amplitude-dependent, so a quiet hit blooms "
+        "less; zero is bit-exact off, and the loop is bounded by a term that "
+        "cannot exceed unity for any input.");
+
+    object->addKnob (ids::damp, "Damp",
+        "A hand on the object, and it is played rather than set -- push it "
+        "while a note rings and the ring changes. The loss is proportional to "
+        "FREQUENCY, so the top goes first and the object turns dull before it "
+        "turns quiet, which is what soft tissue does and what a volume pedal "
+        "does not. Measured on a 4 s decay: at full damp a 250 Hz mode reads "
+        "0.368 s and a 500 Hz mode 0.194 s. Zero is bit-exact off.");
+
     object->addKnob (ids::outputTrim, "Output",
         "Output trim. The floor (-60 dB) is quiet, not silent: with nothing "
         "played the plugin's output is bit-exact zero at any trim.");
@@ -584,6 +602,27 @@ void MalleusEditor::buildPages()
         "Contact time, 8 ms of felt down to 0.15 ms of brass, log-spaced. "
         "Measured spectral centroid on a 32-mode object at 100 Hz: 155 Hz soft, "
         "430 Hz middle, 1438 Hz hard. Mallet and the scrape only.");
+
+    excite->addChoice (ids::exciterB, "Exciter B",
+        "The second contact. A real strike is a contact AND a scrape: a mallet "
+        "with a fingernail on it, or a bow started with a pluck, which is how a "
+        "bowed string is actually begun. Inaudible until Blend leaves zero.");
+
+    excite->addKnob (ids::exciterBlend, "Blend",
+        "How much of Exciter B there is. A lerp on the excitation amounts, so "
+        "0 is bit for bit Exciter A alone and 1 is bit for bit B alone -- both "
+        "ends, not just the off one. Measured on a mallet blended into a pluck "
+        "at 220 Hz, the strike's spectral centroid walks 390 Hz to 227 Hz "
+        "across the control. Setting both slots the same is the single "
+        "exciter, exactly, at every position.");
+
+    excite->addKnob (ids::hardnessVel, "Hardness from velocity",
+        "How much of Hardness comes from how hard you play instead of from the "
+        "knob. On a real drum a soft hit is felt and a hard hit is stick, "
+        "because the same mallet compresses differently -- this is what "
+        "connects that to the keyboard. At full, velocity IS the hardness: "
+        "measured, the strike's centroid runs 216 Hz at velocity 0.1 to 542 Hz "
+        "at 1.0. Zero is bit-exact the knob.");
 
     excite->addKnob (ids::noiseAmount, "Scrape",
         "A seeded, hardness-darkened noise burst mixed into the strike -- the "
@@ -674,6 +713,30 @@ void MalleusEditor::buildPages()
 
     resonance->addGap();
 
+    resonance->addKnob (ids::listenAmount, "Listen amount",
+        "Where you STAND, blended in from where the plugin used to put you. At "
+        "0 every mode is heard equally -- which is what a plain modal sum is, "
+        "and is not any real point on a real object -- and the plugin is the "
+        "mono instrument it has always been, bit for bit. At 1 the two knobs "
+        "below are two real listening points and the stereo is the geometry "
+        "rather than a widener.");
+
+    resonance->addKnob (ids::listenLeft, "Listen left",
+        "The left ear's position along the object. Modes are weighted by "
+        "sin(k pi q), the same law the strike uses, so an ear at 0.5 hears "
+        "EXACTLY nothing of every even mode. Measured: listening at the middle "
+        "reads 0.76 of the flat sum's level, not half, because a struck "
+        "object's energy sits in its low modes.");
+
+    resonance->addKnob (ids::listenRight, "Listen right",
+        "The right ear's position. **Width and mono compatibility trade off "
+        "directly** and nothing escapes it: mirrored pairs at 0.05/0.95 read "
+        "-0.36 correlation and keep 0.57 of their level in mono, while "
+        "0.45/0.55 read +0.86 and keep 0.96. At MATCHED width an asymmetric "
+        "pair survives better -- 0.10/0.75 and 0.20/0.80 are equally wide and "
+        "keep 0.64 against 0.60 -- so offset the two rather than mirroring "
+        "them if the mix folds down.");
+
     resonance->setNote (
         "The taraf reads the same scale the keys do: fed pitchless noise, the weakest "
         "degree rings 857 times louder than the loudest gap between degrees. Drone is a "
@@ -721,17 +784,33 @@ void MalleusEditor::showPage (int index)
 
 void MalleusEditor::updateForExciter()
 {
-    const int exciter = shownExciter_;
+    // **Either slot can be any exciter**, so a control belongs to the note if
+    // *either* slot reaches it -- and only if that slot is actually audible.
+    // Blend at 0 makes slot B silent, so its controls grey out; the moment the
+    // blend leaves zero they come back. Getting this from one slot would grey
+    // out the bow controls on a mallet-plus-bow blend, which is precisely the
+    // patch the second slot exists for.
+    const bool bAudible = shownBlend_ > 0.0f;
+    const bool aAudible = shownBlend_ < 1.0f;
 
-    const bool mallet = exciter == static_cast<int> (Exciter::Mallet);
-    const bool roll = exciter == static_cast<int> (Exciter::Roll);
-    const bool bow = exciter == static_cast<int> (Exciter::Bow);
+    const auto uses = [&] (Exciter which)
+    {
+        const int index = static_cast<int> (which);
+
+        return (aAudible && shownExciter_ == index)
+            || (bAudible && shownExciterB_ == index);
+    };
+
+    const bool mallet = uses (Exciter::Mallet);
+    const bool roll = uses (Exciter::Roll);
+    const bool bow = uses (Exciter::Bow);
 
     auto& excite = *pages_[1];
 
     // Hardness and the scrape are contact properties: a pluck is a
     // displacement release and a bow never leaves the surface.
     excite.setControlEnabled (ids::hardness, mallet || roll);
+    excite.setControlEnabled (ids::hardnessVel, mallet || roll);
     excite.setControlEnabled (ids::noiseAmount, mallet || roll);
 
     excite.setControlEnabled (ids::bowPressure, bow);
@@ -741,6 +820,9 @@ void MalleusEditor::updateForExciter()
     excite.setControlEnabled (ids::rollRatio, roll);
     excite.setControlEnabled (ids::rollMinimum, roll);
     excite.setControlEnabled (ids::rollHumanise, roll);
+
+    // Slot B's choice is inert until the blend leaves zero.
+    excite.setControlEnabled (ids::exciterB, bAudible);
 
     // The bow sustains while the key is held, so a tension drop that lands
     // in 80 ms is a bend at the start of a held note rather than a drop.
@@ -756,6 +838,12 @@ void MalleusEditor::updateForExciter()
     resonance.setControlEnabled (ids::sympDrone, taraf);
     resonance.setControlEnabled (ids::sympDecay, taraf);
     resonance.setControlEnabled (ids::sympBrightness, taraf);
+
+    // The two positions do nothing until there is an amount to blend them in.
+    const bool listening = shownListen_ > 0.0f;
+
+    resonance.setControlEnabled (ids::listenLeft, listening);
+    resonance.setControlEnabled (ids::listenRight, listening);
 }
 
 void MalleusEditor::timerCallback()
@@ -769,18 +857,38 @@ void MalleusEditor::timerCallback()
     // Greying is recomputed only when a switch actually moved -- doing it
     // fifteen times a second would repaint the panel for nothing.
     int exciter = 0;
+    int exciterB = 0;
     int sympCount = 0;
+    float blend = 0.0f;
+    float listen = 0.0f;
 
-    if (auto* raw = malleus_.getState().getRawParameterValue (ids::exciter))
-        exciter = static_cast<int> (raw->load());
+    const auto read = [this] (const char* id, auto& into)
+    {
+        if (auto* raw = malleus_.getState().getRawParameterValue (id))
+            into = static_cast<std::remove_reference_t<decltype (into)>> (raw->load());
+    };
 
-    if (auto* raw = malleus_.getState().getRawParameterValue (ids::sympCount))
-        sympCount = static_cast<int> (raw->load());
+    read (ids::exciter, exciter);
+    read (ids::exciterB, exciterB);
+    read (ids::sympCount, sympCount);
+    read (ids::exciterBlend, blend);
+    read (ids::listenAmount, listen);
 
-    if (exciter != shownExciter_ || (sympCount > 0) != (shownSympCount_ > 0))
+    // The blend and the amount are continuous, so only their *audibility*
+    // decides the greying -- comparing the values themselves would repaint
+    // the panel on every frame of a knob drag.
+    if (exciter != shownExciter_
+        || exciterB != shownExciterB_
+        || (sympCount > 0) != (shownSympCount_ > 0)
+        || (blend > 0.0f) != (shownBlend_ > 0.0f)
+        || (blend < 1.0f) != (shownBlend_ < 1.0f)
+        || (listen > 0.0f) != (shownListen_ > 0.0f))
     {
         shownExciter_ = exciter;
+        shownExciterB_ = exciterB;
         shownSympCount_ = sympCount;
+        shownBlend_ = blend;
+        shownListen_ = listen;
         updateForExciter();
     }
 }
