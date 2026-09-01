@@ -442,7 +442,7 @@ They were read from there rather than fetched.
 | Perttu Hämäläinen, "Smoothing of the Control Signal without Clipped Output in Digital Peak Limiters", **DAFx-02**, Hamburg, 2002 | Conference paper — cite, do not paste | The max-filter (order-statistics) construction that makes a smoothed limiter gain provably non-clipping. §3.5 describes the dual we actually use, and warns of its hazard. |
 | **ITU-R BS.1770-5** (11/2023), Annex 2 | ITU copyright; published for implementation | True-peak measurement: the 12.04 dB attenuation convention, the order-48 four-phase interpolating FIR, and the worst-case under-read table that decides our oversampling control. **The coefficient table is typed in verbatim** — the one thing in Capstone that is copied rather than derived. |
 | Geraint Luff / Signalsmith Audio, "Designing a straightforward limiter", 2022 | Article, © Signalsmith Audio Ltd — cite, do not paste | A modern treatment of the same structure. The hold refinement — widening the minimum window without widening the smoothing — comes from here. |
-| Dimitrios Giannoulis, Michael Massberg & Joshua D. Reiss, "Digital Dynamic Range Compressor Design — A Tutorial and Analysis", **JAES 60(6)**, 2012 | Journal paper — cite, do not paste; **not fetched from this container** | The quadratic soft-knee gain-computer form. `GainComputer` has named it in a comment since it was written; this row is the record that was missing. The infinite-ratio specialisation used by Capstone was derived and measured here rather than transcribed, and Phonoss V1 generalises it back to a finite ratio — a derivation checked by measuring the realised ratio, and pinned bit-exact against the limiter form at 1/ratio = 0. |
+| Dimitrios Giannoulis, Michael Massberg & Joshua D. Reiss, "Digital Dynamic Range Compressor Design — A Tutorial and Analysis", **JAES 60(6)**, 2012 | Journal paper — cite, do not paste; not fetched when this row was written, **since READ first-hand** (user-supplied PDF, 2026-09-01 — see the Membrana section below, which records what the reading confirmed) | The quadratic soft-knee gain-computer form. `GainComputer` has named it in a comment since it was written; this row is the record that was missing. The infinite-ratio specialisation used by Capstone was derived and measured here rather than transcribed, and Phonoss V1 generalises it back to a finite ratio — a derivation checked by measuring the realised ratio, and pinned bit-exact against the limiter form at 1/ratio = 0. |
 
 ---
 
@@ -729,6 +729,31 @@ Nothing here is taken from any commercial plugin, sample library or recording.
 No binary has been inspected. The tones are generated from their published
 frequencies, which is the only way this could have been done anyway: a
 telephone tone *is* its specification.
+
+---
+
+## Microphone physics and presence — Membrana
+
+Membrana models a microphone from mechanism — sphere diffraction, the
+first-order gradient, level-tracking dynamics — and never from any measured
+commercial microphone. The three load-bearing papers were **read first-hand
+from user-supplied PDFs** (2026-09-01): the container's egress proxy refuses
+both hosting domains (escholarship.org and www.eecs.qmul.ac.uk were tested and
+returned blocked), so per CLAUDE.md §9 the URLs were given to the user, who
+fetched them. That access route is part of the record.
+
+| Source | Licence / status | Used for |
+|---|---|---|
+| Richard O. Duda & William L. Martens, "Range dependence of the response of a spherical head model", **JASA 104(5):3048–3058, Nov 1998**, DOI 10.1121/1.423886 | Journal paper — cite, do not paste. **READ first-hand, user-supplied PDF, 2026-09-01** | The exact rigid-sphere scattering series at finite source range (their Eqs 7–8), and — the thing actually *taken* under §9's copy-what-measurement-cannot-check rule — **the Appendix A–B evaluation algorithm**: the Q_m-polynomial substitution that keeps every intermediate bounded where raw spherical-Hankel recursion overflows, its seeds (Q_0 = z, Q_1 = z − z², Q_{−1} ≡ z), the derivative form (A7), the assembled per-term expression (A10), and the stopping rule (two successive terms with fractional change below threshold). Attributed again at the point of use in `plugins/Membrana/Dsp/SphereDiffraction.hpp`. Also: the proof the sphere response is **minimum-phase at every range and angle** (Sec II.D), which is what makes Membrana's minimum-phase FIR realisation faithful rather than convenient; the pinned limit values the tests assert (+6 dB HF on-axis limit, +3 dB at μ = 1, ≈ −13 dB at θ = 150°/μ = 30, the ρ = 1.25 HF rise of +2 dB against the far-field +6); and footnote 1, which fixes their e^(i(kr−ωt)) convention as the conjugate of Kuhn's and Rabinowitz's — so magnitude-only use is convention-proof. Provenance of the algorithm: Bauck & Cooper (1980), extended by the authors to finite range. |
+| Richard O. Duda & William L. Martens, "Range-Dependence of the HRTF for a Spherical Head" (conference version; eScholarship item 0kb7r9m9) | Conference paper — cite, do not paste. **READ first-hand, user-supplied PDF, 2026-09-01** | The same model, plus the measurements: their bowling-ball HRTFs confirm the series for ρ ≥ 2, and below ρ = 2 it was their *source* that stopped being a point — the series itself is exact. Read first, and superseded in detail by the JASA version above. |
+| Rabinowitz, Maxwell, Shao & Wei, "Sound localization cues for a magnified head", *Presence* 2:125–129 (1993) | **Not read — paywalled, and deliberately not pursued.** | The origin of the series formula, per the read papers. Not needed: the series is the standard exterior-scattering solution, the read papers state it in full with an evaluation algorithm, and the limit tests pin the structure. Recorded so nobody buys it thinking it gates anything. |
+| Giannoulis, Massberg & Reiss, "Digital Dynamic Range Compressor Design — A Tutorial and Analysis", **JAES 60(6)**, 2012 | Journal paper — cite, do not paste. **Now READ first-hand, user-supplied PDF, 2026-09-01** — this upgrades the Capstone-era row above, which recorded it as cited-not-read. | The design recommendation Membrana's two dynamics stages adopt: feed-forward, with the **smoothing detector in the log domain placed after the gain computer** (§3.2 and conclusion) — no attack lag, no fixed detector threshold, a guaranteed-smooth return to 0 dB, a freely variable knee, and (their Fig 9) minimum distortion of the gain modulation. Eq (7): the step-invariant one-pole α = e^(−1/(τ·fs)) whose coefficient can move without clicks — confirming the house `EnvelopeFollower` form. Eqs (14)–(17): the decoupled and branching detectors and their smooth variants; Membrana uses the smooth branching form in the log domain. Also verified: Eq (4) is the quadratic soft-knee `GainComputer` has cited since Capstone. **The paper does not treat upward expansion** ("the analysis in this paper was limited to the design of standard compressors") — Membrana's presence and detail lift curves are our own design on the paper's validated methodology, and no printed expander equation exists to have been transcribed. |
+| Beranek & Mellow, *Acoustics: Sound Fields and Transducers*; Eargle, *The Microphone Book*; Wiener, JASA 19:444–451 (1947) | books/paper — **not read**, background only | The proximity effect is derived in `plugins/Membrana/PLAN.md` from the spherical-wave pressure gradient — a two-line derivation whose result is verified by measurement (the +3.01 dB/546 Hz cardioid-at-5-cm pin and the exact zeros: omni everywhere, any gradient pattern at θ = 90°). These references would only re-derive it; listed so a successor knows they were considered and why they were not required. |
+
+Nothing here is taken from any commercial microphone: no measured response of
+a named product, no published polar plot traced, no brand names in presets or
+documentation. A capsule diameter range ("large-diaphragm bodies run
+~50 mm") is public documentation and is the only kind of product fact used.
 
 ---
 
