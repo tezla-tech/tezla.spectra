@@ -32,6 +32,9 @@
 #    --juce-system    use a JUCE installed with `cmake --install`
 #    --native         macOS only: build for this Mac's architecture alone,
 #                     which halves build time while you are iterating
+#    --lto            link-time optimisation for a release build. Slow to
+#                     link, and measured to make no runtime difference to the
+#                     DSP -- see docs/BUILD.md, "A note on TEZLA_LTO"
 #    --help
 #
 #  Everything here has a documented manual equivalent in docs/BUILD-MACOS.md.
@@ -80,6 +83,7 @@ while [[ $# -gt 0 ]]; do
         --juce)        extra_args+=("-DTEZLA_JUCE_PATH=$2"); shift 2 ;;
         --juce-system) extra_args+=("-DTEZLA_JUCE_SOURCE=System"); shift ;;
         --native)      extra_args+=("-DTEZLA_UNIVERSAL_BINARY=OFF"); shift ;;
+        --lto)         extra_args+=("-DTEZLA_LTO=ON"); shift ;;
         --test)        run_tests=1; shift ;;
         --install)     do_install=1; shift ;;
         --installbuild) do_install=1; install_only=1; shift ;;

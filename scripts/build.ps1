@@ -25,6 +25,11 @@
 .PARAMETER Test
     Run the DSP unit tests after building.
 
+.PARAMETER Lto
+    Link-time optimisation (/GL + /LTCG), Release only. Off by default: it was
+    measured to make no runtime difference to the DSP and it slows every link.
+    See docs\BUILD.md, "A note on TEZLA_LTO".
+
 .PARAMETER Clean
     Delete the build folder first.
 
@@ -48,6 +53,7 @@ param(
     [string]   $Generator = '',
     [switch]   $Install,
     [switch]   $Test,
+    [switch]   $Lto,
     [switch]   $Clean,
     [switch]   $List
 )
@@ -116,6 +122,12 @@ if ($Generator) {
 } elseif (Get-Command ninja -ErrorAction SilentlyContinue) {
     # Ninja is a multi-minute saving on a JUCE build. Use it when it is there.
     $cmakeArgs += @('-G', 'Ninja Multi-Config')
+}
+
+# Link-time optimisation, off by default: measured to make no runtime
+# difference to the DSP and it slows every link. See docs\BUILD.md.
+if ($Lto) {
+    $cmakeArgs += '-DTEZLA_LTO=ON'
 }
 
 if ($Install) {

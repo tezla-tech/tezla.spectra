@@ -84,6 +84,7 @@ scripts\build.bat -vs                      :: force the Visual Studio generator
 scripts\build.bat -ninja                   :: force Ninja (needs a developer prompt)
 scripts\build.bat -juce C:\dev\JUCE        :: use a JUCE you already have
 scripts\build.bat -juce-system             :: use a JUCE you installed
+scripts\build.bat -lto                     :: link-time optimisation (release builds; see §3.2)
 ```
 
 Options take **one dash or two** — `-install` and `--install` are the same
@@ -171,36 +172,94 @@ Useful extra options, all optional:
 | `-DTEZLA_BUILD_TOOLS=OFF` | Skip the measurement tools |
 | `-DTEZLA_BUILD_STANDALONE=ON` | Also build a standalone `.exe` per plugin |
 | `-DTEZLA_WARNINGS_AS_ERRORS=ON` | Treat warnings as errors |
-| `-DTEZLA_LTO=ON` | Link-time optimisation. **Off by default and slow** — see below |
+| `-DTEZLA_LTO=ON` | Link-time optimisation. **Off by default: slow to link, and measured to gain nothing at runtime** — see below. `-lto` / `--lto` in the scripts |
 | `-DTEZLA_JUCE_PATH=C:/dev/JUCE` | Use a JUCE you already have — see [section 4](#4-juce-getting-it-or-using-one-you-already-have) |
 | `-DTEZLA_JUCE_SOURCE=System` | Use a JUCE installed with `cmake --install` — see [section 4.4](#44-route-c--a-juce-you-installed-with-cmake---install) |
 
 ### A note on `TEZLA_LTO`
 
-It is off, and the reason is a measurement rather than a preference. JUCE's
-recommended flag is a plain `-flto`, which means **serial** link-time
-optimisation on GCC and **monolithic** LTO on Apple clang — the whole program
-merged into one module and optimised on a single core at link time. The macOS
-plugin job does that for six plugins in two formats, twice over for a universal
-binary, and CI run 38 spent **six hours and four minutes** in that one step
-before it was cancelled. The same build on Windows with MSVC's LTCG took seven
-minutes. There were six plugins then; there are twelve now, so the figure to
-beat has doubled.
+**Off by default, and the reason is a measurement.** Link-time optimisation
+buys cross-translation-unit inlining. This tree's DSP is header-only by design
+([`CLAUDE.md`](../CLAUDE.md) §4), so every audio hot path is already visible to
+the compiler inside the one translation unit that instantiates it, and there is
+nothing left across a boundary for LTO to inline. Measured on 2026-09-01, GCC
+13.3 on x86-64, LTO off against `-flto=auto`, three instruments:
 
-What it buys is cross-translation-unit inlining, which matters for a binary
-somebody is going to run and matters not at all while the numbers are still
-being measured — and the numbers come from `tezla-tests` and `tezla-measure`,
-neither of which is built with it.
+**The six CPU-budget tests**, five interleaved runs each, best of five:
 
-**The released builds do not use it either, deliberately.** `v0.88.8` and its
-Sonitus test run were cut with it off, at the user's instruction, and CI does
-not pass the flag — so nothing turns it back on by accident. That is the right
-default until somebody has actually measured a twelve-plugin universal link with
-it on and found the wait affordable; a release that never finishes linking is
-worth less than one that is a few percent slower.
+| test | off | on | on ÷ off |
+|---|---|---|---|
+| Ferrite, one stereo instance | 0.1565 s | 0.1568 s | 1.002 |
+| Malleus, 16 bowed voices | 0.1972 s | 0.1983 s | 1.006 |
+| Phonoss full strip, stereo | 0.0143 s | 0.0143 s | 1.000 |
+| 64-mode resonator | 0.0036 s | 0.0036 s | 1.000 |
+| Malleus, dead engine | 0.0039 s | 0.0039 s | 1.000 |
+| lowpass gate | 0.0027 s | 0.0028 s | 1.037 (0.1 ms: noise) |
 
-If you do turn it on, prefer `-flto=auto` (GCC) or `-flto=thin` (clang) to the
-plain flag: both parallelise the link across cores, and the plain one does not.
+**`tezla-measure anvil`**, 60 s of stereo audio in 128-sample blocks — the
+closest thing here to a DAW callback:
+
+| oversampling | off | on |
+|---|---|---|
+| ×1 | 4.4 % of a core | 4.3 % |
+| ×2 | 9.5 % | 9.3 % |
+| ×4 | 18.7 % | 18.8 % |
+| ×8 | 39.9 % | 37.8 % |
+
+**`tezla-measure capstone`**, same signal: 0.512 → 0.522 s, 0.814 → 0.806 s,
+2.862 → 3.057 s, 2.315 → 2.204 s, 6.056 → 6.050 s — single runs, mixed signs,
+all inside the noise.
+
+**No runtime gain.** What it costs is real: JUCE's recommended flag is a plain
+`-flto`, which is **serial** link-time optimisation on GCC and **monolithic**
+LTO on Apple clang — the whole program merged into one module and optimised on
+a single core, per format, twice over for a universal binary. CI run 38 spent
+**six hours and four minutes** in that one step before it was cancelled; the
+same build on Windows with MSVC's LTCG took seven minutes. The parallel forms
+this tree passes when asked are a multiple of a normal link, not an order of
+magnitude, but they are still a wait for nothing measurable.
+
+**What has not been measured, and should be before anyone believes a
+different answer for it:** MSVC's `/GL` + `/LTCG` on the Windows rig, in FL
+Studio's CPU meter. The numbers above are GCC on Linux. The structural reason
+applies to every compiler, but the rig is the acceptance test. Build once with
+`scripts\build.bat -lto --install`, once without, and compare the meter on the
+same project.
+
+**So it is an option, not a default**, and it is applied through
+`tezla::compiler-options` — the interface target every Tezla target links — so
+`tezla-tests`, `tezla-measure` and the plugins all get it alike. A number
+measured on one configuration and shipped on another is not a measurement.
+JUCE's `juce_recommended_lto_flags` is deliberately *not* used, because of the
+plain-`-flto` problem above.
+
+Turning it on:
+
+```bat
+scripts\build.bat -lto                        :: script
+scripts\build.bat Sonitus -lto --install      :: one plugin, straight into FL
+
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DTEZLA_PLUGINS=ALL -DTEZLA_LTO=ON
+cmake --build build --config Release --parallel
+```
+
+What `-DTEZLA_LTO=ON` expands to, per compiler, Release configuration only —
+a Debug build with LTO is slow to link and useless to debug:
+
+| compiler | compile | link |
+|---|---|---|
+| MSVC | `/GL` | `/LTCG` |
+| GCC | `-flto=auto` | `-flto=auto` |
+| clang / Apple clang | `-flto=thin` | `-flto=thin` |
+
+`-flto=auto` lets GCC use every core for the LTRANS stage; `-flto=thin` is
+clang's parallel, incremental variant. Both are what the option passes; the
+plain `-flto` is never used here. On macOS, `./scripts/build.sh --lto`, and see
+[`BUILD-MACOS.md`](BUILD-MACOS.md) for why a universal build with it on is a
+long wait even in the thin form.
+
+**The released builds do not use it**, and CI does not pass the flag, so
+nothing turns it back on by accident.
 
 ### 3.3 Using Ninja instead (faster)
 

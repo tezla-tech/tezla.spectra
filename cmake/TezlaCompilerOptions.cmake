@@ -77,3 +77,41 @@ else()
         target_compile_options(tezla_compiler_options INTERFACE -mavx2 -mfma)
     endif()
 endif()
+
+# ------------------------------------------------------------------ LTO ------
+# Link-time optimisation, off by default -- see the comment on the option in
+# the root CMakeLists.txt for the measurement behind that.
+#
+# It lives here, on the interface target every Tezla target links, rather than
+# on the plugin targets alone as JUCE's `juce_recommended_lto_flags` would put
+# it -- for two reasons:
+#
+#  * The instrument must match the thing it measures. `tezla-tests` and
+#    `tezla-measure` link this target too, so a `-DTEZLA_LTO=ON` build gives
+#    the CPU-budget tests the same optimisation the shipped plugin gets. A
+#    number measured on one configuration and shipped on another is not a
+#    measurement.
+#
+#  * JUCE's target passes a plain `-flto`, which is **serial** on GCC and
+#    **monolithic** on Apple clang (run 38: six hours in one link). The forms
+#    below parallelise: `-flto=auto` lets GCC use every core for the LTRANS
+#    stage, and `-flto=thin` is clang's parallel, incremental variant. MSVC's
+#    /GL + /LTCG is what JUCE passes and is already multi-threaded.
+#
+# Release-only, as JUCE does it: a Debug build with LTO is slow to link and
+# useless to debug.
+if(TEZLA_LTO)
+    if(MSVC)
+        target_compile_options(tezla_compiler_options INTERFACE $<$<CONFIG:Release>:/GL>)
+        target_link_options(tezla_compiler_options INTERFACE $<$<CONFIG:Release>:/LTCG>)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")   # Clang and AppleClang
+        target_compile_options(tezla_compiler_options INTERFACE $<$<CONFIG:Release>:-flto=thin>)
+        target_link_options(tezla_compiler_options INTERFACE $<$<CONFIG:Release>:-flto=thin>)
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(tezla_compiler_options INTERFACE $<$<CONFIG:Release>:-flto=auto>)
+        target_link_options(tezla_compiler_options INTERFACE $<$<CONFIG:Release>:-flto=auto>)
+    else()
+        message(WARNING "TEZLA_LTO is set but this compiler (${CMAKE_CXX_COMPILER_ID}) has no LTO flags configured here; ignoring it.")
+    endif()
+    message(STATUS "TEZLA_LTO: on (Release only; see cmake/TezlaCompilerOptions.cmake)")
+endif()
