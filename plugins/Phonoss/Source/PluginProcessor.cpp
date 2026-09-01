@@ -14,11 +14,11 @@
 
 #include <tezla/ui/StateIds.hpp>
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
 namespace
 {
-constexpr auto kStateTypeName = "SyrinxState";
+constexpr auto kStateTypeName = "PhonossState";
 constexpr int kSchemaV1 = 1;
 constexpr int kStateSchemaVersion = kSchemaV1;
 
@@ -225,7 +225,7 @@ const std::vector<Preset>& presets()
         // -------------------------------------------------------------------
         {
             "De-ess Only",
-            "Everything off but the de-esser, worked hard. For putting Syrinx "
+            "Everything off but the de-esser, worked hard. For putting Phonoss "
             "after another chain that already did the dynamics, or for hearing "
             "what the sibilance detector is actually doing.",
             {
@@ -278,7 +278,7 @@ const std::vector<Preset>& presets()
 }
 } // namespace
 
-SyrinxProcessor::SyrinxProcessor()
+PhonossProcessor::PhonossProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput ("Input", juce::AudioChannelSet::stereo(), true)
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
@@ -288,7 +288,7 @@ SyrinxProcessor::SyrinxProcessor()
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
-SyrinxProcessor::createParameterLayout()
+PhonossProcessor::createParameterLayout()
 {
     using Parameter = juce::AudioParameterFloat;
     using BoolParameter = juce::AudioParameterBool;
@@ -513,7 +513,7 @@ SyrinxProcessor::createParameterLayout()
     return { parameters.begin(), parameters.end() };
 }
 
-bool SyrinxProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool PhonossProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto& out = layouts.getMainOutputChannelSet();
 
@@ -523,21 +523,21 @@ bool SyrinxProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     return layouts.getMainInputChannelSet() == out;
 }
 
-void SyrinxProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
+void PhonossProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
 {
     sampleRate_ = sampleRate;
 
     engine_.prepare (sampleRate);
 
     const int preparedBlock = juce::jmax (16, maximumExpectedSamplesPerBlock);
-    scratch_.setSize (SyrinxEngine::kChannels, preparedBlock, false, false, true);
-    dry_.setSize (SyrinxEngine::kChannels, preparedBlock, false, false, true);
+    scratch_.setSize (PhonossEngine::kChannels, preparedBlock, false, false, true);
+    dry_.setSize (PhonossEngine::kChannels, preparedBlock, false, false, true);
 
     // Zero latency, and that is a design choice rather than an omission:
     // nothing here is oversampled and nothing looks ahead, so there is nothing
     // to declare. The mixer still runs, because a bypass that switches rather
     // than crossfades clicks whatever the latency is.
-    bypassMixer_.prepare (sampleRate, 0, SyrinxEngine::kChannels);
+    bypassMixer_.prepare (sampleRate, 0, PhonossEngine::kChannels);
     bypassMixer_.reset (bypassParameter_ != nullptr && bypassParameter_->get());
 
     setLatencySamples (0);
@@ -550,24 +550,24 @@ void SyrinxProcessor::prepareToPlay (double sampleRate, int maximumExpectedSampl
     engine_.setSettings (settings_);
 }
 
-void SyrinxProcessor::pullParameters()
+void PhonossProcessor::pullParameters()
 {
     settings_ = settingsFromParameters();
 }
 
-bool SyrinxProcessor::isIdentity() const
+bool PhonossProcessor::isIdentity() const
 {
     // Built from the **parameters**, not from what the engine happens to be
     // set to. Before the transport has ever run, the engine still holds its
     // default-constructed settings -- which are neutral -- so asking it would
     // have the panel claim bit-exact transparency for a strip whose controls
     // say otherwise. Crossbar's chain readout had exactly this bug.
-    return SyrinxEngine::isIdentity (settingsFromParameters());
+    return PhonossEngine::isIdentity (settingsFromParameters());
 }
 
-SyrinxEngine::Settings SyrinxProcessor::settingsFromParameters() const
+PhonossEngine::Settings PhonossProcessor::settingsFromParameters() const
 {
-    SyrinxEngine::Settings settings;
+    PhonossEngine::Settings settings;
 
     settings.inputTrimDb = valueOf (state_, ids::inputTrim);
     settings.highpassHz = valueOf (state_, ids::highpass);
@@ -637,7 +637,7 @@ SyrinxEngine::Settings SyrinxProcessor::settingsFromParameters() const
 }
 
 template <typename FloatType>
-void SyrinxProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
+void PhonossProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -651,13 +651,13 @@ void SyrinxProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     if (numSamples <= 0)
         return;
 
-    const int channels = juce::jlimit (1, SyrinxEngine::kChannels,
+    const int channels = juce::jlimit (1, PhonossEngine::kChannels,
                                        std::min (inputChannels, outputChannels));
 
     if (numSamples > scratch_.getNumSamples())
     {
-        scratch_.setSize (SyrinxEngine::kChannels, numSamples, false, true, true);
-        dry_.setSize (SyrinxEngine::kChannels, numSamples, false, true, true);
+        scratch_.setSize (PhonossEngine::kChannels, numSamples, false, true, true);
+        dry_.setSize (PhonossEngine::kChannels, numSamples, false, true, true);
     }
 
     pullParameters();
@@ -697,7 +697,7 @@ void SyrinxProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     bypassMixer_.setBypassed (bypassParameter_ != nullptr && bypassParameter_->get());
     bypassMixer_.process (scratch_.getArrayOfWritePointers(),
                           dry_.getArrayOfReadPointers(),
-                          SyrinxEngine::kChannels, numSamples);
+                          PhonossEngine::kChannels, numSamples);
 
     float outputPeak = 0.0f;
 
@@ -729,17 +729,17 @@ void SyrinxProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer)
     meters_.outputDb.store (peakDb (outputPeak), std::memory_order_relaxed);
 }
 
-void SyrinxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void PhonossProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     processInternal (buffer);
 }
 
-void SyrinxProcessor::processBlock (juce::AudioBuffer<double>& buffer, juce::MidiBuffer&)
+void PhonossProcessor::processBlock (juce::AudioBuffer<double>& buffer, juce::MidiBuffer&)
 {
     processInternal (buffer);
 }
 
-juce::String SyrinxProcessor::describeHighpass() const
+juce::String PhonossProcessor::describeHighpass() const
 {
     const auto hz = valueOf (state_, ids::highpass);
 
@@ -760,7 +760,7 @@ juce::String SyrinxProcessor::describeHighpass() const
     return description;
 }
 
-juce::String SyrinxProcessor::describeSibilance() const
+juce::String PhonossProcessor::describeSibilance() const
 {
     const auto threshold = valueOf (state_, ids::deEssThreshold);
     const auto reading = meters_.sibilanceDb.load (std::memory_order_relaxed);
@@ -780,7 +780,7 @@ juce::String SyrinxProcessor::describeSibilance() const
     return description;
 }
 
-void SyrinxProcessor::getStateInformation (juce::MemoryBlock& destData)
+void PhonossProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = state_.copyState();
 
@@ -792,7 +792,7 @@ void SyrinxProcessor::getStateInformation (juce::MemoryBlock& destData)
         copyXmlToBinary (*xml, destData);
 }
 
-void SyrinxProcessor::setStateInformation (const void* data, int sizeInBytes)
+void PhonossProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     auto xml = getXmlFromBinary (data, sizeInBytes);
     if (xml == nullptr || ! xml->hasTagName (state_.state.getType()))
@@ -812,12 +812,12 @@ void SyrinxProcessor::setStateInformation (const void* data, int sizeInBytes)
     tooltipsEnabled_ = tree.getProperty (ui::stateIds::tooltipsEnabled, true);
 }
 
-int SyrinxProcessor::getNumPrograms()
+int PhonossProcessor::getNumPrograms()
 {
     return static_cast<int> (presets().size());
 }
 
-const juce::String SyrinxProcessor::getProgramName (int index)
+const juce::String PhonossProcessor::getProgramName (int index)
 {
     const auto& list = presets();
     const auto count = static_cast<int> (list.size());
@@ -828,7 +828,7 @@ const juce::String SyrinxProcessor::getProgramName (int index)
     return list[static_cast<std::size_t> (index)].name;
 }
 
-void SyrinxProcessor::setCurrentProgram (int index)
+void PhonossProcessor::setCurrentProgram (int index)
 {
     const auto& list = presets();
     const auto count = static_cast<int> (list.size());
@@ -850,14 +850,14 @@ void SyrinxProcessor::setCurrentProgram (int index)
             parameter->setValueNotifyingHost (parameter->convertTo0to1 (setting.value));
 }
 
-juce::AudioProcessorEditor* SyrinxProcessor::createEditor()
+juce::AudioProcessorEditor* PhonossProcessor::createEditor()
 {
-    return new SyrinxEditor (*this);
+    return new PhonossEditor (*this);
 }
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new tezla::syrinx::SyrinxProcessor();
+    return new tezla::phonoss::PhonossProcessor();
 }

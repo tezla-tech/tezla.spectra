@@ -1,10 +1,12 @@
-# Syrinx — the vocal channel strip
+# Phonoss — the vocal channel strip
 
-**Code `Tzsy` · "Tezla Syrinx" · `tech.tezla.Syrinx` · effect.**
+**Code `Tzps` · "Tezla Phonoss" · `tech.tezla.Phonoss` · effect.**
 
-The syrinx is the voice: the organ a bird sings with, and the nymph Pan chased
-into the reeds he then made his pipes from. It keeps the anatomical line
-already running through Malleus (the hammer) and Anvil (the incus).
+**Phonoss** is Greek φωνή, *voice*, carrying a second **s** for the de-esser —
+the stage the strip is really about, and the one that works differently here
+from everywhere else. It was called Syrinx until the day the panel was redrawn;
+nothing had ever been saved with it, so the code moved from `Tzsy` to `Tzps`
+with it and is frozen from here.
 
 ## The thesis
 
@@ -15,7 +17,7 @@ and the limiter there is **nothing**: no gate, no de-esser, no compressor. The
 only dynamics primitive in `shared/` is `GainComputer`, and it is a limiter
 with a soft knee and no ratio control at all.
 
-Syrinx is that middle, as **one strip** rather than five plugins, because a
+Phonoss is that middle, as **one strip** rather than five plugins, because a
 vocal chain is genuinely a chain: the stage order, the gain staging between
 stages, and one preset set that makes them work together are the deliverable.
 
@@ -114,7 +116,7 @@ qemu-aarch64 cross-check was not run" noted per section 2.3.
   gate does not chatter on a signal sitting exactly on the threshold
   (break-check by removing the hysteresis and counting transitions); Range is
   exact; makeup at 0 dB is bit-exact.
-- **V4 — `SyrinxEngine.hpp`.** The whole chain, gain staging, per-stage
+- **V4 — `PhonossEngine.hpp`.** The whole chain, gain staging, per-stage
   gain-reduction readouts. Tests: **every stage neutral is bit-exact identity
   end to end** (section 7, and the reason the de-esser is subtractive);
   block-size independence at 64 against 512 with every stage working; silence
@@ -127,9 +129,9 @@ qemu-aarch64 cross-check was not run" noted per section 2.3.
   the stages left to right in signal order, each with its own gain-reduction
   meter, so it is visible which stage is doing the work. The de-esser gets the
   identity display: the sibilance ratio against its threshold, over time.
-- **V7 — close-out.** `tezla-measure syrinx`, `plugins/Syrinx/README.md`,
+- **V7 — close-out.** `tezla-measure phonoss`, `plugins/Phonoss/README.md`,
   registry flip, validator 47/47 on all ten, and **`docs/VOCAL-CHAIN.md`**:
-  signal order with the existing plugins around Syrinx (Emberdrive multiband
+  signal order with the existing plugins around Phonoss (Emberdrive multiband
   on the body for grit without fizz, Halo for air, Ferrite for glue,
   **Capstone last**, Transpectus to check), with concrete starting settings
   for rap and for singing, and honest notes on where each is the wrong tool.
@@ -166,17 +168,17 @@ CLAUDE.md.
 | V1 GainComputer ratio | done |
 | V2 SibilanceDetector + DeEsser | done |
 | V3 CompressorCore + Gate | done |
-| V4 SyrinxEngine | done |
+| V4 PhonossEngine | done |
 | V5 JUCE layer + presets | done |
 | V6 editor | done |
 | V7 close-out + VOCAL-CHAIN.md | done |
 
-**All seven phases are done; Syrinx v0.1.0 ships.** What remains is not a
+**All seven phases are done; Phonoss v0.1.0 ships.** What remains is not a
 phase: it is the rig test. Nobody has loaded this into FL Studio, and no
 rapper has been through it. That is the acceptance test, and the numbers below
 do not substitute for it.
 
-Measured at close-out (`tezla-measure syrinx`, 48 kHz):
+Measured at close-out (`tezla-measure phonoss`, 48 kHz):
 
 | claim | figure |
 |---|---|

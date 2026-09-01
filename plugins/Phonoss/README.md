@@ -7,19 +7,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
 -->
 
-# Syrinx — vocal channel strip
+# Phonoss — vocal channel strip
 
-**`Tzsy` · "Tezla Syrinx" · `tech.tezla.Syrinx` · effect · v0.1.0**
+**`Tzps` · "Tezla Phonoss" · `tech.tezla.Phonoss` · effect · v0.1.0**
 
 Gate, de-esser, two compressors and tone, in the order a vocal is actually
-mixed. The syrinx is the organ a bird sings with — and the nymph Pan chased
-into the reeds he then made his pipes from. It keeps the anatomical line
-running through Malleus (the hammer) and Anvil (the incus).
+mixed. **Phonoss** is Greek φωνή, *voice*, with a second **s** on the end for
+the de-esser — which is the stage the plugin is really about, and the one it
+does differently from everything else on the market.
 
 The suite already owned both **ends** of a vocal chain and none of the middle:
 character three times over (Emberdrive, Ferrite, Anvil), the ceiling
 (Capstone), the checking (Transpectus). Between the microphone and the limiter
-there was nothing. Syrinx is that middle, as **one strip** rather than five
+there was nothing. Phonoss is that middle, as **one strip** rather than five
 plugins, because a vocal chain is genuinely a chain: the stage order, the gain
 staging between stages, and one preset set that makes them work together are
 the deliverable.
@@ -81,7 +81,7 @@ ratio:
 sibilance_dB = 20 log10( rms(5 kHz and up) / rms(200 Hz .. 3 kHz) )
 ```
 
-`tezla-measure syrinx`, the same sibilant burst rendered at six levels across
+`tezla-measure phonoss`, the same sibilant burst rendered at six levels across
 30 dB:
 
 | input level | reduction on an /s/ | reduction on a vowel |
@@ -118,7 +118,7 @@ little else; vowels in there means it is lisping.
 A gate with one threshold chatters, because a vocal tail sits at whatever
 threshold you set it to — that is how you set it.
 
-`tezla-measure syrinx`, a 400 Hz tone centred exactly on the threshold and
+`tezla-measure phonoss`, a 400 Hz tone centred exactly on the threshold and
 wobbling ±0.5 dB at 5 Hz, transitions counted over two seconds:
 
 | hysteresis | hold | transitions |
@@ -241,7 +241,7 @@ Ad-lib* at 0.8832.
 
 ## Cost
 
-`tezla-measure syrinx`, stereo, 480-sample blocks at 48 kHz:
+`tezla-measure phonoss`, stereo, 480-sample blocks at 48 kHz:
 
 | | % of a core |
 |---|---|

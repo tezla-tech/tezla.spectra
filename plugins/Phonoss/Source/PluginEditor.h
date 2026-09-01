@@ -23,7 +23,7 @@
 
 #include "PluginProcessor.h"
 
-namespace tezla::syrinx
+namespace tezla::phonoss
 {
 
 /// How far down a stage is pulling, drawn as a bar that grows **leftward from
@@ -173,12 +173,12 @@ private:
 /// so the question a strip's display exists to answer -- *which* stage is
 /// doing the work -- is answered by looking rather than by soloing. Underneath
 /// them, full width, the de-esser's sibilance history.
-class SyrinxEditor final : public juce::AudioProcessorEditor,
+class PhonossEditor final : public juce::AudioProcessorEditor,
                            private juce::Timer
 {
 public:
-    explicit SyrinxEditor (SyrinxProcessor& processorToUse);
-    ~SyrinxEditor() override;
+    explicit PhonossEditor (PhonossProcessor& processorToUse);
+    ~PhonossEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -192,7 +192,7 @@ private:
     /// whole panel for nothing.
     void updateForSwitches();
 
-    SyrinxProcessor& syrinx_;
+    PhonossProcessor& phonoss_;
 
     ui::Palette palette_;
     ui::KnobLookAndFeel knobLook_;
@@ -213,7 +213,7 @@ private:
     std::array<int, kNumStages> shownEnabled_ { -1, -1, -1, -1, -1, -1 };
     int shownIdentity_ { -1 };
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SyrinxEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PhonossEditor)
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

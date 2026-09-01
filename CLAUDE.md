@@ -263,7 +263,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **945 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar and Syrinx included, all eleven plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **945 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar and Phonoss included, all eleven plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -519,6 +519,13 @@ A rename touches URLs, titles, the CMake `project()` and prose. It does not
 touch plugin identity. If the manufacturer code ever genuinely has to change,
 that is a **new plugin** with a migration path, not a rename.
 
+The one exception so far, and the shape of a legitimate one: `Syrinx`/`Tzsy`
+became `Phonoss`/`Tzps` while the plugin had **never shipped, never been in a
+project and never had a state saved from it** -- so there was nothing for the
+code to protect. That is the whole test. A code may move only while nothing
+exists that could look for it, which for every plugin here is a window that
+closes the first time the user opens a session with it. Phonoss's is closed.
+
 ### Lists that are append-only, for the same reason
 
 The last row of that table is newly easy to break, because an option list looks
@@ -744,10 +751,10 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   recently `plugins/Malleus/PLAN-PHASE2.md`, whose Continuity section carries a
   per-phase status table and the resume checklist. Any session (whatever assistant or model is
   driving) resumes from the first `pending` phase there; the status row is
-  flipped in the same commit as the phase it describes. Syrinx was **paused at
+  flipped in the same commit as the phase it describes. Phonoss was **paused at
   V2** while Crossbar was built, at the user's request, and resumed at V3;
   it is now **complete through V7**. `plugins/Malleus/PLAN.md`,
-  `plugins/Crossbar/PLAN.md`, `plugins/Syrinx/PLAN.md` and
+  `plugins/Crossbar/PLAN.md`, `plugins/Phonoss/PLAN.md` and
   `plugins/Malleus/PLAN-PHASE2.md` are complete and stay as the worked examples
   of the shape. Sonitus **phase 4 is complete**; Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening

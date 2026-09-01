@@ -145,7 +145,7 @@ built, and "the qemu-aarch64 cross-check was not run" stated per §2.3.
   cross PM is cut. The sweep test is the gate, and it runs before the JUCE
   layer knows the feature exists.
 - **Changing `SvfFilter` touches every plugin that uses it.** Mitigated the
-  same way `GainComputer` was for Syrinx: the new path is off by default and
+  same way `GainComputer` was for Phonoss: the new path is off by default and
   the old one has to stay bit-exact, with a test pinning it.
 - **Two more source-list entries in each matrix.** Append-only, `static_assert`
   updated, and a saved project must reopen sounding the same — the test that
@@ -225,5 +225,5 @@ full, then this file. The non-negotiables:
   test that feeds signal through and compares bit for bit.
 
 **Prior art in this repository**: Emberdrive's Feedback stage for the bounded
-loop (`plugins/Emberdrive/Dsp/`), Syrinx for the "static predicate + bit-exact
+loop (`plugins/Emberdrive/Dsp/`), Phonoss for the "static predicate + bit-exact
 neutral" pattern, `plugins/Malleus/PLAN.md` for the phase shape.

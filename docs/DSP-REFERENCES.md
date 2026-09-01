@@ -442,7 +442,7 @@ They were read from there rather than fetched.
 | Perttu Hämäläinen, "Smoothing of the Control Signal without Clipped Output in Digital Peak Limiters", **DAFx-02**, Hamburg, 2002 | Conference paper — cite, do not paste | The max-filter (order-statistics) construction that makes a smoothed limiter gain provably non-clipping. §3.5 describes the dual we actually use, and warns of its hazard. |
 | **ITU-R BS.1770-5** (11/2023), Annex 2 | ITU copyright; published for implementation | True-peak measurement: the 12.04 dB attenuation convention, the order-48 four-phase interpolating FIR, and the worst-case under-read table that decides our oversampling control. **The coefficient table is typed in verbatim** — the one thing in Capstone that is copied rather than derived. |
 | Geraint Luff / Signalsmith Audio, "Designing a straightforward limiter", 2022 | Article, © Signalsmith Audio Ltd — cite, do not paste | A modern treatment of the same structure. The hold refinement — widening the minimum window without widening the smoothing — comes from here. |
-| Dimitrios Giannoulis, Michael Massberg & Joshua D. Reiss, "Digital Dynamic Range Compressor Design — A Tutorial and Analysis", **JAES 60(6)**, 2012 | Journal paper — cite, do not paste; **not fetched from this container** | The quadratic soft-knee gain-computer form. `GainComputer` has named it in a comment since it was written; this row is the record that was missing. The infinite-ratio specialisation used by Capstone was derived and measured here rather than transcribed, and Syrinx V1 generalises it back to a finite ratio — a derivation checked by measuring the realised ratio, and pinned bit-exact against the limiter form at 1/ratio = 0. |
+| Dimitrios Giannoulis, Michael Massberg & Joshua D. Reiss, "Digital Dynamic Range Compressor Design — A Tutorial and Analysis", **JAES 60(6)**, 2012 | Journal paper — cite, do not paste; **not fetched from this container** | The quadratic soft-knee gain-computer form. `GainComputer` has named it in a comment since it was written; this row is the record that was missing. The infinite-ratio specialisation used by Capstone was derived and measured here rather than transcribed, and Phonoss V1 generalises it back to a finite ratio — a derivation checked by measuring the realised ratio, and pinned bit-exact against the limiter form at 1/ratio = 0. |
 
 ---
 
@@ -636,7 +636,7 @@ which is the copy-proof kind of citation.
 
 ---
 
-## Vocal dynamics -- Syrinx
+## Vocal dynamics -- Phonoss
 
 The rule of section 9 applied to a channel strip: the dynamics mathematics is
 textbook and is derived and measured here; the one thing worth taking is the
@@ -646,7 +646,7 @@ knee form, recorded in the dynamics table above.
 |---|---|---|
 | Giannoulis, Massberg & Reiss (above) | see the dynamics table | The soft-knee compressor curve, generalised to a finite ratio in `GainComputer` |
 | Linkwitz-Riley crossover (Linkwitz, JAES 1976; standard result) | mathematics, no licence | The de-esser's band split, through the existing `dsp::LinkwitzRiley4` |
-| Feed-forward compressor topology (level -> static curve -> smoothing -> makeup), and hysteresis on a gate's two thresholds | standard engineering, no licence | `dsp::CompressorCore` and Syrinx's `Gate`. Both are built from the mechanism and then measured -- the ratio table, the attack and release times, the chatter counts -- rather than transcribed from anywhere |
+| Feed-forward compressor topology (level -> static curve -> smoothing -> makeup), and hysteresis on a gate's two thresholds | standard engineering, no licence | `dsp::CompressorCore` and Phonoss's `Gate`. Both are built from the mechanism and then measured -- the ratio table, the attack and release times, the chatter counts -- rather than transcribed from anywhere |
 
 **The gate needs two mechanisms, not one, and measurement is what settled
 that.** The first draft of its test assumed hysteresis and hold were

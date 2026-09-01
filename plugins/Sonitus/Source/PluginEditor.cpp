@@ -1036,7 +1036,7 @@ void DicePage::refreshControls()
         // unlit button on a panel of unlit buttons says nothing, and the state
         // worth seeing at a glance is which sections are out of the game.
         // Amber for held, which is this suite's colour for "this stage is
-        // doing something" -- Capstone's gain reduction and Syrinx's wear it
+        // doing something" -- Capstone's gain reduction and Phonoss's wear it
         // too. The DICEROLL page's own accent is a near-white, and a locked
         // button in it read as a blank plate rather than as a state.
         row.lock->setColour (juce::TextButton::buttonColourId,

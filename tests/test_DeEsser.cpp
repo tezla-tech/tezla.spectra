@@ -16,7 +16,7 @@
 #include "DeEsser.hpp"
 #include "SibilanceDetector.hpp"
 
-using namespace tezla::syrinx;
+using namespace tezla::phonoss;
 
 namespace
 {

@@ -74,9 +74,9 @@
 #include "DeEsser.hpp"
 #include "Gate.hpp"
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
-class SyrinxEngine
+class PhonossEngine
 {
 public:
     static constexpr int kChannels = 2;
@@ -215,7 +215,7 @@ public:
         // stating precisely because CLAUDE.md section 7's rule looks like it
         // applies and does not: `Biquad::setCoefficients` does not clear state,
         // so redesigning a filter mid-stream is safe. Removing the guard leaves
-        // every test in `test_SyrinxEngine.cpp` green, which is the check that
+        // every test in `test_PhonossEngine.cpp` green, which is the check that
         // says so.
         //
         // Its worth, micro-benched over two million calls: **173 ns per
@@ -441,4 +441,4 @@ private:
     }
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

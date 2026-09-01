@@ -85,7 +85,7 @@
 #include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Denormals.hpp>
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
 namespace dsp = tezla::dsp;
 
@@ -192,4 +192,4 @@ private:
     double sibilantPower_ { 0.0 };
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

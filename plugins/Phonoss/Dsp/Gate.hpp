@@ -70,7 +70,7 @@
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/Exact.hpp>
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
 namespace dsp = tezla::dsp;
 
@@ -320,4 +320,4 @@ private:
     double gainDb_ { 0.0 };
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

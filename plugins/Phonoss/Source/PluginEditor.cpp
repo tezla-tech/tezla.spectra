@@ -13,7 +13,7 @@
 
 #include <tezla/ui/StateIds.hpp>
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
 namespace
 {
@@ -516,48 +516,48 @@ void StagePanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-// SyrinxEditor
+// PhonossEditor
 // ---------------------------------------------------------------------------
 
-SyrinxEditor::SyrinxEditor (SyrinxProcessor& processorToUse)
+PhonossEditor::PhonossEditor (PhonossProcessor& processorToUse)
     : AudioProcessorEditor (&processorToUse),
-      syrinx_ (processorToUse),
+      phonoss_ (processorToUse),
       palette_ (kPalette),
       knobLook_ (kPalette)
 {
     setLookAndFeel (&knobLook_);
 
     header_ = std::make_unique<ui::HeaderBar> (
-        syrinx_.getState(), "SYRINX",
+        phonoss_.getState(), "PHONOSS",
         "Vocal channel strip -- gate, de-esser, two compressors, tone",
         ids::bypass, palette_);
 
-    header_->attachSuiteControls (syrinx_.getState(), nullptr, ids::outputTrim, nullptr);
+    header_->attachSuiteControls (phonoss_.getState(), nullptr, ids::outputTrim, nullptr);
 
     header_->onSwapRequested = [this]
     {
-        syrinx_.getAbCompare().swapSlots();
-        header_->setActiveSlot (syrinx_.getAbCompare().isSlotB());
-        header_->setOtherSlotFilled (syrinx_.getAbCompare().otherSlotFilled());
+        phonoss_.getAbCompare().swapSlots();
+        header_->setActiveSlot (phonoss_.getAbCompare().isSlotB());
+        header_->setOtherSlotFilled (phonoss_.getAbCompare().otherSlotFilled());
     };
 
     header_->onCopyRequested = [this]
     {
-        syrinx_.getAbCompare().copyToOtherSlot();
-        header_->setOtherSlotFilled (syrinx_.getAbCompare().otherSlotFilled());
+        phonoss_.getAbCompare().copyToOtherSlot();
+        header_->setOtherSlotFilled (phonoss_.getAbCompare().otherSlotFilled());
     };
 
     header_->onTooltipsToggled = [this] (bool enabled)
     {
-        syrinx_.setTooltipsEnabled (enabled);
+        phonoss_.setTooltipsEnabled (enabled);
         tooltips_.setEnabled (enabled);
     };
 
-    header_->setTooltipsEnabled (syrinx_.getTooltipsEnabled());
-    tooltips_.setEnabled (syrinx_.getTooltipsEnabled());
+    header_->setTooltipsEnabled (phonoss_.getTooltipsEnabled());
+    tooltips_.setEnabled (phonoss_.getTooltipsEnabled());
 
-    header_->setActiveSlot (syrinx_.getAbCompare().isSlotB());
-    header_->setOtherSlotFilled (syrinx_.getAbCompare().otherSlotFilled());
+    header_->setActiveSlot (phonoss_.getAbCompare().isSlotB());
+    header_->setOtherSlotFilled (phonoss_.getAbCompare().otherSlotFilled());
 
     addAndMakeVisible (*header_);
 
@@ -569,7 +569,7 @@ SyrinxEditor::SyrinxEditor (SyrinxProcessor& processorToUse)
     sibilanceLabel_.setText ("SIBILANCE", juce::dontSendNotification);
     sibilanceLabel_.setColour (juce::Label::textColourId, palette_.dimText);
     sibilanceLabel_.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    sibilanceLabel_.setTooltip (syrinx_.describeSibilance());
+    sibilanceLabel_.setTooltip (phonoss_.describeSibilance());
     addAndMakeVisible (sibilanceLabel_);
 
     statusLabel_.setJustificationType (juce::Justification::centredRight);
@@ -590,14 +590,14 @@ SyrinxEditor::SyrinxEditor (SyrinxProcessor& processorToUse)
     startTimerHz (30);
 }
 
-SyrinxEditor::~SyrinxEditor()
+PhonossEditor::~PhonossEditor()
 {
     setLookAndFeel (nullptr);
 }
 
-void SyrinxEditor::buildStages()
+void PhonossEditor::buildStages()
 {
-    auto& state = syrinx_.getState();
+    auto& state = phonoss_.getState();
 
     // ---- IN --------------------------------------------------------------
 
@@ -606,7 +606,7 @@ void SyrinxEditor::buildStages()
         "Level into the strip, before anything measures it. Every threshold "
         "below is relative to what arrives here, so moving this moves all of "
         "them -- set it first and leave it.");
-    stages_[input]->addKnob (ids::highpass, "HPF", syrinx_.describeHighpass());
+    stages_[input]->addKnob (ids::highpass, "HPF", phonoss_.describeHighpass());
 
     // Peak in and peak out, which is the pair of numbers you actually want
     // while setting a strip: everything between them is the strip's doing.
@@ -772,12 +772,12 @@ void SyrinxEditor::buildStages()
         addAndMakeVisible (*stagePanel);
 }
 
-void SyrinxEditor::paint (juce::Graphics& g)
+void PhonossEditor::paint (juce::Graphics& g)
 {
     g.fillAll (palette_.background);
 }
 
-void SyrinxEditor::resized()
+void PhonossEditor::resized()
 {
     auto bounds = getLocalBounds();
 
@@ -814,9 +814,9 @@ void SyrinxEditor::resized()
     }
 }
 
-void SyrinxEditor::timerCallback()
+void PhonossEditor::timerCallback()
 {
-    const auto& meters = syrinx_.getMeterValues();
+    const auto& meters = phonoss_.getMeterValues();
 
     const auto update = [] (StagePanel& stagePanel, float db)
     {
@@ -841,13 +841,13 @@ void SyrinxEditor::timerCallback()
     sibilance_->push (meters.sibilanceDb.load (std::memory_order_relaxed),
                       meters.deEssDb.load (std::memory_order_relaxed));
 
-    if (auto* raw = syrinx_.getState().getRawParameterValue (ids::deEssThreshold))
+    if (auto* raw = phonoss_.getState().getRawParameterValue (ids::deEssThreshold))
         sibilance_->setThresholdDb (raw->load());
 
     updateForSwitches();
 }
 
-void SyrinxEditor::updateForSwitches()
+void PhonossEditor::updateForSwitches()
 {
     for (int i = 0; i < kNumStages; ++i)
     {
@@ -865,7 +865,7 @@ void SyrinxEditor::updateForSwitches()
             sibilance_->setStageEnabled (on != 0);
     }
 
-    const int identity = syrinx_.isIdentity() ? 1 : 0;
+    const int identity = phonoss_.isIdentity() ? 1 : 0;
 
     if (identity == shownIdentity_)
         return;
@@ -883,4 +883,4 @@ void SyrinxEditor::updateForSwitches()
                             identity != 0 ? palette_.accent : palette_.dimText);
 }
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss
