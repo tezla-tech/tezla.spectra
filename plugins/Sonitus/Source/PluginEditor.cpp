@@ -1616,6 +1616,10 @@ constexpr float kAxisHeight = 11.0f;
 /// Deep enough for a 9 pt digit and the beat ticks above it.
 constexpr float kRulerHeight = 12.0f;
 
+/// The zoom strip along the bottom of an ADV plot. Slim, because it is only
+/// there when the graph is zoomed and it must not eat plot height when it is.
+constexpr float kViewBarHeight = 5.0f;
+
 /// The right-hand end of the ruler strip belongs to the length readout, and a
 /// tick label that runs under it prints one number on top of another -- which
 /// the first seconds-ruler screenshot did, "2.20 s" under "2.29 s total".
@@ -2120,6 +2124,17 @@ MultiEnvelopeEditor::MultiEnvelopeEditor (juce::AudioProcessorValueTreeState& st
     : state_ (state), envelope_ (envelopeIndex), palette_ (palette)
 {
     setComponentID ("adv" + juce::String (envelopeIndex + 1) + "-graph");
+
+    setTooltip (
+        "Drag a **point** for its time and level; drag a segment's **middle** up or down for "
+        "its curve.\n\n"
+        "**Wheel zooms** the time axis about the pointer, up to 32x -- sixteen points across "
+        "900 pixels is 56 of them a leg, and a point's time, level and tension have no knobs, "
+        "so this graph is the only way to reach them. **Shift-wheel scrolls**, and so does "
+        "dragging the strip along the bottom. **Double-click** puts the whole envelope back on "
+        "screen.\n\n"
+        "Zoomed out fully, another notch out hands the wheel to the page -- so the wheel never "
+        "feels dead over a graph.");
 }
 
 float MultiEnvelopeEditor::plain (const juce::String& field) const
@@ -2202,8 +2217,9 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
     layout.total = std::max (layout.total, 1.0e-3);
 
     const auto area = plotArea();
+    const auto axis = timeAxis (layout.total);
 
-    layout.x[0] = area.getX();
+    layout.x[0] = axis.originX;
     layout.y[0] = area.getBottom();   // the gate opens from level 0
 
     double elapsed = 0.0;
@@ -2212,12 +2228,57 @@ MultiEnvelopeEditor::Layout MultiEnvelopeEditor::layoutNow() const
         elapsed += layout.seconds[static_cast<std::size_t> (i)];
 
         layout.x[static_cast<std::size_t> (i + 1)] =
-            area.getX() + area.getWidth() * static_cast<float> (elapsed / layout.total);
+            axis.originX + static_cast<float> (elapsed * axis.perSecond);
         layout.y[static_cast<std::size_t> (i + 1)] =
             area.getBottom() - area.getHeight() * plain ("L" + juce::String (i + 1));
     }
 
     return layout;
+}
+
+MultiEnvelopeEditor::TimeAxis MultiEnvelopeEditor::timeAxis (double total) const noexcept
+{
+    const auto area = plotArea();
+
+    // At 1x this is exactly what it always was: the whole envelope across the
+    // plot, t = 0 at the left edge. Zoomed, the scale multiplies and the origin
+    // walks left by whatever the offset skipped -- which is why `originX` is a
+    // float that can be negative rather than an area edge.
+    const double perSecond = static_cast<double> (area.getWidth())
+                               * static_cast<double> (zoom_) / std::max (total, 1.0e-9);
+
+    return { area.getX() - static_cast<float> (static_cast<double> (offset_) * total * perSecond),
+             perSecond };
+}
+
+juce::Rectangle<float> MultiEnvelopeEditor::viewBarArea() const
+{
+    const auto area = plotArea();
+
+    return { area.getX(), area.getBottom() - kViewBarHeight - 1.0f,
+             area.getWidth(), kViewBarHeight };
+}
+
+void MultiEnvelopeEditor::setView (float zoom, float offset)
+{
+    const float next = juce::jlimit (1.0f, kMaxZoom, zoom);
+
+    // The window can never run past either end, and at 1x there is nowhere to
+    // go -- `1 - span` is 0 there, so the clamp pins the offset without a
+    // special case.
+    const float span = 1.0f / next;
+    const float clamped = juce::jlimit (0.0f, std::max (0.0f, 1.0f - span), offset);
+
+    // **A setter that changes nothing does nothing.** A wheel notch at either
+    // zoom limit is exactly that, and repainting a sixteen-point curve plus a
+    // four-tier grid for it -- at whatever rate the wheel reports -- is the
+    // kind of cost that only shows up on somebody else's machine.
+    if (juce::approximatelyEqual (next, zoom_) && juce::approximatelyEqual (clamped, offset_))
+        return;
+
+    zoom_ = next;
+    offset_ = clamped;
+    repaint();
 }
 
 juce::String MultiEnvelopeEditor::musicalLength (double seconds) const
@@ -2267,7 +2328,12 @@ void MultiEnvelopeEditor::paintMusicalRuler (juce::Graphics& g, const Layout& la
 
     const double beatSeconds = 60.0 / bpm_;
     const double barSeconds = beatSeconds * static_cast<double> (beatsPerBar_);
-    const double perSecond = area.getWidth() / layout.total;
+
+    // Through the view, so zooming in *reveals* finer tiers rather than drawing
+    // the same four further apart -- the spacing tests below are what decide
+    // which ones are legible, and they were always the right test.
+    const auto axis = timeAxis (layout.total);
+    const double perSecond = axis.perSecond;
 
     const GridTier tiers[] {
         { barSeconds,          0.34f, 1.4f },
@@ -2290,7 +2356,10 @@ void MultiEnvelopeEditor::paintMusicalRuler (juce::Graphics& g, const Layout& la
 
         for (double t = tier.seconds; t < layout.total - 1.0e-9; t += tier.seconds)
         {
-            const auto x = area.getX() + static_cast<float> (t * perSecond);
+            const auto x = axis.originX + static_cast<float> (t * perSecond);
+
+            if (x < area.getX() || x > area.getRight())
+                continue;
 
             g.fillRect (juce::Rectangle<float> (x - 0.5f * tier.thickness, area.getY(),
                                                 tier.thickness, area.getHeight()));
@@ -2307,7 +2376,11 @@ void MultiEnvelopeEditor::paintMusicalRuler (juce::Graphics& g, const Layout& la
 
         for (double t = 0.0; t < layout.total - 1.0e-9; t += beatSeconds)
         {
-            const auto x = area.getX() + static_cast<float> (t * perSecond);
+            const auto x = axis.originX + static_cast<float> (t * perSecond);
+
+            if (x < area.getX() || x > area.getRight())
+                continue;
+
             g.fillRect (juce::Rectangle<float> (x, ruler.getY(), 1.0f, 3.0f));
         }
     }
@@ -2326,9 +2399,9 @@ void MultiEnvelopeEditor::paintMusicalRuler (juce::Graphics& g, const Layout& la
             if ((bar - 1) % step != 0)
                 continue;
 
-            const auto x = area.getX() + static_cast<float> (t * perSecond);
+            const auto x = axis.originX + static_cast<float> (t * perSecond);
 
-            if (x + 24.0f > area.getRight() - kRulerReadout)
+            if (x < area.getX() || x + 24.0f > area.getRight() - kRulerReadout)
                 continue;
 
             g.setColour (palette_.accent.withAlpha (0.75f));
@@ -2348,7 +2421,8 @@ void MultiEnvelopeEditor::paintSecondsRuler (juce::Graphics& g, const Layout& la
 {
     const auto area = plotArea();
     const auto ruler = rulerArea();
-    const double perSecond = area.getWidth() / layout.total;
+    const auto axis = timeAxis (layout.total);
+    const double perSecond = axis.perSecond;
 
     // The coarsest step that still gives at least three labelled marks, from a
     // 1-2-5 ladder so the numbers read as round.
@@ -2367,7 +2441,10 @@ void MultiEnvelopeEditor::paintSecondsRuler (juce::Graphics& g, const Layout& la
 
     for (double t = step; t < layout.total - 1.0e-9; t += step)
     {
-        const auto x = area.getX() + static_cast<float> (t * perSecond);
+        const auto x = axis.originX + static_cast<float> (t * perSecond);
+
+        if (x < area.getX() || x > area.getRight())
+            continue;
 
         g.setColour (palette_.dimText.withAlpha (0.09f));
         g.fillRect (juce::Rectangle<float> (x, area.getY(), 1.0f, area.getHeight()));
@@ -2449,13 +2526,20 @@ void MultiEnvelopeEditor::paintLegLabels (juce::Graphics& g, const Layout& layou
     for (int i = 0; i < layout.points; ++i)
     {
         const auto slot = static_cast<std::size_t> (i);
-        const float x0 = layout.x[slot];
-        const float x1 = layout.x[slot + 1];
-        const float width = x1 - x0;
+
+        // **The part of the leg that is on screen**, not the whole leg.
+        //
+        // Zoomed in, a leg is usually wider than the plot and its midpoint is
+        // off to one side -- so a label centred on the leg itself is centred
+        // somewhere nobody can see, and the name of the leg you are actually
+        // looking at is the one that vanishes.
+        const auto leg = juce::Rectangle<float> (layout.x[slot], area.getY() + 1.0f,
+                                                 layout.x[slot + 1] - layout.x[slot], 10.0f)
+                           .getIntersection (area.withHeight (11.0f));
 
         // Too narrow to hold a name is left blank rather than overprinted, the
         // same rule the AHDSR's stage letters follow.
-        if (width < 26.0f)
+        if (leg.getWidth() < 26.0f)
             continue;
 
         const int division = layout.division[slot];
@@ -2465,9 +2549,7 @@ void MultiEnvelopeEditor::paintLegLabels (juce::Graphics& g, const Layout& layou
         g.setColour (division < 0 ? palette_.dimText.withAlpha (0.40f)
                                   : palette_.secondary.withAlpha (0.70f));
 
-        g.drawText (dsp::divisionName (division),
-                    juce::Rectangle<float> (x0, area.getY() + 1.0f, width, 10.0f),
-                    juce::Justification::centred, false);
+        g.drawText (dsp::divisionName (division), leg, juce::Justification::centred, false);
     }
 }
 
@@ -2479,6 +2561,25 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
     g.setColour (palette_.background.darker (0.2f));
     g.fillRoundedRectangle (getLocalBounds().toFloat(), 5.0f);
 
+    // The ruler, under the curve rather than over it: it is the paper this is
+    // drawn on, and a grid line across a handle would read as part of the
+    // shape.
+    //
+    // **Outside the plot clip below, and it has to be**: it draws into the
+    // strip *under* the plot as well as across it, and `reduceClipRegion` only
+    // ever intersects -- there is no widening it again from inside. It does its
+    // own range check per line instead.
+    if (layout.snap)
+        paintMusicalRuler (g, layout);
+    else
+        paintSecondsRuler (g, layout);
+
+    // **Everything from here to the readout is clipped to the plot**, because
+    // zoomed the curve runs off both ends by design.
+    {
+    juce::Graphics::ScopedSaveState clip { g };
+    g.reduceClipRegion (area.toNearestInt());
+
     // The loop region, shaded, while Loop is on.
     if (layout.loop)
     {
@@ -2489,14 +2590,6 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
         g.fillRect (juce::Rectangle<float> (from, area.getY(),
                                             std::max (2.0f, to - from), area.getHeight()));
     }
-
-    // The ruler, under the curve rather than over it: it is the paper this is
-    // drawn on, and a grid line across a handle would read as part of the
-    // shape.
-    if (layout.snap)
-        paintMusicalRuler (g, layout);
-    else
-        paintSecondsRuler (g, layout);
 
     // The curve, in the DSP's own arithmetic -- EnvelopeEditor::segment.
     juce::Path path;
@@ -2577,7 +2670,47 @@ void MultiEnvelopeEditor::paint (juce::Graphics& g)
     if (layout.snap)
         paintLegLabels (g, layout);
 
+    paintViewBar (g);
+    }   // the plot clip ends here
+
+    // Outside it: the readout lives in the ruler strip.
     paintLengthReadout (g, layout);
+}
+
+void MultiEnvelopeEditor::paintViewBar (juce::Graphics& g)
+{
+    if (zoom_ <= 1.0f)
+        return;   // the whole envelope is on screen; there is nothing to say
+
+    const auto bar = viewBarArea();
+    const float radius = kViewBarHeight * 0.5f;
+
+    g.setColour (juce::Colours::black.withAlpha (0.45f));
+    g.fillRoundedRectangle (bar, radius);
+
+    // The thumb, with a floor on its width: at 32x it would otherwise be three
+    // pixels, which is a thing you cannot grab.
+    const auto thumb = bar.withX (bar.getX() + bar.getWidth() * offset_)
+                          .withWidth (std::max (12.0f, bar.getWidth() / zoom_));
+
+    g.setColour (palette_.secondary.withAlpha (0.80f));
+    g.fillRoundedRectangle (thumb, radius);
+
+    // What the factor actually is, top right, out of the leg labels' way.
+    const auto plot = plotArea();
+
+    g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+    g.setColour (palette_.secondary.withAlpha (0.70f));
+    // One decimal below ten, none above -- and spelled out rather than passed
+    // as a count, because `String (value, 0)` does not mean "no decimals" in
+    // JUCE: zero or less falls back to default formatting, which printed the
+    // factor as "16.1822x".
+    const auto factor = zoom_ < 10.0f ? juce::String (zoom_, 1)
+                                      : juce::String (juce::roundToInt (zoom_));
+
+    g.drawText (factor + "x",
+                juce::Rectangle<float> (plot.getRight() - 34.0f, plot.getY() + 1.0f, 32.0f, 10.0f),
+                juce::Justification::centredRight, false);
 }
 
 void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
@@ -2587,6 +2720,32 @@ void MultiEnvelopeEditor::mouseDown (const juce::MouseEvent& event)
 
     dragPoint_ = -1;
     dragSegment_ = -1;
+    draggingView_ = false;
+
+    // The zoom strip, when there is one. It sits inside the plot, so it has to
+    // be tested before the handles or a point sitting at level 0 near the
+    // bottom edge would win every click on it.
+    if (zoom_ > 1.0f)
+    {
+        const auto bar = viewBarArea();
+
+        if (bar.contains (position))
+        {
+            const float thumbX = bar.getX() + bar.getWidth() * offset_;
+            const float thumbWidth = std::max (12.0f, bar.getWidth() / zoom_);
+
+            // Grabbing the thumb keeps the grip point under the pointer;
+            // clicking the empty track jumps the thumb's centre to the click,
+            // which is what every scrollbar does.
+            dragViewGrab_ = position.x >= thumbX && position.x <= thumbX + thumbWidth
+                              ? position.x - thumbX
+                              : thumbWidth * 0.5f;
+
+            draggingView_ = true;
+            setView (zoom_, (position.x - dragViewGrab_ - bar.getX()) / bar.getWidth());
+            return;
+        }
+    }
 
     // A point first: the nearest within reach. **Reach shrinks with density**,
     // and that is not polish -- a point's time, level and tension have no
@@ -2649,6 +2808,13 @@ void MultiEnvelopeEditor::mouseDrag (const juce::MouseEvent& event)
 {
     const auto area = plotArea();
 
+    if (draggingView_)
+    {
+        const auto bar = viewBarArea();
+        setView (zoom_, (event.position.x - dragViewGrab_ - bar.getX()) / bar.getWidth());
+        return;
+    }
+
     if (dragPoint_ >= 0)
     {
         const auto layout = layoutNow();
@@ -2662,9 +2828,16 @@ void MultiEnvelopeEditor::mouseDrag (const juce::MouseEvent& event)
         // x is this segment's own time: the distance from the previous point,
         // in the current total's scale. The total shifts as the time does,
         // which reads as the graph breathing -- correct, if surprising once.
+        //
+        // Through the axis rather than the plot's width, so a drag at 8x moves
+        // the point an eighth as far per pixel. Getting this from `getWidth()`
+        // would make zooming in *coarser* instead of finer, which is the exact
+        // opposite of the reason to zoom.
+        const auto axis = timeAxis (layout.total);
         const float previousX = layout.x[static_cast<std::size_t> (dragPoint_)];
-        const double fraction = juce::jlimit (0.001f, 1.0f,
-            (event.position.x - previousX) / area.getWidth());
+        const double fraction = juce::jlimit (0.001, 1.0,
+            static_cast<double> (event.position.x - previousX)
+              / (axis.perSecond * layout.total));
         setPlain ("T" + n, static_cast<float> (fraction * layout.total), true);
 
         repaint();
@@ -2685,6 +2858,72 @@ void MultiEnvelopeEditor::mouseUp (const juce::MouseEvent&)
 {
     dragPoint_ = -1;
     dragSegment_ = -1;
+    draggingView_ = false;
+}
+
+/// The whole envelope, back on screen.
+///
+/// The escape hatch, and it needs to exist: the wheel over this graph zooms
+/// rather than scrolling the page, so a graph left at 32x with no way back to
+/// 1x would be a control that had swallowed its own way out. Double-click is
+/// the gesture the rest of the panel already uses for "put it back".
+void MultiEnvelopeEditor::mouseDoubleClick (const juce::MouseEvent&)
+{
+    setView (1.0f, 0.0f);
+}
+
+void MultiEnvelopeEditor::mouseWheelMove (const juce::MouseEvent& event,
+                                          const juce::MouseWheelDetails& wheel)
+{
+    const auto area = plotArea();
+
+    if (area.getWidth() <= 0.0f)
+        return;
+
+    // A notch is a tenth on X11, a fifth on Windows, and a continuous dribble
+    // on a trackpad -- so the magnitude is used but bounded, rather than either
+    // trusted (a trackpad flick would jump to the limit) or thrown away for the
+    // sign alone (a trackpad would then move in whole notches).
+    const float raw = ! juce::approximatelyEqual (wheel.deltaY, 0.0f) ? wheel.deltaY
+                                                                     : wheel.deltaX;
+    const float step = wheel.isReversed ? -raw : raw;
+
+    if (juce::approximatelyEqual (step, 0.0f))
+        return;
+
+    if (event.mods.isShiftDown())
+    {
+        // Pan. Scaled by the zoom so a notch is always the same *fraction of
+        // what is on screen* -- a fifth of it -- rather than the same fraction
+        // of the envelope, which at 32x would be four windows a notch.
+        setView (zoom_, offset_ - juce::jlimit (-0.2f, 0.2f, step * 1.6f) / zoom_);
+        return;
+    }
+
+    // A tick is 22%, and X11's notch is a tenth -- so `step * 10` makes one
+    // notch one tick there and scales sensibly elsewhere. Capped at two ticks
+    // an event (1.49x) because the platforms disagree about magnitude and a
+    // wheel that jumped to the limit on one of them would be unusable on it.
+    const float ticks = juce::jlimit (-2.0f, 2.0f, step * 10.0f);
+    const float next = juce::jlimit (1.0f, kMaxZoom, zoom_ * std::pow (1.22f, ticks));
+
+    if (juce::approximatelyEqual (next, zoom_) && next <= 1.0f)
+    {
+        // Fully zoomed out and still winding out: hand it to the page. The
+        // wheel scrolls the panel everywhere else in this plugin, and a graph
+        // that ate the event while doing nothing with it would read as broken.
+        Component::mouseWheelMove (event, wheel);
+        return;
+    }
+
+    // **Zoom about the pointer.** What is under the cursor stays under it,
+    // which is the difference between zooming and being teleported: the
+    // fraction of the envelope at the pointer is `offset + anchor / zoom`, and
+    // holding it fixed across the change gives the new offset directly.
+    const float anchor = juce::jlimit (0.0f, 1.0f,
+        (event.position.x - area.getX()) / area.getWidth());
+
+    setView (next, offset_ + anchor / zoom_ - anchor / next);
 }
 
 // ---------------------------------------------------------------------------

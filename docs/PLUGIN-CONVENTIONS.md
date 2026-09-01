@@ -134,6 +134,11 @@ reset it to 12-TET would be a bug rather than a feature.
   `ComboBox` is built with the wheel off — `ui::noWheel` at the point of
   construction, `ui::sweepNoWheel` over the finished tree as a net for controls
   a page builds later. See `shared/tezla-ui/include/tezla/ui/ScrollWheel.hpp`.
+- **A graph may take the wheel as a *view* gesture** — zoom, pan — because
+  nothing it does is a parameter change and the picture answers what happened.
+  Two conditions: it never writes to the value tree, and fully zoomed out it
+  passes the next notch to its parent so the page still scrolls. A control that
+  ate the event and did nothing with it would read as broken.
 - No modal dialogs, no splash screens, no network access, no telemetry.
 
 ### The house panel design
