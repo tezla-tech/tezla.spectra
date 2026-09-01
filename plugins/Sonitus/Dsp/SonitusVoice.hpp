@@ -893,8 +893,12 @@ public:
         const double cutoffScale = filterScale (modulator);
         const double cutoffNow = cutoff_.next();
 
+        // The right channel is tuned to the same cutoff as the left, so it
+        // takes the coefficient the left just computed rather than evaluating
+        // the same `tan` again -- identical inputs, identical bits, and one
+        // transcendental fewer per sample while the cutoff is moving.
         filters_[0].setCutoffHz (cutoffNow);
-        filters_[1].setCutoffHz (cutoffNow);
+        filters_[1].adoptCutoffFrom (filters_[0]);
 
         double outLeft = filters_[0].process (mixLeft, cutoffScale);
         double outRight = filters_[1].process (mixRight, cutoffScale);

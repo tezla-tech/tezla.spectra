@@ -227,6 +227,22 @@ public:
         updateCutoffCoefficient();
     }
 
+    /// Take the cutoff and its coefficient from a filter that has just been
+    /// tuned to the value this one would be tuned to -- the other channel of
+    /// a stereo pair, prepared at the same rate.
+    ///
+    /// Bit-exact by construction: setCutoffHz on this filter would clamp the
+    /// same value against the same limit and evaluate the same `tan` of it,
+    /// so copying the result is indistinguishable from recomputing it, and
+    /// saves a transcendental per sample per channel on a modulated sweep.
+    /// Only the cutoff pair is copied; resonance, drive, mode and the state
+    /// are this filter's own.
+    void adoptCutoffFrom (const SvfFilter& other) noexcept
+    {
+        cutoffHz_ = other.cutoffHz_;
+        g_ = other.g_;
+    }
+
     [[nodiscard]] double getCutoffHz() const noexcept { return cutoffHz_; }
 
     /// 0 is no resonance at all; 1 is the edge of self-oscillation.
