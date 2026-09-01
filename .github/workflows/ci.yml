@@ -156,9 +156,18 @@ jobs:
           run_tests=true
           [ "${INPUT_SKIP_TESTS:-false}" = "true" ] && run_tests=false
 
+          # `macos-14` rather than `macos-latest`, and it is an experiment, not
+          # a fix: four macOS jobs in a row have been cancelled at exactly
+          # 15m01s with no runner ever assigned, while Windows picks one up in
+          # three seconds. That pattern says the account has no macOS runner
+          # entitlement, which no label reaches -- but a different runner pool
+          # costs nothing to try, because the leg now runs in parallel with
+          # Windows and no longer blocks the release. If a macOS build appears,
+          # the cause is confounded between the label and capacity recovering;
+          # say so rather than crediting the label.
           if [ "$platforms" = "all" ]; then
-            tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"macOS"}]'
-            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-latest","name":"macOS","artifact":"macos-vst3-au"}]'
+            tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-14","name":"macOS"}]'
+            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-14","name":"macOS","artifact":"macos-vst3-au"}]'
             arm64=true
           else
             # Linux stays even on a Windows run: it is 47 seconds, it is the
@@ -295,9 +304,17 @@ jobs:
     # `test-arm64` is skipped on a Windows-only run, and a skipped dependency
     # skips its dependents unless they say otherwise. Spelt out rather than
     # `always()`, so a genuine ARM64 failure still stops the build.
+    #
+    # `cancelled` is accepted for `test` for the reason given at the release
+    # job below: a matrix job reports `cancelled` when any leg was, and the
+    # macOS test leg keeps being cancelled by GitHub for want of a runner. That
+    # is what skipped this job in run 47 and took the Windows plugins with it,
+    # even though Linux and Windows tests had both gone green. A test that ran
+    # and *failed* still stops everything -- `failure` is not in this list.
     if: >-
       ${{ !cancelled()
-          && (needs.test.result == 'success' || needs.test.result == 'skipped')
+          && (needs.test.result == 'success' || needs.test.result == 'skipped'
+              || needs.test.result == 'cancelled')
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
     # A ceiling for a HANG, not a budget for a build. Run 38's macOS job sat in
@@ -325,6 +342,29 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.plugins) }}
+
+    # The macOS leg is allowed to fail without taking the release with it, and
+    # Windows is not. That asymmetry is not laziness about Macs -- it is that
+    # the two fail for different reasons. Windows failing means the code is
+    # broken. macOS failing, four times running, has meant **no runner was
+    # ever assigned**: the job sat exactly 15m01s with runner_id 0 and was
+    # cancelled by GitHub, while Windows picked one up in three seconds. That
+    # is an account-level macOS entitlement problem and no workflow setting
+    # reaches it.
+    #
+    # Losing the Windows build too, in that situation, helps nobody. The
+    # release notes already describe macOS only when a macOS zip is actually
+    # present, and the release job still refuses to publish with no artefacts
+    # at all -- so a half-built release says what it is rather than pretending.
+    #
+    # Keyed on `matrix.name`, not `matrix.os`: the runner label is a variable
+    # being experimented with above, and a guard that silently stops matching
+    # when the label moves is worse than no guard. The name is the identity.
+    #
+    # Note what this does NOT cover: `continue-on-error` converts a *failure*
+    # into a non-fatal one, and a job cancelled for want of a runner is not a
+    # failure. That case is handled in the release job's `if` instead.
+    continue-on-error: ${{ matrix.name == 'macOS' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -455,11 +495,32 @@ jobs:
     # Two routes in: a version tag, or a manual run with a version typed in.
     # Same shape as `build` above, and for the same reason: a Windows-only run
     # skips the ARM64 job, and a skipped dependency would otherwise skip this.
+    #
+    # `cancelled` is accepted for `test` and `build` and `failure` is accepted
+    # for `build`, which needs justifying, because it reads like the gate being
+    # given up on. It is the opposite -- it is the gate being made to mean what
+    # it says. A matrix job reports `cancelled` when **any** leg was cancelled,
+    # and the macOS legs are being cancelled by GitHub after 15m01s without
+    # ever being handed a runner. That is not evidence about this code. Letting
+    # it skip the release threw away four completed Windows builds for a
+    # reason that has nothing to do with them.
+    #
+    # What still blocks a release, and must:
+    #   * `needs.test.result == 'failure'` -- a test that ran and failed. Not
+    #     accepted here, deliberately: that is evidence about the code.
+    #   * `!cancelled()` -- somebody cancelling the whole run means stop.
+    #   * `needs.*.result == 'skipped'` for `build` -- nothing was built.
+    #   * The Package step, which exits 1 if no artefacts were downloaded, so a
+    #     run where every build leg died publishes nothing rather than an empty
+    #     release.
+    # And the notes describe macOS only when a macOS zip is actually present,
+    # so a Windows-only release says so instead of pretending.
     if: >-
       ${{ !cancelled()
           && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != '')
-          && (needs.test.result == 'success' || needs.test.result == 'skipped')
-          && needs.build.result == 'success'
+          && (needs.test.result == 'success' || needs.test.result == 'skipped'
+              || needs.test.result == 'cancelled')
+          && needs.build.result != 'skipped'
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     needs: [plan, test, test-arm64, build]
     runs-on: ubuntu-latest

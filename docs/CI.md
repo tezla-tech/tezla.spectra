@@ -233,6 +233,45 @@ error message blames the plugin.
 The build job writes all of this into the run summary, so the reason a release
 did or did not happen is on the run page rather than only in this file.
 
+### A cancelled macOS job does not cancel the release
+
+**Observed, four runs in a row (45, 47, 49, 50, 2026-09-01):** the macOS job is
+cancelled by GitHub at *exactly* 15 minutes and 1 second after it is created,
+with `runner_id: 0` — meaning no runner was ever assigned to it. The Windows job
+in the same runs picks up a runner in **three seconds**. Nothing is wrong with
+the workflow, the code, or the label: the account is not being given a macOS
+runner.
+
+That used to be fatal to the whole release, and the mechanism is worth writing
+down because it is not obvious. A matrix job's aggregate `result` is
+`cancelled` if **any** leg was cancelled — so one starved macOS leg made
+`needs.test.result` and `needs.build.result` read `cancelled`, which matched
+neither `success` nor `skipped`, which skipped `build` and then `release`. Run
+47 threw away a completed Windows test job and never even started the Windows
+plugin build, for a reason that had nothing to do with either.
+
+So `build` and `release` now accept `cancelled` from `test`, `release` accepts
+anything but `skipped` from `build`, and the macOS *build* leg additionally
+carries `continue-on-error`. What still stops a release, deliberately:
+
+- a test that **ran and failed** (`failure` is not in either list);
+- somebody cancelling the whole run (`!cancelled()`);
+- nothing having been built at all — the Package step exits 1 when no
+  artefacts were downloaded, so a run where every leg died publishes nothing
+  rather than an empty release.
+
+A Windows-only release still says so: the notes only describe the macOS half
+when a macOS zip is actually present.
+
+**None of this makes a Mac build happen.** It is a workflow that stops
+punishing Windows for it. The fix is on the billing account — macOS runners on
+a private repository need a plan that includes them and a spending limit that
+has not been reached (**Settings → Billing**). As an experiment the label was
+moved from `macos-latest` to `macos-14`, which costs nothing now that the leg
+runs in parallel and blocks nothing; if a macOS build does appear, the cause is
+confounded between the label and capacity recovering, and should be reported
+that way rather than credited to the label.
+
 ---
 
 ## Downloaded builds and macOS quarantine
