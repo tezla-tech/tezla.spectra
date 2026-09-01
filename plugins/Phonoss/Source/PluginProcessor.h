@@ -12,9 +12,9 @@
 #include <tezla/dsp/BypassMixer.hpp>
 #include <tezla/ui/AbCompare.hpp>
 
-#include "SyrinxEngine.hpp"
+#include "PhonossEngine.hpp"
 
-namespace tezla::syrinx
+namespace tezla::phonoss
 {
 
 /// Parameter IDs. These are permanent: renaming one silently resets that
@@ -83,11 +83,11 @@ inline constexpr auto outputTrim     = "outputTrim";
 inline constexpr auto bypass         = "bypass";
 } // namespace ids
 
-class SyrinxProcessor final : public juce::AudioProcessor
+class PhonossProcessor final : public juce::AudioProcessor
 {
 public:
-    SyrinxProcessor();
-    ~SyrinxProcessor() override = default;
+    PhonossProcessor();
+    ~PhonossProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
     void releaseResources() override {}
@@ -188,13 +188,13 @@ private:
     /// The same read, into a fresh value rather than into the member the audio
     /// thread is using. What `isIdentity()` asks about, from the message
     /// thread, without racing the audio thread's copy.
-    [[nodiscard]] SyrinxEngine::Settings settingsFromParameters() const;
+    [[nodiscard]] PhonossEngine::Settings settingsFromParameters() const;
 
     juce::AudioProcessorValueTreeState state_;
     juce::AudioParameterBool* bypassParameter_ { nullptr };
 
-    SyrinxEngine engine_;
-    SyrinxEngine::Settings settings_;
+    PhonossEngine engine_;
+    PhonossEngine::Settings settings_;
 
     /// Double-precision scratch: the DSP is double throughout, so a float host
     /// buffer is converted here rather than compromising the processing. The
@@ -215,7 +215,7 @@ private:
     double sampleRate_ { 44100.0 };
     int currentProgram_ { 0 };
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SyrinxProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PhonossProcessor)
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

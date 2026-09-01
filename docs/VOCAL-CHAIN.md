@@ -22,7 +22,7 @@ and DnB. Rap vocals first, sung vocals second.
 ```
   take
    │
-   ├─ Syrinx            gate · de-ess · level · peak · tone      ← the strip
+   ├─ Phonoss            gate · de-ess · level · peak · tone      ← the strip
    │
    ├─ Emberdrive        grit, multiband, on the body only        ← optional
    ├─ Halo              air above 8 kHz                          ← optional
@@ -33,7 +33,7 @@ and DnB. Rap vocals first, sung vocals second.
    └─ Transpectus       checking, not processing                 ← anywhere
 ```
 
-**Syrinx first, Capstone last.** Everything between them is taste, and most
+**Phonoss first, Capstone last.** Everything between them is taste, and most
 takes need one of the three rather than all of them.
 
 The one hard rule: **Capstone goes last**, on the track and on the master. It
@@ -42,11 +42,11 @@ undo that.
 
 ---
 
-## 1. Syrinx — the strip
+## 1. Phonoss — the strip
 
 Everything a voice needs before it has any character: the gate, the de-esser,
 the levelling and the tone. Its internal order is fixed and
-[argued in its README](../plugins/Syrinx/README.md); you do not have to think
+[argued in its README](../plugins/Phonoss/README.md); you do not have to think
 about it.
 
 **Start here, always.** Load *Rap Lead* or *Sung Verse* and get the level
@@ -81,11 +81,11 @@ Preset ***Sung Verse*** or ***Sung Chorus***, and change two habits:
 - **Slower leveller.** 40 ms attack and 400 ms release, ratio 2:1. The point is
   to be inaudible.
 
-### Where Syrinx is the wrong tool
+### Where Phonoss is the wrong tool
 
 - **A take with a real noise problem.** The gate hides broadband noise between
   words; it does nothing during them. Re-record, or use a dedicated denoiser.
-- **A vocal that needs *character*.** Syrinx is deliberately clean. Nothing in
+- **A vocal that needs *character*.** Phonoss is deliberately clean. Nothing in
   it will make a voice sound like anything — that is the next three plugins.
 - **Pitch.** Not here, not ever, by design.
 
@@ -127,7 +127,7 @@ Generated high-harmonic content above about 8 kHz. It makes a vocal sound
 amplifying what is there — which matters on a take that has nothing up there to
 amplify.
 
-**After the de-esser**, which is automatic if it is after Syrinx. That ordering
+**After the de-esser**, which is automatic if it is after Phonoss. That ordering
 is not optional: adding air before a de-esser means the de-esser fights air you
 just generated, and you get a dull vocal and a de-esser working far too hard.
 
@@ -139,7 +139,7 @@ just generated, and you get a dull vocal and a de-esser working far too hard.
 
 ### Where it is the wrong tool
 
-- **A take that is already sibilant.** Fix that in Syrinx first, then decide
+- **A take that is already sibilant.** Fix that in Phonoss first, then decide
   whether it still needs air. Usually it does not.
 - **As a substitute for the EQ high shelf.** If there is real content up there,
   a shelf is cheaper and cleaner. Halo is for when there is not.
@@ -162,7 +162,7 @@ tape machine, because that is what it is modelling.
 ### Where it is the wrong tool
 
 - **On every vocal track separately.** It is glue; glue works on a group.
-- **When you want the vocal to sound modern and clean.** That is Syrinx alone.
+- **When you want the vocal to sound modern and clean.** That is Phonoss alone.
 
 ---
 
@@ -175,13 +175,13 @@ guarantees a ceiling, and every plugin after it can exceed one. Put an EQ boost
 after your limiter and the limiter's guarantee is worth nothing.
 
 Its own gain reduction should be small on a vocal — a few dB of catching, not
-levelling. If Capstone is doing 6 dB of work on a voice, Syrinx is not doing
+levelling. If Capstone is doing 6 dB of work on a voice, Phonoss is not doing
 its job and the fix is upstream.
 
 ### Where it is the wrong tool
 
 - **As a compressor.** It has no ratio and is not trying to shape anything. Use
-  Syrinx's two.
+  Phonoss's two.
 - **To make a vocal loud.** It makes it *not exceed* a ceiling. Loudness comes
   from levelling first.
 
@@ -189,7 +189,7 @@ its job and the fix is upstream.
 
 ## 6. Transpectus — checking
 
-Not processing. Put it wherever you need to see something: after Syrinx to
+Not processing. Put it wherever you need to see something: after Phonoss to
 check the levelling worked, on the master to check the loudness and the
 correlation.
 
@@ -208,7 +208,7 @@ The two things worth checking on a vocal:
 ### Rap lead, aggressive mix
 
 ```
-Syrinx     "Rap Lead", trim so the leveller shows 4-6 dB
+Phonoss     "Rap Lead", trim so the leveller shows 4-6 dB
 Emberdrive mid band only, moderate drive, mix 25%, auto-trim on
 Halo       low amount, high focus
 Capstone   ceiling -1.0 dBTP, a few dB of catching
@@ -220,7 +220,7 @@ Doubles and ad-libs go to their own bus with *Rap Double* / *Rap Ad-lib*, then
 ### Sung vocal, spacious
 
 ```
-Syrinx     "Sung Verse", gate off, leveller slow
+Phonoss     "Sung Verse", gate off, leveller slow
 Halo       moderate amount, wide focus
 Ferrite    low drive, no wobble, for weight
 Capstone   ceiling -1.0 dBTP
@@ -232,7 +232,7 @@ Capstone   ceiling -1.0 dBTP
 
 - **Pitch correction.** Ruled out permanently, at the user's direction. Use
   what you already use.
-- **Reverb and delay.** Not in this suite yet. They go *after* Syrinx and
+- **Reverb and delay.** Not in this suite yet. They go *after* Phonoss and
   *before* Capstone, on sends rather than inserts.
 - **De-noise.** Not in this suite. A gate is not a denoiser.
 

@@ -152,7 +152,7 @@ qemu-aarch64 cross-check was not run" noted per §2.3.
   layer. If the LINE section turns out to be wanted on other material it
   becomes its own effect later, not a second mode here.
 
-Syrinx is **paused at V2** for this and resumes after D6. Sonitus P4 and Prism
+Phonoss is **paused at V2** for this and resumes after D6. Sonitus P4 and Prism
 remain parked. This plan does not touch them.
 
 ## Continuity — how any session resumes this work
@@ -183,7 +183,7 @@ sixteen tones through the full line. What has *not* happened is the acceptance
 test: nobody has played it in FL Studio on the rig it was written for. Anything
 further starts from what the user's ears say there.
 
-Syrinx resumes at V3.
+Phonoss resumes at V3.
 
 **To resume** (if a phase is ever reopened): read CLAUDE.md in full, then this
 file; take the first `pending` phase. The non-negotiables, in one place:

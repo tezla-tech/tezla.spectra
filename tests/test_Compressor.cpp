@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
 
-// `dsp::CompressorCore` and Syrinx's `Gate`.
+// `dsp::CompressorCore` and Phonoss's `Gate`.
 //
 // test_Dynamics.cpp already pins the static curve: what the ratio does to the
 // gain computer's arithmetic. This file asks the different question -- whether
@@ -381,7 +381,7 @@ namespace {
 /// vocal tail does, because the threshold is set to where the tail is.
 int chatterCount (double hysteresisDb, double holdMs)
 {
-    syrinx::Gate gate;
+    phonoss::Gate gate;
     gate.prepare (kRate);
     gate.setThresholdDb (-30.0);
     gate.setHysteresisDb (hysteresisDb);
@@ -459,7 +459,7 @@ TEZLA_TEST (the_gate_opens_above_the_threshold_and_shuts_below_the_hysteresis)
 {
     // What the two thresholds actually are. A level between them holds
     // whatever state the gate is already in, which is the whole point.
-    syrinx::Gate gate;
+    phonoss::Gate gate;
     gate.prepare (kRate);
     gate.setThresholdDb (-30.0);
     gate.setHysteresisDb (6.0);
@@ -500,7 +500,7 @@ TEZLA_TEST (the_gates_hold_carries_it_across_a_real_gap)
     // gap closes it.
     const auto staysOpenAcross = [] (double gapSeconds)
     {
-        syrinx::Gate gate;
+        phonoss::Gate gate;
         gate.prepare (kRate);
         gate.setThresholdDb (-30.0);
         gate.setHysteresisDb (3.0);
@@ -537,7 +537,7 @@ TEZLA_TEST (the_gates_range_attenuates_by_exactly_what_it_says)
     // those Range settings, to within 0.01 dB.
     for (double rangeDb : { 6.0, 12.0, 24.0 })
     {
-        syrinx::Gate gate;
+        phonoss::Gate gate;
         gate.prepare (kRate);
         gate.setThresholdDb (-20.0);
         gate.setRangeDb (rangeDb);
@@ -573,7 +573,7 @@ TEZLA_TEST (a_gate_with_no_range_is_bit_exact_identity)
     // and it is, by construction: at Range 0 the smoother's target is exactly
     // 0 dB whether the gate is open or shut, and `dbToGain` of that is
     // exactly 1.0.
-    syrinx::Gate gate;
+    phonoss::Gate gate;
     gate.prepare (kRate);
     gate.setThresholdDb (0.0);      // deliberately impossible to cross
     gate.setRangeDb (0.0);
@@ -588,7 +588,7 @@ TEZLA_TEST (a_gate_with_no_range_is_bit_exact_identity)
     // And silence in is exactly silence out, whatever the Range.
     for (double rangeDb : { 0.0, 20.0, 80.0 })
     {
-        syrinx::Gate quiet;
+        phonoss::Gate quiet;
         quiet.prepare (kRate);
         quiet.setRangeDb (rangeDb);
 
@@ -605,7 +605,7 @@ TEZLA_TEST (the_gate_holds_for_the_same_time_at_every_sample_rate)
     // detector's own 5 ms decay to fall through the closing threshold.
     for (double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
     {
-        syrinx::Gate gate;
+        phonoss::Gate gate;
         gate.prepare (rate);
         gate.setThresholdDb (-30.0);
         gate.setHysteresisDb (3.0);

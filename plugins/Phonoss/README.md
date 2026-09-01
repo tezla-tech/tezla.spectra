@@ -7,19 +7,19 @@ SPDX-License-Identifier: AGPL-3.0-only
 GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
 -->
 
-# Syrinx — vocal channel strip
+# Phonoss — vocal channel strip
 
-**`Tzsy` · "Tezla Syrinx" · `tech.tezla.Syrinx` · effect · v0.1.0**
+**`Tzps` · "Tezla Phonoss" · `tech.tezla.Phonoss` · effect · v0.1.0**
 
 Gate, de-esser, two compressors and tone, in the order a vocal is actually
-mixed. The syrinx is the organ a bird sings with — and the nymph Pan chased
-into the reeds he then made his pipes from. It keeps the anatomical line
-running through Malleus (the hammer) and Anvil (the incus).
+mixed. **Phonoss** is Greek φωνή, *voice*, with a second **s** on the end for
+the de-esser — which is the stage the plugin is really about, and the one it
+does differently from everything else on the market.
 
 The suite already owned both **ends** of a vocal chain and none of the middle:
 character three times over (Emberdrive, Ferrite, Anvil), the ceiling
 (Capstone), the checking (Transpectus). Between the microphone and the limiter
-there was nothing. Syrinx is that middle, as **one strip** rather than five
+there was nothing. Phonoss is that middle, as **one strip** rather than five
 plugins, because a vocal chain is genuinely a chain: the stage order, the gain
 staging between stages, and one preset set that makes them work together are
 the deliverable.
@@ -81,7 +81,7 @@ ratio:
 sibilance_dB = 20 log10( rms(5 kHz and up) / rms(200 Hz .. 3 kHz) )
 ```
 
-`tezla-measure syrinx`, the same sibilant burst rendered at six levels across
+`tezla-measure phonoss`, the same sibilant burst rendered at six levels across
 30 dB:
 
 | input level | reduction on an /s/ | reduction on a vowel |
@@ -118,7 +118,7 @@ little else; vowels in there means it is lisping.
 A gate with one threshold chatters, because a vocal tail sits at whatever
 threshold you set it to — that is how you set it.
 
-`tezla-measure syrinx`, a 400 Hz tone centred exactly on the threshold and
+`tezla-measure phonoss`, a 400 Hz tone centred exactly on the threshold and
 wobbling ±0.5 dB at 5 Hz, transitions counted over two seconds:
 
 | hysteresis | hold | transitions |
@@ -194,7 +194,9 @@ removes the filter from the path entirely.
 **GATE** — Threshold, Hysteresis, Range, Attack, Hold, Release, Sidechain HPF.
 
 **DE-ESS** — Corner, Threshold (a *ratio*, −40 to +20 dB), Ratio, Knee, Range,
-Attack, Release, Listen.
+Attack, Release. **Listen** sits beside the sibilance display rather than in
+this box, because it is the control you reach for while looking at that
+picture.
 
 **LEVELLER** / **PEAK** — Threshold, Ratio, Knee, Attack, Release, Makeup, Mix,
 Sidechain HPF, Auto Release.
@@ -204,11 +206,45 @@ Sidechain HPF, Auto Release.
 Output trim and bypass live in the header, as everywhere in the suite. Every
 control has a tooltip saying what it does and what it costs.
 
-The panel is laid out **as the chain**: six boxes left to right in signal
-order, each with its own switch and its own gain-reduction bar, so the question
-a strip's display exists to answer — which stage is doing the work — is
-answered by looking. Underneath, full width, the de-esser's sibilance history
-with its threshold drawn across it.
+### The panel
+
+Laid out **as the chain**: six boxes left to right in signal order, an arrow in
+each gap, and a hue that rotates along the path — so the colour of a box is a
+*position in the signal* rather than a label. The order is most of the argument
+for this being one strip rather than five plugins, and six boxes in a row said
+nothing about direction.
+
+**Two displays across the top**, because there are two questions and one pane
+answers them both badly:
+
+- **left — sibilance against its threshold.** The identity display: whether the
+  detector is triggering on the right thing. A vowel sits below the line however
+  loud the singer gets; an /s/ crosses it. Hovering reads the history back —
+  the value, **how far past the threshold it is**, and what the stage did about
+  it, because an /s/ 1 dB over and one 9 dB over want completely different
+  settings and look nearly identical as curves.
+- **right — where the work is done.** All four reducing stages on **one time
+  axis**, as four lanes. Four separate meters share no clock, so a de-esser
+  ducking 40 ms before the leveller does looks exactly like the two ducking
+  together; here it does not, and the classic vocal fault — a compressor chewing
+  on an /s/ the de-esser was about to remove — is visible as two lanes dipping
+  in sequence. The gate's lane is scaled to 48 dB and the other three to 18,
+  because a gate legitimately removes 40 dB and a compressor legitimately
+  removes 3.
+
+Each box carries its **live gain reduction in its title bar**, and the title
+brightens with it — so which stage is working is readable in peripheral vision,
+which is where it is useful, because you are looking at a knob at the time.
+Threshold is drawn 1.32× and Knee, Hysteresis and the sidechain filters 0.74×:
+a size is the one hierarchy cue that survives being glanced at, and forty
+identical knobs gave the eye nothing to land on. A stage switched out recedes —
+its knobs grey, its spine dims, its title reads **off** rather than 0.0 dB,
+because a stage doing nothing and a stage not in circuit are different facts.
+
+Every value carries its unit. That sounds like nothing and was not: the panel
+used to show `-45.0`, `3.0`, `40`, `120`, `0`, `6000` and `0.90` side by side
+with nothing saying which were decibels, which milliseconds, which hertz and
+which a Q.
 
 ---
 
@@ -241,7 +277,7 @@ Ad-lib* at 0.8832.
 
 ## Cost
 
-`tezla-measure syrinx`, stereo, 480-sample blocks at 48 kHz:
+`tezla-measure phonoss`, stereo, 480-sample blocks at 48 kHz:
 
 | | % of a core |
 |---|---|

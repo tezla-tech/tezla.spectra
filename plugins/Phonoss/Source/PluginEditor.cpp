@@ -13,7 +13,7 @@
 
 #include <tezla/ui/StateIds.hpp>
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
 namespace
 {
@@ -39,8 +39,36 @@ const ui::Palette kPalette {
 };
 
 constexpr int kHeaderHeight = 58;
-constexpr int kSibilanceHeight = 96;
+
+/// The two displays, at the **top**. They were a 96 px strip below the fold,
+/// which is where a plugin puts the thing nobody is expected to look at -- and
+/// the sibilance measure is the one reading in this plugin that no other tool
+/// in the suite can give.
+constexpr int kDisplayHeight = 148;
+constexpr int kDisplayLabelHeight = 15;
 constexpr int kStatusHeight = 22;
+
+/// The gap between one stage box and the next, which is where the arrow goes.
+///
+/// **The order is the point of this plugin.** De-ess before compression is
+/// most of the argument for it being one strip rather than five plugins -- a
+/// compressor that ducks on an /s/ makes the sibilance *louder* relative to
+/// the word after it -- and six boxes in a row say nothing about direction.
+/// Two triangles in a gap do.
+constexpr int kChainGap = 13;
+
+/// **A hue per stage, rotated along the chain.**
+///
+/// The house step, so this reads as the same panel as everything else -- see
+/// PanelDesign.hpp. What is specific here is the *axis*: index 0 is the input
+/// and index 5 is the tone stage, so the colour is a position in the signal
+/// path rather than an arbitrary label. Six stages span 90 degrees of hue,
+/// which is enough that IN and EQ are plainly different and adjacent stages
+/// are plainly related -- which is the truth about them.
+[[nodiscard]] juce::Colour stageTint (const ui::Palette& palette, int stage)
+{
+    return ui::design::tintFor (palette.accent, stage);
+}
 constexpr int kStageTitleHeight = 26;
 constexpr int kBarHeight = 22;
 constexpr int kLabelHeight = 15;
@@ -194,6 +222,40 @@ void SibilanceDisplay::setStageEnabled (bool enabled)
     repaint();
 }
 
+int SibilanceDisplay::slotAt (float x) const
+{
+    const int count = filled_ ? kHistory : writeIndex_;
+
+    if (count < 2 || getWidth() <= 0)
+        return -1;
+
+    const float step = static_cast<float> (getWidth()) / static_cast<float> (kHistory - 1);
+    const int position = juce::jlimit (0, count - 1, juce::roundToInt (x / step));
+
+    return filled_ ? (writeIndex_ + position) % kHistory : position;
+}
+
+void SibilanceDisplay::mouseMove (const juce::MouseEvent& event)
+{
+    const int slot = slotAt (event.position.x);
+
+    if (slot == hoverSlot_)
+        return;   // the pointer moved a pixel and landed in the same sample
+
+    hoverSlot_ = slot;
+    hoverX_ = event.position.x;
+    repaint();
+}
+
+void SibilanceDisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverSlot_ < 0)
+        return;
+
+    hoverSlot_ = -1;
+    repaint();
+}
+
 float SibilanceDisplay::yFor (double db) const
 {
     const auto clamped = juce::jlimit (kFloorDb, kCeilingDb, db);
@@ -295,6 +357,218 @@ void SibilanceDisplay::paint (juce::Graphics& g)
         g.setColour (palette_.secondary.withAlpha (0.30f));
         g.fillPath (reduction);
     }
+
+    // -- the pointer's own reading ------------------------------------------
+    if (hoverSlot_ < 0)
+        return;
+
+    const auto slot = static_cast<std::size_t> (hoverSlot_);
+    const float value = sibilance_[slot];
+    const float cut = reduction_[slot];
+
+    g.setColour (palette_.text.withAlpha (0.35f));
+    g.fillRect (hoverX_ - 0.5f, 0.0f, 1.0f, bounds.getHeight());
+
+    g.setColour (palette_.accentBright);
+    g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ hoverX_, yFor (value) }));
+
+    // The number, and **how far past the line it is**, which is the thing the
+    // graph cannot say: an /s/ 1 dB over the threshold and one 9 dB over need
+    // completely different settings and look nearly identical as curves.
+    const auto over = static_cast<double> (value) - thresholdDb_;
+
+    const auto text = juce::String (value, 1) + " dB   "
+                    + (over >= 0.0 ? "+" : "") + juce::String (over, 1) + " past   "
+                    + juce::String (cut, 1) + " dB cut";
+
+    auto box = juce::Rectangle<float> (hoverX_ + 8.0f, 3.0f, 190.0f, 14.0f);
+
+    if (box.getRight() > bounds.getRight() - 3.0f)
+        box = box.withX (hoverX_ - 198.0f);
+
+    g.setColour (palette_.background.withAlpha (0.88f));
+    g.fillRoundedRectangle (box.expanded (3.0f, 1.0f), 3.0f);
+
+    g.setColour (palette_.text);
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText (text, box, juce::Justification::centredLeft, false);
+}
+
+// ---------------------------------------------------------------------------
+// ChainReductionDisplay
+// ---------------------------------------------------------------------------
+
+void ChainReductionDisplay::push (const std::array<float, kLanes>& reductionDb)
+{
+    for (int lane = 0; lane < kLanes; ++lane)
+        history_[static_cast<std::size_t> (lane)][static_cast<std::size_t> (writeIndex_)]
+            = reductionDb[static_cast<std::size_t> (lane)];
+
+    if (++writeIndex_ >= kHistory)
+    {
+        writeIndex_ = 0;
+        filled_ = true;
+    }
+
+    repaint();
+}
+
+void ChainReductionDisplay::setLaneEnabled (int lane, bool enabled)
+{
+    const auto index = static_cast<std::size_t> (juce::jlimit (0, kLanes - 1, lane));
+
+    if (enabled_[index] == enabled)
+        return;
+
+    enabled_[index] = enabled;
+    repaint();
+}
+
+float ChainReductionDisplay::laneFloorDb (int lane) const
+{
+    // **The gate's lane is scaled to its own job.** A gate legitimately removes
+    // 40 dB and a compressor legitimately removes 3; one scale for both draws
+    // the compressors as a flat line, which is exactly the stage whose work
+    // this display exists to show.
+    return lane == 0 ? -48.0f : -18.0f;
+}
+
+juce::Rectangle<float> ChainReductionDisplay::laneBounds (int lane) const
+{
+    const auto full = getLocalBounds().toFloat().reduced (1.0f);
+    const float height = full.getHeight() / static_cast<float> (kLanes);
+
+    return { full.getX(), full.getY() + height * static_cast<float> (lane),
+             full.getWidth(), height };
+}
+
+int ChainReductionDisplay::slotAt (float x) const
+{
+    const int count = filled_ ? kHistory : writeIndex_;
+
+    if (count < 2 || getWidth() <= 0)
+        return -1;
+
+    const float step = static_cast<float> (getWidth()) / static_cast<float> (kHistory - 1);
+    const int position = juce::jlimit (0, count - 1, juce::roundToInt (x / step));
+
+    return filled_ ? (writeIndex_ + position) % kHistory : position;
+}
+
+void ChainReductionDisplay::mouseMove (const juce::MouseEvent& event)
+{
+    const int slot = slotAt (event.position.x);
+
+    if (slot == hoverSlot_)
+        return;
+
+    hoverSlot_ = slot;
+    hoverX_ = event.position.x;
+    repaint();
+}
+
+void ChainReductionDisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverSlot_ < 0)
+        return;
+
+    hoverSlot_ = -1;
+    repaint();
+}
+
+void ChainReductionDisplay::paint (juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds().toFloat();
+
+    g.setColour (palette_.background.brighter (0.05f));
+    g.fillRoundedRectangle (bounds, 3.0f);
+
+    const int count = filled_ ? kHistory : writeIndex_;
+    const float step = bounds.getWidth() / static_cast<float> (kHistory - 1);
+
+    for (int lane = 0; lane < kLanes; ++lane)
+    {
+        const auto index = static_cast<std::size_t> (lane);
+        const auto area = laneBounds (lane);
+        const auto tint = tints_[index];
+        const bool on = enabled_[index];
+
+        // A hairline between lanes, so four bands read as four rather than as
+        // one graph with steps in it.
+        if (lane > 0)
+        {
+            g.setColour (palette_.dimText.withAlpha (0.12f));
+            g.fillRect (area.getX() + 2.0f, area.getY(), area.getWidth() - 4.0f, 1.0f);
+        }
+
+        if (count >= 2 && on)
+        {
+            const float floorDb = laneFloorDb (lane);
+
+            juce::Path band;
+            band.startNewSubPath (0.0f, area.getY());
+
+            for (int i = 0; i < count; ++i)
+            {
+                const int slot = filled_ ? (writeIndex_ + i) % kHistory : i;
+                const float amount = juce::jlimit (
+                    0.0f, 1.0f, history_[index][static_cast<std::size_t> (slot)] / floorDb);
+
+                band.lineTo (static_cast<float> (i) * step,
+                             area.getY() + amount * (area.getHeight() - 2.0f));
+            }
+
+            band.lineTo (static_cast<float> (count - 1) * step, area.getY());
+            band.closeSubPath();
+
+            g.setColour (tint.withAlpha (0.45f));
+            g.fillPath (band);
+
+            g.setColour (tint.withAlpha (0.85f));
+            g.strokePath (band, juce::PathStrokeType (1.0f));
+        }
+
+        // The name, and the live figure, at the two ends of the lane.
+        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.setColour (on ? tint.withAlpha (0.85f) : palette_.dimText.withAlpha (0.4f));
+        g.drawText (names_[index], area.withTrimmedLeft (5.0f).withHeight (11.0f),
+                    juce::Justification::centredLeft, false);
+
+        const int newest = filled_ ? (writeIndex_ + kHistory - 1) % kHistory
+                                   : juce::jmax (0, writeIndex_ - 1);
+
+        const auto shown = hoverSlot_ >= 0 ? static_cast<std::size_t> (hoverSlot_)
+                                           : static_cast<std::size_t> (newest);
+
+        // `-0.0 dB` is not a reading anybody wants to see, and a float that
+        // has been through a decibel conversion arrives there constantly.
+        const auto value = count < 1 ? 0.0f : history_[index][shown];
+
+        const auto figure = ! on ? juce::String ("off")
+                                 : (count < 1
+                                      ? juce::String ("--")
+                                      : juce::String (value > -0.05f ? 0.0f : value, 1) + " dB");
+
+        g.setColour (on ? palette_.text.withAlpha (0.85f) : palette_.dimText.withAlpha (0.4f));
+        g.drawText (figure, area.withTrimmedRight (5.0f).withHeight (11.0f),
+                    juce::Justification::centredRight, false);
+    }
+
+    if (count < 2)
+    {
+        g.setColour (palette_.dimText.withAlpha (0.6f));
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawText ("waiting for signal", bounds, juce::Justification::centred);
+        return;
+    }
+
+    if (hoverSlot_ < 0)
+        return;
+
+    // One cursor across all four lanes: the whole point is reading them at the
+    // *same instant*, so the line spans the display rather than one lane.
+    g.setColour (palette_.text.withAlpha (0.35f));
+    g.fillRect (hoverX_ - 0.5f, 0.0f, 1.0f, bounds.getHeight());
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +576,9 @@ void SibilanceDisplay::paint (juce::Graphics& g)
 // ---------------------------------------------------------------------------
 
 StagePanel::StagePanel (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
-                        juce::String title, const char* enableParameterId, int columns)
-    : state_ (state), palette_ (palette), title_ (std::move (title)),
+                        juce::Colour tint, juce::String title,
+                        const char* enableParameterId, int columns)
+    : state_ (state), palette_ (palette), tint_ (tint), title_ (std::move (title)),
       enableId_ (enableParameterId), columns_ (columns)
 {
     if (enableId_ == nullptr)
@@ -331,13 +606,13 @@ void StagePanel::addKnob (const char* parameterId, const juce::String& name,
     // What a house knob is lives in ui/HouseControls.hpp: relief, a machined
     // skirt, a tinted track, the value font, and the wheel turned off so it
     // scrolls the panel instead of editing.
-    ui::styleKnob (knob->slider, palette_, palette_.accent);
+    ui::styleKnob (knob->slider, palette_, tint_, emphasisOf (parameterId));
     ui::resetsToDefault (knob->slider, state_, parameterId);
     knob->slider.setTooltip (tooltip);
     addAndMakeVisible (knob->slider);
 
     knob->label.setText (name, juce::dontSendNotification);
-    ui::styleName (knob->label, palette_, palette_.accent);
+    ui::styleName (knob->label, palette_, tint_);
     knob->label.setTooltip (tooltip);
     addAndMakeVisible (knob->label);
 
@@ -346,6 +621,36 @@ void StagePanel::addKnob (const char* parameterId, const juce::String& name,
         state_, parameterId, knob->slider);
 
     knobs_.push_back (std::move (knob));
+}
+
+void StagePanel::setEmphasis (const char* lead, std::vector<juce::String> trims)
+{
+    leadId_ = lead != nullptr ? juce::String (lead) : juce::String{};
+    trimIds_ = std::move (trims);
+}
+
+ui::design::Emphasis StagePanel::emphasisOf (const juce::String& id) const
+{
+    if (id == leadId_)
+        return ui::design::Emphasis::lead;
+
+    for (const auto& trim : trimIds_)
+        if (id == trim)
+            return ui::design::Emphasis::trim;
+
+    return ui::design::Emphasis::normal;
+}
+
+void StagePanel::setReductionDb (double db)
+{
+    // A tenth of a decibel is the resolution the title prints, so anything
+    // finer than that is a repaint of the same picture -- and this arrives
+    // thirty times a second, per stage.
+    if (std::abs (db - reductionDb_) < 0.05)
+        return;
+
+    reductionDb_ = db;
+    repaint (getLocalBounds().removeFromTop (kStageTitleHeight + 2));
 }
 
 void StagePanel::addToggle (const char* parameterId, const juce::String& name,
@@ -409,8 +714,18 @@ void StagePanel::refreshEnablement()
     for (auto& knob : knobs_)
     {
         knob->slider.setEnabled (on);
+
+        // **Back to the stage's own colour, not to the plain grey.** Every
+        // name here is warmed toward its stage's hue by `ui::styleName`;
+        // writing `palette_.dimText` back on the way to enabled would leave
+        // one box's labels cold beside five warm ones, and it would only
+        // happen after a switch had been off once. The same bug Malleus and
+        // Crossbar had, and it is invisible until somebody toggles something.
+        const auto colour = palette_.dimText.interpolatedWith (tint_,
+                                                               ui::design::kLabelTint);
+
         knob->label.setColour (juce::Label::textColourId,
-                               on ? palette_.dimText : palette_.dimText.withAlpha (0.4f));
+                               on ? colour : colour.withAlpha (0.4f));
         knob->label.repaint();
     }
 
@@ -431,18 +746,55 @@ void StagePanel::paint (juce::Graphics& g)
     g.setColour (palette_.background.brighter (0.10f));
     g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
 
-    // The title bar carries the accent when the stage is in circuit and goes
-    // flat when it is not, so the chain reads at a glance from across the room.
+    // **The spine**, in the stage's own hue: the cue that survives being
+    // glanced at, in the place a scanning eye already goes.
     const bool on = isStageEnabled();
+
+    {
+        juce::Path spine;
+        spine.addRoundedRectangle (bounds.getX() + 1.0f, bounds.getY() + 4.0f,
+                                   3.0f, bounds.getHeight() - 8.0f,
+                                   1.5f, 1.5f, true, false, true, false);
+
+        g.setColour (tint_.withAlpha (on ? 0.85f : 0.25f));
+        g.fillPath (spine);
+    }
+
+    // The title bar carries the stage's hue when it is in circuit and goes
+    // flat when it is not, so the chain reads at a glance from across the room.
     auto titleArea = bounds.removeFromTop (static_cast<float> (kStageTitleHeight));
 
-    g.setColour (on ? palette_.accent.withAlpha (0.16f) : palette_.background.withAlpha (0.35f));
+    // **How hard it is working, as light.** A stage pulling 6 dB is a
+    // different object from one pulling 0.2, and the difference matters more
+    // than any single knob on it -- so the bar brightens with the reduction
+    // rather than only saying "in circuit".
+    const auto working = on ? juce::jlimit (0.0f, 1.0f,
+                                            static_cast<float> (-reductionDb_) / 12.0f)
+                            : 0.0f;
+
+    g.setColour (on ? tint_.withAlpha (0.16f + 0.34f * working)
+                    : palette_.background.withAlpha (0.35f));
     g.fillRoundedRectangle (titleArea.reduced (2.0f, 2.0f), 3.0f);
 
     g.setColour (on ? palette_.text : palette_.dimText);
     g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
     g.drawText (title_, titleArea.reduced (enableButton_ != nullptr ? 52.0f : 6.0f, 0.0f),
                 juce::Justification::centred);
+
+    // The figure, right-aligned in the same bar. Only where there is a
+    // reduction to report -- IN and EQ do not reduce, and printing "0.0 dB"
+    // for them would say they were idle rather than that they are not that
+    // kind of stage.
+    if (bar_ == nullptr)
+        return;
+
+    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+    g.setColour (on ? palette_.text.withAlpha (0.45f + 0.5f * working)
+                    : palette_.dimText.withAlpha (0.35f));
+    g.drawText (on ? juce::String (reductionDb_ > -0.05 ? 0.0 : reductionDb_, 1) + " dB"
+                   : juce::String ("off"),
+                titleArea.withTrimmedRight (7.0f).withHeight (titleArea.getHeight()),
+                juce::Justification::centredRight, false);
 }
 
 void StagePanel::resized()
@@ -502,7 +854,12 @@ void StagePanel::resized()
         // The gap comes off the bottom, so the value never abuts the caption
         // below it. See kCellGap.
         cell.removeFromBottom (kCellGap);
-        knob.slider.setBounds (cell.reduced (2, 0));
+
+        // **Emphasis is a size**, and a size is the one hierarchy cue that
+        // survives being glanced at. Threshold is what a gate or a compressor
+        // is *set by*; Knee and the sidechain filter are set once and then
+        // ignored. The cell keeps its footprint either way.
+        knob.slider.setBounds (ui::emphasised (cell.reduced (2, 0), emphasisOf (knob.id)));
     }
 
     // Readouts go under the knob grid, in whatever the cap left over.
@@ -516,48 +873,48 @@ void StagePanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-// SyrinxEditor
+// PhonossEditor
 // ---------------------------------------------------------------------------
 
-SyrinxEditor::SyrinxEditor (SyrinxProcessor& processorToUse)
+PhonossEditor::PhonossEditor (PhonossProcessor& processorToUse)
     : AudioProcessorEditor (&processorToUse),
-      syrinx_ (processorToUse),
+      phonoss_ (processorToUse),
       palette_ (kPalette),
       knobLook_ (kPalette)
 {
     setLookAndFeel (&knobLook_);
 
     header_ = std::make_unique<ui::HeaderBar> (
-        syrinx_.getState(), "SYRINX",
+        phonoss_.getState(), "PHONOSS",
         "Vocal channel strip -- gate, de-esser, two compressors, tone",
         ids::bypass, palette_);
 
-    header_->attachSuiteControls (syrinx_.getState(), nullptr, ids::outputTrim, nullptr);
+    header_->attachSuiteControls (phonoss_.getState(), nullptr, ids::outputTrim, nullptr);
 
     header_->onSwapRequested = [this]
     {
-        syrinx_.getAbCompare().swapSlots();
-        header_->setActiveSlot (syrinx_.getAbCompare().isSlotB());
-        header_->setOtherSlotFilled (syrinx_.getAbCompare().otherSlotFilled());
+        phonoss_.getAbCompare().swapSlots();
+        header_->setActiveSlot (phonoss_.getAbCompare().isSlotB());
+        header_->setOtherSlotFilled (phonoss_.getAbCompare().otherSlotFilled());
     };
 
     header_->onCopyRequested = [this]
     {
-        syrinx_.getAbCompare().copyToOtherSlot();
-        header_->setOtherSlotFilled (syrinx_.getAbCompare().otherSlotFilled());
+        phonoss_.getAbCompare().copyToOtherSlot();
+        header_->setOtherSlotFilled (phonoss_.getAbCompare().otherSlotFilled());
     };
 
     header_->onTooltipsToggled = [this] (bool enabled)
     {
-        syrinx_.setTooltipsEnabled (enabled);
+        phonoss_.setTooltipsEnabled (enabled);
         tooltips_.setEnabled (enabled);
     };
 
-    header_->setTooltipsEnabled (syrinx_.getTooltipsEnabled());
-    tooltips_.setEnabled (syrinx_.getTooltipsEnabled());
+    header_->setTooltipsEnabled (phonoss_.getTooltipsEnabled());
+    tooltips_.setEnabled (phonoss_.getTooltipsEnabled());
 
-    header_->setActiveSlot (syrinx_.getAbCompare().isSlotB());
-    header_->setOtherSlotFilled (syrinx_.getAbCompare().otherSlotFilled());
+    header_->setActiveSlot (phonoss_.getAbCompare().isSlotB());
+    header_->setOtherSlotFilled (phonoss_.getAbCompare().otherSlotFilled());
 
     addAndMakeVisible (*header_);
 
@@ -566,11 +923,54 @@ SyrinxEditor::SyrinxEditor (SyrinxProcessor& processorToUse)
     sibilance_ = std::make_unique<SibilanceDisplay> (palette_);
     addAndMakeVisible (*sibilance_);
 
-    sibilanceLabel_.setText ("SIBILANCE", juce::dontSendNotification);
-    sibilanceLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+    sibilanceLabel_.setText ("SIBILANCE  vs THRESHOLD", juce::dontSendNotification);
+    sibilanceLabel_.setColour (juce::Label::textColourId,
+                               palette_.dimText.interpolatedWith (stageTint (palette_, deEss),
+                                                                  ui::design::kLabelTint));
     sibilanceLabel_.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-    sibilanceLabel_.setTooltip (syrinx_.describeSibilance());
+    sibilanceLabel_.setTooltip (phonoss_.describeSibilance());
     addAndMakeVisible (sibilanceLabel_);
+
+    // **Listen belongs beside the display it is used with.** It was at the
+    // bottom of the de-ess column, three boxes away from the only picture that
+    // tells you whether it is lisping.
+    listenButton_ = std::make_unique<ui::LampButton> ("LISTEN");
+    listenButton_->setClickingTogglesState (true);
+    listenButton_->setTooltip (
+        "Monitors what is being REMOVED rather than what is kept. The fastest "
+        "way to tell over-essing from under-essing: you should hear esses and "
+        "very little else. Vowels in here means it is lisping.");
+    addAndMakeVisible (*listenButton_);
+
+    listenAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        phonoss_.getState(), ids::deEssListen, *listenButton_);
+
+    reduction_ = std::make_unique<ChainReductionDisplay> (
+        palette_,
+        std::array<juce::Colour, 4> { stageTint (palette_, gate),
+                                      stageTint (palette_, deEss),
+                                      stageTint (palette_, leveller),
+                                      stageTint (palette_, peak) },
+        std::array<juce::String, 4> { "GATE", "DE-ESS", "LEVELLER", "PEAK" });
+    addAndMakeVisible (*reduction_);
+
+    reductionLabel_.setText ("WHERE THE WORK IS DONE", juce::dontSendNotification);
+    reductionLabel_.setColour (juce::Label::textColourId,
+                               palette_.dimText.interpolatedWith (stageTint (palette_, leveller),
+                                                                  ui::design::kLabelTint));
+    reductionLabel_.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    reductionLabel_.setTooltip (
+        "Every stage's gain reduction on **one time axis**, which is the only "
+        "way to see them working against each other.\n\n"
+        "Four separate meters share no clock, so a de-esser ducking 40 ms "
+        "before the leveller does looks exactly like the two ducking together. "
+        "Here it does not: the classic vocal fault is a compressor chewing on "
+        "an /s/ the de-esser was about to remove, and it is visible as two "
+        "lanes dipping in sequence.\n\n"
+        "The gate's lane is scaled to 48 dB and the other three to 18, because "
+        "a gate legitimately removes 40 dB and a compressor legitimately "
+        "removes 3. Hover for the figures at any instant.");
+    addAndMakeVisible (reductionLabel_);
 
     statusLabel_.setJustificationType (juce::Justification::centredRight);
     statusLabel_.setColour (juce::Label::textColourId, palette_.dimText);
@@ -590,23 +990,24 @@ SyrinxEditor::SyrinxEditor (SyrinxProcessor& processorToUse)
     startTimerHz (30);
 }
 
-SyrinxEditor::~SyrinxEditor()
+PhonossEditor::~PhonossEditor()
 {
     setLookAndFeel (nullptr);
 }
 
-void SyrinxEditor::buildStages()
+void PhonossEditor::buildStages()
 {
-    auto& state = syrinx_.getState();
+    auto& state = phonoss_.getState();
 
     // ---- IN --------------------------------------------------------------
 
-    stages_[input] = std::make_unique<StagePanel> (state, palette_, "IN", nullptr, 1);
+    stages_[input] = std::make_unique<StagePanel> (state, palette_, stageTint (palette_, input), "IN", nullptr, 1);
+    stages_[input]->setEmphasis (ids::inputTrim, {});
     stages_[input]->addKnob (ids::inputTrim, "TRIM",
         "Level into the strip, before anything measures it. Every threshold "
         "below is relative to what arrives here, so moving this moves all of "
         "them -- set it first and leave it.");
-    stages_[input]->addKnob (ids::highpass, "HPF", syrinx_.describeHighpass());
+    stages_[input]->addKnob (ids::highpass, "HPF", phonoss_.describeHighpass());
 
     // Peak in and peak out, which is the pair of numbers you actually want
     // while setting a strip: everything between them is the strip's doing.
@@ -622,7 +1023,8 @@ void SyrinxEditor::buildStages()
 
     // ---- GATE ------------------------------------------------------------
 
-    stages_[gate] = std::make_unique<StagePanel> (state, palette_, "GATE", ids::gateOn, 2);
+    stages_[gate] = std::make_unique<StagePanel> (state, palette_, stageTint (palette_, gate), "GATE", ids::gateOn, 2);
+    stages_[gate]->setEmphasis (ids::gateThreshold, { ids::gateHysteresis, ids::gateSidechain });
     stages_[gate]->addKnob (ids::gateThreshold, "THRESH",
         "Where the gate opens. Set it under the quietest thing you want to "
         "keep, not under the noise: the two are usually much closer together "
@@ -657,7 +1059,8 @@ void SyrinxEditor::buildStages()
 
     // ---- DE-ESS ----------------------------------------------------------
 
-    stages_[deEss] = std::make_unique<StagePanel> (state, palette_, "DE-ESS", ids::deEssOn, 2);
+    stages_[deEss] = std::make_unique<StagePanel> (state, palette_, stageTint (palette_, deEss), "DE-ESS", ids::deEssOn, 2);
+    stages_[deEss]->setEmphasis (ids::deEssThreshold, { ids::deEssKnee, ids::deEssCorner });
     stages_[deEss]->addKnob (ids::deEssCorner, "CORNER",
         "Where the sibilant band starts. 5 to 8 kHz for most voices; lower "
         "for a deep one, higher if it is dulling the words rather than the "
@@ -680,15 +1083,14 @@ void SyrinxEditor::buildStages()
         "through before the stage reacts.");
     stages_[deEss]->addKnob (ids::deEssRelease, "RELEASE",
         "How fast it lets go. Too long and the word after the /s/ is dull.");
-    stages_[deEss]->addToggle (ids::deEssListen, "LISTEN",
-        "Monitors what is being REMOVED rather than what is kept. The fastest "
-        "way to tell over-essing from under-essing: you should hear esses and "
-        "very little else. Vowels in here means it is lisping.");
+    // Listen lives beside the sibilance display rather than here -- see the
+    // editor's constructor.
     stages_[deEss]->addReductionBar();
 
     // ---- LEVELLER --------------------------------------------------------
 
-    stages_[leveller] = std::make_unique<StagePanel> (state, palette_, "LEVELLER", ids::comp1On, 2);
+    stages_[leveller] = std::make_unique<StagePanel> (state, palette_, stageTint (palette_, leveller), "LEVELLER", ids::comp1On, 2);
+    stages_[leveller]->setEmphasis (ids::comp1Threshold, { ids::comp1Knee, ids::comp1Sidechain });
     stages_[leveller]->addKnob (ids::comp1Threshold, "THRESH",
         "Where the slow compressor starts working. This one is for the shape "
         "of the performance -- the difference between a loud line and a quiet "
@@ -720,7 +1122,8 @@ void SyrinxEditor::buildStages()
 
     // ---- PEAK ------------------------------------------------------------
 
-    stages_[peak] = std::make_unique<StagePanel> (state, palette_, "PEAK", ids::comp2On, 2);
+    stages_[peak] = std::make_unique<StagePanel> (state, palette_, stageTint (palette_, peak), "PEAK", ids::comp2On, 2);
+    stages_[peak]->setEmphasis (ids::comp2Threshold, { ids::comp2Knee, ids::comp2Sidechain });
     stages_[peak]->addKnob (ids::comp2Threshold, "THRESH",
         "Higher than the leveller's: this one only catches what got past it. "
         "If it is working all the time, the leveller is not doing its job.");
@@ -751,7 +1154,8 @@ void SyrinxEditor::buildStages()
     // Frequency then gain, one band per row, with Q last. Ordering them by
     // parameter declaration instead put MID's gain beside HIGH's frequency,
     // which reads as one band with two corners.
-    stages_[eq] = std::make_unique<StagePanel> (state, palette_, "EQ", ids::eqOn, 2);
+    stages_[eq] = std::make_unique<StagePanel> (state, palette_, stageTint (palette_, eq), "EQ", ids::eqOn, 2);
+    stages_[eq]->setEmphasis (ids::eqMidDb, { ids::eqMidQ });
     stages_[eq]->addKnob (ids::eqLowHz, "LOW Hz", "Corner of the low shelf.");
     stages_[eq]->addKnob (ids::eqLowDb, "LOW",
         "Weight. Cut here rather than boosting if the voice is muddy -- there "
@@ -772,25 +1176,74 @@ void SyrinxEditor::buildStages()
         addAndMakeVisible (*stagePanel);
 }
 
-void SyrinxEditor::paint (juce::Graphics& g)
+void PhonossEditor::paint (juce::Graphics& g)
 {
     g.fillAll (palette_.background);
+
+    // **The chain, drawn as one.** An arrow in each gap, at the height of the
+    // title bars, in the colour of the stage it points *into* -- so the
+    // gradient reads as a direction rather than as six colours, and the fixed
+    // order looks decided rather than arbitrary.
+    if (chainRow_.isEmpty())
+        return;
+
+    const float y = static_cast<float> (chainRow_.getY() + kStageTitleHeight / 2 + 3);
+
+    for (int i = 1; i < kNumStages; ++i)
+    {
+        const auto& previous = *stages_[static_cast<std::size_t> (i - 1)];
+        const auto& next = *stages_[static_cast<std::size_t> (i)];
+
+        const float centre = 0.5f * static_cast<float> (previous.getRight() + next.getX());
+
+        juce::Path arrow;
+        arrow.startNewSubPath (centre - 2.5f, y - 3.5f);
+        arrow.lineTo (centre + 2.5f, y);
+        arrow.lineTo (centre - 2.5f, y + 3.5f);
+
+        g.setColour (stageTint (palette_, i).withAlpha (0.75f));
+        g.strokePath (arrow, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
 }
 
-void SyrinxEditor::resized()
+void PhonossEditor::resized()
 {
     auto bounds = getLocalBounds();
 
     header_->setBounds (bounds.removeFromTop (kHeaderHeight));
 
-    auto footer = bounds.removeFromBottom (kSibilanceHeight + kStatusHeight);
-    auto status = footer.removeFromBottom (kStatusHeight);
+    statusLabel_.setBounds (bounds.removeFromBottom (kStatusHeight).reduced (8, 0));
 
-    statusLabel_.setBounds (status.reduced (8, 0));
+    // **The displays, at the top, side by side.**
+    //
+    // Left asks "is it triggering on the right thing"; right asks "which stage
+    // is doing the work". Two questions, two panes -- rather than one pane
+    // doing both jobs badly, which is what a single strip along the bottom
+    // was.
+    auto displays = bounds.removeFromTop (kDisplayHeight).reduced (6, 3);
 
-    auto sibilanceArea = footer.reduced (6, 3);
-    sibilanceLabel_.setBounds (sibilanceArea.removeFromTop (14).reduced (2, 0));
-    sibilance_->setBounds (sibilanceArea);
+    auto left = displays.removeFromLeft (displays.getWidth() / 2);
+    left.removeFromRight (4);
+    auto right = displays;
+    right.removeFromLeft (4);
+
+    // The de-ess Listen sits in the left display's caption row, at its right
+    // end -- the one control that belongs to that picture rather than to a
+    // stage box.
+    auto leftCaption = left.removeFromTop (kDisplayLabelHeight);
+
+    const int listenWidth = 66 + 2 * ui::LampButton::kGlowMargin;
+
+    listenButton_->setBounds (
+        ui::LampButton::sized (66, 17)
+          .withCentre (leftCaption.removeFromRight (listenWidth).getCentre()));
+
+    sibilanceLabel_.setBounds (leftCaption.reduced (2, 0));
+    sibilance_->setBounds (left);
+
+    reductionLabel_.setBounds (right.removeFromTop (kDisplayLabelHeight).reduced (2, 0));
+    reduction_->setBounds (right);
 
     // The chain, left to right. IN and EQ are narrower than the dynamics
     // stages because they hold fewer controls; giving every box the same width
@@ -800,28 +1253,38 @@ void SyrinxEditor::resized()
     const std::array<int, kNumStages> weights { 9, 16, 16, 18, 16, 15 };
     const int total = std::accumulate (weights.begin(), weights.end(), 0);
 
+    // The gaps come out of the row before the weights divide what is left, so
+    // a narrow window loses box width rather than losing the arrows.
+    const int usable = bounds.getWidth() - (kNumStages - 1) * kChainGap;
+
     int x = bounds.getX();
 
     for (int i = 0; i < kNumStages; ++i)
     {
         const int width = i == kNumStages - 1
                         ? bounds.getRight() - x
-                        : bounds.getWidth() * weights[static_cast<std::size_t> (i)] / total;
+                        : usable * weights[static_cast<std::size_t> (i)] / total;
 
         stages_[static_cast<std::size_t> (i)]->setBounds (x, bounds.getY(), width,
                                                           bounds.getHeight());
-        x += width;
+        x += width + kChainGap;
     }
+
+    chainRow_ = bounds;
 }
 
-void SyrinxEditor::timerCallback()
+void PhonossEditor::timerCallback()
 {
-    const auto& meters = syrinx_.getMeterValues();
+    const auto& meters = phonoss_.getMeterValues();
 
     const auto update = [] (StagePanel& stagePanel, float db)
     {
         if (auto* bar = stagePanel.getReductionBar())
             bar->setReductionDb (db);
+
+        // And the title bar, which is where it is readable while your eyes are
+        // on a knob.
+        stagePanel.setReductionDb (db);
     };
 
     update (*stages_[gate], meters.gateDb.load (std::memory_order_relaxed));
@@ -841,13 +1304,18 @@ void SyrinxEditor::timerCallback()
     sibilance_->push (meters.sibilanceDb.load (std::memory_order_relaxed),
                       meters.deEssDb.load (std::memory_order_relaxed));
 
-    if (auto* raw = syrinx_.getState().getRawParameterValue (ids::deEssThreshold))
+    reduction_->push ({ meters.gateDb.load (std::memory_order_relaxed),
+                        meters.deEssDb.load (std::memory_order_relaxed),
+                        meters.comp1Db.load (std::memory_order_relaxed),
+                        meters.comp2Db.load (std::memory_order_relaxed) });
+
+    if (auto* raw = phonoss_.getState().getRawParameterValue (ids::deEssThreshold))
         sibilance_->setThresholdDb (raw->load());
 
     updateForSwitches();
 }
 
-void SyrinxEditor::updateForSwitches()
+void PhonossEditor::updateForSwitches()
 {
     for (int i = 0; i < kNumStages; ++i)
     {
@@ -863,9 +1331,15 @@ void SyrinxEditor::updateForSwitches()
 
         if (i == deEss)
             sibilance_->setStageEnabled (on != 0);
+
+        // The reduction lanes run gate, de-ess, leveller, peak -- the four
+        // stages that reduce -- so the stage index maps onto a lane by
+        // subtracting the input.
+        if (i >= gate && i <= peak)
+            reduction_->setLaneEnabled (i - gate, on != 0);
     }
 
-    const int identity = syrinx_.isIdentity() ? 1 : 0;
+    const int identity = phonoss_.isIdentity() ? 1 : 0;
 
     if (identity == shownIdentity_)
         return;
@@ -883,4 +1357,4 @@ void SyrinxEditor::updateForSwitches()
                             identity != 0 ? palette_.accent : palette_.dimText);
 }
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

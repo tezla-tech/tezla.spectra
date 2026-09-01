@@ -23,12 +23,12 @@
 #include <tezla/dsp/Decibels.hpp>
 #include <tezla/dsp/Exact.hpp>
 
-#include <SyrinxEngine.hpp>
+#include <PhonossEngine.hpp>
 
 #include "TestFramework.hpp"
 
 using namespace tezla;
-using namespace tezla::syrinx;
+using namespace tezla::phonoss;
 
 namespace {
 
@@ -54,9 +54,9 @@ double voiceAt (std::size_t index, double levelDb = -12.0)
     return dsp::dbToGain (levelDb) * value * 0.4;
 }
 
-SyrinxEngine::Settings working()
+PhonossEngine::Settings working()
 {
-    SyrinxEngine::Settings s;
+    PhonossEngine::Settings s;
     s.highpassHz = 90.0;
 
     s.gate.thresholdDb = -40.0;
@@ -88,10 +88,10 @@ SyrinxEngine::Settings working()
 
 /// Renders the probe through a strip, in blocks of `blockSize`, pushing the
 /// settings once per block the way a host does.
-std::vector<double> render (const SyrinxEngine::Settings& settings, double seconds,
+std::vector<double> render (const PhonossEngine::Settings& settings, double seconds,
                             int blockSize, double levelDb = -12.0)
 {
-    SyrinxEngine engine;
+    PhonossEngine engine;
     engine.prepare (kRate);
 
     const auto total = static_cast<std::size_t> (seconds * kRate);
@@ -138,9 +138,9 @@ TEZLA_TEST (a_strip_with_every_stage_neutral_is_bit_exact_identity)
     // The defaults are the neutral setting -- trims 0 dB, high-pass off, gate
     // Range 0, de-ess Range 0, both ratios 1:1, every EQ band 0 dB -- and
     // 40001 sample values go through both channels and come back bit for bit.
-    SyrinxEngine engine;
+    PhonossEngine engine;
     engine.prepare (kRate);
-    engine.setSettings (SyrinxEngine::Settings {});
+    engine.setSettings (PhonossEngine::Settings {});
 
     CHECK (engine.isIdentity());
 
@@ -179,9 +179,9 @@ TEZLA_TEST (each_stage_alone_can_break_the_identity_and_nothing_else_does)
     // not the signal: a Range of 12 dB with a threshold nothing reaches is
     // honestly "not neutral" even though this probe never triggers it. Drop
     // any one clause from `isIdentity()` and its row below goes red.
-    const auto stillIdentity = [] (const SyrinxEngine::Settings& s)
+    const auto stillIdentity = [] (const PhonossEngine::Settings& s)
     {
-        SyrinxEngine engine;
+        PhonossEngine engine;
         engine.prepare (kRate);
         engine.setSettings (s);
 
@@ -204,50 +204,50 @@ TEZLA_TEST (each_stage_alone_can_break_the_identity_and_nothing_else_does)
         return exact;
     };
 
-    CHECK (stillIdentity (SyrinxEngine::Settings {}));
+    CHECK (stillIdentity (PhonossEngine::Settings {}));
 
     {
-        auto s = SyrinxEngine::Settings {}; s.inputTrimDb = 0.1;
+        auto s = PhonossEngine::Settings {}; s.inputTrimDb = 0.1;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {}; s.highpassHz = 20.0;
+        auto s = PhonossEngine::Settings {}; s.highpassHz = 20.0;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {}; s.gate.rangeDb = 1.0;
+        auto s = PhonossEngine::Settings {}; s.gate.rangeDb = 1.0;
         s.gate.thresholdDb = 0.0;   // so it is actually shut
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.deEss.rangeDb = 6.0; s.deEss.thresholdDb = -40.0;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.leveller.ratio = 1.1; s.leveller.thresholdDb = -60.0;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.peak.ratio = 1.1; s.peak.thresholdDb = -60.0;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {}; s.eq.lowShelfDb = 0.1;
+        auto s = PhonossEngine::Settings {}; s.eq.lowShelfDb = 0.1;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {}; s.eq.midDb = 0.1;
+        auto s = PhonossEngine::Settings {}; s.eq.midDb = 0.1;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {}; s.eq.highShelfDb = 0.1;
+        auto s = PhonossEngine::Settings {}; s.eq.highShelfDb = 0.1;
         CHECK (! stillIdentity (s));
     }
     {
-        auto s = SyrinxEngine::Settings {}; s.outputTrimDb = 0.1;
+        auto s = PhonossEngine::Settings {}; s.outputTrimDb = 0.1;
         CHECK (! stillIdentity (s));
     }
 }
@@ -257,7 +257,7 @@ TEZLA_TEST (silence_in_is_exactly_silence_out_with_the_strip_working_hard)
     // Nothing in, everything switched on: a gate that leaked its range, a
     // compressor with a makeup applied to a dry path, or an EQ ringing on its
     // own initial state would all show up as a non-zero here.
-    SyrinxEngine engine;
+    PhonossEngine engine;
     engine.prepare (kRate);
     engine.setSettings (working());
 
@@ -321,7 +321,7 @@ TEZLA_TEST (the_two_channels_stay_locked_together)
     // this test goes red. That is the image walking a third of a decibel toward
     // the quiet side and back on every syllable, which on a doubled vocal is
     // audible as the double wandering rather than sitting where it was panned.
-    SyrinxEngine engine;
+    PhonossEngine engine;
     engine.prepare (kRate);
 
     auto s = working();
@@ -390,13 +390,13 @@ TEZLA_TEST (the_stage_meters_report_the_stage_that_is_working)
     // A strip's display exists to say *which* stage is doing the work, so the
     // readouts have to be per stage and have to be right. Three settings, each
     // of which should light exactly one meter.
-    const auto metersFor = [] (const SyrinxEngine::Settings& s, double levelDb)
+    const auto metersFor = [] (const PhonossEngine::Settings& s, double levelDb)
     {
-        SyrinxEngine engine;
+        PhonossEngine engine;
         engine.prepare (kRate);
         engine.setSettings (s);
 
-        SyrinxEngine::Meters worst;
+        PhonossEngine::Meters worst;
 
         for (std::size_t n = 0; n < static_cast<std::size_t> (1.2 * kRate); ++n)
         {
@@ -417,7 +417,7 @@ TEZLA_TEST (the_stage_meters_report_the_stage_that_is_working)
 
     // Only the gate: a signal well under its threshold.
     {
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.gate.thresholdDb = 0.0;
         s.gate.rangeDb = 20.0;
 
@@ -430,7 +430,7 @@ TEZLA_TEST (the_stage_meters_report_the_stage_that_is_working)
 
     // Only the de-esser: the probe's sibilant bursts.
     {
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.deEss.rangeDb = 12.0;
         s.deEss.thresholdDb = -18.0;
 
@@ -443,7 +443,7 @@ TEZLA_TEST (the_stage_meters_report_the_stage_that_is_working)
 
     // Only the leveller.
     {
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.leveller.thresholdDb = -30.0;
         s.leveller.ratio = 4.0;
 
@@ -483,10 +483,10 @@ TEZLA_TEST (de_essing_before_compression_is_not_the_same_as_after)
     // is driven. That zero is the whole argument for the order.
     const auto worstLevellerReduction = [] (double deEssRangeDb)
     {
-        SyrinxEngine engine;
+        PhonossEngine engine;
         engine.prepare (kRate);
 
-        auto s = SyrinxEngine::Settings {};
+        auto s = PhonossEngine::Settings {};
         s.deEss.rangeDb = deEssRangeDb;
         s.deEss.thresholdDb = -18.0;
         s.leveller.thresholdDb = -26.0;
@@ -553,7 +553,7 @@ TEZLA_TEST (the_strip_costs_little_enough_to_go_on_every_take)
     // design rather than a saving: there is no nonlinearity in the chain to
     // alias (CLAUDE.md section 6), so oversampling a dynamics-only path would
     // buy latency and CPU for nothing at all.
-    SyrinxEngine engine;
+    PhonossEngine engine;
     engine.prepare (kRate);
 
     constexpr int kBlock = 480;
@@ -594,7 +594,7 @@ TEZLA_TEST (the_strip_costs_little_enough_to_go_on_every_take)
     const double seconds = std::chrono::duration<double> (
         std::chrono::steady_clock::now() - start).count();
 
-    std::printf ("        [syrinx cpu] full strip, stereo: %.2f%% of a core (sink %g)\n",
+    std::printf ("        [phonoss cpu] full strip, stereo: %.2f%% of a core (sink %g)\n",
                  100.0 * seconds, sink);
 
     // Generous against the measured 1.31% because a shared CI runner is not a

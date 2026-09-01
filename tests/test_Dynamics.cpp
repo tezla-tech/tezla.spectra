@@ -238,7 +238,7 @@ TEZLA_TEST (limiter_holds_a_sine_below_the_ceiling)
 }
 
 // ---------------------------------------------------------------------------
-// The ratio generalisation (Syrinx V1)
+// The ratio generalisation (Phonoss V1)
 // ---------------------------------------------------------------------------
 
 namespace

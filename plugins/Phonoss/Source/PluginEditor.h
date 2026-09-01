@@ -23,7 +23,7 @@
 
 #include "PluginProcessor.h"
 
-namespace tezla::syrinx
+namespace tezla::phonoss
 {
 
 /// How far down a stage is pulling, drawn as a bar that grows **leftward from
@@ -78,12 +78,24 @@ public:
 
     void paint (juce::Graphics&) override;
 
+    /// **The exact number under the pointer.**
+    ///
+    /// A trace tells you the shape and lies about the value: whether an /s/
+    /// crossed the line by 1 dB or by 9 is the difference between a de-esser
+    /// that works and one that lisps, and no amount of looking at a curve
+    /// settles it. Hovering reads the history back.
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+
 private:
     static constexpr int kHistory = 240;
     static constexpr double kFloorDb = -48.0;
     static constexpr double kCeilingDb = 24.0;
 
     [[nodiscard]] float yFor (double db) const;
+
+    /// Which history slot sits under an x, or -1 for none.
+    [[nodiscard]] int slotAt (float x) const;
 
     ui::Palette palette_;
     std::array<float, kHistory> sibilance_ {};
@@ -92,6 +104,66 @@ private:
     bool filled_ { false };
     double thresholdDb_ { -6.0 };
     bool enabled_ { true };
+    int hoverSlot_ { -1 };
+    float hoverX_ { 0.0f };
+};
+
+/// **Which stage is doing the work, and are they fighting each other.**
+///
+/// Four gain-reduction meters cannot answer that, however honest each one is:
+/// they share no clock, so a de-esser ducking 40 ms before the leveller does
+/// looks exactly like the two of them ducking together. One time axis with the
+/// four stages on it *does* answer it, and the answer is usually the diagnosis
+/// -- a compressor chewing on an /s/ the de-esser was about to remove is the
+/// classic vocal-chain fault and it is invisible in isolation.
+///
+/// Laid out as four **lanes** rather than four overlaid traces. Overlaid, the
+/// only thing telling them apart is colour, and the house hue step is 18
+/// degrees -- deliberately subtle, because it was chosen for plates sitting
+/// side by side rather than curves crossing each other. Lanes need no colour
+/// to be read, and the colour then reinforces which box each lane belongs to
+/// instead of carrying the whole burden.
+class ChainReductionDisplay final : public juce::Component
+{
+public:
+    static constexpr int kLanes = 4;
+
+    ChainReductionDisplay (ui::Palette palette, std::array<juce::Colour, kLanes> tints,
+                           std::array<juce::String, kLanes> names)
+        : palette_ (palette), tints_ (tints), names_ (names) {}
+
+    /// One tick of history: the four stages' reduction, at or below zero.
+    void push (const std::array<float, kLanes>& reductionDb);
+
+    /// A lane whose stage is switched out reads "off" rather than "0.0 dB" --
+    /// a stage doing nothing and a stage not in circuit are different facts.
+    void setLaneEnabled (int lane, bool enabled);
+
+    void paint (juce::Graphics&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+
+private:
+    static constexpr int kHistory = 240;
+
+    /// The bottom of a lane. Deep enough for gating, which is the one stage
+    /// here that legitimately removes 40 dB -- but a lane scaled to 40 would
+    /// show a compressor's 3 dB as nothing at all, so the gate's lane is
+    /// scaled separately from the other three.
+    [[nodiscard]] float laneFloorDb (int lane) const;
+
+    [[nodiscard]] juce::Rectangle<float> laneBounds (int lane) const;
+    [[nodiscard]] int slotAt (float x) const;
+
+    ui::Palette palette_;
+    std::array<juce::Colour, kLanes> tints_;
+    std::array<juce::String, kLanes> names_;
+    std::array<std::array<float, kHistory>, kLanes> history_ {};
+    std::array<bool, kLanes> enabled_ { true, true, true, true };
+    int writeIndex_ { 0 };
+    bool filled_ { false };
+    int hoverSlot_ { -1 };
+    float hoverX_ { 0.0f };
 };
 
 /// One box in the chain: a title, an optional in/out switch, a grid of knobs,
@@ -100,7 +172,20 @@ class StagePanel final : public juce::Component
 {
 public:
     StagePanel (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
-                juce::String title, const char* enableParameterId, int columns);
+                juce::Colour tint, juce::String title, const char* enableParameterId,
+                int columns);
+
+    /// The stage's live gain reduction, for the title bar.
+    ///
+    /// **Which stage is doing the work has to be readable without looking for
+    /// it.** A number in the title, and the title lighting when the stage is
+    /// actually reducing, puts that in peripheral vision -- which is where it
+    /// is useful, because you are looking at a knob at the time.
+    void setReductionDb (double db);
+
+    /// Which control the stage is *about*, drawn larger than its neighbours,
+    /// and which are set once and then ignored, drawn smaller.
+    void setEmphasis (const char* lead, std::vector<juce::String> trims);
 
     void addKnob (const char* parameterId, const juce::String& name,
                   const juce::String& tooltip);
@@ -150,11 +235,19 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
+    /// A control's size, from the two lists this stage was given.
+    [[nodiscard]] ui::design::Emphasis emphasisOf (const juce::String& id) const;
+
     juce::AudioProcessorValueTreeState& state_;
     ui::Palette palette_;
+    juce::Colour tint_;
     juce::String title_;
     const char* enableId_ { nullptr };
     int columns_;
+
+    juce::String leadId_;
+    std::vector<juce::String> trimIds_;
+    double reductionDb_ { 0.0 };
 
     std::unique_ptr<ui::LampButton> enableButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> enableAttachment_;
@@ -173,12 +266,12 @@ private:
 /// so the question a strip's display exists to answer -- *which* stage is
 /// doing the work -- is answered by looking rather than by soloing. Underneath
 /// them, full width, the de-esser's sibilance history.
-class SyrinxEditor final : public juce::AudioProcessorEditor,
+class PhonossEditor final : public juce::AudioProcessorEditor,
                            private juce::Timer
 {
 public:
-    explicit SyrinxEditor (SyrinxProcessor& processorToUse);
-    ~SyrinxEditor() override;
+    explicit PhonossEditor (PhonossProcessor& processorToUse);
+    ~PhonossEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -192,7 +285,7 @@ private:
     /// whole panel for nothing.
     void updateForSwitches();
 
-    SyrinxProcessor& syrinx_;
+    PhonossProcessor& phonoss_;
 
     ui::Palette palette_;
     ui::KnobLookAndFeel knobLook_;
@@ -204,16 +297,28 @@ private:
     std::array<std::unique_ptr<StagePanel>, kNumStages> stages_;
 
     std::unique_ptr<SibilanceDisplay> sibilance_;
+    std::unique_ptr<ChainReductionDisplay> reduction_;
     juce::Label sibilanceLabel_;
+    juce::Label reductionLabel_;
     juce::Label statusLabel_;
+
+    /// The de-esser's Listen, lifted out of its stage box to sit beside the
+    /// display it is used with: it is the control you reach for *while looking
+    /// at that graph*, and it was at the bottom of a column three boxes away.
+    std::unique_ptr<ui::LampButton> listenButton_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> listenAttachment_;
 
     /// What the panel is currently dressed for, so the greying is not
     /// recomputed every tick. Deliberately impossible starting values, so the
     /// first tick always applies the state.
+    /// Where the row of stage boxes ended up, so `paint` can put an arrow in
+    /// each gap without recomputing the layout it was already given.
+    juce::Rectangle<int> chainRow_;
+
     std::array<int, kNumStages> shownEnabled_ { -1, -1, -1, -1, -1, -1 };
     int shownIdentity_ { -1 };
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SyrinxEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PhonossEditor)
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

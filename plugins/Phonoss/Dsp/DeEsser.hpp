@@ -47,7 +47,7 @@
 
 #include "SibilanceDetector.hpp"
 
-namespace tezla::syrinx {
+namespace tezla::phonoss {
 
 class DeEsser
 {
@@ -189,4 +189,4 @@ private:
     double lastSibilanceDb_ { SibilanceDetector::kSilentDb };
 };
 
-} // namespace tezla::syrinx
+} // namespace tezla::phonoss

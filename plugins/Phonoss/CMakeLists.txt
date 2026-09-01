@@ -6,9 +6,9 @@
 # GNU AGPLv3 (see LICENSE), plus NOTICE.md's attribution term. Keep intact.
 
 tezla_add_plugin(
-    NAME            Syrinx
-    PRODUCT_NAME    "Tezla Syrinx"
-    PLUGIN_CODE     Tzsy
+    NAME            Phonoss
+    PRODUCT_NAME    "Tezla Phonoss"
+    PLUGIN_CODE     Tzps
     DESCRIPTION     "Vocal channel strip: gate, de-esser, two compressors, tone"
     VERSION         0.1.0
     VST3_CATEGORIES Fx Dynamics EQ

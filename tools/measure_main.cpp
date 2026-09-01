@@ -46,7 +46,7 @@
 #include "FerriteEngine.hpp"
 #include "CapstoneEngine.hpp"
 #include "CrossbarEngine.hpp"
-#include "SyrinxEngine.hpp"
+#include "PhonossEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
 #include "MalleusEngine.hpp"
@@ -3853,12 +3853,12 @@ int runCrossbar (const Args& args)
 }
 
 // ---------------------------------------------------------------------------
-// syrinx
+// phonoss
 // ---------------------------------------------------------------------------
 
-namespace syrinxMeasure {
+namespace phonossMeasure {
 
-using namespace tezla::syrinx;
+using namespace tezla::phonoss;
 
 /// A voice-shaped probe. `sibilant` swaps the body of the voice for a
 /// high-band burst of the same total energy, which is what makes the de-esser's
@@ -3891,15 +3891,15 @@ double voiceAt (std::size_t index, double rate, double levelDb, bool sibilant)
 /// is a step: the settling transient is broadband, so it looks to the de-esser
 /// exactly like sibilance. Measuring from sample zero reported 2.96 dB of
 /// reduction on a pure vowel -- a defect that existed only in the harness.
-SyrinxEngine::Meters worstOf (const SyrinxEngine::Settings& settings, double rate,
+PhonossEngine::Meters worstOf (const PhonossEngine::Settings& settings, double rate,
                               double seconds, double levelDb, bool sibilant)
 {
-    SyrinxEngine engine;
+    PhonossEngine engine;
     engine.prepare (rate);
     engine.setSettings (settings);
 
     const auto settle = static_cast<std::size_t> (0.1 * rate);
-    SyrinxEngine::Meters worst;
+    PhonossEngine::Meters worst;
 
     for (std::size_t n = 0; n < static_cast<std::size_t> (seconds * rate); ++n)
     {
@@ -3921,15 +3921,15 @@ SyrinxEngine::Meters worstOf (const SyrinxEngine::Settings& settings, double rat
     return worst;
 }
 
-} // namespace syrinxMeasure
+} // namespace phonossMeasure
 
-int runSyrinx (const Args& args)
+int runPhonoss (const Args& args)
 {
-    using namespace syrinxMeasure;
+    using namespace phonossMeasure;
 
     const double rate = args.sampleRate > 0.0 ? args.sampleRate : 48000.0;
 
-    std::printf ("tezla-measure syrinx -- %.0f Hz\n\n", rate);
+    std::printf ("tezla-measure phonoss -- %.0f Hz\n\n", rate);
 
     // -----------------------------------------------------------------------
     // The claim the plugin is built around
@@ -3942,7 +3942,7 @@ int runSyrinx (const Args& args)
     std::printf ("  %-12s %14s %14s\n", "level", "on an /s/", "on a vowel");
 
     {
-        SyrinxEngine::Settings s;
+        PhonossEngine::Settings s;
 
         // Range wide open, deliberately. CLAUDE.md section 10: a guard at the
         // end of a chain makes every measurement of the guarded quantity true.
@@ -4100,9 +4100,9 @@ int runSyrinx (const Args& args)
     std::printf ("\nNeutral is the identity, bit for bit\n");
 
     {
-        SyrinxEngine engine;
+        PhonossEngine engine;
         engine.prepare (rate);
-        engine.setSettings (SyrinxEngine::Settings {});
+        engine.setSettings (PhonossEngine::Settings {});
 
         std::size_t exact = 0;
         std::size_t total = 0;
@@ -4126,7 +4126,7 @@ int runSyrinx (const Args& args)
         std::printf ("  %zu of %zu samples bit-identical, worst difference %.3e\n",
                      exact, total, worst);
         std::printf ("  isIdentity() reports %s\n",
-                     SyrinxEngine::isIdentity (SyrinxEngine::Settings {}) ? "true" : "false");
+                     PhonossEngine::isIdentity (PhonossEngine::Settings {}) ? "true" : "false");
     }
 
     // -----------------------------------------------------------------------
@@ -4136,9 +4136,9 @@ int runSyrinx (const Args& args)
     std::printf ("\nCPU, stereo, 480-sample blocks\n");
 
     {
-        const auto costOf = [&] (const char* label, const SyrinxEngine::Settings& settings)
+        const auto costOf = [&] (const char* label, const PhonossEngine::Settings& settings)
         {
-            SyrinxEngine engine;
+            PhonossEngine engine;
             engine.prepare (rate);
 
             constexpr int kBlock = 480;
@@ -4174,9 +4174,9 @@ int runSyrinx (const Args& args)
                          sink);
         };
 
-        costOf ("everything neutral", SyrinxEngine::Settings {});
+        costOf ("everything neutral", PhonossEngine::Settings {});
 
-        SyrinxEngine::Settings working;
+        PhonossEngine::Settings working;
         working.highpassHz = 90.0;
         working.gate.thresholdDb = -40.0;
         working.gate.rangeDb = 18.0;
@@ -4225,7 +4225,7 @@ void printUsage()
     std::printf ("  ferrite         [--fs --out FILE]  tape loops, losses, aliasing, wobble, CPU\n");
     std::printf ("  malleus         [--fs --out FILE]  mode tables, lock, decay, bow onset, CPU\n");
     std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
-    std::printf ("  syrinx          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
+    std::printf ("  phonoss          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
 }
 
 } // namespace
@@ -4258,7 +4258,7 @@ int main (int argc, char** argv)
     if (command == "ferrite")         return runFerrite (args);
     if (command == "malleus")         return runMalleus (args);
     if (command == "crossbar")        return runCrossbar (args);
-    if (command == "syrinx")          return runSyrinx (args);
+    if (command == "phonoss")          return runPhonoss (args);
 
     printUsage();
     return 1;
