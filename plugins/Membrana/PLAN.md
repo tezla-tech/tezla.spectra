@@ -133,11 +133,12 @@ m and the Q_m substitution keeps every intermediate a polynomial value:
   self-consistent).
 - **Stopping rule, theirs verbatim**: iterate while either of the last two
   fractional changes \|term\|/\|sum\| exceeds the threshold — i.e. stop only
-  when two successive terms are both below it. Threshold 1e−10; hard cap 200
-  terms; a test asserts the cap is never reached over the whole parameter
-  space (ρ ∈ [1.2, 80], μ up to 192 kHz × 30 mm sphere). Convergence is
-  governed by (1/ρ)^m beyond the arguments, so ρ → 1 is the slow corner — and
-  design-time only, never in `processBlock`.
+  when two successive terms are both below it. Threshold 1e−10; hard cap 300
+  terms (the worst corner of the swept space measures 197: ρ = 1.2 at
+  μ = 105.5, an octave past any design grid); a test asserts the cap is never
+  reached over the whole parameter space (ρ ∈ [1.2, 80], μ up to 192 kHz ×
+  30 mm sphere). Convergence is governed by (1/ρ)^m beyond the arguments, so
+  ρ → 1 is the slow corner — and design-time only, never in `processBlock`.
 - ρ is clamped ≥ 1.2 for this block (the mouth cannot occupy the mic body);
   the proximity block above keeps the true r.
 
@@ -426,8 +427,8 @@ CLAUDE.md.
 
 | phase | status |
 |---|---|
-| MB0 plan + registry + references | in progress |
-| MB1 MicPattern + SphereDiffraction | pending |
+| MB0 plan + registry + references | done |
+| MB1 MicPattern + SphereDiffraction | done |
 | MB2 MinimumPhaseFir lift + CapsuleEq | pending |
 | MB3 PresenceTracker | pending |
 | MB4 DetailLift | pending |
