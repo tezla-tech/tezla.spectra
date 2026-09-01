@@ -60,6 +60,8 @@
 #include <cmath>
 #include <numbers>
 
+#include <tezla/dsp/Exact.hpp>
+
 namespace tezla::membrana {
 
 struct MicPattern
@@ -104,7 +106,8 @@ struct MicPattern
     static double boostDb (double a, double cosTheta, double rMetres, double fHz) noexcept
     {
         const double g = gradientWeight (a, cosTheta);
-        if (g == 0.0)
+
+        if (tezla::dsp::isExactlyZero (g))
             return 0.0;
 
         const double d     = level (a, cosTheta);

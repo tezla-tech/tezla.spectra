@@ -433,7 +433,7 @@ CLAUDE.md.
 | MB3 PresenceTracker | done |
 | MB4 DetailLift | done |
 | MB5 MembranaEngine | done |
-| MB6 JUCE layer + measure command | pending |
+| MB6 JUCE layer + measure command | done |
 | MB7 editor + close-out | pending |
 
 **To resume** (a later phase, or a fix): read CLAUDE.md in full, then this

@@ -47,6 +47,7 @@
 #include "CapstoneEngine.hpp"
 #include "CrossbarEngine.hpp"
 #include "PhonossEngine.hpp"
+#include "MembranaEngine.hpp"
 #include "EmberdriveEngine.hpp"
 #include "HaloEngine.hpp"
 #include "MalleusEngine.hpp"
@@ -4205,6 +4206,243 @@ int runPhonoss (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// membrana
+// ---------------------------------------------------------------------------
+
+namespace membranaMeasure {
+
+using tezla::membrana::MembranaEngine;
+
+/// Steady-state RMS gain of a sine through a freshly prepared engine.
+double engineSineGainDb (const MembranaEngine::Settings& settings, double rate,
+                         double hz, double peak, double settleSeconds)
+{
+    MembranaEngine engine;
+    engine.prepare (rate);
+    engine.setSettings (settings);
+
+    const double dPhase = 2.0 * std::numbers::pi * hz / rate;
+    double phase = 0.0, energyIn = 0.0, energyOut = 0.0;
+    std::vector<double> left (512), right (512), input (512);
+    const auto settle = static_cast<int> (settleSeconds * rate);
+    const auto measure = static_cast<int> (0.5 * rate);
+    int done = 0;
+
+    while (done < settle + measure)
+    {
+        for (int i = 0; i < 512; ++i)
+        {
+            input[static_cast<std::size_t> (i)] = peak * std::sin (phase);
+            left[static_cast<std::size_t> (i)] = right[static_cast<std::size_t> (i)]
+                = input[static_cast<std::size_t> (i)];
+            phase += dPhase;
+        }
+
+        engine.process (left.data(), right.data(), 512);
+
+        for (int i = 0; i < 512; ++i)
+            if (done + i >= settle)
+            {
+                energyIn += input[static_cast<std::size_t> (i)] * input[static_cast<std::size_t> (i)];
+                energyOut += left[static_cast<std::size_t> (i)] * left[static_cast<std::size_t> (i)];
+            }
+
+        done += 512;
+    }
+
+    return 10.0 * std::log10 (energyOut / energyIn);
+}
+
+} // namespace membranaMeasure
+
+int runMembrana (const Args& args)
+{
+    using namespace membranaMeasure;
+    using tezla::membrana::CapsuleEq;
+    using tezla::membrana::DetailLift;
+    using tezla::membrana::MembranaEngine;
+    using tezla::membrana::MicPattern;
+    using tezla::membrana::SphereDiffraction;
+
+    const double rate = args.sampleRate > 0.0 ? args.sampleRate : 48000.0;
+
+    std::printf ("tezla-measure membrana -- %.0f Hz\n\n", rate);
+
+    // -----------------------------------------------------------------------
+    std::printf ("Proximity against the closed form (cardioid, on axis)\n");
+    std::printf ("  boost_dB(f) = 10 log10(1 + (G c / (2 pi f r D))^2), corner = G c / (2 pi r D)\n\n");
+
+    for (double r : { 0.05, 0.10 })
+    {
+        std::printf ("  r = %2.0f cm, corner %6.1f Hz:", r * 100.0,
+                     MicPattern::cornerHz (0.5, 1.0, r));
+
+        for (double f : { 100.0, 546.0, 2000.0 })
+            std::printf ("   %5.0f Hz %+7.3f dB", f, MicPattern::boostDb (0.5, 1.0, r, f));
+
+        std::printf ("\n");
+    }
+
+    std::printf ("  omni, any distance:                %5.0f Hz %+7.3f dB (exact zero by predicate)\n\n",
+                 100.0, MicPattern::boostDb (1.0, 1.0, 0.05, 100.0));
+
+    // -----------------------------------------------------------------------
+    std::printf ("Sphere limits against Duda & Martens (rho = 100 unless said)\n\n");
+    std::printf ("  on axis, mu = 1:            %+7.3f dB   (paper: about +3)\n",
+                 SphereDiffraction::magnitudeDb (100.0, 1.0, 1.0));
+    std::printf ("  on axis, mu = 30:           %+7.3f dB   (paper: +6.02 limit)\n",
+                 SphereDiffraction::magnitudeDb (100.0, 30.0, 1.0));
+    std::printf ("  150 degrees, mu = 30:       %+7.3f dB   (paper: about -13)\n",
+                 SphereDiffraction::magnitudeDb (100.0, 30.0, std::cos (150.0 * std::numbers::pi / 180.0)));
+
+    const auto rise = [] (double rho)
+    {
+        return SphereDiffraction::magnitudeDb (rho, 60.0, 1.0)
+               - SphereDiffraction::magnitudeDb (rho, 0.1, 1.0);
+    };
+
+    std::printf ("  LF-to-HF rise, rho = 1.25:  %+7.3f dB   (paper: about +2)\n", rise (1.25));
+    std::printf ("  LF-to-HF rise, rho = 100:   %+7.3f dB   (paper: about +6)\n\n", rise (100.0));
+
+    // -----------------------------------------------------------------------
+    std::printf ("Capsule EQ fit (rendered coefficients against the analytic target)\n\n");
+
+    {
+        struct Config { const char* name; double pattern, body, character, grille, grilleHz, distance, axis; };
+        constexpr Config configs[] = {
+            { "cardioid 5 cm",       0.5, 50.0, 0.35, 0.0, 7000.0, 0.05, 0.0 },
+            { "char 100, 60 mm 2 cm", 0.5, 60.0, 1.00, 0.0, 7000.0, 0.02, 0.0 },
+            { "grille full at 9 kHz", 0.5, 50.0, 0.00, 1.0, 9000.0, 1.00, 0.0 },
+        };
+
+        for (const auto& config : configs)
+        {
+            tezla::membrana::CapsuleEq eq;
+            eq.setPattern (config.pattern);
+            eq.setBodyMm (config.body);
+            eq.setCharacter (config.character);
+            eq.setGrille (config.grille, config.grilleHz);
+            eq.setPosition (config.distance, config.axis);
+            eq.setLowLimitHz (40.0);
+            eq.setAutoLevel (true);
+            eq.prepare (rate);
+
+            double worst = 0.0, worstHz = 0.0;
+
+            for (double hz = 700.0; hz <= 20000.0 && hz < rate * 0.45; hz *= 1.06)
+            {
+                const double error = std::abs (eq.renderedDbAt (hz) - eq.targetDbAt (hz));
+
+                if (error > worst)
+                {
+                    worst = error;
+                    worstHz = hz;
+                }
+            }
+
+            std::printf ("  %-22s worst %6.4f dB at %5.0f Hz, 1 kHz hold %+9.6f dB\n",
+                         config.name, worst, worstHz, eq.renderedDbAt (1000.0));
+        }
+
+        std::printf ("\n");
+    }
+
+    // -----------------------------------------------------------------------
+    std::printf ("Presence curve (amount 6 dB, threshold -28, knee 12, track 1)\n");
+    std::printf ("  lift = amount * ((1 - track) + track * s(clamp01((T - L) / 12)))\n\n");
+
+    for (double level : { -16.0, -28.0, -34.0, -40.0, -52.0 })
+    {
+        double xc = (-28.0 - level) / 12.0;
+        xc = xc < 0.0 ? 0.0 : xc > 1.0 ? 1.0 : xc;
+        const double eased = xc * xc * (3.0 - 2.0 * xc);
+        std::printf ("  level %4.0f dB -> lift %6.3f dB\n", level, 6.0 * eased);
+    }
+
+    std::printf ("\n");
+
+    // -----------------------------------------------------------------------
+    std::printf ("Detail window (amount 6 dB, floor -55: T_d = -35, knee 15, ease 6)\n\n");
+
+    for (double level : { -30.0, -40.0, -45.0, -50.0, -55.0, -70.0 })
+        std::printf ("  level %4.0f dB -> lift %6.3f dB%s\n", level,
+                     tezla::membrana::DetailLift::curveLiftDb (6.0, -55.0, level),
+                     level <= -70.0 ? "   (hiss: the floor holds)" : "");
+
+    std::printf ("\n");
+
+    // -----------------------------------------------------------------------
+    std::printf ("Whole engine\n\n");
+
+    {
+        MembranaEngine::Settings neutral;
+        std::printf ("  all-neutral identity:      %s\n",
+                     MembranaEngine::isIdentity (neutral) ? "bit-exact (predicate)" : "NOT IDENTITY -- BROKEN");
+
+        MembranaEngine::Settings close;
+        close.mic.distanceCm = 8.0;
+        close.mic.character01 = 1.0;
+        std::printf ("  autoLevel 1 kHz at 8 cm:   %+8.4f dB (should be 0)\n",
+                     engineSineGainDb (close, rate, 1000.0, 0.1, 0.5));
+
+        MembranaEngine::Settings shelf;
+        shelf.presence.amountDb = 6.0;
+        shelf.presence.track01 = 0.0;
+        shelf.presence.frequencyHz = 1000.0;
+        std::printf ("  static presence 6 dB, 16k: %+8.4f dB (asymptote 6)\n",
+                     engineSineGainDb (shelf, rate, 16000.0, 0.1, 3.0));
+    }
+
+    // -----------------------------------------------------------------------
+    std::printf ("\nCPU, everything engaged, stereo, 480-sample blocks\n\n");
+
+    {
+        MembranaEngine engine;
+        MembranaEngine::Settings settings;
+        settings.mic.distanceCm = 8.0;
+        settings.mic.character01 = 1.0;
+        settings.mic.grille01 = 0.5;
+        settings.presence.amountDb = 6.0;
+        settings.detail.amountDb = 8.0;
+        settings.outputDb = 1.0;
+        engine.prepare (rate);
+        engine.setSettings (settings);
+
+        std::vector<double> left (480), right (480);
+        double phase = 0.0;
+        const double dPhase = 2.0 * std::numbers::pi * 800.0 / rate;
+        const int blocks = 2000;
+
+        const auto start = std::chrono::steady_clock::now();
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            for (int i = 0; i < 480; ++i)
+            {
+                left[static_cast<std::size_t> (i)] = right[static_cast<std::size_t> (i)]
+                    = 0.05 * std::sin (phase);
+                phase += dPhase;
+            }
+
+            engine.process (left.data(), right.data(), 480);
+        }
+
+        const auto stop = std::chrono::steady_clock::now();
+        const double seconds = std::chrono::duration<double> (stop - start).count();
+        const double audioSeconds = blocks * 480.0 / rate;
+
+        std::printf ("  %.2f%% of one core (%.3f s processing for %.1f s of audio)\n",
+                     100.0 * seconds / audioSeconds, seconds, audioSeconds);
+    }
+
+    if (! args.outPath.empty())
+        std::printf ("\n  (--out is accepted for consistency; this command prints tables "
+                     "rather than writing a CSV.)\n");
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -4226,6 +4464,7 @@ void printUsage()
     std::printf ("  malleus         [--fs --out FILE]  mode tables, lock, decay, bow onset, CPU\n");
     std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
     std::printf ("  phonoss          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
+    std::printf ("  membrana        [--fs --out FILE]  proximity, sphere limits, fit, curves, CPU\n");
 }
 
 } // namespace
@@ -4259,6 +4498,7 @@ int main (int argc, char** argv)
     if (command == "malleus")         return runMalleus (args);
     if (command == "crossbar")        return runCrossbar (args);
     if (command == "phonoss")          return runPhonoss (args);
+    if (command == "membrana")        return runMembrana (args);
 
     printUsage();
     return 1;
