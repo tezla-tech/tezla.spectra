@@ -110,10 +110,14 @@ exact and the test asserts an *activity count*, not silence.
 ### Kick engine — body, drop, sigh, harmonics, tone, click, tail
 
 - **Body**: a phase accumulator sine, `phase += inc`, pitch updated per
-  control chunk (32 internal samples, timer restarted at note-on so the grid
-  is hit-relative) **with the increment interpolated linearly across the
-  chunk** — a 2 ms drop from +60 semitones spans ~11 chunks and a frequency
-  staircase there is audible grit. Start phase 0–90°, default 0 (90° with a
+  control chunk (32 internal samples on the engine's own grid; a hit that
+  starts mid-chunk gets exact endpoints for its partial chunk) **with the
+  increment interpolated linearly between exact values at the chunk's two
+  ends** — a 2 ms drop from +60 semitones spans ~11 chunks and a frequency
+  staircase there is audible grit, while the chord between two exact points
+  has no lag and misses the exponential by (dt²/8)·f″, 0.35 cents at the
+  steepest point (measured: 0.016 cents against the closed form over cycles
+  3–30 at every rate, I1). Start phase 0–90°, default 0 (90° with a
   0 ms attack is a full-scale step by design; the tooltip says "a click by
   construction" — the NM chapter's sync-so-every-hit-starts-alike, as a knob).
 - **Pitch**: two `TensionDrop`s (promoted to `tezla::dsp`, cents summed, exact
@@ -244,9 +248,17 @@ stage bit-exact at neutral, tested bit for bit as Sonitus tests its tilt.
 - **Clip**: `Adaa1<SoftClipExcess>` at 0 dBFS, knee 0–100 % default 0 (a hard
   ceiling, identity for |x| ≤ 1). The removed excess is exposed and measured —
   Capstone's lesson: measure what the guard had to do.
-- Latency: none in the chain; the instrument declares the `Oversampler`'s
-  whole-sample latency once (47/63/71 at ×2/×4/×8; 0 at ×1), re-declared on
-  change as Sonitus does.
+- Latency: none in the chain. **The instrument's latency is half the
+  oversampler's round trip, and a half-sample** — found at I1 on the first
+  kick: `Oversampler::getLatencySamples()` is the up-and-down figure an
+  effect incurs (47/63/71), while a generator writes into
+  `internalBuffers()` and runs only the decimation half, 23.5/31.5/35.5 host
+  samples. The engine delays its internal signal by `factor / 2` samples
+  before decimating and declares the whole number that results: **24 / 32 /
+  36** (0 at ×1), measured against the undecimated render to a residual of
+  4e-8 / 8e-7 / 1.7e-6 with the neighbouring integers a thousand times
+  worse. Sonitus, the one other instrument on that path, declares the round
+  trip; `docs/ROADMAP.md` §10.
 
 ### Oversampling and multi-out — one `Oversampler` per bus
 
@@ -472,10 +484,12 @@ tolerance; a kick *restart / add* retrigger mode; a shifted-series shell; a
   `releaseResources`/destructor drain, the allocation-counting test.
 - **Retrigger vs choke**: one `fadeOut`, shortest remaining wins; test both
   orders and a retrigger *during* a choke.
-- **Rate match**: hit-relative control timer + linear increment interpolation;
-  the residual between 176.4 k and 192 k internal rates is the chunk-length
-  difference (8.8 %), second order after interpolation — set the four-rate
-  tolerance from the measurement, not from hope.
+- **Rate match**: linear increment interpolation between exact chunk
+  endpoints; the residual between 176.4 k and 192 k internal rates is the
+  chunk-length difference (8.8 %), second order after interpolation.
+  Measured at I1: 0.016 cents against the closed form and 1.95 µs of
+  crossing-time spread between the four rates; the test bounds are 0.1 cents
+  and 10 µs.
 - **`Adsr` at sustain 0** must be killed (the CPU-zombie lesson); assert the
   hit count.
 - **SoftEven DC** on a sub: measure the post-blocker DC bump per corner in
@@ -507,7 +521,7 @@ CLAUDE.md.
 | phase | status |
 |---|---|
 | I0 plan + registry + references + roadmap | done |
-| I1 kick engine + engine skeleton + TensionDrop promotion + SoftOdd | pending |
+| I1 kick engine + engine skeleton + TensionDrop promotion + SoftOdd | done |
 | I2 minimal JUCE layer, kick only, rig build + ear round | pending |
 | I3 snare engine | pending |
 | I4 hat + clap engines, choke | pending |
@@ -517,6 +531,31 @@ CLAUDE.md.
 | I8a sample DSP (WavFile, upsample2x, SincInterpolator, SampleVoice) | pending |
 | I8b sample loader (slots, Align, Render, pad UI) | pending |
 | I9 editor close-out | pending |
+
+**Measured at I1** (`tezla-measure ictus` and `tezla-tests kick`, 48 kHz
+host unless said; the container's CPU figures are noisy, quoted as a range):
+
+| claim | figure |
+|---|---|
+| neutral kick against sin(2π·phase) × envelope, 24000 samples, oversampling off | **bit-identical** |
+| pitch against the closed form, cycles 3–30, at 44.1 / 48 / 96 / 192 kHz (Auto) | **0.016 / 0.015 / 0.015 / 0.015 cents** |
+| crossing-time spread between the four rates over the whole hit | **1.95 µs** |
+| declared latency ×2 / ×4 / ×8, residual against the undecimated render | **24 / 32 / 36**; 4e-8 / 8e-7 / 1.7e-6 (one sample either side: 1.7e-2) |
+| retrigger: max step of a single hit / retriggered / what a cut would be | 0.0347 / **0.0347** / 0.8163 |
+| 64-, 97- and 512-sample blocks, both kicks, everything on | **bit-identical** |
+| hit retirement (everything on, half tail) | last non-zero at 1.031 s, active hits **0** |
+| two kicks, everything on, 48 kHz ×4, decimation included | **4.3–7.0 %** of a core |
+| kick engine at 192 kHz, everything on / neutral | **70.5 / 14.2 ns per sample** (1.35 % / 0.27 %) |
+| idle instrument | 0.001 % |
+| even-curve DC bump after the blocker at 5 / 10 / 20 / 40 Hz | −16.2 / **−20.3** / −25.5 / −29.0 dB re peak (10 Hz stays the default: 20 Hz would cost 0.64 dB at 50 Hz) |
+| harmonics stage, 55 Hz full scale at 192 kHz, gain 4 | THD −17.9 dB, inharmonic **−155 dB** (−189 dB audible) |
+| default kick: rise to −3 dB / energy below 80 Hz | 1.10 ms / 41.8 % |
+
+Break-checks at I1, each seen red then reverted: a staircase increment
+(pitch test red), the control grid restarted per callback (block-size test
+red), no alignment delay (latency test red at ×2/×4/×8), the blocker placed
+in the neutral path (neutral test red), the envelope kill removed (retire
+test red, "active hits 1").
 
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
 file; take the first `pending` phase. The non-negotiables every phase here

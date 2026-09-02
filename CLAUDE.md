@@ -373,6 +373,16 @@ squarely the plugin's problem, not the host's, for two reasons:
   picks tap counts per stage (95/65/65) so the round-trip latency is a **whole
   number of base-rate samples** at every factor — 47/63/71 for x2/x4/x8.
   A fractional latency cannot be reported honestly to a host.
+- **An instrument's latency is half that round trip, and a half-sample.** A
+  generator writes into `Oversampler::internalBuffers()` and runs only the
+  decimation half, so its delay is 23.5 / 31.5 / 35.5 host samples at
+  ×2 / ×4 / ×8 — not the 47 / 63 / 71 that `getLatencySamples()` reports.
+  Found on Ictus's first kick (a ×4 onset arrived 0.66 ms earlier than the
+  declared figure said). Ictus delays its internal signal by `factor / 2`
+  samples before decimating and declares 24 / 32 / 36, measured to a
+  residual of 1e-6 against the undecimated render; Sonitus, the one other
+  instrument on that path, still declares the round trip — `docs/ROADMAP.md`
+  §10.
 - Filter coefficients are **always** computed from the actual sample rate.
   Never hard-code a coefficient derived at 44.1 or 48 k.
 - **But that alone is not enough, and this has been measured.** The bilinear

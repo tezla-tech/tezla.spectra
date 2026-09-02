@@ -257,3 +257,29 @@ change to anything already decided.
    user asking, after hearing the Ictus layer.
 
 **What would unpark each:** the user saying so, per item.
+
+## 10. Sonitus declares twice its latency
+
+**Found 2026-09-02 on Ictus's first kick**, and left alone in Sonitus until
+the user decides, because fixing it moves its output by half a sample and
+its declared PDC by tens of samples.
+
+`Oversampler::getLatencySamples()` is the **round trip** — upsample and
+downsample, what an effect incurs — and its tap counts (95/65/65) are chosen
+so that sum is a whole number of host samples: 47 / 63 / 71 at ×2 / ×4 / ×8.
+An instrument writes straight into `internalBuffers()` and runs only the
+decimation half, so its real delay is **half of that, and a half-sample**:
+23.5 / 31.5 / 35.5. Sonitus is the one other instrument on that path (the
+others do not oversample their generators), and it declares the round-trip
+figure, so FL Studio's PDC advances it by 23.5 / 31.5 / 35.5 host samples too
+much (0.66 ms at 48 kHz ×4). Ictus measured it (`tests/test_Ictus.cpp`, the latency test), delays
+its internal signal by `factor / 2` samples before decimating and declares
+24 / 32 / 36 — exact to a residual of 1e-6 against the undecimated render.
+
+**Would change**: the same `factor / 2` alignment delay in Sonitus's
+process loop, `getLatencySamples()` returning `(roundTrip + 1) / 2`, and its
+"new latency" tests updated. The output shifts by half a host sample, so
+existing renders no longer null against new ones (the 32 goldens included),
+and every saved project's PDC moves.
+
+**What would unpark it:** the user saying so.

@@ -56,6 +56,9 @@
 #include "Sf2TestBuilder.hpp"
 #include "SvaraEngine.hpp"
 #include "TranspectusEngine.hpp"
+#include "IctusEngine.hpp"
+
+#include <tezla/measure/WavWriter.hpp>
 
 namespace {
 
@@ -4572,6 +4575,374 @@ int runMembrana (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// ictus
+// ---------------------------------------------------------------------------
+
+namespace ictusMeasure
+{
+using namespace tezla::ictus;
+
+/// One hit of `settings` through the whole engine at a host rate; the left
+/// channel comes back.
+std::vector<double> renderHit (const KickSettings& settings, double rate, double seconds,
+                               tezla::dsp::OversamplingMode mode = tezla::dsp::OversamplingMode::Auto,
+                               int* factorOut = nullptr, int* latencyOut = nullptr)
+{
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (rate, 512);
+
+    EngineParameters parameters;
+    parameters.kick1 = settings;
+    parameters.oversampling = mode;
+    engine->setParameters (parameters);
+
+    const int total = static_cast<int> (seconds * rate);
+    std::vector<double> left (static_cast<std::size_t> (total), 0.0);
+    std::vector<double> right (static_cast<std::size_t> (total), 0.0);
+
+    engine->noteOn (36, 1.0);
+
+    int done = 0;
+
+    while (done < total)
+    {
+        const int take = std::min (512, total - done);
+        double* block[2] = { left.data() + done, right.data() + done };
+        engine->process (block, take);
+        done += take;
+    }
+
+    if (factorOut != nullptr)
+        *factorOut = engine->getOversamplingFactor();
+
+    if (latencyOut != nullptr)
+        *latencyOut = engine->getLatencySamples();
+
+    return left;
+}
+
+std::vector<double> crossings (const std::vector<double>& x, double rate)
+{
+    std::vector<double> out;
+
+    // Only from inside the first lobe: a linear-phase decimator pre-rings
+    // before the hit -- at -100 dB far out, at -40 dB right at the onset --
+    // and that ripple crosses zero. Counting it misaligned every cycle that
+    // followed (10,000 cents on the first run, one whole cycle on the
+    // second, while the undecimated 192 kHz case read 0.015). Detection
+    // starts where the signal first reaches a tenth of its peak, which is
+    // inside the body's first half-cycle, so the first crossing counted is
+    // the end of the first cycle at every rate.
+    double peak = 0.0;
+    for (const double v : x)
+        peak = std::max (peak, std::abs (v));
+
+    std::size_t onset = x.size();
+    for (std::size_t n = 0; n < x.size(); ++n)
+        if (std::abs (x[n]) > 0.1 * peak)
+        {
+            onset = n;
+            break;
+        }
+
+    for (std::size_t n = onset + 1; n < x.size(); ++n)
+        if (x[n - 1] < 0.0 && x[n] >= 0.0)
+        {
+            const double frac = -x[n - 1] / (x[n] - x[n - 1]);
+            out.push_back ((static_cast<double> (n - 1) + frac) / rate);
+        }
+
+    return out;
+}
+
+double closedFormHz (const KickSettings& s, double t)
+{
+    const double dropTau = s.dropSeconds / tezla::dsp::TensionDrop::kLandFactor;
+    const double sighTau = s.sighSeconds / tezla::dsp::TensionDrop::kLandFactor;
+    const double cents = 100.0 * s.startSemitones * std::exp (-t / dropTau)
+                       + 100.0 * s.sighSemitones * std::exp (-t / sighTau);
+    return s.tuneHz * std::exp2 (cents / 1200.0);
+}
+
+double peakOf (const std::vector<double>& x)
+{
+    double peak = 0.0;
+    for (const double v : x)
+        peak = std::max (peak, std::abs (v));
+    return peak;
+}
+} // namespace ictusMeasure
+
+int runIctus (const Args& args)
+{
+    using namespace tezla;
+    using namespace ictusMeasure;
+
+    const double rate = args.sampleRate;
+
+    std::printf ("tezla-measure ictus -- table 1, the kick\n\n");
+
+    // ---- 1. the pitch trajectory at four host rates ----------------------
+
+    KickSettings kick;
+    kick.tuneHz = 50.0;
+    kick.startSemitones = 30.0;
+    kick.dropSeconds = 0.03;
+    kick.sighSemitones = 1.5;
+    kick.sighSeconds = 0.5;
+    kick.decaySeconds = 1.0;
+    kick.level = 1.0;
+    kick.velocityDrop = 0.0;
+
+    const double rates[] = { 44100.0, 48000.0, 96000.0, 192000.0 };
+
+    std::printf ("Pitch of the default kick body (50 Hz landed, +30 st drop over 30 ms,\n");
+    std::printf ("+1.5 st sigh over 0.5 s), cycle by cycle from zero crossings, against the\n");
+    std::printf ("closed form's period over the same cycle. Auto oversampling: x4, x4, x2, x1.\n\n");
+
+    std::vector<std::vector<double>> allTimes;
+
+    for (const double r : rates)
+    {
+        int factor = 0;
+        int latency = 0;
+        const auto out = renderHit (kick, r, 0.6, dsp::OversamplingMode::Auto, &factor, &latency);
+        auto times = crossings (out, r);
+        for (auto& t : times)
+            t -= static_cast<double> (latency) / r;
+        allTimes.push_back (std::move (times));
+    }
+
+    // The closed form's crossings: its phase integral reaching whole cycles.
+    std::vector<double> predicted;
+    {
+        constexpr double dt = 1.0e-6;
+        double phase = 0.0;
+        double next = 1.0;
+        double previous = closedFormHz (kick, 0.0);
+
+        for (double t = 0.0; t < 0.6; t += dt)
+        {
+            const double hz = closedFormHz (kick, t + dt);
+            phase += 0.5 * (previous + hz) * dt;
+            previous = hz;
+
+            if (phase >= next)
+            {
+                predicted.push_back (t + dt - (phase - next) / (hz * dt) * dt);
+                next += 1.0;
+            }
+        }
+    }
+
+    std::printf ("  %5s %9s %10s |", "cycle", "starts ms", "closed Hz");
+    for (const double r : rates)
+        std::printf (" %8.0fk %7s", r / 1000.0, "cents");
+    std::printf (" | spread c\n");
+
+    std::size_t cycles = predicted.size();
+    for (const auto& times : allTimes)
+        cycles = std::min (cycles, times.size());
+
+    double worstCents = 0.0;
+    double worstSpread = 0.0;
+
+    for (std::size_t k = 0; k + 1 < cycles; ++k)
+    {
+        const double closedPeriod = predicted[k + 1] - predicted[k];
+        const bool show = k < 8 || k % 10 == 9 || k + 2 == cycles;
+
+        if (show)
+            std::printf ("  %5zu %9.2f %10.3f |", k + 1, 1000.0 * predicted[k], 1.0 / closedPeriod);
+
+        double lo = 1.0e9;
+        double hi = -1.0e9;
+
+        for (const auto& times : allTimes)
+        {
+            const double period = times[k + 1] - times[k];
+            const double cents = 1200.0 * std::log2 (closedPeriod / period);
+            lo = std::min (lo, cents);
+            hi = std::max (hi, cents);
+            worstCents = std::max (worstCents, std::abs (cents));
+
+            if (show)
+                std::printf (" %9.3f %7.3f", 1.0 / period, cents);
+        }
+
+        worstSpread = std::max (worstSpread, hi - lo);
+
+        if (show)
+            std::printf (" | %7.3f\n", hi - lo);
+    }
+
+    std::printf ("\n  worst over %zu cycles: %.3f cents against the closed form, %.3f cents between rates\n",
+                 cycles - 1, worstCents, worstSpread);
+
+    // ---- 2. rise time and the sub-band share -----------------------------
+
+    {
+        KickSettings s;   // the defaults
+        const auto out = renderHit (s, rate, 1.0);
+        const double peak = peakOf (out);
+
+        int rise = 0;
+        for (std::size_t n = 0; n < out.size(); ++n)
+            if (std::abs (out[n]) >= 0.707 * peak)
+            {
+                rise = static_cast<int> (n);
+                break;
+            }
+
+        // Energy below 80 Hz over the whole hit, from a zero-padded FFT.
+        std::vector<double> padded (1u << 16, 0.0);
+        std::copy (out.begin(), out.begin() + std::min (out.size(), padded.size()), padded.begin());
+        const auto spectrum = measure::fftOfReal (padded);
+        const double binWidth = rate / static_cast<double> (padded.size());
+
+        double sub = 0.0;
+        double total = 0.0;
+
+        for (std::size_t bin = 1; bin < spectrum.size(); ++bin)
+        {
+            const double power = std::norm (spectrum[bin]);
+            total += power;
+            if (static_cast<double> (bin) * binWidth < 80.0)
+                sub += power;
+        }
+
+        std::printf ("\nDefault kick at %.0f Hz: peak %.3f, rise to -3 dB in %.2f ms, %.1f%% of the energy below 80 Hz\n",
+                     rate, peak, 1000.0 * rise / rate, 100.0 * sub / total);
+    }
+
+    // ---- 3. the even curve's DC, after the blocker, per corner -------------
+
+    {
+        std::printf ("\nEven harmonics at full (a DC pedestal by construction) through the per-hit blocker:\n");
+        std::printf ("the largest 50 ms mean of the output, relative to its peak.\n");
+
+        for (const double corner : { 5.0, 10.0, 20.0, 40.0 })
+        {
+            KickSettings s;
+            s.harmonics = 1.0;
+            s.even = 1.0;
+            s.dcBlockerHz = corner;
+
+            const auto out = renderHit (s, rate, 1.0);
+            const double peak = peakOf (out);
+            const auto window = static_cast<std::size_t> (0.05 * rate);
+
+            double worst = 0.0;
+            for (std::size_t n = 0; n + window <= out.size(); n += window / 4)
+            {
+                double mean = 0.0;
+                for (std::size_t i = 0; i < window; ++i)
+                    mean += out[n + i];
+                worst = std::max (worst, std::abs (mean / static_cast<double> (window)));
+            }
+
+            std::printf ("  blocker %4.0f Hz: DC bump %7.2f dB re peak\n", corner,
+                         20.0 * std::log10 (std::max (worst, 1.0e-12) / peak));
+        }
+    }
+
+    // ---- 4. the harmonics stage's inharmonic floor at the internal rate ---
+
+    {
+        constexpr double internalRate = 192000.0;
+        constexpr std::size_t fftSize = 1u << 16;
+        const double hz = measure::binExactFrequency (55.0, internalRate, fftSize);
+        const auto input = measure::sine (hz, 1.0, internalRate, fftSize);
+
+        dsp::SoftEven even { KickEngine::kShaperGainAtFull };
+        dsp::SoftOdd odd { KickEngine::kShaperGainAtFull };
+        dsp::Adaa1<dsp::SoftEven> adaaEven;
+        dsp::Adaa1<dsp::SoftOdd> adaaOdd;
+        dsp::DcBlocker<double> blocker;
+        blocker.prepare (internalRate, 10.0);
+
+        // Two windows in, the second analysed: the blocker's settling from the
+        // onset is a non-harmonic component the analyser would otherwise count.
+        std::vector<double> output (fftSize);
+        for (std::size_t pass = 0; pass < 2; ++pass)
+            for (std::size_t i = 0; i < fftSize; ++i)
+            {
+                const double x = input[i];
+                const double shaped = 0.5 * adaaEven.process (x, even) + 0.5 * adaaOdd.process (x, odd);
+                output[i] = blocker.process (x + shaped);
+            }
+
+        const auto report = measure::analyseHarmonics (output, internalRate, hz, 12);
+        std::printf ("\nHarmonics stage at full, 55 Hz full scale at 192 kHz: THD %.1f dB, inharmonic %.1f dB (%.1f dB audible)\n",
+                     report.thdDb, report.aliasingDb, report.audibleAliasingDb);
+    }
+
+    // ---- 5. CPU ---------------------------------------------------------
+
+    {
+        KickEngine engine;
+        engine.prepare (192000.0);
+
+        KickSettings s;
+        s.harmonics = 0.7;
+        s.toneEnabled = true;
+        s.click = 0.5;
+        s.clickNoise = 0.4;
+        s.tailMix = 0.5;
+        s.decaySeconds = 2.0;
+
+        constexpr int samples = 192000;
+        double sink = 0.0;
+
+        const auto time = [&] (const KickSettings& settings)
+        {
+            engine.start (settings, 50.0, 1.0, 1234, 0);
+            const auto start = std::chrono::steady_clock::now();
+
+            for (int n = 0; n < samples; ++n)
+            {
+                if (n % Engine::kControlIntervalSamples == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+                sink += engine.process();
+            }
+
+            return 1.0e9 * std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count()
+                 / samples;
+        };
+
+        KickSettings neutral;
+        neutral.decaySeconds = 2.0;
+
+        const double nsFull = time (s);
+        const double nsNeutral = time (neutral);
+
+        std::printf ("\nKick engine, one second at 192 kHz: %.1f ns/sample everything on, %.1f ns/sample neutral"
+                     " (%.2f%% / %.2f%% of a core at 192 kHz; sink %g)\n",
+                     nsFull, nsNeutral, nsFull * 192000.0 / 1.0e7, nsNeutral * 192000.0 / 1.0e7, sink);
+    }
+
+    // ---- 6. a WAV to listen to ------------------------------------------
+
+    if (! args.outPath.empty())
+    {
+        KickSettings s;
+        s.harmonics = 0.4;
+        s.click = 0.4;
+        s.clickNoise = 0.3;
+        s.toneEnabled = true;
+
+        const auto out = renderHit (s, rate, 1.5);
+
+        if (measure::writeWav (args.outPath, { out }, rate))
+            std::printf ("\nWrote %s (one hit, %.0f Hz, harmonics 0.4, click 0.4, tone x8)\n", args.outPath.c_str(), rate);
+        else
+            std::printf ("\nCould not write %s\n", args.outPath.c_str());
+    }
+
+    return 0;
+}
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -4596,6 +4967,7 @@ void printUsage()
     std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
     std::printf ("  phonoss          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
     std::printf ("  membrana        [--fs --out FILE]  proximity, sphere limits, fit, curves, CPU\n");
+    std::printf ("  ictus           [--fs --out FILE]  kick pitch trajectory at four rates, DC, aliasing, CPU\n");
 }
 
 } // namespace
@@ -4631,6 +5003,7 @@ int main (int argc, char** argv)
     if (command == "crossbar")        return runCrossbar (args);
     if (command == "phonoss")          return runPhonoss (args);
     if (command == "membrana")        return runMembrana (args);
+    if (command == "ictus")           return runIctus (args);
 
     printUsage();
     return 1;
