@@ -73,6 +73,13 @@ the sound and the workflow*, never a source of code.
   by CMake *before* `project()`, so they must be set at the very top of the
   root `CMakeLists.txt` and only take effect on a fresh build folder. Setting
   them later, or in an existing folder, silently does nothing.
+  **CI deviates from this, since 2026-09-01, at the user's request:** the
+  macOS *CI* build is **arm64 only by default** (the workflow's `mac_arch`
+  input), because a twelve-plugin universal build measured **6h04m** on run 51
+  and GitHub kills a hosted job at six hours. It is the CI default that
+  changed, not the target: a local build stays universal, and CI can be asked
+  for universal one input away. Intel Mac users self-compile from a CI release
+  for now, and its notes say so. Revisit when the release layout is settled.
 - **macOS builds are not code signed**, so anything downloaded is quarantined
   and Gatekeeper refuses it — the DAW then reports the plugin as damaged. Every
   document and release note that offers a macOS download must say how to clear

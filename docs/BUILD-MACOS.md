@@ -61,6 +61,8 @@ your DAW and rescan.
 ./scripts/build.sh --config Debug         # debug build
 ./scripts/build.sh --clean                # wipe build/ first
 ./scripts/build.sh --native               # this Mac's architecture only
+./scripts/build.sh --lto                  # link-time optimisation (release builds; see below)
+./scripts/build.sh --native --avx2        # AVX2 on an Intel Mac (see below)
 ./scripts/build.sh                        # every plugin, Release
 ./scripts/build.sh NONE --test            # DSP + tests only, no JUCE, seconds
 ```
@@ -71,6 +73,26 @@ is the word that turns the plugins off when you only want the DSP measured.
 **`--native` halves your build time while iterating.** By default the build is
 universal (arm64 + x86_64), which compiles everything twice. You only need that
 for something you are going to hand to someone else.
+
+**`--lto` is the opposite trade, and it is off for a measured reason.**
+Link-time optimisation was measured to make no runtime difference to the DSP —
+the engines are header-only, so there is nothing across a translation-unit
+boundary left to inline; the numbers are in [`BUILD.md`, "A note on
+`TEZLA_LTO`"](BUILD.md#a-note-on-tezla_lto). What it costs on a Mac is the
+link: Apple clang gets `-flto=thin`, the parallel form, never JUCE's plain
+`-flto` whose monolithic whole-program link cost CI six hours — but a universal
+build still does that link twice per format, so `--lto` and `--native` go
+together while you are iterating, and `--lto` alone is for a release you have
+time for.
+
+**`--avx2` is for an Intel Mac building for itself.** It is the measured,
+bit-exact lever from [`BUILD.md`, "A note on
+`TEZLA_ENABLE_AVX2`"](BUILD.md#a-note-on-tezla_enable_avx2): about 11 % less
+CPU and not one bit of output changed. Apple Silicon has no AVX2, so the option
+is ignored there with a warning; and a universal build refuses it outright,
+because its arm64 slice cannot take the flag — pair it with `--native`. That is
+the right pairing anyway: AVX2 is for the machine in front of you, and a
+universal bundle is for handing out.
 
 ---
 
@@ -177,6 +199,8 @@ Useful flags, in addition to the ones in [`BUILD.md` §3.2](BUILD.md#32-choosing
 | `-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0` | Raise the minimum macOS version (default 11.0) |
 | `-DTEZLA_BUILD_AU=OFF` | Skip the Audio Unit |
 | `-DTEZLA_BUILD_STANDALONE=ON` | Also build a standalone `.app` |
+| `-DTEZLA_LTO=ON` | Link-time optimisation (`-flto=thin` on Apple clang). **Off by default: measured to gain nothing at runtime, and a universal build with it on is a long link** — see [`BUILD.md`, "A note on `TEZLA_LTO`"](BUILD.md#a-note-on-tezla_lto). `--lto` in the script |
+| `-DTEZLA_ENABLE_AVX2=ON` | AVX2 code generation, Intel only. **Bit-identical output, about 11 % less CPU** — see [`BUILD.md`, "A note on `TEZLA_ENABLE_AVX2`"](BUILD.md#a-note-on-tezla_enable_avx2). Needs a single-architecture build (`-DTEZLA_UNIVERSAL_BINARY=OFF` or `-DCMAKE_OSX_ARCHITECTURES=x86_64`); ignored on Apple Silicon. `--avx2` in the script |
 
 > `CMAKE_OSX_ARCHITECTURES` and `CMAKE_OSX_DEPLOYMENT_TARGET` are read by CMake
 > *before* `project()` runs, so they only take effect on a **fresh** build

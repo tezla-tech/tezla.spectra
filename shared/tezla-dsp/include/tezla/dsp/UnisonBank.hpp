@@ -128,6 +128,10 @@ public:
     {
         sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
 
+        // The noise corner derived in setMorph depends on the rate, so a
+        // rate change must make the next setMorph go through the guard.
+        morph_ = -1.0;
+
         // A one-pole at kDriftHz, stepped once per interval rather than per
         // sample, so the wander is bounded and smooth at any rate.
         driftCoefficient_ = std::clamp (6.283185307179586 * kDriftHz
@@ -258,13 +262,21 @@ public:
 
     void setMorph (double morph) noexcept
     {
+        // Guarded: Sonitus pushes this at every control chunk, and below is a
+        // `pow` plus a loop over every oscillator. The oscillators guard their
+        // own setMorph already; this guard covers the corner computation and
+        // the loop. Same value in, nothing recomputed, nothing changed.
+        const double clamped = std::clamp (morph, 0.0, 1.0);
+        if (isExactly (clamped, morph_))
+            return;
+        morph_ = clamped;
+
         for (auto& voice : voices_)
             voice.setMorph (morph);
 
         // The Noise shape's colour lives here because the oscillator does not
         // know the sample rate: morph sweeps the one-pole's corner from wide
         // open down to ~200 Hz, logarithmically.
-        const double clamped = std::clamp (morph, 0.0, 1.0);
         const double cornerHz = 20000.0 * std::pow (200.0 / 20000.0, clamped);
         const double g = std::clamp (6.283185307179586 * cornerHz / sampleRate_, 0.0, 1.0);
 
@@ -414,6 +426,10 @@ private:
     }
 
     double sampleRate_ { 48000.0 };
+
+    /// Last morph applied, so setMorph can refuse a no-op. -1 is outside the
+    /// clamped range, which makes the first call always go through.
+    double morph_ { -1.0 };
     double frequency_  { 0.0 };
 
     int    voiceCount_   { 1 };

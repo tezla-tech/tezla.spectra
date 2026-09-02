@@ -38,6 +38,8 @@ set "DO_TEST=0"
 set "DO_CLEAN=0"
 set "GENERATOR="
 set "JUCEARGS="
+set "LTOARGS="
+set "AVX2ARGS="
 
 :parse
 if "%~1"=="" goto after_parse
@@ -63,6 +65,8 @@ if /I "!ARG!"=="-plugins" goto opt_plugins
 if /I "!ARG!"=="-builddir" goto opt_builddir
 if /I "!ARG!"=="-juce"        goto opt_juce
 if /I "!ARG!"=="-juce-system" goto opt_juce_system
+if /I "!ARG!"=="-lto"     goto opt_lto
+if /I "!ARG!"=="-avx2"    goto opt_avx2
 if /I "!ARG!"=="-ninja"   goto opt_ninja
 if /I "!ARG!"=="-vs"      goto opt_vs
 rem Anything else is taken as the plugin list, so "build.bat Emberdrive" works.
@@ -136,6 +140,22 @@ goto parse
 set "JUCEARGS=-DTEZLA_JUCE_SOURCE=System"
 shift
 goto parse
+:opt_lto
+rem Link-time optimisation. Off by default: measured to make no runtime
+rem difference to the DSP (see the TEZLA_LTO comment in CMakeLists.txt) and
+rem it makes every link a multiple slower. Here for a release build, and for
+rem anyone who wants to measure it on their own machine.
+set "LTOARGS=-DTEZLA_LTO=ON"
+shift
+goto parse
+:opt_avx2
+rem AVX2 code generation. Bit-identical output to the default build (checked
+rem on the Sonitus golden renders) and about 11% less CPU; off by default only
+rem because the binary then needs a 2013-or-newer CPU. Fine for this rig; not
+rem for a build handed to someone else. See docs\BUILD.md.
+set "AVX2ARGS=-DTEZLA_ENABLE_AVX2=ON"
+shift
+goto parse
 :opt_ninja
 set "GENERATOR=Ninja Multi-Config"
 shift
@@ -204,7 +224,7 @@ if /I "%GENERATOR%"=="Visual Studio 17 2022" set "GENARGS=-G "%GENERATOR%" -A x6
 
 echo.
 echo Configuring ^(%CONFIG%, plugins: %PLUGINS%^)...
-cmake -S "%REPO%" -B "%BUILDDIR%" %GENARGS% -DTEZLA_PLUGINS=%PLUGINS% -DCMAKE_BUILD_TYPE=%CONFIG% %JUCEARGS%
+cmake -S "%REPO%" -B "%BUILDDIR%" %GENARGS% -DTEZLA_PLUGINS=%PLUGINS% -DCMAKE_BUILD_TYPE=%CONFIG% %JUCEARGS% %LTOARGS% %AVX2ARGS%
 if errorlevel 1 (
     echo.
     echo ERROR: CMake configure failed. See docs\BUILD.md, section "Troubleshooting".
@@ -358,6 +378,10 @@ echo   -builddir ^<d^>   use a different build folder
 echo   -juce ^<path^>    use a JUCE source tree you already have
 echo                   ^(or set the JUCE_PATH environment variable once^)
 echo   -juce-system    use a JUCE installed with "cmake --install"
+echo   -lto            link-time optimisation ^(release builds; slow link,
+echo                   measured no runtime gain -- see docs\BUILD.md^)
+echo   -avx2           AVX2 code generation: bit-identical output, ~11%% less CPU;
+echo                   needs a 2013-or-newer CPU, so not for builds you hand out
 echo   -ninja          force the Ninja generator ^(needs a VS developer prompt^)
 echo   -vs             force the Visual Studio 2022 generator
 echo   -list           show available plugin names

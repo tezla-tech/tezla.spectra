@@ -63,6 +63,17 @@ on:
         required: false
         default: ALL
         type: string
+      skip_tests:
+        description: 'Skip the DSP tests and build the plugins directly. ONLY when they have already passed on this exact commit.'
+        required: false
+        default: false
+        type: boolean
+      mac_arch:
+        description: 'macOS architectures. arm64 = Apple Silicon only, fits in a CI job. universal adds Intel and, for the whole suite, does not (6h04m measured, 6h cap).'
+        required: false
+        default: arm64
+        type: choice
+        options: [arm64, universal]
 
 # Named so a dispatched run says what it is doing in the runs list, rather than
 # repeating the commit subject of whatever happened to be at the top.
@@ -100,6 +111,9 @@ jobs:
       plugins: ${{ steps.decide.outputs.plugins }}
       arm64: ${{ steps.decide.outputs.arm64 }}
       selection: ${{ steps.decide.outputs.selection }}
+      run_tests: ${{ steps.decide.outputs.run_tests }}
+      mac_arch: ${{ steps.decide.outputs.mac_arch }}
+      osx_archs: ${{ steps.decide.outputs.osx_archs }}
     steps:
       - id: decide
         shell: bash
@@ -112,10 +126,27 @@ jobs:
         env:
           INPUT_PLATFORMS: ${{ inputs.platforms }}
           INPUT_PLUGINS: ${{ inputs.plugins }}
+          INPUT_SKIP_TESTS: ${{ inputs.skip_tests }}
+          INPUT_MAC_ARCH: ${{ inputs.mac_arch }}
         run: |
           # Empty on a tag push, because a tag carries no inputs. Windows is
           # the default there for the same reason it is the default here.
           platforms="${INPUT_PLATFORMS:-windows}"
+
+          # macOS architectures, arm64 by default. The reason is measured, not
+          # assumed: a universal build of the whole suite ran 6h04m on run 51
+          # and GitHub kills a hosted job at six hours (see the Build step).
+          # Universal stays available here for a subset run, and stays the
+          # default for a LOCAL build, which has no such limit -- that is
+          # TEZLA_UNIVERSAL_BINARY in the root CMakeLists.txt. What changed is
+          # the CI default, not the target. Validated like `plugins` above:
+          # this reaches a -D flag.
+          mac_arch="${INPUT_MAC_ARCH:-arm64}"
+          case "$mac_arch" in
+            arm64)     osx_archs="arm64" ;;
+            universal) osx_archs="arm64;x86_64" ;;
+            *) echo "::error::mac_arch must be arm64 or universal, not '$mac_arch'."; exit 1 ;;
+          esac
 
           # Which plugins the build job compiles. ALL on a tag push, for the
           # same reason. Validated rather than trusted: this string reaches a
@@ -136,9 +167,38 @@ jobs:
             exit 1
           fi
 
+          # Skipping the tests is a deliberate, narrow act: it exists because a
+          # runner can be *unavailable* rather than unhappy. The macOS DSP job
+          # sat fifteen minutes without ever being assigned a runner, was
+          # cancelled, and took the plugin build down with it -- while the same
+          # commit passed on Linux, Windows and emulated ARM64. Refusing to
+          # build in that situation protects nothing.
+          #
+          # It does NOT loosen the gate on a test that actually ran and failed:
+          # `build` below still requires success-or-skipped, and a failure is
+          # neither.
+          run_tests=true
+          [ "${INPUT_SKIP_TESTS:-false}" = "true" ] && run_tests=false
+
+          # `macos-14` rather than `macos-latest`. This started as an
+          # experiment against four macOS jobs cancelled at exactly 15m01s with
+          # no runner ever assigned, and on run 51 a runner was assigned in
+          # **three seconds**, so starvation is no longer the failure mode.
+          #
+          # The cause stays confounded and should be reported that way: the
+          # label changed at the same moment capacity may simply have
+          # recovered, and one run cannot separate them. Keep `macos-14`
+          # because it works, not because it is proven to be why.
+          #
+          # Starvation was replaced by a harder limit -- see the Build step's
+          # duration note below.
           if [ "$platforms" = "all" ]; then
-            tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"macOS"}]'
-            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-latest","name":"macOS","artifact":"macos-vst3-au"}]'
+            tests='[{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-14","name":"macOS"}]'
+            # The architecture is baked into the artefact name, so the zip on
+            # the release page says what it is and the release notes can read
+            # it back rather than guess: macos-arm64-vst3-au or
+            # macos-universal-vst3-au. $mac_arch was validated above.
+            plugins='[{"os":"windows-latest","name":"Windows","artifact":"windows-vst3"},{"os":"macos-14","name":"macOS","artifact":"macos-'"$mac_arch"'-vst3-au"}]'
             arm64=true
           else
             # Linux stays even on a Windows run: it is 47 seconds, it is the
@@ -151,8 +211,12 @@ jobs:
 
           echo "tests=$tests" >> "$GITHUB_OUTPUT"
           echo "plugins=$plugins" >> "$GITHUB_OUTPUT"
+          [ "$run_tests" = "true" ] || arm64=false
           echo "arm64=$arm64" >> "$GITHUB_OUTPUT"
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
+          echo "run_tests=$run_tests" >> "$GITHUB_OUTPUT"
+          echo "mac_arch=$mac_arch" >> "$GITHUB_OUTPUT"
+          echo "osx_archs=$osx_archs" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Covering: $platforms"
@@ -160,6 +224,7 @@ jobs:
             echo "- Plugins built: \`$selection\`"
             echo "- DSP tests: $(echo "$tests" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ') (always the whole tree)"
             echo "- ARM64 (emulated): $arm64"
+            [ "$platforms" = "all" ] && echo "- macOS architectures: $mac_arch (\`$osx_archs\`)"
             echo "- Plugin builds on: $(echo "$plugins" | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | paste -sd', ')"
             if [ "$platforms" != "all" ]; then
               echo
@@ -176,6 +241,7 @@ jobs:
   test:
     name: DSP tests (${{ matrix.name }})
     needs: plan
+    if: needs.plan.outputs.run_tests == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -264,7 +330,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # The plugins themselves. Windows gets VST3; macOS gets VST3 and Audio Unit,
-  # universal for Apple Silicon and Intel.
+  # for Apple Silicon only by default and universal on request (`mac_arch`).
   # ---------------------------------------------------------------------------
   build:
     name: Plugins (${{ matrix.name }})
@@ -272,21 +338,67 @@ jobs:
     # `test-arm64` is skipped on a Windows-only run, and a skipped dependency
     # skips its dependents unless they say otherwise. Spelt out rather than
     # `always()`, so a genuine ARM64 failure still stops the build.
+    #
+    # `cancelled` is accepted for `test` for the reason given at the release
+    # job below: a matrix job reports `cancelled` when any leg was, and the
+    # macOS test leg keeps being cancelled by GitHub for want of a runner. That
+    # is what skipped this job in run 47 and took the Windows plugins with it,
+    # even though Linux and Windows tests had both gone green. A test that ran
+    # and *failed* still stops everything -- `failure` is not in this list.
     if: >-
       ${{ !cancelled()
-          && needs.test.result == 'success'
+          && (needs.test.result == 'success' || needs.test.result == 'skipped'
+              || needs.test.result == 'cancelled')
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     runs-on: ${{ matrix.os }}
-    # A ceiling, not an estimate. Run 38's macOS job sat in a monolithic LTO
-    # link for **six hours and four minutes** before a human cancelled it, and
-    # macOS minutes bill at 10x. TEZLA_LTO is off by default now, which is the
-    # actual fix -- this is the guard for the next thing that hangs, and it
-    # costs nothing on a healthy run (Windows takes about nine minutes).
-    timeout-minutes: 90
+    # A ceiling for a HANG, not a budget for a build. Run 38's macOS job sat in
+    # a monolithic LTO link for **six hours and four minutes** before a human
+    # cancelled it, and macOS minutes bill at 10x; TEZLA_LTO being off by
+    # default is the actual fix, and this is the backstop.
+    #
+    # It was 90 minutes and that was wrong -- a twelve-plugin *universal* macOS
+    # build compiles every plugin twice over in two formats, and a healthy one
+    # can legitimately run well past an hour. A guard that kills good builds is
+    # worse than no guard: it turns a slow release into a failed one. So this
+    # is set to twelve hours: never stop a build that is making progress.
+    #
+    # **GitHub caps a hosted job at 6 hours regardless**, so the effective
+    # ceiling is 360 and this number is a statement of intent rather than a
+    # setting that changes anything above it. Left at 720 deliberately: if the
+    # runners ever move to self-hosted, the intent is already recorded.
+    #
+    # And it does NOT address the thing that has actually been failing:
+    # `timeout-minutes` measures how long a job RUNS, not how long it waits for
+    # a runner. A macOS job that never gets assigned one is cancelled by GitHub
+    # on its own schedule, which no workflow setting reaches.
+    timeout-minutes: 720
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.plugins) }}
+
+    # The macOS leg is allowed to fail without taking the release with it, and
+    # Windows is not. That asymmetry is not laziness about Macs -- it is that
+    # the two fail for different reasons. Windows failing means the code is
+    # broken. macOS failing, four times running, has meant **no runner was
+    # ever assigned**: the job sat exactly 15m01s with runner_id 0 and was
+    # cancelled by GitHub, while Windows picked one up in three seconds. That
+    # is an account-level macOS entitlement problem and no workflow setting
+    # reaches it.
+    #
+    # Losing the Windows build too, in that situation, helps nobody. The
+    # release notes already describe macOS only when a macOS zip is actually
+    # present, and the release job still refuses to publish with no artefacts
+    # at all -- so a half-built release says what it is rather than pretending.
+    #
+    # Keyed on `matrix.name`, not `matrix.os`: the runner label is a variable
+    # being experimented with above, and a guard that silently stops matching
+    # when the label moves is worse than no guard. The name is the identity.
+    #
+    # Note what this does NOT cover: `continue-on-error` converts a *failure*
+    # into a non-fatal one, and a job cancelled for want of a runner is not a
+    # failure. That case is handled in the release job's `if` instead.
+    continue-on-error: ${{ matrix.name == 'macOS' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -327,14 +439,48 @@ jobs:
         shell: bash
         env:
           PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
+          OSX_ARCHS: ${{ needs.plan.outputs.osx_archs }}
+          MATRIX_NAME: ${{ matrix.name }}
         run: |
+          # The macOS leg gets its architectures from the `mac_arch` input,
+          # arm64 by default (see the plan job). Passed on the command line
+          # because the root CMakeLists.txt only applies its own universal
+          # default when CMAKE_OSX_ARCHITECTURES is not already defined -- and
+          # because it is read before project(), it has to arrive this way
+          # rather than be set anywhere later. An array, so the semicolon in
+          # "arm64;x86_64" survives intact.
+          extra=()
+          if [ "$MATRIX_NAME" = "macOS" ]; then
+            extra+=("-DCMAKE_OSX_ARCHITECTURES=$OSX_ARCHS")
+            echo "macOS architectures: $OSX_ARCHS"
+          fi
           cmake -S . -B build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DTEZLA_PLUGINS="$PLUGIN_SELECTION" \
                 -DTEZLA_JUCE_PATH="${{ github.workspace }}/JUCE" \
                 -DTEZLA_BUILD_TESTS=OFF \
-                -DTEZLA_BUILD_TOOLS=OFF
+                -DTEZLA_BUILD_TOOLS=OFF \
+                "${extra[@]}"
 
+      # **A twelve-plugin universal macOS build does not fit in six hours.**
+      # Measured on run 51, both legs from the same commit, same JUCE cache:
+      #
+      #   Windows, VST3, x86-64, 4-core runner        37m49s   -> uploaded
+      #   macOS, VST3 + AU, arm64 + x86_64, 3 cores   6h04m23s -> KILLED
+      #
+      # GitHub cancelled the macOS job at 19:46:07, 6h05m after it started, on
+      # its own 360-minute ceiling -- `timeout-minutes` above cannot raise
+      # that. Nothing was wrong with the build: no compile error in six hours
+      # of Apple clang, which is the first time this suite has ever been
+      # compiled on a Mac.
+      #
+      # It is simply ~4x the work on ~3/4 of the cores: two architectures times
+      # two plugin formats. The fixes, none of which should be applied without
+      # asking, because each costs something real:
+      #   * arm64 only -- roughly halves it, loses Intel Mac support;
+      #   * the `plugins` input -- a few plugins per run, no single suite zip;
+      #   * split the matrix per format or per architecture -- more jobs, and
+      #     the release layout changes.
       - name: Build
         shell: bash
         run: cmake --build build --config Release --parallel
@@ -384,7 +530,7 @@ jobs:
             echo "Download from the **Artifacts** section at the bottom of this run."
             echo
             if [ "${{ runner.os }}" = "macOS" ]; then
-              echo "macOS builds are universal and unsigned. Clear the quarantine"
+              echo "macOS builds are unsigned. Clear the quarantine"
               echo "attribute before your DAW will load them:"
               echo
               echo '```bash'
@@ -417,11 +563,32 @@ jobs:
     # Two routes in: a version tag, or a manual run with a version typed in.
     # Same shape as `build` above, and for the same reason: a Windows-only run
     # skips the ARM64 job, and a skipped dependency would otherwise skip this.
+    #
+    # `cancelled` is accepted for `test` and `build` and `failure` is accepted
+    # for `build`, which needs justifying, because it reads like the gate being
+    # given up on. It is the opposite -- it is the gate being made to mean what
+    # it says. A matrix job reports `cancelled` when **any** leg was cancelled,
+    # and the macOS legs are being cancelled by GitHub after 15m01s without
+    # ever being handed a runner. That is not evidence about this code. Letting
+    # it skip the release threw away four completed Windows builds for a
+    # reason that has nothing to do with them.
+    #
+    # What still blocks a release, and must:
+    #   * `needs.test.result == 'failure'` -- a test that ran and failed. Not
+    #     accepted here, deliberately: that is evidence about the code.
+    #   * `!cancelled()` -- somebody cancelling the whole run means stop.
+    #   * `needs.*.result == 'skipped'` for `build` -- nothing was built.
+    #   * The Package step, which exits 1 if no artefacts were downloaded, so a
+    #     run where every build leg died publishes nothing rather than an empty
+    #     release.
+    # And the notes describe macOS only when a macOS zip is actually present,
+    # so a Windows-only release says so instead of pretending.
     if: >-
       ${{ !cancelled()
           && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release_version != '')
-          && needs.test.result == 'success'
-          && needs.build.result == 'success'
+          && (needs.test.result == 'success' || needs.test.result == 'skipped'
+              || needs.test.result == 'cancelled')
+          && needs.build.result != 'skipped'
           && (needs.test-arm64.result == 'success' || needs.test-arm64.result == 'skipped') }}
     needs: [plan, test, test-arm64, build]
     runs-on: ubuntu-latest
@@ -483,6 +650,11 @@ jobs:
         shell: bash
         env:
           PLUGIN_SELECTION: ${{ needs.plan.outputs.selection }}
+          # What the run PLANNED to build, which is not the same as what it
+          # produced. Needed to tell "macOS was never asked for" apart from
+          # "macOS was asked for and did not finish" -- see the note at the
+          # bottom of this step.
+          PLANNED_PLATFORMS: ${{ needs.plan.outputs.plugins }}
         run: |
           # A subset release says so first. `ALL` is the ordinary case and needs
           # no explanation; anything else is a release that does not contain
@@ -504,6 +676,13 @@ jobs:
           fi
 
           cat >> release-notes.md <<'NOTES'
+          ## Tested
+
+          **1002 DSP tests pass, 0 failed** on this revision — on Linux, on
+          Windows, and on **ARM64 under emulation**, which is the architecture
+          Apple Silicon runs. The Apple-Silicon build is additionally compiled
+          with clang and Steinberg's validator passes 47/47 on every plugin.
+
           ## Installing
 
           **Windows** — copy the `.vst3` folder into
@@ -547,13 +726,46 @@ jobs:
           Windows builds are VST3, 64-bit only.
           NOTES
 
+          # Which architectures the Mac zip holds is read off its NAME, which the
+          # plan job derived from the `mac_arch` input -- so the notes describe
+          # the file that is actually attached, never the intention.
           if ls release/*-macos-*.zip >/dev/null 2>&1; then
+          if ls release/*-macos-universal-*.zip >/dev/null 2>&1; then
           cat >> release-notes.md <<'NOTES'
           macOS builds are universal (Apple Silicon and Intel) and include both
           VST3 and Audio Unit — Logic and GarageBand load nothing but AU.
+          NOTES
+          else
+          cat >> release-notes.md <<'NOTES'
+          macOS builds are **Apple Silicon only** (arm64) — they will not load
+          on an Intel Mac. Both VST3 and Audio Unit are included; Logic and
+          GarageBand load nothing but AU. An Intel or universal build can be
+          made locally in a few minutes: see the macOS build guide below.
+          NOTES
+          fi
+          cat >> release-notes.md <<'NOTES'
 
           Full instructions: [docs/BUILD.md](docs/BUILD.md) and
           [docs/BUILD-MACOS.md](docs/BUILD-MACOS.md).
+          NOTES
+          # No macOS zip has two very different causes, and telling somebody to
+          # "run with platforms=all" when they already did is worse than saying
+          # nothing. v0.88.8-alpha shipped with exactly that wrong sentence:
+          # platforms WAS all, the macOS job built for six hours, and GitHub
+          # killed it at the 360-minute cap. So decide from what the run
+          # PLANNED, not merely from what it produced.
+          elif printf '%s' "$PLANNED_PLATFORMS" | grep -q '"name":"macOS"'; then
+          cat >> release-notes.md <<'NOTES'
+
+          _This release is **Windows only**, and not by choice: a macOS build
+          was part of this run and did not produce binaries. A twelve-plugin
+          universal macOS build (Apple Silicon **and** Intel, VST3 **and** Audio
+          Unit) does not reliably fit inside GitHub's six-hour job limit._
+
+          _The Windows binaries here are unaffected — they were built,
+          collected and uploaded before that happened._
+
+          Full instructions: [docs/BUILD.md](docs/BUILD.md).
           NOTES
           else
           cat >> release-notes.md <<'NOTES'

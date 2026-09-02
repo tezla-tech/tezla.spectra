@@ -159,7 +159,7 @@ Windows and macOS build the actual plugins and upload them as run artifacts:
 | Platform | Formats | Architecture |
 |---|---|---|
 | Windows | VST3 | x86-64 |
-| macOS | VST3 + Audio Unit | universal (arm64 + x86_64) |
+| macOS | VST3 + Audio Unit | arm64 by default in CI (`mac_arch` input); universal on request, and always for a local build |
 
 **Only Windows, unless you ask for more.** The "platforms" box on the Run
 workflow form takes `windows` (the default) or `all`; a tag push covers Windows.
@@ -232,6 +232,111 @@ error message blames the plugin.
 
 The build job writes all of this into the run summary, so the reason a release
 did or did not happen is on the run page rather than only in this file.
+
+### A cancelled macOS job does not cancel the release
+
+**This is the single most expensive lesson in this file.** Five release runs on
+2026-09-01 produced nothing, and not one of them failed for a reason connected
+to the code.
+
+The mechanism is worth writing down because it is not obvious. **A matrix job's
+aggregate `result` is `cancelled` if *any* leg was cancelled.** One dead macOS
+leg therefore made `needs.test.result` and `needs.build.result` read
+`cancelled`, which matched neither `success` nor `skipped`, which skipped
+`build` and then `release`. Run 47 threw away a completed Windows test job and
+never even started the Windows plugin build. Run 50 was thirty minutes into a
+healthy twelve-plugin Windows build whose release had already been doomed by a
+job that died fifteen minutes in.
+
+So `build` and `release` now accept `cancelled` from `test`, `release` accepts
+anything but `skipped` from `build`, and the macOS *build* leg additionally
+carries `continue-on-error` (keyed on `matrix.name`, not `matrix.os`, so it
+cannot silently stop matching when the runner label moves). Note that
+`continue-on-error` was **not** sufficient on its own: it converts a *failure*,
+and a job cancelled for want of a runner — or killed at a time limit — is not a
+failure. The `if` gates are the load-bearing half.
+
+**Proven, not theorised:** on run 51 the macOS leg was cancelled and the
+release published anyway, carrying the Windows binaries. That also settles a
+documentation ambiguity — `!cancelled()` does *not* block a job whose
+dependency was cancelled; it only blocks when the whole run is cancelled.
+
+What still stops a release, deliberately:
+
+- a test that **ran and failed** (`failure` is in neither list);
+- somebody cancelling the whole run (`!cancelled()`);
+- nothing having been built at all — the Package step exits 1 when no
+  artefacts were downloaded, so a run where every leg died publishes nothing
+  rather than an empty release.
+
+### Two different macOS failures, and only one of them is fixed
+
+Do not conflate these; the first was diagnosed wrongly for several hours.
+
+**1. Starvation (runs 45, 47, 49, 50).** The macOS job cancelled at *exactly*
+15m01s after creation with `runner_id: 0` — no runner ever assigned — while
+Windows picked one up in three seconds. This looked like an account-level
+entitlement problem. On run 51, with the label moved from `macos-latest` to
+`macos-14`, a runner was assigned in **three seconds**. So the entitlement
+reading was probably wrong. **The cause remains confounded** — the label
+changed at the same moment capacity may simply have recovered, and one run
+cannot separate them. Keep `macos-14` because it works, not because it is
+proven to be why.
+
+**2. Duration (run 51) — unresolved.** Same commit, same JUCE cache, both legs
+side by side:
+
+| Leg | Formats | Architectures | Cores | Build step |
+|---|---|---|---|---|
+| Windows | VST3 | x86-64 | 4 | **37m49s** → uploaded |
+| macOS | VST3 + AU | arm64 + x86_64 | 3 | **6h04m23s** → killed |
+
+And one plugin alone, run 52 (`v0.88.8-sonitus`, Sonitus only, `mac_arch:
+arm64`), same commit family:
+
+| Leg | Formats | Architectures | Cores | Build step |
+|---|---|---|---|---|
+| Windows | VST3 | x86-64 | 4 | **5m15s** → uploaded |
+| macOS | VST3 + AU | arm64 only | 3 | **23m28s** → uploaded |
+
+Read those two rows together and the arithmetic is unforgiving: **a single
+plugin costs about 23 minutes on macOS even arm64-only**, so twelve of them
+in one job is roughly 4.7 hours sequential — inside the six-hour cap only
+if Sonitus is the heaviest plugin by a margin, and universal would double it
+again. Halving the architectures bought a working Sonitus release; it does
+not buy a whole-suite macOS release in one job. That is the structural case
+for one job per plugin, running in parallel, if the suite is ever to ship for
+Mac from CI.
+
+GitHub cancelled the macOS job on its own **360-minute ceiling**, which
+`timeout-minutes` cannot raise. Nothing was wrong with the build — six hours of
+Apple clang with no compile error, the first time this suite has ever been
+compiled on a Mac. It is simply about four times the work on three quarters of
+the cores: two architectures times two plugin formats.
+
+A twelve-plugin universal macOS build therefore **does not reliably fit in a
+GitHub-hosted job.** The options, each costing something real:
+
+- **arm64 only** — roughly halves the compile, loses Intel Mac support;
+- **the `plugins` input** — a few plugins per run, no single whole-suite zip;
+- **split the matrix** per format or per architecture — more jobs, and the
+  release layout changes.
+
+**The user chose the first, on 2026-09-01, as the CI default.** The `mac_arch`
+input (`arm64` | `universal`) drives `CMAKE_OSX_ARCHITECTURES` on the macOS
+leg, and the architecture is baked into the artefact name —
+`macos-arm64-vst3-au` or `macos-universal-vst3-au` — so the zip says what it
+is and the release notes read the name back rather than guess. What changed is
+the *CI default*, not the target: a local build is still universal unless
+`-DTEZLA_UNIVERSAL_BINARY=OFF` is passed, because a local build has no six-hour
+limit. Intel Mac users of a CI release self-compile for now; the notes say so.
+
+A Windows-only release says which of these two situations it is in: the notes
+distinguish "macOS was never asked for" from "macOS was asked for and did not
+produce binaries", decided from what the run *planned* rather than from what it
+produced. v0.88.8-alpha shipped before that distinction existed and carries the
+wrong sentence — it tells the reader to re-run with `platforms: all`, which is
+exactly what had been done.
 
 ---
 

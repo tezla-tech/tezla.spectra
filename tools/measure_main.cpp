@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <memory>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -73,6 +74,13 @@ struct Args
     /// of aliasing for a structure that actually manages -28.
     bool frequencyGiven { false };
 
+    /// sonitus-stress only: how hard to push the instrument, and at which
+    /// oversampling. `osMode` is off | x2 | x4 | x8 | all (the default).
+    int voices          { 16 };
+    int unison          { 7 };
+    double seconds      { 4.0 };
+    std::string osMode  { "all" };
+
     [[nodiscard]] double frequencyOr (double fallback) const
     {
         return frequencyGiven ? frequency : fallback;
@@ -92,6 +100,10 @@ struct Args
             else if (key == "--gain")  args.gainDb     = std::atof (value.c_str());
             else if (key == "--drive") args.drive      = std::atof (value.c_str());
             else if (key == "--out")   args.outPath    = value;
+            else if (key == "--voices")  args.voices  = std::max (1, std::atoi (value.c_str()));
+            else if (key == "--unison")  args.unison  = std::clamp (std::atoi (value.c_str()), 1, 7);
+            else if (key == "--seconds") args.seconds = std::max (1.0, std::atof (value.c_str()));
+            else if (key == "--os")      args.osMode  = value;
         }
         return args;
     }
@@ -1788,6 +1800,123 @@ std::vector<double> playNote (const sonitus::EngineParameters& parameters, doubl
     return { out.end() - static_cast<long> (window), out.end() };
 }
 } // namespace sonitusMeasure
+
+// -----------------------------------------------------------------------------
+// sonitus-stress: the CPU worst case, measured the way the rig meets it.
+//
+// Many voices in wide unison with a long release, so every voice is sounding
+// for the whole timed window, at each oversampling factor. This exists because
+// the answer to "why does x8 smash the meter" is arithmetic, not mystery -- the
+// whole voice runs at the internal rate, so the bill is linear in the factor --
+// and because a number measured here on GCC is not a number measured on the
+// rig with MSVC. Run it there; it prints ms of CPU per second of audio, which
+// divided by ten is the percentage of one core.
+//
+// Options: --voices N (16)  --unison N (7)  --seconds S (4)  --os off|x2|x4|x8|all
+// -----------------------------------------------------------------------------
+int runSonitusStress (const Args& args)
+{
+    using namespace tezla;
+
+    const double rate = args.sampleRate;
+    constexpr int block = 512;
+
+    struct Mode { const char* name; dsp::OversamplingMode mode; };
+    const Mode all[] { { "off", dsp::OversamplingMode::Off }, { "x2", dsp::OversamplingMode::X2 },
+                       { "x4", dsp::OversamplingMode::X4 },   { "x8", dsp::OversamplingMode::X8 } };
+
+    std::printf ("Sonitus stress: %d voices, unison %d + %d (%d oscillators), 6 s release,\n"
+                 "%.0f Hz in %d-sample blocks, %.0f s of audio timed per factor, best of 3.\n"
+                 "Every voice is sounding for the whole window: held for 1 s, then released.\n\n",
+                 args.voices, args.unison, args.unison, args.voices * 2 * args.unison,
+                 rate, block, args.seconds);
+    std::printf ("  factor   internal rate     ms per second of audio    %% of one core\n");
+
+    bool any = false;
+    for (const auto& m : all)
+    {
+        if (args.osMode != "all" && args.osMode != m.name)
+            continue;
+        any = true;
+
+        sonitus::EngineParameters p;
+        p.voice.shapeA = dsp::OscShape::saw;
+        p.voice.shapeB = dsp::OscShape::saw;
+        p.voice.unisonA = args.unison;
+        p.voice.unisonB = args.unison;
+        p.voice.detuneA = 25.0;
+        p.voice.detuneB = 25.0;
+        p.voice.spreadA = 1.0;
+        p.voice.spreadB = 1.0;
+        p.voice.levelA = 1.0;
+        p.voice.levelB = 1.0;
+        p.voice.centsB = 7.0;
+        p.voice.subLevel = 0.5;
+        p.voice.foldAmount = 0.3;
+        p.voice.cutoffHz = 4000.0;
+        p.voice.resonance = 0.4;
+        p.voice.filterDrive = 0.5;
+        p.voice.amp.attack = 0.005;
+        p.voice.amp.sustain = 1.0;
+        p.voice.amp.release = 6.0;
+        p.voice.ampVelocity = 0.0;
+        p.voice.level = 0.5;
+        p.keyboard = sonitus::KeyboardMode::poly;
+        p.polyphony = args.voices;
+        p.tubeDriveDb = 12.0;
+        p.oversampling = m.mode;
+
+        // 414 kB: on the heap, never the stack (tests/test_Sonitus.cpp says why).
+        auto engine = std::make_unique<sonitus::Engine>();
+        engine->setParameters (p);
+        engine->prepare (rate, block);
+        engine->setTransport (0.0, 120.0, true);
+
+        std::vector<double> left (static_cast<std::size_t> (block)), right (static_cast<std::size_t> (block));
+        double* channels[2] { left.data(), right.data() };
+        const auto render = [&] (double secs)
+        {
+            const long blocks = static_cast<long> (secs * rate / block);
+            for (long i = 0; i < blocks; ++i)
+                engine->process (channels, block);
+        };
+        const auto noteFor = [] (int n) { return 36 + (n * 3) % 40; };   // a chord across four octaves
+
+        double best = 1.0e9;
+        for (int rep = 0; rep < 3; ++rep)
+        {
+            engine->allNotesOff();
+            engine->reset();
+            for (int n = 0; n < args.voices; ++n)
+                engine->noteOn (noteFor (n), 1.0);
+            render (0.25);                                   // warm-up, untimed
+
+            const auto t0 = std::chrono::steady_clock::now();
+            render (1.0);
+            for (int n = 0; n < args.voices; ++n)
+                engine->noteOff (noteFor (n));
+            render (args.seconds - 1.0);                     // into the long release
+            const auto t1 = std::chrono::steady_clock::now();
+            best = std::min (best, std::chrono::duration<double> (t1 - t0).count());
+        }
+
+        const double msPerSecond = 1000.0 * best / args.seconds;
+        std::printf ("  %-6s   %8.0f Hz      %10.1f                %6.1f%%\n",
+                     m.name, rate * engine->getOversamplingFactor(), msPerSecond, msPerSecond / 10.0);
+    }
+
+    if (! any)
+    {
+        std::printf ("  --os must be off, x2, x4, x8 or all\n");
+        return 1;
+    }
+
+    std::printf ("\n  Linear in the factor: the whole voice -- oscillators, filters, fold,\n"
+                 "  envelopes -- runs at the internal rate, so x8 is eight times x1. Auto at\n"
+                 "  %.0f Hz picks the factor that lands near 192 kHz internally; see the\n"
+                 "  README's CPU section for what the factors buy in aliasing.\n\n", rate);
+    return 0;
+}
 
 int runSonitus (const Args& args)
 {
@@ -4459,6 +4588,8 @@ void printUsage()
     std::printf ("  loudness        [--fs]  LUFS at four rates, gating, PLR/PSR, correlation\n");
     std::printf ("  anvil           [--fs]  amplifier aliasing, lane THD, transformer flux, CPU\n");
     std::printf ("  sonitus         [--fs]  instrument aliasing, comb notches, tuning, CPU\n");
+    std::printf ("  sonitus-stress  [--fs --voices N --unison N --seconds S --os off|x2|x4|x8|all]\n");
+    std::printf ("                          the CPU worst case per oversampling factor, ms per second of audio\n");
     std::printf ("  svarayantra     [--fs]  soundfont engine aliasing and CPU per voice\n");
     std::printf ("  ferrite         [--fs --out FILE]  tape loops, losses, aliasing, wobble, CPU\n");
     std::printf ("  malleus         [--fs --out FILE]  mode tables, lock, decay, bow onset, CPU\n");
@@ -4493,6 +4624,7 @@ int main (int argc, char** argv)
     if (command == "loudness")        return runLoudness (args);
     if (command == "anvil")           return runAnvil (args);
     if (command == "sonitus")         return runSonitus (args);
+    if (command == "sonitus-stress")  return runSonitusStress (args);
     if (command == "svarayantra")     return runSvarayantra (args);
     if (command == "ferrite")         return runFerrite (args);
     if (command == "malleus")         return runMalleus (args);

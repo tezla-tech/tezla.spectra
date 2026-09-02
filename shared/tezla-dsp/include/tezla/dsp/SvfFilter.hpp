@@ -224,7 +224,23 @@ public:
             return;
 
         cutoffHz_ = wanted;
-        updateCoefficients();
+        updateCutoffCoefficient();
+    }
+
+    /// Take the cutoff and its coefficient from a filter that has just been
+    /// tuned to the value this one would be tuned to -- the other channel of
+    /// a stereo pair, prepared at the same rate.
+    ///
+    /// Bit-exact by construction: setCutoffHz on this filter would clamp the
+    /// same value against the same limit and evaluate the same `tan` of it,
+    /// so copying the result is indistinguishable from recomputing it, and
+    /// saves a transcendental per sample per channel on a modulated sweep.
+    /// Only the cutoff pair is copied; resonance, drive, mode and the state
+    /// are this filter's own.
+    void adoptCutoffFrom (const SvfFilter& other) noexcept
+    {
+        cutoffHz_ = other.cutoffHz_;
+        g_ = other.g_;
     }
 
     [[nodiscard]] double getCutoffHz() const noexcept { return cutoffHz_; }
@@ -486,6 +502,18 @@ private:
         const double clamped = std::clamp (hz, 1.0, limit);
 
         return std::tan (3.141592653589793 * clamped / sampleRate_);
+    }
+
+    /// The cutoff half of updateCoefficients() on its own. g depends on the
+    /// cutoff and the sample rate; k depends on the resonance and nothing else.
+    /// A cutoff change used to recompute both, which put a `pow` next to the
+    /// `tan` on every sample of a modulated sweep -- Sonitus moves its cutoff
+    /// through a per-sample smoother, so that was two transcendentals per
+    /// filter per sample for a value that had not changed. Same expression,
+    /// same inputs, same bits: this alters nothing but the work done.
+    void updateCutoffCoefficient() noexcept
+    {
+        g_ = prewarp (cutoffHz_);
     }
 
     void updateCoefficients() noexcept

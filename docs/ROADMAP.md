@@ -156,3 +156,52 @@ is fine, and it must not be added without being asked. JUCE 9.0.1 has no native
 CLAP output, so it means pulling in `clap-juce-extensions`. Because §4 keeps all
 DSP framework-free, the cost is a wrapper rather than a rewrite — which is
 precisely why there is no hurry.
+
+---
+
+## 7. Sonitus CPU — the optimisations that would change the sound, parked
+
+**Status: parked at the user's request, deliberately.** The brief for the
+Sonitus CPU work of 2026-09-01 was that *the sound and its harmonics must not
+change in any way*, so only bit-exact changes were made (guards on per-chunk
+setters, a shared filter coefficient — see the "×8 stress case" section of
+`plugins/Sonitus/README.md` for the measurements). Everything below would
+change the output, however slightly, and so waits.
+
+The measured picture it waits against: ×8 with 224 oscillators costs 1973 ms
+per second of audio here, exactly linear in the factor; oscillators are ~60 %
+of it, the filter's drive rail ~21 %, fold ~11 %, tube ~7 %, the sine sub ~5 %;
+LTO is not a lever (−6 % at best, and GCC's is slower).
+
+### What is parked, largest first
+
+1. **Oscillators and sub at the base rate, nonlinear path oversampled per
+   voice.** A polyBLEP saw is already band-limited; oversampling it removes
+   aliasing that is not there. Rendering the oscillator mix at the host rate and
+   upsampling per voice into the fold/filter/tube would take roughly half of
+   the ×8 cost off and turn "×8 = 8× everything" into "×8 = 8× the nonlinear
+   stages". It changes the signal path — a halfband per voice, so the §6
+   rate-independence null and the §7 aliasing sweep must be re-measured at
+   every factor — and PM, feedback and hard sync alias on their own, so those
+   oscillators must stay at the internal rate when engaged.
+2. **Cheaper transcendentals**: the sub's `std::sin` (phase rotator or table),
+   the SVF rail's `std::tanh` (rational approximation), the tube's `std::pow`
+   (integer-power or polynomial). About −20 % together. Each differs from libm
+   by a few units in the last place: inaudible, and not bit-identical.
+3. **Filter coefficients per control chunk instead of per sample.** The
+   cutoff smoother is a one-pole that never quite settles, so a modulated
+   cutoff recomputes a `tan` per filter per sample; updating every 32 samples
+   would remove that, and would quantise the sweep at 12 kHz — a different
+   sweep, if an indistinguishable one.
+4. **Skip the formant bank at mix 0** (0.5 %). Only worth listing because it
+   looks free and is not: skipping leaves the bank's state cold at the moment
+   the knob is engaged.
+
+### What would unpark each
+
+**The user saying so, per item, after seeing the evidence** — a null test
+between the current output and the candidate, rendered on the golden patch
+set, with the residual's peak in dBFS. Items 2–4 are contained and could be
+offered that way in an afternoon each; item 1 is a design change with its own
+plan and measurement pass. None of them is worth doing quietly, and none will
+be.

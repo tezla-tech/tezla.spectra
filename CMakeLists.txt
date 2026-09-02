@@ -72,28 +72,49 @@ option(TEZLA_BUILD_STANDALONE "Also build a standalone app for each plugin"   OF
 option(TEZLA_BUILD_RENDER     "Also build an offline renderer for each plugin" OFF)
 option(TEZLA_COPY_AFTER_BUILD "Copy built VST3 bundles to the system VST3 folder" OFF)
 option(TEZLA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"           OFF)
-option(TEZLA_ENABLE_AVX2      "Build with AVX2 (needs a 2013-or-newer CPU)"   OFF)
+# Off because it is a distribution decision: an AVX2 binary will not load on a
+# CPU older than 2013. It is NOT a quality decision -- with contraction off
+# (TezlaCompilerOptions.cmake) the AVX2 build's output is bit-identical to the
+# SSE2 build's, checked on 32 Sonitus golden renders, and it measured about
+# 11% less CPU on the Sonitus stress case. `-avx2` / `--avx2` in the scripts;
+# docs/BUILD.md, "A note on TEZLA_ENABLE_AVX2".
+option(TEZLA_ENABLE_AVX2      "Build with AVX2 (bit-exact, ~11% faster; needs a 2013-or-newer CPU)" OFF)
 option(TEZLA_BUILD_AU         "Also build Audio Unit versions (macOS only)"   ON)
 
-# **Off, deliberately, and it is not a performance decision made lightly.**
+# **Off, deliberately -- and measured, not assumed.**
 #
-# JUCE's recommended LTO flag is a plain `-flto`, which on GCC means serial
-# LTRANS -- observed here as "lto-wrapper: using serial compilation of 101
-# LTRANS jobs" -- and on Apple clang means *monolithic* LTO, the whole program
-# merged into one module and optimised on one core at link time. The macOS
-# plugin job does that for six plugins, two formats each, twice over for a
-# universal binary: twenty-four serial whole-program optimisations. CI run 38
-# spent **six hours and four minutes** in that step before being cancelled,
-# against seven minutes for the same build on Windows with MSVC's LTCG.
+# What LTO buys is cross-translation-unit inlining. This tree's DSP is
+# header-only by design (CLAUDE.md section 4), so every audio hot path is
+# already visible to the compiler inside the one translation unit that
+# instantiates it, and there is nothing left across a boundary to inline.
+# Measured on 2026-09-01, GCC 13.3 on x86-64, the six CPU-budget tests with
+# and without `-flto=auto`, five interleaved runs each, best of five:
 #
-# What it buys is cross-translation-unit inlining, which matters for a shipping
-# binary and matters not at all while the numbers are still being measured --
-# and the numbers are measured by `tezla-tests` and `tezla-measure`, neither of
-# which is built with it.
+#     ferrite, one stereo instance     0.1565 s   0.1568 s   x1.002
+#     16 bowed voices (Malleus)        0.1972 s   0.1983 s   x1.006
+#     phonoss full strip, stereo       0.0143 s   0.0143 s   x1.000
+#     64 modes (resonator)             0.0036 s   0.0036 s   x1.000
+#     dead engine                      0.0039 s   0.0039 s   x1.000
+#     lowpass gate                     0.0027 s   0.0028 s   x1.037 (0.1 ms: noise)
 #
-# Turn it on for a release build when there is one to make, and prefer
-# `-flto=auto` (GCC) or `-flto=thin` (clang) over the plain flag when you do.
-option(TEZLA_LTO              "Link-time optimisation (slow; for release builds)" OFF)
+# No runtime gain at all. That is GCC; MSVC's /GL+/LTCG on the Windows rig has
+# not been measured from here and should be, in FL Studio's CPU meter, before
+# anyone believes a different answer for it -- but the structural reason
+# applies to every compiler.
+#
+# What it costs is real. JUCE's recommended flag is a plain `-flto`: serial
+# LTRANS on GCC, and on Apple clang *monolithic* LTO -- the whole program
+# merged into one module and optimised on one core at link time, per format,
+# twice over for a universal binary. CI run 38 spent **six hours and four
+# minutes** there before being cancelled. The parallel forms (`-flto=auto`,
+# `-flto=thin`) are what this tree passes when asked, and they are still a
+# multiple of a normal link.
+#
+# So: off during development, where the numbers are being measured and every
+# build is a wait; available as an option for a release build, applied through
+# tezla::compiler-options so tests, tools and plugins all get it alike (see
+# cmake/TezlaCompilerOptions.cmake); `-lto` / `--lto` in the build scripts.
+option(TEZLA_LTO              "Link-time optimisation (slow to link; measured no runtime gain here)" OFF)
 
 include(TezlaCompilerOptions)
 

@@ -132,13 +132,13 @@ function(tezla_add_plugin)
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
 
-    # Off unless asked for. See the comment on TEZLA_LTO in the root
-    # CMakeLists.txt: JUCE's recommended flag is a plain `-flto`, which is
-    # serial on GCC and monolithic on Apple clang, and it cost CI six hours on
-    # macOS before this was made a choice.
-    if(TEZLA_LTO)
-        target_link_libraries(${ARG_NAME} PUBLIC juce::juce_recommended_lto_flags)
-    endif()
+    # LTO is NOT applied here, and deliberately not through JUCE's
+    # `juce_recommended_lto_flags`: that target passes a plain `-flto`, serial
+    # on GCC and monolithic on Apple clang, and it cost CI six hours on macOS
+    # before TEZLA_LTO became a choice. When TEZLA_LTO is on, the parallel
+    # per-compiler flags arrive through tezla::compiler-options above -- the
+    # same target tezla-tests and tezla-measure link, so the instrument and the
+    # plugin are built the same way. See cmake/TezlaCompilerOptions.cmake.
 
     set_target_properties(${ARG_NAME} PROPERTIES FOLDER "Plugins")
 
