@@ -766,8 +766,8 @@ never from any product's binary, samples or presets. Every source below was
 soundonsound.com, image-line.com, forum.juce.com, cim.mcgill.ca, nuxx.net,
 manualslib.com, audiofanzine.com all refused), so per CLAUDE.md §9 the URLs
 were given to the user, who fetched them all; they live in
-`technical references/drumsynth./` (the folder name ends in a dot) and were
-read first-hand from there on 2026-09-02. That access route is part of the
+`technical references/drumsynth/` and were read first-hand from there on
+2026-09-02. That access route is part of the
 record. Everything taken is physics or a documented mechanism; the one table of
 numbers copied — the cymbal generator's oscillator frequencies — is attributed
 again at the point of use.

@@ -44,8 +44,8 @@ Every drum-synthesis and FL Studio source was **blocked at the network layer**
 on the first pass (qub.ac.uk, dafx.de, soundonsound.com, image-line.com,
 forum.juce.com, cim.mcgill.ca, nuxx.net and others all refused). Per CLAUDE.md
 §9 the URLs were given to the user, who fetched them; they live in
-`technical references/drumsynth./` (the folder name ends in a dot) and were
-**read first-hand from there on 2026-09-02**. The full table, with what each
+`technical references/drumsynth/` and were **read first-hand from there on
+2026-09-02**. The full table, with what each
 source settled, is in `docs/DSP-REFERENCES.md` ("Drum synthesis — Ictus").
 The short form:
 
@@ -597,7 +597,7 @@ honours, in one place:
 - Parameter string IDs and every choice list are frozen at birth and
   append-only (CLAUDE.md §8). MIDI note, choke group and sample path are
   state-tree properties, never parameters.
-- The sources are user-supplied PDFs in `technical references/drumsynth./`,
+- The sources are user-supplied PDFs in `technical references/drumsynth/`,
   read first-hand 2026-09-02; statuses in `docs/DSP-REFERENCES.md` ("Drum
   synthesis — Ictus"). If another source is needed, ask the user with URLs
   per CLAUDE.md §9 — do not work around it silently.
