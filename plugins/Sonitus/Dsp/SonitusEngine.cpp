@@ -801,6 +801,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
         {
             advanceGlobalSources (Voice::kControlIntervalSamples);
             voices_.advanceGlide (Voice::kControlIntervalSamples);
+            voices_.advanceDrift();
             voices_.applyControls (snappedVoice(), sources_);
 
             // After the sources have moved and before the comb is aimed: the

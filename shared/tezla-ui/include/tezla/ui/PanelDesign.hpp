@@ -144,4 +144,35 @@ inline constexpr int   kValueHeight = 19;
     return accent.withRotatedHue (kGroupHueStep * static_cast<float> (groupIndex) / 360.0f);
 }
 
+// ---------------------------------------------------------------------------
+// The spectral ring: the controls that add colour wear colour
+// ---------------------------------------------------------------------------
+
+/// A knob marked `ui::spectralKnob` -- drift, humanise, anything whose job is
+/// to make the sound less exact -- draws its ring as a pastel hue sweep along
+/// its travel instead of the group's single tint: the one control on a plate
+/// that colours the sound is the one that is coloured. Pastel on purpose: low
+/// saturation and full brightness sit with the plate's own tints rather than
+/// shouting over them, and read as a hint of a rainbow rather than a toy.
+///
+/// Hue is in JUCE's 0..1 turns. Starting at red and sweeping five sixths of
+/// the wheel ends on violet rather than wrapping back round to red.
+inline constexpr float kSpectralHueStart = 0.0f;
+inline constexpr float kSpectralHueSpan = 0.83f;
+inline constexpr float kSpectralSaturation = 0.48f;
+inline constexpr float kSpectralBrightness = 1.0f;
+
+/// The unfilled travel at this alpha, so the ring reads as a rainbow even at
+/// zero -- most of these controls sit at zero most of the time, and a ring that
+/// only coloured up when turned would not say what the control is for.
+inline constexpr float kSpectralTrackAlpha = 0.50f;
+
+/// The value arc's halo. Wider in alpha than the plain knob's 0.18, because a
+/// pastel at that alpha vanishes against the plate.
+inline constexpr float kSpectralHaloAlpha = 0.26f;
+
+/// Segment length of the sweep and the overlap that hides its seams, radians.
+inline constexpr float kSpectralSegmentRadians = 0.09f;
+inline constexpr float kSpectralSeamRadians = 0.02f;
+
 } // namespace tezla::ui::design

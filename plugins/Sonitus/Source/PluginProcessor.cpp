@@ -51,7 +51,10 @@ constexpr int kSchemaV5 = 5;
 /// own, so the hint keeps meaning one piece of work.
 constexpr int kSchemaV6 = 6;
 
-constexpr int kStateSchemaVersion = kSchemaV6;
+/// Voice drift -- the voice card's temperature. Its own version, as ever.
+constexpr int kSchemaV7 = 7;
+
+constexpr int kStateSchemaVersion = kSchemaV7;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -997,6 +1000,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         juce::ParameterID { ids::renderOversampling, kSchemaV6 }, "Render quality",
         choices::renderOversampling, 0));
 
+    // ---- the voice card -----------------------------------------------------
+    // Appended at V7, at the end, because a host's automation list is order
+    // sensitive. Cents of cutoff, skewed so the 10..60 cents a warm polysynth
+    // actually does sits in the first half of the travel and the rest is the
+    // creative range. 0 is bit-exactly off.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::voiceDrift, kSchemaV7 }, "Voice drift",
+        skewedRange (0.0f, 600.0f, 40.0f), 0.0f, centsAttributes()));
+
     return layout;
 }
 
@@ -1132,6 +1144,7 @@ void SonitusProcessor::pullParameters()
     v.resonance = valueOf (state_, ids::resonance);
     v.filterDrive = valueOf (state_, ids::filterDrive);
     v.filterMorph = valueOf (state_, ids::filterMorph);
+    v.voiceDrift = valueOf (state_, ids::voiceDrift);
     v.filterKeyTrack = valueOf (state_, ids::filterTrack);
     v.filterFm = valueOf (state_, ids::filterFm);
     v.filterVelocity = valueOf (state_, ids::filterVel);

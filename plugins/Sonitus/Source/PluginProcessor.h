@@ -211,6 +211,11 @@ inline constexpr auto oversampling = "oversampling";
 /// What an offline bounce runs at. Appended at schema V6, defaulting to "Same
 /// as live", so a project saved before it existed bounces what it played.
 inline constexpr auto renderOversampling = "renderOversampling";
+
+/// The voice card's temperature: cutoff and resonance drift together, the
+/// tuning a little. Appended at schema V7, defaulting to 0, which is
+/// bit-exactly off.
+inline constexpr auto voiceDrift = "voiceDrift";
 } // namespace ids
 
 /// The option lists behind the choice parameters.

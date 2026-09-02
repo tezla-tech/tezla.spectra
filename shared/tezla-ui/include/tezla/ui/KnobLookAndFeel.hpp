@@ -34,6 +34,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Palette.hpp"
+#include "PanelDesign.hpp"
 
 namespace tezla::ui
 {
@@ -137,10 +138,68 @@ public:
         const bool tintTrack = static_cast<bool> (slider.getProperties().getWithDefault (
             "tezlaTintTrack", false));
 
-        arc (startAngle, endAngle,
-             tintTrack ? tint.withAlpha (on ? 0.24f : 0.10f)
-                       : palette_.dimText.withAlpha (on ? 0.26f : 0.12f),
-             thickness);
+        // **A spectral knob wears a pastel rainbow.** Set by `ui::spectralKnob`
+        // on the controls that add colour to the sound -- drift, humanise -- so
+        // the coloured control is the one that colours (PanelDesign.hpp, "The
+        // spectral ring"). The ring is a hue sweep along the travel, drawn as
+        // short opaque segments inside a transparency layer: a gradient cannot
+        // follow an arc, and translucent segments would double up at every
+        // seam. The round ends are two discs in the end colours. Disabled, it
+        // goes grey like any other knob, so inert still reads as inert.
+        const bool spectral = static_cast<bool> (slider.getProperties().getWithDefault (
+            "tezlaSpectral", false));
+
+        const auto hueAt = [&] (float at)
+        {
+            const float t = juce::jlimit (0.0f, 1.0f, (at - startAngle) / (endAngle - startAngle));
+
+            return juce::Colour::fromHSV (design::kSpectralHueStart + design::kSpectralHueSpan * t,
+                                          design::kSpectralSaturation,
+                                          design::kSpectralBrightness, 1.0f);
+        };
+
+        const auto spectralArc = [&] (float from, float to, float alpha, float width_)
+        {
+            const float a = juce::jmin (from, to);
+            const float b = juce::jmax (from, to);
+
+            if (b - a < 1.0e-4f)
+                return;
+
+            const int segments = juce::jmax (1, static_cast<int> ((b - a) / design::kSpectralSegmentRadians) + 1);
+            const float step = (b - a) / static_cast<float> (segments);
+
+            g.beginTransparencyLayer (alpha);
+
+            for (int i = 0; i < segments; ++i)
+            {
+                const float s = a + step * static_cast<float> (i);
+                const float e = i == segments - 1 ? b : s + step + design::kSpectralSeamRadians;
+
+                juce::Path path;
+                path.addCentredArc (centre.x, centre.y, trackRadius, trackRadius, 0.0f, s, e, true);
+                g.setColour (hueAt (s + step * 0.5f));
+                g.strokePath (path, juce::PathStrokeType (width_, juce::PathStrokeType::curved,
+                                                          juce::PathStrokeType::butt));
+            }
+
+            for (const float end : { a, b })
+            {
+                g.setColour (hueAt (end));
+                g.fillEllipse (juce::Rectangle<float> { width_, width_ }.withCentre (
+                    { centre.x + trackRadius * std::sin (end), centre.y - trackRadius * std::cos (end) }));
+            }
+
+            g.endTransparencyLayer();
+        };
+
+        if (spectral && on)
+            spectralArc (startAngle, endAngle, design::kSpectralTrackAlpha, thickness);
+        else
+            arc (startAngle, endAngle,
+                 tintTrack ? tint.withAlpha (on ? 0.24f : 0.10f)
+                           : palette_.dimText.withAlpha (on ? 0.26f : 0.12f),
+                 thickness);
 
         // The body: a shallow gradient, dark at the bottom. Enough to lift the
         // knob off the panel without pretending to be a photograph of one.
@@ -260,11 +319,23 @@ public:
         // reads as inert at a glance.
         if (std::abs (angle - anchor) > 1.0e-4f)
         {
-            if (on)
-                arc (anchor, angle, tint.withAlpha (0.18f), thickness * 2.4f);
+            if (spectral && on)
+            {
+                spectralArc (anchor, angle, design::kSpectralHaloAlpha, thickness * 2.4f);
+                spectralArc (anchor, angle, 1.0f, thickness);
+            }
+            else
+            {
+                if (on)
+                    arc (anchor, angle, tint.withAlpha (0.18f), thickness * 2.4f);
 
-            arc (anchor, angle, fill, thickness);
+                arc (anchor, angle, fill, thickness);
+            }
         }
+
+        // A spectral pointer takes the hue under it, so the reading and the
+        // ring agree about where the value is.
+        const auto pointerColour = spectral && on ? hueAt (angle) : tintBright;
 
         // The pointer.
         {
@@ -277,14 +348,14 @@ public:
 
             if (on)
             {
-                g.setColour (tintBright.withAlpha (0.22f));
+                g.setColour (pointerColour.withAlpha (0.22f));
                 g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f) * 2.6f);
             }
 
             // On a relief cap the pointer sits on a light grey, where a dim
             // grey line disappears -- so the disabled pointer goes dark rather
             // than pale, and the lit one keeps its bright tint.
-            g.setColour (on ? tintBright
+            g.setColour (on ? pointerColour
                             : (relief ? juce::Colours::black.withAlpha (0.45f)
                                       : palette_.dimText.withAlpha (0.35f)));
             g.drawLine ({ from, to }, juce::jmax (1.6f, radius * 0.085f));

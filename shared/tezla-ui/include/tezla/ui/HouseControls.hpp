@@ -70,6 +70,16 @@ inline void styleKnob (juce::Slider& slider, Palette palette, juce::Colour tint,
     noWheel (slider);
 }
 
+/// Marks a knob as one that **adds colour to the sound** -- drift, humanise --
+/// so it wears the house spectral ring: a pastel rainbow along its travel in
+/// place of the group tint (PanelDesign.hpp, "The spectral ring"). Call it
+/// after `styleKnob`; it only sets the property the look and feel reads, and a
+/// later `tezlaTint` from the group leaves it alone.
+inline void spectralKnob (juce::Slider& slider)
+{
+    slider.getProperties().set ("tezlaSpectral", true);
+}
+
 /// Double-click goes back to **the parameter's own default**, not to the middle
 /// of its range -- which on a skewed range is somewhere else entirely, and on a
 /// drive control is usually somewhere loud.

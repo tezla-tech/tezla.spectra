@@ -205,7 +205,7 @@ constexpr int kPagePad = 5;
     // Set once per patch, if ever. Drift, spread and humanise are texture
     // rather than shape.
     static const char* trims[] {
-        "driftA", "driftB", "spreadA", "spreadB", "fineA", "fineB",
+        "driftA", "driftB", "voiceDrift", "spreadA", "spreadB", "fineA", "fineB",
         "combSpread", "combDamp", "octaveA", "octaveB", "subOctave"
     };
 
@@ -218,6 +218,23 @@ constexpr int kPagePad = 5;
             return design::Emphasis::trim;
 
     return design::Emphasis::normal;
+}
+
+/// The controls that add colour to the sound, and wear it: the house spectral
+/// ring, a pastel rainbow along the travel (PanelDesign.hpp, "The spectral
+/// ring"). Both kinds of analogue drift, and nothing else -- the ring is the
+/// mark of a control whose job is to make the sound less exact, and giving it
+/// to a second kind of control would spend it. Same shape as `emphasisOf`, for
+/// the same reason.
+[[nodiscard]] bool isSpectral (const juce::String& id) noexcept
+{
+    static const char* spectral[] { "driftA", "driftB", "voiceDrift" };
+
+    for (const char* name : spectral)
+        if (id == name)
+            return true;
+
+    return false;
 }
 
 /// The strip along the bottom of the *editor* that carries the current page's
@@ -517,6 +534,9 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
     // then, so a cell that is never tinted still looks like a knob.
     ui::styleKnob (slider_, palette_, palette_.accent, emphasisOf (parameterId));
     ui::resetsToDefault (slider_, state, parameterId);
+
+    if (isSpectral (parameterId))
+        ui::spectralKnob (slider_);
 
     slider_.setTooltip (tooltip);
     label_.setTooltip (tooltip);
@@ -3591,8 +3611,11 @@ void SonitusEditor::buildPages()
 
         page.addKnob (driftId, "Drift",
             "Slow random wander on each copy's pitch, in cents. What an analogue oscillator bank "
-            "does because its components are warm and imperfect. A little is life; a lot is a "
-            "broken machine, which is occasionally what you want.");
+            "does because its components are warm and imperfect. Per copy on purpose -- separate "
+            "VCOs wander against each other, and that is the part you hear -- and it carries on "
+            "between notes: a key restarts the unison's phases exactly as it always has, never "
+            "the drift, so two presses of the same key are two different notes. A little is "
+            "life; a lot is a broken machine, which is occasionally what you want.");
     };
 
     osc->addHeading ("OSCILLATOR A -- the sync master", 6);
@@ -3731,6 +3754,15 @@ void SonitusEditor::buildPages()
     filter->addKnob (ids::filterVel, "Velocity",
         "How far velocity opens the filter. The standard expressive link, and the reason a "
         "programmed bassline can breathe.");
+
+    filter->addKnob (ids::voiceDrift, "Drift",
+        "The voice card's temperature, in cents of cutoff. Cutoff and resonance wander "
+        "together, slowly, and never the same way on two voices: each has its own fixed "
+        "mismatch and its own wander, which carries on between notes rather than restarting "
+        "with them. Up to about 40 cents is what a warm analogue polysynth does; past that it "
+        "is a creative control. The same warmth nudges the whole voice's tuning by a quarter of "
+        "the amount, capped at 15 cents, which is what makes an analogue chord shimmer against "
+        "itself. Costs nothing, and at 0 it is exactly off.");
 
     filter->addHeading ("KEYBOARD", 4, true);
 

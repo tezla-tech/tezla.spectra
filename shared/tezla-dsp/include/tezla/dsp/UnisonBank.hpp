@@ -45,6 +45,16 @@
 // static detune gives a periodic churn that the ear locks onto within a bar. A
 // slow random wander on top of it never repeats, and that is the whole of what
 // the "analogue" knob on an old polysynth was doing.
+//
+// **And the drift does not retrigger.** It is a property of the voice card,
+// not of the note: a key going down does not reset the temperature of a
+// transistor. So a cold note re-scatters the phases -- the same seven values
+// every time, the unison retriggers exactly as it always has -- and leaves the
+// drift walk wherever it was, still walking. For a long time note-on called
+// the full reset, which re-seeded one shared random stream and zeroed the
+// walk, and a given voice slot played the same wander on every press. Two
+// streams now: one for the scatter, re-seeded per note; one for the drift,
+// seeded once and never by a note. See `reset` and `restartNote`.
 
 #include <algorithm>
 #include <array>
@@ -141,8 +151,6 @@ public:
         updateIncrements();
     }
 
-    /// Clears every oscillator and, unless told otherwise, scatters their
-    /// phases -- see the header: a stack that starts in phase is one loud saw.
     /// The seed the phase scatter and the drift are drawn from.
     ///
     /// Settable, because **every bank scattering identically defeats the
@@ -153,27 +161,66 @@ public:
     /// other. Left alone it keeps the value it always had.
     void setSeed (std::uint64_t seed) noexcept { seed_ = seed | 1ull; }
 
+    /// The **full** reset, for `prepare` and a graph rebuild: the drift stream
+    /// is re-seeded and the walk goes back to zero, then everything a cold note
+    /// does. A note-on wants `restartNote()` instead, which leaves the drift
+    /// alone -- see the header.
     void reset (bool randomisePhases = true) noexcept
     {
-        random_.seed (seed_);
+        driftRandom_.seed (seed_ ^ kDriftSalt);
+
+        for (auto& value : drift_)
+            value = 0.0;
+
+        for (auto& value : driftTarget_)
+            value = 0.0;
+
+        driftCountdown_ = 0;
+
+        restartNote (randomisePhases);
+    }
+
+    /// What a cold note needs: every oscillator cleared and, unless told
+    /// otherwise, its phase scattered -- see the header: a stack that starts in
+    /// phase is one loud saw. The scatter is drawn from a stream re-seeded here,
+    /// so it is the same seven values on every note and the unison retriggers
+    /// exactly as it always has.
+    ///
+    /// **The drift is not touched.** Not the walk, not its targets, not its
+    /// timer, not its stream: it carries on from wherever it was, so two
+    /// presses of the same key are two different notes. That is the one thing
+    /// in the bank a note-on is not allowed to restart.
+    void restartNote (bool randomisePhases = true) noexcept
+    {
+        phaseRandom_.seed (seed_);
 
         for (int i = 0; i < kMaxVoices; ++i)
         {
             const auto index = static_cast<std::size_t> (i);
 
-            voices_[index].reset (randomisePhases ? random_.next() : 0.0);
+            voices_[index].reset (randomisePhases ? phaseRandom_.next() : 0.0);
 
             // Every voice its own noise stream, derived from the bank's seed:
             // a noise stack whose voices agree is mono however wide the pan.
             voices_[index].seedNoise (seed_ ^ (std::uint64_t { 0x9e3779b97f4a7c15 }
                                                  * static_cast<std::uint64_t> (i + 1)));
-
-            drift_[index] = 0.0;
-            driftTarget_[index] = 0.0;
         }
 
-        driftCountdown_ = 0;
         incrementCountdown_ = 0;
+    }
+
+    /// Where oscillator `index`'s drift walk is, in [-1, 1] before the cents
+    /// scaling. For the test that a note does not restart it.
+    [[nodiscard]] double driftOf (int index) const noexcept
+    {
+        return drift_[static_cast<std::size_t> (std::clamp (index, 0, kMaxVoices - 1))];
+    }
+
+    /// Oscillator `index`'s phase, for the test that a note scatters it exactly
+    /// as it always has.
+    [[nodiscard]] double phaseOf (int index) const noexcept
+    {
+        return voices_[static_cast<std::size_t> (std::clamp (index, 0, kMaxVoices - 1))].getPhase();
     }
 
     /// 1 to 7. One voice is a plain oscillator and costs what one costs.
@@ -402,7 +449,7 @@ private:
         if (driftCountdown_ <= 0)
         {
             for (int i = 0; i < kMaxVoices; ++i)
-                driftTarget_[static_cast<std::size_t> (i)] = random_.bipolar();
+                driftTarget_[static_cast<std::size_t> (i)] = driftRandom_.bipolar();
 
             driftCountdown_ = static_cast<int> (sampleRate_ * 0.05);
         }
@@ -454,7 +501,16 @@ private:
     int    incrementCountdown_ { 0 };
 
     std::uint64_t seed_ { 0x5bf03635c1e5a2b3ull };
-    SmallRandom random_;
+
+    /// Folded into the seed for the drift stream, so the two streams are
+    /// unrelated. `seed()` sets the low bit, so any value will do here.
+    static constexpr std::uint64_t kDriftSalt = 0xd1b54a32d192ed03ull;
+
+    /// Two streams on purpose -- see the header. The scatter's is re-seeded on
+    /// every cold note; the drift's is seeded once, at `reset`, and never by a
+    /// note.
+    SmallRandom phaseRandom_;
+    SmallRandom driftRandom_;
 };
 
 } // namespace tezla::dsp
