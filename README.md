@@ -149,8 +149,9 @@ are both latency-matched to the sample. See
 | **[Crossbar](plugins/Crossbar/)** | **Instrument** — the telephone: every DTMF pair and call-progress tone to the published standards, a dialler, and a G.711 line — 300–3400 Hz, 8 kHz, eight *logarithmic* bits | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Phonoss](plugins/Phonoss/)** | Effect — the vocal channel strip: gate, de-esser, two compressors and tone, in the order a vocal is actually mixed. Sibilance is detected as a **ratio** of high-band to body energy, so the same /s/ is reduced identically across 30 dB of input | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Membrana](plugins/Membrana/)** | Effect — the microphone stage, before Phonoss: pattern, body diffraction (the exact rigid-sphere series at finite range), distance and angle from the physics, plus presence that **rides** (leans in when the singer backs off) and a floored detail lift — consonants up, hiss exactly untouched | v0.1.0 — 47/47 on Steinberg's validator |
+| **[Ictus](plugins/Ictus/)** | **Instrument** — the drum synthesiser for drum and bass, in progress: the kick ships first (a sine body under the two pitch drops the TR-808 analysis separates, parallel odd/even harmonics through ADAA, a pitch-tracking tone, click and noise, a tail), with the snare, hats, clap, punch chain, humanise, sample layer and per-pad outputs to follow | v0.1.0 (kick only) — 47/47 on Steinberg's validator; not yet loaded on the rig |
 
-1000 framework-free DSP tests pass on Linux x86-64, which is where development
+1024 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS

@@ -475,3 +475,174 @@ TEZLA_TEST (soft_even_generates_the_even_harmonic_series)
     CHECK (third < second * 1.0e-6);      // odd harmonics must be absent
     CHECK (fourth < second);              // and the series must decay
 }
+
+// ---------------------------------------------------------------------------
+// SoftOdd -- the odd partner of SoftEven, behind Ictus's kick Harmonics.
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (soft_odd_at_zero_gain_is_exactly_silence)
+{
+    // The same rule as the even curve and the folder: a Harmonics knob at zero
+    // is bit-exactly nothing, not a quiet something.
+    const SoftOdd odd { 0.0 };
+
+    for (const double x : { -1.0e6, -4.0, -0.3, 0.0, 0.3, 4.0, 1.0e6 })
+    {
+        CHECK (odd.evaluate (x) == 0.0);
+        CHECK (odd.antiderivative (x) == 0.0);
+    }
+}
+
+TEZLA_TEST (soft_odd_is_odd_and_stays_bounded)
+{
+    for (const double gain : { 0.1, 1.0, 20.0 })
+    {
+        const SoftOdd odd { gain };
+
+        for (const double x : { 1.0e-8, 0.01, 0.5, 1.0, 100.0, 1.0e9 })
+        {
+            CHECK_NEAR (odd.evaluate (-x), -odd.evaluate (x), 1.0e-15);
+            CHECK (odd.evaluate (x) >= 0.0);
+
+            // Never above 1. It approaches 1 from below and, past |u| ~ 1e8,
+            // the double arithmetic lands exactly on it -- so the strict
+            // bound is asserted where the arithmetic can still tell.
+            CHECK (odd.evaluate (x) <= 1.0);
+            if (gain * x < 1.0e6)
+                CHECK (odd.evaluate (x) < 1.0);
+
+            CHECK (std::isfinite (odd.evaluate (x)));
+            CHECK (std::isfinite (odd.antiderivative (x)));
+
+            // The antiderivative of an odd curve is even -- the property the
+            // first draft got wrong.
+            CHECK (odd.antiderivative (-x) == odd.antiderivative (x));
+        }
+    }
+}
+
+TEZLA_TEST (soft_odd_has_no_linear_term_at_all)
+{
+    // Used in parallel with the dry signal, this is what makes the kick's
+    // Harmonics knob add harmonics rather than level: for a small signal the
+    // curve is u|u| -- second order in the level -- and its slope at the
+    // origin is zero, so nothing reaches the fundamental until the body is
+    // actually hot.
+    for (const double gain : { 0.25, 1.0, 8.0 })
+    {
+        const SoftOdd odd { gain };
+
+        for (const double x : { 1.0e-6, 1.0e-4, 1.0e-3 })
+        {
+            // f(x) = u|u| (1 - u^2 + ...), so the leading term is right to
+            // within u^2 -- the same self-scaling tolerance the even test uses,
+            // doubled because here the correction lands exactly on it.
+            const double u = gain * x;
+            const double expected = u * std::abs (u);
+            CHECK_NEAR (odd.evaluate (x) / expected, 1.0, 2.0 * u * u);
+        }
+
+        // The secant of u|u| across +/-step is exactly g^2 * step: it goes to
+        // zero with the step, which is what "no linear term" means for an odd
+        // curve (an even curve's secant is zero by symmetry and says nothing).
+        constexpr double step = 1.0e-9;
+        const double slope = (odd.evaluate (step) - odd.evaluate (-step)) / (2.0 * step);
+        CHECK (slope >= 0.0);
+        CHECK (slope <= 1.001 * gain * gain * step);
+    }
+}
+
+TEZLA_TEST (soft_odd_antiderivative_is_the_integral_of_the_curve)
+{
+    for (const double gain : { 0.05, 0.5, 2.0, 30.0 })
+    {
+        const SoftOdd odd { gain };
+        constexpr double step = 1.0e-7;
+
+        for (const double x : { -3.0, -0.7, -0.05, 0.05, 0.7, 3.0 })
+        {
+            const double numerical = (odd.antiderivative (x + step)
+                                    - odd.antiderivative (x - step)) / (2.0 * step);
+            CHECK_NEAR (numerical, odd.evaluate (x), 1.0e-5);
+        }
+    }
+
+    // The two branches of the antiderivative meet at the threshold: just
+    // below it the series must agree with the closed form to well below
+    // anything ADAA could turn into noise, and at it the closed form is used.
+    const SoftOdd unit { 1.0 };
+    constexpr double at = 0.05;
+    CHECK (unit.antiderivative (at) == at - std::atan (at));
+
+    const double below = at * 0.999;
+    const double closedBelow = below - std::atan (below);
+    CHECK_NEAR (unit.antiderivative (below) / closedBelow, 1.0, 1.0e-12);
+}
+
+TEZLA_TEST (soft_odd_antiderivative_survives_tiny_arguments)
+{
+    // Pinned exactly as for SoftEven: at g*x = 1e-9 the closed form subtracts
+    // two numbers that agree to within one ULP and returns rounding; the
+    // series returns u^3/3 to six figures.
+    constexpr double gain = 1.0e-9;
+    const SoftOdd odd { gain };
+
+    volatile double guard = 1.0;
+    const double x = static_cast<double> (guard);
+
+    const double exact = gain * gain * x * x * x / 3.0;
+    CHECK_NEAR (odd.antiderivative (x) / exact, 1.0, 1.0e-6);
+
+    const double naive = (gain * x - std::atan (gain * x)) / gain;
+    CHECK (std::abs (naive - exact) / exact > 0.1);
+}
+
+TEZLA_TEST (soft_odd_generates_the_odd_harmonic_series)
+{
+    // A sine in comes out with a strong third harmonic and a fifth, and
+    // essentially nothing at the second or the fourth -- the mirror image of
+    // the even test, through the same ADAA.
+    constexpr double sampleRate = 192000.0;
+    constexpr std::size_t fftSize = 1 << 15;
+
+    const double frequency = binExactFrequency (1000.0, sampleRate, fftSize);
+    const auto input = sine (frequency, 1.0, sampleRate, fftSize);
+
+    const SoftOdd odd { 2.0 };
+    Adaa1<SoftOdd> adaa;
+
+    std::vector<double> output (fftSize);
+
+    for (std::size_t i = 0; i < fftSize; ++i)
+        output[i] = adaa.process (input[i], odd);
+
+    const auto spectrum = fftOfReal (output);
+    const double binWidth = sampleRate / static_cast<double> (fftSize);
+
+    const auto levelAt = [&] (int harmonic)
+    {
+        const auto bin = static_cast<std::size_t> (std::llround (frequency * harmonic / binWidth));
+        return std::abs (spectrum[bin]);
+    };
+
+    const double first  = levelAt (1);
+    const double second = levelAt (2);
+    const double third  = levelAt (3);
+    const double fourth = levelAt (4);
+    const double fifth  = levelAt (5);
+
+    // Measured at gain 2 on a full-scale sine: 3rd -24.1 dB, 5th -31.7 dB,
+    // 2nd -139.9 dB re the fundamental. The curve keeps a large fundamental
+    // of its own (u|u| of a sine is 8/3pi of it), which is why the odd
+    // harmonics read low against it and high against the dry signal's
+    // harmonics, which are absent.
+    CHECK (third > 0.05 * first);       // the third is the point of the curve
+    CHECK (fifth > 0.01 * first);
+    CHECK (third > fifth);
+    CHECK (second < 1.0e-6 * first);    // an odd curve makes no even harmonics
+    CHECK (fourth < 1.0e-6 * first);
+
+    std::printf ("        [soft odd] 3rd %.1f dB, 5th %.1f dB, 2nd %.1f dB re fundamental\n",
+                 20.0 * std::log10 (third / first), 20.0 * std::log10 (fifth / first),
+                 20.0 * std::log10 (std::max (second, 1.0e-300) / first));
+}

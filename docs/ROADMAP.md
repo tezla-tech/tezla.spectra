@@ -218,3 +218,68 @@ scalar `Oscillator` as the reference — and neither has a line of code yet.
 The plan names the phases, the tests that must be seen red, and the
 measurements (`tezla-measure sonitus-stress`, the 32 goldens) that decide
 whether each phase lands.
+
+## 9. Ictus — ideas parked at the plan stage
+
+**Parked 2026-09-02 while the plan was written**, so that the first build is
+the plan and not the plan plus its afterthoughts. Each is a contained addition
+to a plugin whose engines are described in `plugins/Ictus/PLAN.md`; none is a
+change to anything already decided.
+
+1. **A per-session "unit tolerance" offset.** The TR-808 bass-drum paper
+   (Werner, Abel, Smith, DAFx-14) attributes unit-to-unit differences to part
+   tolerances. Ictus's *Humanise* is per hit; a small static offset drawn once
+   at `prepare` — the Sonitus voice-temperature idea — would make two instances
+   of the same kit differ the way two machines do. Would change: a second,
+   smaller deviation table applied once per instance, behind the same
+   Humanise knob. Decided by: the user hearing two instances side by side.
+2. **Kick retrigger mode, *restart / add*.** The 808 adds its retrigger pulse
+   to the still-ringing resonator rather than restarting it (the paper's §8),
+   which is why it has no machine-gun effect. Ictus restarts with a 1 ms
+   crossfade. An *add* mode would excite the running body instead. Would
+   change: one append-only choice on the kick pad and a second `noteOn` path.
+   Decided by: a fast roll on the rig.
+3. **A "shifted series" shell for the kick.** Sound On Sound's bass-drum
+   analysis shows a real kick's partials as a harmonic series shifted by a
+   constant (43 Hz + 7 Hz → 50, 93, 136, 179 Hz). The kick's *Harmonics* are
+   true harmonics of the body; a small modal shell at shifted partials would
+   add the acoustic-kick inharmonicity. Would change: a three-mode
+   `ModalResonator` on the kick pad with a *Shell* level, exact at 0.
+   Decided by: whether a DnB kick ever wants it — likely not, hence parked.
+4. **A "Both" output option** (a pad on its own bus *and* in Main). Rejected
+   from v1 because it duplicates audio; trivial to append to the `output`
+   choice list if a workflow needs it.
+5. **Svarayantra adopting `SincInterpolator`.** Its 4-point Hermite has the
+   same top-end droop (−4.4 dB at 20 kHz for a 44.1 k source) and first image
+   (−8 dB) that were measured when Ictus's sample layer was designed. Would
+   change: the player's read path and its measured interpolation figures;
+   bit-exactness with existing renders is lost by design. Decided by: the
+   user asking, after hearing the Ictus layer.
+
+**What would unpark each:** the user saying so, per item.
+
+## 10. Sonitus declares twice its latency
+
+**Found 2026-09-02 on Ictus's first kick**, and left alone in Sonitus until
+the user decides, because fixing it moves its output by half a sample and
+its declared PDC by tens of samples.
+
+`Oversampler::getLatencySamples()` is the **round trip** — upsample and
+downsample, what an effect incurs — and its tap counts (95/65/65) are chosen
+so that sum is a whole number of host samples: 47 / 63 / 71 at ×2 / ×4 / ×8.
+An instrument writes straight into `internalBuffers()` and runs only the
+decimation half, so its real delay is **half of that, and a half-sample**:
+23.5 / 31.5 / 35.5. Sonitus is the one other instrument on that path (the
+others do not oversample their generators), and it declares the round-trip
+figure, so FL Studio's PDC advances it by 23.5 / 31.5 / 35.5 host samples too
+much (0.66 ms at 48 kHz ×4). Ictus measured it (`tests/test_Ictus.cpp`, the latency test), delays
+its internal signal by `factor / 2` samples before decimating and declares
+24 / 32 / 36 — exact to a residual of 1e-6 against the undecimated render.
+
+**Would change**: the same `factor / 2` alignment delay in Sonitus's
+process loop, `getLatencySamples()` returning `(roundTrip + 1) / 2`, and its
+"new latency" tests updated. The output shifts by half a host sample, so
+existing renders no longer null against new ones (the 32 goldens included),
+and every saved project's PDC moves.
+
+**What would unpark it:** the user saying so.

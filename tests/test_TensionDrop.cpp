@@ -9,14 +9,20 @@
 
 #include <cmath>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 #include <tezla/dsp/ModalResonator.hpp>
+#include <tezla/dsp/TensionDrop.hpp>
 
-#include "TensionDrop.hpp"
+#include "TensionDrop.hpp"   // Malleus's forwarding header
 
 using tezla::dsp::ModalResonator;
-using tezla::malleus::TensionDrop;
+using tezla::dsp::TensionDrop;
+
+// The promotion to shared/tezla-dsp left Malleus a name, not a copy: one
+// class, two namespaces. A second implementation would drift.
+static_assert (std::is_same_v<tezla::malleus::TensionDrop, tezla::dsp::TensionDrop>);
 
 TEZLA_TEST (the_drop_starts_at_depth_and_lands_at_the_stated_time)
 {

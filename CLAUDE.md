@@ -373,6 +373,16 @@ squarely the plugin's problem, not the host's, for two reasons:
   picks tap counts per stage (95/65/65) so the round-trip latency is a **whole
   number of base-rate samples** at every factor — 47/63/71 for x2/x4/x8.
   A fractional latency cannot be reported honestly to a host.
+- **An instrument's latency is half that round trip, and a half-sample.** A
+  generator writes into `Oversampler::internalBuffers()` and runs only the
+  decimation half, so its delay is 23.5 / 31.5 / 35.5 host samples at
+  ×2 / ×4 / ×8 — not the 47 / 63 / 71 that `getLatencySamples()` reports.
+  Found on Ictus's first kick (a ×4 onset arrived 0.66 ms earlier than the
+  declared figure said). Ictus delays its internal signal by `factor / 2`
+  samples before decimating and declares 24 / 32 / 36, measured to a
+  residual of 1e-6 against the undecimated render; Sonitus, the one other
+  instrument on that path, still declares the round trip — `docs/ROADMAP.md`
+  §10.
 - Filter coefficients are **always** computed from the actual sample rate.
   Never hard-code a coefficient derived at 44.1 or 48 k.
 - **But that alone is not enough, and this has been measured.** The bilinear
@@ -816,8 +826,11 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   positions); **Membrana is complete through MB7** — the microphone stage
   (`Tzmb`, before Phonoss in the vocal chain), `plugins/Membrana/PLAN.md` is
   the worked example of a plan whose three source papers were user-supplied
-  PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). No plugin is
-  currently in flight; Prism remains parked at the user's request.
+  PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). **Ictus is in
+  flight** — the drum synthesiser (`Tzic`), `plugins/Ictus/PLAN.md`, resumed
+  from its first `pending` phase; its thirteen sources are user-supplied PDFs
+  in `technical references/drumsynth./` (the folder name ends in a dot), read
+  first-hand on 2026-09-02. Prism remains parked at the user's request.
 - **What is parked lives in `docs/ROADMAP.md`** — the other half of the PLAN.md
   rule. A plan tracks work in flight; the roadmap tracks work deliberately not
   started, and each item names the reason it was parked and the specific thing
