@@ -19,6 +19,11 @@
 // The pad's MIDI note is a state-tree property, not a parameter: it is not
 // automatable and a preset must not remap the player's notes
 // (plugins/Ictus/PLAN.md). Note-learn writes it from the message thread.
+//
+// Schema 2, from the rig's first ear round: Gate and Release on the kick,
+// Bass mode (every key plays Kick 1 at the key's pitch), and the shared
+// tuning page behind both -- the processor is the ui::TuningHost, exactly as
+// Malleus is, with the scale handed to the audio thread by a swap.
 
 #include <atomic>
 #include <vector>
@@ -26,7 +31,10 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/Oversampler.hpp>
+#include <tezla/dsp/Scales.hpp>
+#include <tezla/dsp/Tuning.hpp>
 #include <tezla/ui/AbCompare.hpp>
+#include <tezla/ui/TuningHost.hpp>
 
 #include <IctusEngine.hpp>
 
@@ -79,6 +87,14 @@ inline constexpr auto k1VelDecay  = "k1VelDecay";
 inline constexpr auto output             = "output";
 inline constexpr auto oversampling       = "oversampling";
 inline constexpr auto renderOversampling = "renderOversampling";
+
+// ---- schema 2: the rig's first ear round -----------------------------------
+// KICK 1 -- gate
+inline constexpr auto k1Gate      = "k1Gate";
+inline constexpr auto k1Release   = "k1Release";
+
+// GLOBAL -- Bass mode
+inline constexpr auto bassMode    = "bassMode";
 } // namespace ids
 
 /// Choice lists. **APPEND-ONLY**: a choice parameter stores an index.
@@ -98,7 +114,8 @@ static_assert (static_cast<int> (dsp::RenderOversampling::sameAsLive) == 0
             && static_cast<int> (dsp::RenderOversampling::X8)         == 4,
                "the render option list is indexed straight into RenderOversampling");
 
-class IctusProcessor final : public juce::AudioProcessor
+class IctusProcessor final : public juce::AudioProcessor,
+                             public ui::TuningHost
 {
 public:
     IctusProcessor();
@@ -149,6 +166,29 @@ public:
     void setTooltipsEnabled (bool enabled) noexcept { tooltipsEnabled_ = enabled; }
     [[nodiscard]] bool getTooltipsEnabled() const noexcept { return tooltipsEnabled_; }
 
+    // ---- the tuning (message thread; mirrors Malleus) ----------------------
+
+    juce::String loadScalaText (const juce::String& text, const juce::String& name) override;
+    juce::String loadKeyboardMapText (const juce::String& text) override;
+    juce::String selectBuiltInScale (const juce::String& name) override;
+    void resetTuning() override;
+
+    [[nodiscard]] const dsp::Scale& getScale() const noexcept override { return scale_; }
+    [[nodiscard]] juce::String getScaleName() const noexcept override { return scaleName_; }
+    [[nodiscard]] juce::String describeTuning() const override;
+    [[nodiscard]] double getRootHz() const noexcept override;
+
+    void setConcertPitch (double hz) override;
+    [[nodiscard]] double getConcertPitch() const noexcept override { return concertPitchHz_; }
+
+    /// What the current tuning plays for a key, from a message-thread twin.
+    [[nodiscard]] double previewFrequencyFor (int midiNote) const;
+
+    /// Live tooltips for the BASS lamp and the KEY switch: what a key plays
+    /// right now, through which scale, in Hz -- not something to work out.
+    [[nodiscard]] juce::String describeKeying() const;
+    [[nodiscard]] juce::String describeFollowKey() const;
+
     // ---- what the editor reads ------------------------------------------
 
     [[nodiscard]] int getActiveHitCount() const noexcept { return activeHits_.load(); }
@@ -171,6 +211,9 @@ private:
     void pullParameters();
     void handleMidi (const juce::MidiMessage& message);
 
+    void publishTuning();
+    void collectTuning() noexcept;
+
     juce::AudioProcessorValueTreeState state_;
     ui::AbCompare abCompare_ { state_, {} };
 
@@ -188,6 +231,26 @@ private:
     double sampleRate_ { 48000.0 };
     int reportedLatency_ { 0 };
     std::atomic<int> activeHits_ { 0 };
+
+    // ---- tuning hand-off (the Malleus arrangement) ---------------------------
+    dsp::Scale scale_;
+    double concertPitchHz_ { 440.0 };
+    double pendingConcertHz_ { 440.0 };
+    dsp::KeyboardMap keyboardMap_;
+    bool hasKeyboardMap_ { false };
+
+    dsp::Scale pendingScale_;
+    dsp::KeyboardMap pendingMap_;
+    std::atomic<bool> tuningPending_ { false };
+    juce::SpinLock tuningLock_;
+
+    juce::String scalaText_;
+    juce::String keyboardMapText_;
+    juce::String scaleName_;
+
+    /// Message-thread twin of the engine's tuning, for the tooltips and the
+    /// panel's table.
+    dsp::Tuning previewTuning_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IctusProcessor)
 };

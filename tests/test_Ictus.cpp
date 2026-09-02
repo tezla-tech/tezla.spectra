@@ -33,9 +33,9 @@ namespace
 
 struct Hit
 {
-    int sample;          ///< host sample the note lands on
+    int sample;          ///< host sample the event lands on
     int note;
-    double velocity;
+    double velocity;     ///< a negative velocity is a note-OFF for `note`
 };
 
 struct Choke
@@ -73,7 +73,12 @@ std::vector<double> render (const EngineParameters& parameters, double rate, int
     {
         for (const auto& hit : hits)
             if (hit.sample == done)
-                engine.noteOn (hit.note, hit.velocity);
+            {
+                if (hit.velocity < 0.0)
+                    engine.noteOff (hit.note);
+                else
+                    engine.noteOn (hit.note, hit.velocity);
+            }
 
         for (const auto& choke : chokes)
             if (choke.sample == done)
@@ -698,4 +703,206 @@ TEZLA_TEST (two_kicks_fit_their_budget_and_an_idle_instrument_costs_nothing)
 
     CHECK_CPU_BUDGET (activeSeconds, 0.10, "two kicks, everything on, 48 kHz x4");
     CHECK_CPU_BUDGET (idleSeconds, 0.01, "idle instrument");
+}
+
+// ---------------------------------------------------------------------------
+// Bass mode and the gate -- from the first ear round on the rig
+// ---------------------------------------------------------------------------
+
+namespace
+{
+int lastNonZeroSample (const std::vector<double>& x)
+{
+    int last = -1;
+
+    for (std::size_t n = 0; n < x.size(); ++n)
+        if (x[n] != 0.0)
+            last = static_cast<int> (n);
+
+    return last;
+}
+
+double peakFrom (const std::vector<double>& x, int from)
+{
+    double peak = 0.0;
+
+    for (std::size_t n = static_cast<std::size_t> (from); n < x.size(); ++n)
+        peak = std::max (peak, std::abs (x[n]));
+
+    return peak;
+}
+} // namespace
+
+TEZLA_TEST (bass_mode_plays_the_kick_on_every_key_at_that_keys_pitch)
+{
+    // With Bass mode on, every key strikes Kick 1 at the key's pitch through
+    // the tuning -- 12-TET at A4 = 440 Hz until a scale is loaded: note 36
+    // lands on 65.41 Hz, 43 on 98.00, 48 on 130.81 -- and the pad's own note
+    // stops being special. With it off, a key that is not a pad's note is
+    // silent, which is what the rig showed for "Follow key" alone.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    EngineParameters parameters;
+    parameters.kick1 = neutralKick();
+    parameters.kick1.decaySeconds = 0.6;
+    parameters.bassMode = true;
+
+    const std::pair<int, double> keys[] { { 36, 65.4064 }, { 43, 97.9989 }, { 48, 130.8128 } };
+
+    for (const auto& [note, hz] : keys)
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+
+        const auto out = render (parameters, rate, samples, { { 0, note, 1.0 } }, 256, {}, engine.get());
+        const auto times = crossings (out, rate);
+
+        CHECK (times.size() > 20);
+
+        // A silent key has already failed the check above; measuring its
+        // pitch would index an empty list.
+        if (times.size() < 3)
+            continue;
+
+        // The mean period over the settled cycles, in cents against the
+        // tuning's frequency for that key.
+        const double measured = static_cast<double> (times.size() - 2) / (times.back() - times[1]);
+        const double cents = 1200.0 * std::log2 (measured / hz);
+
+        std::printf ("        [bass] note %d: %.3f Hz, %.3f cents from %.3f\n", note, measured, cents, hz);
+        CHECK_NEAR (cents, 0.0, 0.5);
+        CHECK (engine->activeHitCount() == 1);
+    }
+
+    // Off: note 43 strikes nothing at all.
+    parameters.bassMode = false;
+
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+
+    const auto out = render (parameters, rate, 4800, { { 0, 43, 1.0 } }, 256, {}, engine.get());
+
+    CHECK (engine->activeHitCount() == 0);
+    CHECK (peakFrom (out, 0) == 0.0);
+}
+
+TEZLA_TEST (a_gated_kick_releases_at_note_off_and_a_one_shot_ignores_it)
+{
+    // The hold and decay are the hit's shape; the gate adds the early exit a
+    // fill needs. Note-off at 200 ms into a 2 s decay: a one-shot pad plays
+    // on regardless; a gated pad with a 50 ms release is exactly silent
+    // shortly after 250 ms; with Release at 0 it is gone within 2 ms -- and
+    // in neither case does the output step by more than a 1 ms ramp of the
+    // level can, where a cut would step by the whole level.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 48000;
+    constexpr int off = 9600;
+
+    EngineParameters parameters;
+    parameters.kick1 = neutralKick();
+    parameters.kick1.tuneHz = 100.0;
+    parameters.kick1.decaySeconds = 2.0;
+
+    const std::vector<Hit> events { { 0, 36, 1.0 }, { off, 36, -1.0 } };
+
+    // ---- one-shot ----
+    parameters.kick1.gate = false;
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+        const auto out = render (parameters, rate, samples, events, 256, {}, engine.get());
+
+        CHECK (engine->activeHitCount() == 1);
+        CHECK (peakFrom (out, 43200) > 0.05);
+    }
+
+    // The body's own largest step, for the click bound below.
+    const double bodyStep = maxStep (render (parameters, rate, samples, { { 0, 36, 1.0 } }));
+
+    // ---- gated, 50 ms release ----
+    parameters.kick1.gate = true;
+    parameters.kick1.releaseSeconds = 0.05;
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+        const auto out = render (parameters, rate, samples, events, 256, {}, engine.get());
+        const int last = lastNonZeroSample (out);
+
+        std::printf ("        [gate] release 50 ms: note-off at %.1f ms, last non-zero at %.1f ms, max step %.4f (body %.4f)\n",
+                     1000.0 * off / rate, 1000.0 * last / rate, maxStep (out), bodyStep);
+
+        CHECK (engine->activeHitCount() == 0);
+        CHECK (last > off);
+        CHECK (last < off + static_cast<int> (0.05 * rate) + 400);
+        CHECK (maxStep (out) <= bodyStep + 1.0e-3);
+    }
+
+    // ---- gated, release 0: the 1 ms cut ----
+    parameters.kick1.releaseSeconds = 0.0;
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+        const auto out = render (parameters, rate, samples, events, 256, {}, engine.get());
+        const int last = lastNonZeroSample (out);
+
+        std::printf ("        [gate] release 0: last non-zero at %.2f ms after the note-off, max step %.4f\n",
+                     1000.0 * (last - off) / rate, maxStep (out));
+
+        CHECK (engine->activeHitCount() == 0);
+        CHECK (last > off);
+        CHECK (last < off + static_cast<int> (0.002 * rate) + 100);
+
+        // A 1 ms ramp from full level steps 1/48 per host sample at most; a
+        // cut would step by the level itself.
+        CHECK (maxStep (out) <= bodyStep + 1.0 / (0.001 * rate) + 1.0e-3);
+        CHECK (maxStep (out) < 0.1);
+    }
+
+    // ---- a note-off after the hit has landed changes nothing ----
+    parameters.kick1.decaySeconds = 0.1;
+    parameters.kick1.releaseSeconds = 0.05;
+    {
+        const auto plain = render (parameters, rate, 24000, { { 0, 36, 1.0 } });
+        const auto late = render (parameters, rate, 24000, { { 0, 36, 1.0 }, { 12000, 36, -1.0 } });
+
+        double worst = 0.0;
+        for (std::size_t n = 0; n < plain.size(); ++n)
+            worst = std::max (worst, std::abs (plain[n] - late[n]));
+
+        CHECK (worst == 0.0);
+    }
+}
+
+TEZLA_TEST (in_bass_mode_a_note_off_releases_only_the_hit_its_key_started)
+{
+    // A bass line played legato: C held, D pressed (the pad retriggers, C's
+    // hit fades in the crossfade), C released -- D must play on -- then D
+    // released, and the pad is silent. The gate keys on the note, not the
+    // pad.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 48000;
+
+    EngineParameters parameters;
+    parameters.kick1 = neutralKick();
+    parameters.kick1.decaySeconds = 2.0;
+    parameters.kick1.gate = true;
+    parameters.kick1.releaseSeconds = 0.02;
+    parameters.bassMode = true;
+
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+
+    const auto out = render (parameters, rate, samples,
+                             { { 0, 36, 1.0 }, { 4800, 38, 1.0 }, { 7200, 36, -1.0 }, { 24000, 38, -1.0 } },
+                             256, {}, engine.get());
+
+    // D still sounding well after C's release...
+    CHECK (peakFrom (out, 12000) > 0.05);
+
+    // ...and everything gone after D's.
+    const int last = lastNonZeroSample (out);
+    CHECK (last > 24000);
+    CHECK (last < 24000 + static_cast<int> (0.02 * rate) + 400);
+    CHECK (engine->activeHitCount() == 0);
 }

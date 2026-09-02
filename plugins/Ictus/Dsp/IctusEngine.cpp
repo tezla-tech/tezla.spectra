@@ -15,14 +15,6 @@
 
 namespace tezla::ictus {
 
-namespace
-{
-[[nodiscard]] double noteToHz (int note) noexcept
-{
-    return 440.0 * std::exp2 ((static_cast<double> (note) - 69.0) / 12.0);
-}
-} // namespace
-
 void Engine::prepare (double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -84,7 +76,7 @@ void Engine::reconcileFactor() noexcept
 }
 
 void Engine::startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings& settings,
-                        int note, double velocity) noexcept
+                        int note, double velocity, bool keyed) noexcept
 {
     reconcileFactor();
 
@@ -93,25 +85,51 @@ void Engine::startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings
     const std::uint64_t seed = (kSeedBase ^ (kPadSalt * static_cast<std::uint64_t> (static_cast<int> (index) + 1)))
                              + kHitGolden * hitCount_;
 
-    const double endHz = settings.followKey ? noteToHz (note) : settings.tuneHz;
+    // The landed pitch: from the key through the tuning in Bass mode or
+    // with Follow key lit, else the pad's own Tune.
+    const double endHz = (keyed || settings.followKey) ? tuning_.frequencyFor (note)
+                                                       : settings.tuneHz;
 
     // A note between two process() calls lands at whatever offset the
     // control grid is at; the hit gets that many samples as its first,
     // partial chunk. Zero means the tick is due and will serve it.
     const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
 
-    pad.start (settings, endHz, velocity, seed, toBoundary);
+    pad.start (note, settings, endHz, velocity, seed, toBoundary);
 }
 
 void Engine::noteOn (int note, double velocity) noexcept
 {
+    // Bass mode: every key is Kick 1 at that key's pitch, nothing else
+    // sounds. A tuned sub-bass instrument made of the kick.
+    if (parameters_.bassMode)
+    {
+        startKick (kick1_, PadIndex::kick1, parameters_.kick1, note, velocity, true);
+        return;
+    }
+
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick1)])
-        startKick (kick1_, PadIndex::kick1, parameters_.kick1, note, velocity);
+        startKick (kick1_, PadIndex::kick1, parameters_.kick1, note, velocity, false);
 
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick2)])
-        startKick (kick2_, PadIndex::kick2, parameters_.kick2, note, velocity);
+        startKick (kick2_, PadIndex::kick2, parameters_.kick2, note, velocity, false);
 
     // The other six pads arrive with their engines (I3, I4).
+}
+
+void Engine::noteOff (int note) noexcept
+{
+    if (parameters_.bassMode)
+    {
+        kick1_.release (note);
+        return;
+    }
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick1)])
+        kick1_.release (note);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick2)])
+        kick2_.release (note);
 }
 
 void Engine::allNotesOff() noexcept

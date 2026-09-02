@@ -107,6 +107,14 @@ struct KickSettings
     double tailSeconds { 1.0 };          ///< the tail's decay, 0.1..4
     double level { 0.8 };                ///< 0..1
 
+    // ---- gate -----------------------------------------------------------
+    /// Lit: a note-off RELEASES the hit from wherever its envelopes are,
+    /// over `releaseSeconds`; dark: a one-shot that ignores note-off. The
+    /// hold and decay are the hit's shape either way -- the gate only adds
+    /// the early exit a fill needs.
+    bool   gate { false };
+    double releaseSeconds { 0.0 };       ///< 0..2; 0 is a 1 ms cut, the shortest that does not click
+
     // ---- velocity amounts, all of the form x * ((1 - a) + a * v) --------
     double velocityLevel { 1.0 };
     double velocityClick { 0.6 };
@@ -132,6 +140,11 @@ public:
     /// Shaper gain at Harmonics = 1 (it is 1 + 3h, so a full-scale body sits
     /// well into both curves at the top of the knob).
     static constexpr double kShaperGainAtFull = 4.0;
+
+    /// The shortest release: a note-off with Release at 0 ramps out over
+    /// this rather than stepping to zero, which would click. Inaudible as a
+    /// tail, exact as a stop.
+    static constexpr double kMinimumReleaseSeconds = 0.001;
 
     static constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
@@ -225,7 +238,11 @@ public:
         amp_.setDecaySeconds (scaled (std::clamp (s.decaySeconds, 0.02, 2.0), s.velocityDecay));
         amp_.setDecayTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
         amp_.setSustain (0.0);
-        amp_.setReleaseSeconds (0.0);
+
+        gate_ = s.gate;
+        release_ = std::max (kMinimumReleaseSeconds, std::clamp (s.releaseSeconds, 0.0, 2.0));
+        amp_.setReleaseSeconds (release_);
+        amp_.setReleaseTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
         amp_.noteOn();
 
         tailMix_ = std::clamp (s.tailMix, 0.0, 1.0);
@@ -241,7 +258,8 @@ public:
             tail_.setDecaySeconds (std::clamp (s.tailSeconds, 0.1, 4.0));
             tail_.setDecayTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
             tail_.setSustain (0.0);
-            tail_.setReleaseSeconds (0.0);
+            tail_.setReleaseSeconds (release_);
+            tail_.setReleaseTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
             tail_.noteOn();
         }
 
@@ -330,6 +348,24 @@ public:
         if (toneOn_)
             tone_.setCutoffHz (toneRatio_ * hz);   // guarded: nothing to do once landed
     }
+
+    /// Note-off. A gated hit releases both envelopes from wherever they are
+    /// over the release time -- an envelope that has already landed is
+    /// idle and unchanged, so a gate that opens late changes nothing. A
+    /// one-shot hit ignores this entirely, which is what a drum pad does.
+    void release() noexcept
+    {
+        if (! active_ || ! gate_)
+            return;
+
+        if (amp_.isActive())
+            amp_.noteOff();
+
+        if (tailOn_ && tail_.isActive())
+            tail_.noteOff();
+    }
+
+    [[nodiscard]] bool isGated() const noexcept { return gate_; }
 
     /// One internal sample. Exactly 0.0 when the hit is over.
     [[nodiscard]] double process() noexcept
@@ -449,6 +485,8 @@ private:
     bool tailOn_ { false };
     double tailMix_ { 0.0 };
     double gain_ { 1.0 };
+    bool gate_ { false };
+    double release_ { kMinimumReleaseSeconds };
 
     // harmonics
     bool harmonicsOn_ { false };

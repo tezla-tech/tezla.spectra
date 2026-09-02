@@ -126,14 +126,42 @@ void ControlPage::setNote (const juce::String& note)
 void ControlPage::setControlEnabled (const char* parameterId, bool enabled)
 {
     const juce::String id { parameterId };
+    const auto colour = enabled ? nameColour() : nameColour().withAlpha (0.35f);
 
     for (auto& knob : knobs_)
         if (knob->id == id)
         {
             knob->slider.setEnabled (enabled);
-            knob->label.setColour (juce::Label::textColourId,
-                                   enabled ? nameColour() : nameColour().withAlpha (0.35f));
+            knob->label.setColour (juce::Label::textColourId, colour);
             knob->label.repaint();
+        }
+
+    for (auto& item : switches_)
+        if (item->id == id)
+        {
+            item->button->setEnabled (enabled);
+            item->button->setAlpha (enabled ? 1.0f : 0.45f);
+            item->label.setColour (juce::Label::textColourId, colour);
+            item->label.repaint();
+        }
+}
+
+void ControlPage::setTooltip (const char* parameterId, const juce::String& tooltip)
+{
+    const juce::String id { parameterId };
+
+    for (auto& knob : knobs_)
+        if (knob->id == id)
+        {
+            knob->slider.setTooltip (tooltip);
+            knob->label.setTooltip (tooltip);
+        }
+
+    for (auto& item : switches_)
+        if (item->id == id)
+        {
+            item->button->setTooltip (tooltip);
+            item->label.setTooltip (tooltip);
         }
 }
 
@@ -270,10 +298,34 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
                            "(measured 0.001% of a core).");
     addAndMakeVisible (hitsLabel_);
 
+    // BASS: the whole keyboard plays Kick 1 at the key's pitch. A global, so
+    // it lives in the strip rather than on the kick's page. Its tooltip is
+    // live -- which scale, and what C1 plays through it.
+    bassButton_.setComponentID ("bass");
+    bassButton_.setClickingTogglesState (true);
+    addAndMakeVisible (bassButton_);
+    bassAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        ictus_.getState(), ids::bassMode, bassButton_);
+
+    kickTab_.setComponentID ("page-kick");
+    kickTab_.setTooltip ("Kick 1's controls.");
+    kickTab_.onClick = [this] { showPage (0); };
+    addAndMakeVisible (kickTab_);
+
+    tuningTab_.setComponentID ("page-tuning");
+    tuningTab_.setTooltip ("The tuning that Bass mode and Follow key play through: built-in "
+                           "scales, Scala .scl and .kbm files, concert pitch. It travels with "
+                           "the project as text. Costs nothing: a hit reads one frequency.");
+    tuningTab_.onClick = [this] { showPage (1); };
+    addAndMakeVisible (tuningTab_);
+
     buildPage();
+    buildTuningPage();
+    showPage (0);
 
     tooltips_.setEnabled (ictus_.getTooltipsEnabled());
     refreshHeaderTooltips();
+    refreshKeyTooltips();
     updateGreying();
 
     setResizable (true, true);
@@ -302,10 +354,11 @@ void IctusEditor::buildPage()
         "sub kick; 60 to 70 sits up where a break lives. With Follow key lit the "
         "MIDI note sets this instead.");
 
+    // The text is replaced with the live one (which scale, what the pad's
+    // note plays through it) the moment the editor is up.
     page_->addSwitch (ids::k1FollowKey, "Follow key", "Key",
-        "Lit: the landed pitch comes from the MIDI note (C1 = 32.7 Hz, E1 = 41.2, "
-        "G1 = 49.0) so the kick can sit in the track's key. Dark: Tune sets it and "
-        "every note on the pad plays the same kick.");
+        "Lit: the landed pitch comes from the MIDI note through the TUNING page's "
+        "scale. Dark: Tune sets it.");
 
     page_->addKnob (ids::k1Start, "Start",
         "How far above the landed pitch the hit starts, 0 to 60 semitones. This is "
@@ -409,6 +462,21 @@ void IctusEditor::buildPage()
         "the sub that fills a bar; keep an eye on how it meets the next hit -- a "
         "retrigger crossfades the old one out over 1 ms.");
 
+    // ---- gate: the envelope's early exit ----
+    page_->addSwitch (ids::k1Gate, "Gate", "Gate",
+        "Lit: a note-off RELEASES the hit from wherever its envelope is, over "
+        "Release -- so a fast fill does not pile each hit's tail onto the next, "
+        "and in Bass mode a note ends when the key lifts. Hold and Decay still "
+        "shape the hit. Dark: a one-shot that plays its whole length whatever "
+        "the key does. The HIT button always plays the whole hit.");
+
+    page_->addKnob (ids::k1Release, "Release",
+        "How long a gated hit takes to fall silent after the key lifts, 0 to 2 s. "
+        "0 is a 1 ms cut, the shortest that does not click (measured: the largest "
+        "output step equals the body's own, 0.013). 20 to 60 ms is a natural stop; "
+        "long values are a second decay that starts when the key lifts. Does "
+        "nothing with Gate dark, and nothing at all once the hit has landed.");
+
     page_->addKnob (ids::k1Level, "Level",
         "The kick's own level before the output trim, 0 to 100%. At 100 a Phase "
         "90 hit peaks at full scale; the defaults sit at 80 so the click and "
@@ -441,10 +509,57 @@ void IctusEditor::buildPage()
     addAndMakeVisible (*page_);
 }
 
+void IctusEditor::buildTuningPage()
+{
+    // The shared microtuning panel: the processor is its TuningHost, exactly
+    // as it is for Malleus, Sonitus and Svarayantra. Only the explanation is
+    // this instrument's.
+    tuningPage_ = std::make_unique<ui::TuningPanel> (ictus_, palette_,
+        "Bass mode plays Kick 1 on every key through this tuning, and Follow key reads it "
+        "too. A kick is a sine that lands on a pitch, so a just fifth against the bass "
+        "locks where a tempered one beats -- the sub either sits or it churns. The scale "
+        "travels with the project as .scl text. Tune, Start and Sigh stay in Hz and "
+        "semitones: they are the shape of the hit, not the scale.");
+
+    addChildComponent (*tuningPage_);
+}
+
+void IctusEditor::styleTab (juce::TextButton& tab, bool active)
+{
+    // The active tab wears the accent; the other is a dark plate with the
+    // accent on it, so the row is a key to where things are.
+    tab.setColour (juce::TextButton::buttonColourId,
+                   active ? palette_.accent : palette_.panel.brighter (0.18f));
+    tab.setColour (juce::TextButton::textColourOffId,
+                   active ? palette_.background : palette_.accent);
+}
+
+void IctusEditor::showPage (int index)
+{
+    currentPage_ = juce::jlimit (0, 1, index);
+
+    styleTab (kickTab_, currentPage_ == 0);
+    styleTab (tuningTab_, currentPage_ == 1);
+
+    page_->setVisible (currentPage_ == 0);
+    tuningPage_->setVisible (currentPage_ == 1);
+
+    if (currentPage_ == 1)
+        tuningPage_->refresh();
+
+    resized();
+}
+
 void IctusEditor::refreshHeaderTooltips()
 {
     header_->setOversamplingTooltip (ictus_.describeOversampling());
     header_->setRenderTooltip (ictus_.describeRenderQuality());
+}
+
+void IctusEditor::refreshKeyTooltips()
+{
+    bassButton_.setTooltip (ictus_.describeKeying());
+    page_->setTooltip (ids::k1FollowKey, ictus_.describeFollowKey());
 }
 
 void IctusEditor::updateGreying()
@@ -460,17 +575,27 @@ void IctusEditor::updateGreying()
     const bool toneOn = read (ids::k1ToneOn) > 0.5f;
     const bool harmonics = read (ids::k1Harmonics) > 0.0f;
     const bool tail = read (ids::k1Tail) > 0.0f;
+    const bool gate = read (ids::k1Gate) > 0.5f;
 
-    if (toneOn == shownToneOn_ && harmonics == shownHarmonics_ && tail == shownTail_)
+    // Tune does nothing while the key sets the pitch -- Follow key lit, or
+    // Bass mode, which keys every hit.
+    const bool keyed = read (ids::k1FollowKey) > 0.5f || read (ids::bassMode) > 0.5f;
+
+    if (toneOn == shownToneOn_ && harmonics == shownHarmonics_ && tail == shownTail_
+        && gate == shownGate_ && keyed == shownKeyed_)
         return;
 
     shownToneOn_ = toneOn;
     shownHarmonics_ = harmonics;
     shownTail_ = tail;
+    shownGate_ = gate;
+    shownKeyed_ = keyed;
 
     page_->setControlEnabled (ids::k1Tone, toneOn);
     page_->setControlEnabled (ids::k1Even, harmonics);
     page_->setControlEnabled (ids::k1TailTime, tail);
+    page_->setControlEnabled (ids::k1Release, gate);
+    page_->setControlEnabled (ids::k1Tune, ! keyed);
 }
 
 void IctusEditor::timerCallback()
@@ -506,6 +631,26 @@ void IctusEditor::timerCallback()
         refreshHeaderTooltips();
     }
 
+    // The key tooltips name the scale and what a key plays through it; the
+    // tuning page's table reads the same host. Both follow a change made
+    // anywhere -- the panel, a preset, a state load.
+    const juce::String scale = ictus_.getScaleName() + " @ " + juce::String (ictus_.getConcertPitch(), 3);
+    const bool bass = read (ids::bassMode) > 0;
+    const int padNote = ictus_.getPadNote (PadIndex::kick1);
+
+    if (scale != shownScale_ || bass != shownBass_ || padNote != shownPadNote_)
+    {
+        const bool scaleMoved = scale != shownScale_;
+
+        shownScale_ = scale;
+        shownBass_ = bass;
+        shownPadNote_ = padNote;
+        refreshKeyTooltips();
+
+        if (scaleMoved && tuningPage_->isVisible())
+            tuningPage_->refresh();
+    }
+
     updateGreying();
 }
 
@@ -524,10 +669,19 @@ void IctusEditor::resized()
     hitButton_.setBounds (strip.removeFromLeft (64));
     strip.removeFromLeft (10);
     hitsLabel_.setBounds (strip.removeFromRight (140));
+
+    // Tabs at the right of the strip, the BASS lamp beside them.
+    tuningTab_.setBounds (strip.removeFromRight (84).reduced (2, 0));
+    kickTab_.setBounds (strip.removeFromRight (70).reduced (2, 0));
+    strip.removeFromRight (12);
+    bassButton_.setBounds (ui::LampButton::sized (64, 26).withCentre (strip.removeFromRight (72).getCentre()));
+    strip.removeFromRight (8);
+
     padLabel_.setBounds (strip);
 
     bounds.reduce (8, 6);
     page_->setBounds (bounds);
+    tuningPage_->setBounds (bounds);
 }
 
 } // namespace tezla::ictus

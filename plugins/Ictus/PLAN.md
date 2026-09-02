@@ -522,7 +522,8 @@ CLAUDE.md.
 |---|---|
 | I0 plan + registry + references + roadmap | done |
 | I1 kick engine + engine skeleton + TensionDrop promotion + SoftOdd | done |
-| I2 minimal JUCE layer, kick only, rig build + ear round | done in code; **the rig's ear round is the user's and has not happened** |
+| I2 minimal JUCE layer, kick only, rig build + ear round | done — **played on the rig 2026-09-02** ("wow that sounds great"); the round's asks are the I2.1 row |
+| I2.1 the rig's first ear round: Bass mode, Gate + Release, tuning page | done in code; not yet played on the rig |
 | I3 snare engine | pending |
 | I4 hat + clap engines, choke | pending |
 | I5 punch chain + TransientShaper | pending |
@@ -562,7 +563,46 @@ shared header, a pad strip with HIT and the hit count, seven columns of
 knobs and two lamp switches, greying for Even / Tone / Tail time). Built and
 photographed through `tezla-render-Ictus editor`: a scripted press and
 release on HIT, 150 ms of audio and two timer ticks read "1 hit sounding".
-Steinberg's validator: 47 of 47. Nobody has loaded it in FL Studio yet.
+Steinberg's validator: 47 of 47. Loaded and played in FL Studio on the rig
+the same day.
+
+**I2.1 — the rig's first ear round** (2026-09-02). Two findings from the
+user, both about what happens between the keyboard and the pad:
+
+1. *Follow key* only ever sounded on the pad's own note, so it was a fixed
+   transposition rather than a keyboard. The engine's `startKick` now takes
+   the landed pitch from `dsp::Tuning::frequencyFor (note)` (the shared
+   tuning, 12-TET at A4 = 440 Hz until a scale is loaded) whenever the hit is
+   keyed, and **Bass mode** (`bassMode`, a global switch in the strip) makes
+   every key strike Kick 1 at the key's pitch with the other pads silent — a
+   tuned sub-bass instrument made of the kick. Microtuning came with it for
+   free: `IctusProcessor` is a `ui::TuningHost` exactly as Malleus is
+   (publish under a `SpinLock`, `swapScale` on the audio thread, scale and
+   map as text in the state), and the editor's second page is the shared
+   `ui::TuningPanel`. The Key and BASS tooltips are live (`describeKeying`,
+   `describeFollowKey`): which scale, and what C1, C2 and G2 play through it.
+2. A one-shot's tail piles up under a fast fill. **Gate** (`k1Gate`) makes a
+   note-off release the hit from wherever its envelopes are, over
+   **Release** (`k1Release`, 0–2 s, skewed to 100 ms); Release 0 is a 1 ms
+   cut — `KickEngine::kMinimumReleaseSeconds` — the shortest that does not
+   click. Both AHD envelopes (amp and tail) get the release with the decay's
+   tension. A note-off after the hit has landed changes nothing, bit for bit,
+   and the pad releases only the hit *that key* started (`Pad::release
+   (note)`, the slot remembers its note), so a legato bass line holds.
+
+   Parameters appended at `kSchemaV2`, all neutral by default; preset *Bass
+   Keys* on the end of the list. Measured (`tezla-tests bass`, `gated`,
+   `note_off`): notes 36 / 43 / 48 land on 65.406 / 97.999 / 130.813 Hz,
+   within 0.001 cents; note-off at 200 ms into a 2 s decay with a 50 ms
+   release → last non-zero at 251.3 ms, max step 0.0133 = the body's own;
+   Release 0 → gone 2.29 ms after the note-off (the 1 ms cut, half a host
+   sample of alignment and the decimator's tail), same step; the one-shot
+   plays on; the late note-off is a null. Break-checks, each seen red then
+   reverted: `noteOn` ignoring Bass mode (the bass test went silent — and
+   first crashed on an empty crossing list, so the test now fails on its
+   check instead), `release()` emptied (gate test red on activity and on the
+   last non-zero), `Pad::release` ignoring which key started the hit (legato
+   test red, D cut with C).
 
 Break-checks at I1, each seen red then reverted: a staircase increment
 (pitch test red), the control grid restarted per callback (block-size test
@@ -571,7 +611,9 @@ in the neutral path (neutral test red), the envelope kill removed (retire
 test red, "active hits 1").
 
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
-file; take the first `pending` phase. The non-negotiables every phase here
+file; take the first `pending` phase. The next is I3 — but the user's ears
+run this project: if the rig reports on I2.1 first, that report comes before
+the snare. The non-negotiables every phase here
 honours, in one place:
 
 - One phase = one commit. Tests written and RUN in that commit; every
