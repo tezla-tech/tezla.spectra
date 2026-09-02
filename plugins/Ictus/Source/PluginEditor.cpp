@@ -274,20 +274,12 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
     // ---- the pad strip ----
     padLabel_.setFont (juce::FontOptions (13.0f, juce::Font::bold));
     padLabel_.setColour (juce::Label::textColourId, palette_.accentBright);
-    padLabel_.setText ("KICK 1  --  " + noteName (ictus_.getPadNote (PadIndex::kick1)),
-                       juce::dontSendNotification);
-    padLabel_.setTooltip ("The pad this page edits, and the MIDI note that strikes it: General "
-                          "MIDI's kick, so any drum pattern plays it without setup. The other pads "
-                          "arrive with their engines; each keeps its GM note.");
     addAndMakeVisible (padLabel_);
 
-    hitButton_.setComponentID ("hit-kick1");
+    hitButton_.setComponentID ("hit");
     hitButton_.setColour (juce::TextButton::buttonColourId, palette_.accent.withAlpha (0.35f));
     hitButton_.setColour (juce::TextButton::textColourOffId, palette_.text);
-    hitButton_.setTooltip ("Strikes the kick at full velocity, at the top of the next audio block, "
-                           "so a patch can be auditioned without a keyboard. A hit while one is "
-                           "still sounding crossfades over 1 ms rather than cutting it.");
-    hitButton_.onClick = [this] { ictus_.triggerHit (PadIndex::kick1); };
+    hitButton_.onClick = [this] { ictus_.triggerHit (currentPad_); };
     addAndMakeVisible (hitButton_);
 
     hitsLabel_.setFont (juce::FontOptions (11.0f));
@@ -308,18 +300,26 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
         ictus_.getState(), ids::bassMode, bassButton_);
 
     kickTab_.setComponentID ("page-kick");
-    kickTab_.setTooltip ("Kick 1's controls.");
+    kickTab_.setTooltip ("Kick 1's controls. HIT strikes the kick while this page is up.");
     kickTab_.onClick = [this] { showPage (0); };
     addAndMakeVisible (kickTab_);
+
+    snareTab_.setComponentID ("page-snare");
+    snareTab_.setTooltip ("Snare 1's controls -- the same engine also plays the Perc pad as a tom "
+                          "and Snare 2, on their defaults until their pages arrive. HIT strikes "
+                          "the snare while this page is up.");
+    snareTab_.onClick = [this] { showPage (1); };
+    addAndMakeVisible (snareTab_);
 
     tuningTab_.setComponentID ("page-tuning");
     tuningTab_.setTooltip ("The tuning that Bass mode and Follow key play through: built-in "
                            "scales, Scala .scl and .kbm files, concert pitch. It travels with "
                            "the project as text. Costs nothing: a hit reads one frequency.");
-    tuningTab_.onClick = [this] { showPage (1); };
+    tuningTab_.onClick = [this] { showPage (2); };
     addAndMakeVisible (tuningTab_);
 
-    buildPage();
+    buildKickPage();
+    buildSnarePage();
     buildTuningPage();
     showPage (0);
 
@@ -341,11 +341,12 @@ IctusEditor::~IctusEditor()
     setLookAndFeel (nullptr);
 }
 
-void IctusEditor::buildPage()
+void IctusEditor::buildKickPage()
 {
     auto& state = ictus_.getState();
 
-    page_ = std::make_unique<ControlPage> (state, palette_, 7);
+    kickPage_ = std::make_unique<ControlPage> (state, palette_, 7);
+    auto& page_ = kickPage_;
 
     // ---- pitch ----
     page_->addKnob (ids::k1Tune, "Tune",
@@ -506,7 +507,161 @@ void IctusEditor::buildPage()
                     "pitch within 0.016 cents of the ideal curve at 44.1, 48, 96 and 192 kHz; "
                     "two kicks with everything on at 4 to 7% of a core; the plain body bit-exact.");
 
-    addAndMakeVisible (*page_);
+    addChildComponent (*page_);
+}
+
+void IctusEditor::buildSnarePage()
+{
+    auto& state = ictus_.getState();
+
+    snarePage_ = std::make_unique<ControlPage> (state, palette_, 7);
+    auto& page = snarePage_;
+
+    // ---- shell ----
+    page->addKnob (ids::s1Tune, "Tune",
+        "The shell's fundamental, 60 to 800 Hz. A snare sits near 180 to 240; a "
+        "tom lower. With Follow key lit the MIDI note sets it. In Bass mode this "
+        "pad is silent -- every key plays the kick.");
+
+    page->addSwitch (ids::s1FollowKey, "Follow key", "Key",
+        "Lit: the fundamental comes from the MIDI note through the TUNING page's "
+        "scale. Dark: Tune sets it.");
+
+    page->addKnob (ids::s1Spread, "Spread",
+        "How far the two upper modes sit above the fundamental: 0 puts all three "
+        "on one pitch (a tom), 100 is the snare's set at 1.6 and 2.2 times it -- "
+        "the fast-decaying pair a real shell has. Measured 1.601 and 2.201. "
+        "Costs nothing.");
+
+    page->addKnob (ids::s1Tone, "Tone",
+        "How hard the upper two modes are struck, 0 to 100%. 0 strikes the "
+        "fundamental alone and runs one mode instead of three.");
+
+    page->addKnob (ids::s1Decay, "Decay",
+        "The fundamental's ring-down to -60 dB, 50 ms to 2 s; the upper modes die "
+        "at 0.7 and 0.5 times this, as they do on the drum. The shell is cut "
+        "exactly once it is 120 dB down, so a 250 ms snare is gone by 500 ms and "
+        "costs nothing after.");
+
+    page->addKnob (ids::s1Start, "Start",
+        "The drop: the shell starts this far above its pitch, 0 to 24 semitones, "
+        "and glides down over Drop. 4 to 8 is a snare's crack; more is a tom's "
+        "bend. Velocity scales it by Vel > Drop. 0 is exact.");
+
+    page->addKnob (ids::s1Drop, "Drop",
+        "How long the drop takes to land, 2 to 200 ms. The three modes are retuned "
+        "once every 32 internal samples while it moves, with their ring intact, "
+        "and never once it has landed (measured: 704 retunes for a 50 ms drop, "
+        "then 0).");
+
+    page->addKnob (ids::s1Body, "Body",
+        "The shell's level, 0 to 100%, before Level. Body and Wires are a plain "
+        "sum: with Rattle at 0 there is nothing between them, bit for bit.");
+
+    // ---- wires ----
+    page->addKnob (ids::s1Wires, "Wires",
+        "The wires' level, 0 to 100%: seeded white noise through the Snappy "
+        "filter under its own decay, a new stream every hit. 0 runs no noise at "
+        "all. Velocity moves this and Snappy together by Vel > Wires.");
+
+    page->addKnob (ids::s1Snappy, "Snappy",
+        "The wires' filter corner, 1 to 8 kHz. High-passed, everything above it: "
+        "2 kHz is a fat, papery snare, 6 kHz a tight hiss (measured centroids 7.8 "
+        "to 8.9 kHz). Band-passed, the buzz sits at it (2.6 to 6.7 kHz).");
+
+    page->addKnob (ids::s1Snap, "Snap",
+        "The wires' filter shape: 0 is a high-pass above Snappy -- open hiss; "
+        "100 a band-pass at it -- a pitched, focused buzz. A crossfade that is "
+        "exact at both ends.");
+
+    page->addKnob (ids::s1WiresDecay, "Wires decay",
+        "How long the stick's burst on the wires takes to land, 50 to 400 ms. With "
+        "Rattle up the wires also follow the shell, past this.");
+
+    page->addKnob (ids::s1Rattle, "Rattle",
+        "How much the shell's own motion drives the wires, 0 to 100%: the one "
+        "nonlinearity kept from the physical models, so the wires buzz for as "
+        "long as the drum rings. At 100 they start 1.8 times louder and are still "
+        "there at 100 ms where the plain burst has ended, 29 dB down with the "
+        "shell. 0 runs no follower and is exact.");
+
+    // ---- crack ----
+    page->addKnob (ids::s1Crack, "Crack",
+        "The stick's contact: one resonant mode struck with the hit, ringing "
+        "3 ms -- the kick's click, on the snare. This is what velocity is most "
+        "about (Vel > Crack). 0 is exact off.");
+
+    page->addKnob (ids::s1CrackTone, "Crack tone",
+        "The crack's pitch, 200 Hz to 8 kHz, and the corner of the noise burst's "
+        "high-pass. 3 to 5 kHz is a stick on a head.");
+
+    page->addKnob (ids::s1Noise, "Noise",
+        "A burst of high-passed noise with the hit, seeded per hit -- the "
+        "contact's own spit, shorter than the wires.");
+
+    page->addKnob (ids::s1NoiseTime, "Noise time",
+        "How long the burst takes to fall 60 dB, 0.5 to 8 ms.");
+
+    // ---- level and gate ----
+    page->addKnob (ids::s1Level, "Level",
+        "The snare's own level before the output trim, 0 to 100%.");
+
+    page->addSwitch (ids::s1Gate, "Gate", "Gate",
+        "Lit: a note-off fades the WHOLE hit out over Release -- shell, wires and "
+        "crack -- from wherever it is; a snare has no envelope of its own, its "
+        "shell simply rings down, so this is the only way a long tom stops early. "
+        "Dark: a one-shot that ignores note-off. The HIT button always plays the "
+        "whole hit.");
+
+    page->addKnob (ids::s1Release, "Release",
+        "How long a gated hit takes to fade after the key lifts, 0 to 2 s. 0 is a "
+        "1 ms ramp, the shortest that does not click (measured: no step larger "
+        "than the strike's own). Does nothing with Gate dark.");
+
+    // ---- velocity ----
+    page->addKnob (ids::s1VelLevel, "Vel > Level",
+        "How much velocity moves the level, 0 to 100%.");
+
+    page->addKnob (ids::s1VelWires, "Vel > Wires",
+        "How much velocity moves the wires' level AND their Snappy corner, 0 to "
+        "100%: a soft hit is quieter and duller, the way the article has it.");
+
+    page->addKnob (ids::s1VelCrack, "Vel > Crack",
+        "How much velocity moves the crack and its noise, 0 to 100%: harder hits "
+        "get more stick.");
+
+    page->addKnob (ids::s1VelDrop, "Vel > Drop",
+        "How much velocity moves the Start height, 0 to 100%: harder hits start "
+        "higher and drop further.");
+
+    page->setNote ("Every knob is read at the strike and held for the whole hit. Measured: the modes "
+                   "at 1 : 1.601 : 2.201 against the article's 1.6 and 2.2; a Spread 0 shell an exact "
+                   "200.000 Hz at 44.1, 48, 96 and 192 kHz; the landed drum retuned 0 times a second; "
+                   "15 ns a sample with everything on at 192 kHz. The Perc pad (D#1) is this engine "
+                   "as a tom, and Snare 2 (E1) its defaults, until their own pages arrive.");
+
+    addChildComponent (*page);
+}
+
+void IctusEditor::refreshPadStrip()
+{
+    const bool kick = currentPad_ == PadIndex::kick1;
+
+    padLabel_.setText (juce::String (kick ? "KICK 1" : "SNARE 1") + "  --  "
+                           + noteName (ictus_.getPadNote (currentPad_)),
+                       juce::dontSendNotification);
+
+    padLabel_.setTooltip (kick
+        ? "The pad this page edits, and the MIDI note that strikes it: General MIDI's kick, so "
+          "any drum pattern plays it without setup. The other pads keep their GM notes: snare 38, "
+          "closed hat 42, open hat 46, clap 39, perc 37, kick 2 on 35, snare 2 on 40."
+        : "The pad this page edits, and the MIDI note that strikes it: General MIDI's snare. The "
+          "Perc pad on 37 and Snare 2 on 40 run the same engine on their defaults.");
+
+    hitButton_.setTooltip (juce::String ("Strikes the ") + (kick ? "kick" : "snare")
+                           + " at full velocity, at the top of the next audio block, so a patch can "
+                             "be auditioned without a keyboard. A hit while one is still sounding "
+                             "crossfades over 1 ms rather than cutting it.");
 }
 
 void IctusEditor::buildTuningPage()
@@ -536,15 +691,24 @@ void IctusEditor::styleTab (juce::TextButton& tab, bool active)
 
 void IctusEditor::showPage (int index)
 {
-    currentPage_ = juce::jlimit (0, 1, index);
+    currentPage_ = juce::jlimit (0, 2, index);
 
     styleTab (kickTab_, currentPage_ == 0);
-    styleTab (tuningTab_, currentPage_ == 1);
+    styleTab (snareTab_, currentPage_ == 1);
+    styleTab (tuningTab_, currentPage_ == 2);
 
-    page_->setVisible (currentPage_ == 0);
-    tuningPage_->setVisible (currentPage_ == 1);
+    kickPage_->setVisible (currentPage_ == 0);
+    snarePage_->setVisible (currentPage_ == 1);
+    tuningPage_->setVisible (currentPage_ == 2);
 
-    if (currentPage_ == 1)
+    if (currentPage_ == 0)
+        currentPad_ = PadIndex::kick1;
+    else if (currentPage_ == 1)
+        currentPad_ = PadIndex::snare1;
+
+    refreshPadStrip();
+
+    if (currentPage_ == 2)
         tuningPage_->refresh();
 
     resized();
@@ -559,7 +723,8 @@ void IctusEditor::refreshHeaderTooltips()
 void IctusEditor::refreshKeyTooltips()
 {
     bassButton_.setTooltip (ictus_.describeKeying());
-    page_->setTooltip (ids::k1FollowKey, ictus_.describeFollowKey());
+    kickPage_->setTooltip (ids::k1FollowKey, ictus_.describeFollowKey (PadIndex::kick1));
+    snarePage_->setTooltip (ids::s1FollowKey, ictus_.describeFollowKey (PadIndex::snare1));
 }
 
 void IctusEditor::updateGreying()
@@ -581,21 +746,49 @@ void IctusEditor::updateGreying()
     // Bass mode, which keys every hit.
     const bool keyed = read (ids::k1FollowKey) > 0.5f || read (ids::bassMode) > 0.5f;
 
-    if (toneOn == shownToneOn_ && harmonics == shownHarmonics_ && tail == shownTail_
-        && gate == shownGate_ && keyed == shownKeyed_)
-        return;
+    if (toneOn != shownToneOn_ || harmonics != shownHarmonics_ || tail != shownTail_
+        || gate != shownGate_ || keyed != shownKeyed_)
+    {
+        shownToneOn_ = toneOn;
+        shownHarmonics_ = harmonics;
+        shownTail_ = tail;
+        shownGate_ = gate;
+        shownKeyed_ = keyed;
 
-    shownToneOn_ = toneOn;
-    shownHarmonics_ = harmonics;
-    shownTail_ = tail;
-    shownGate_ = gate;
-    shownKeyed_ = keyed;
+        kickPage_->setControlEnabled (ids::k1Tone, toneOn);
+        kickPage_->setControlEnabled (ids::k1Even, harmonics);
+        kickPage_->setControlEnabled (ids::k1TailTime, tail);
+        kickPage_->setControlEnabled (ids::k1Release, gate);
+        kickPage_->setControlEnabled (ids::k1Tune, ! keyed);
+    }
 
-    page_->setControlEnabled (ids::k1Tone, toneOn);
-    page_->setControlEnabled (ids::k1Even, harmonics);
-    page_->setControlEnabled (ids::k1TailTime, tail);
-    page_->setControlEnabled (ids::k1Release, gate);
-    page_->setControlEnabled (ids::k1Tune, ! keyed);
+    // The snare page: the wires' controls with the wires, the crack's tone
+    // with the crack, the noise time with the noise, Release with Gate, and
+    // Tune with its own Key (Bass mode silences the whole pad instead).
+    const bool wires = read (ids::s1Wires) > 0.0f;
+    const bool crack = read (ids::s1Crack) > 0.0f;
+    const bool noise = read (ids::s1Noise) > 0.0f;
+    const bool snareGate = read (ids::s1Gate) > 0.5f;
+    const bool snareKeyed = read (ids::s1FollowKey) > 0.5f;
+
+    if (wires != shownSnareWires_ || crack != shownSnareCrack_ || noise != shownSnareNoise_
+        || snareGate != shownSnareGate_ || snareKeyed != shownSnareKeyed_)
+    {
+        shownSnareWires_ = wires;
+        shownSnareCrack_ = crack;
+        shownSnareNoise_ = noise;
+        shownSnareGate_ = snareGate;
+        shownSnareKeyed_ = snareKeyed;
+
+        snarePage_->setControlEnabled (ids::s1Snappy, wires);
+        snarePage_->setControlEnabled (ids::s1Snap, wires);
+        snarePage_->setControlEnabled (ids::s1WiresDecay, wires);
+        snarePage_->setControlEnabled (ids::s1Rattle, wires);
+        snarePage_->setControlEnabled (ids::s1CrackTone, crack || noise);
+        snarePage_->setControlEnabled (ids::s1NoiseTime, noise);
+        snarePage_->setControlEnabled (ids::s1Release, snareGate);
+        snarePage_->setControlEnabled (ids::s1Tune, ! snareKeyed);
+    }
 }
 
 void IctusEditor::timerCallback()
@@ -636,7 +829,7 @@ void IctusEditor::timerCallback()
     // anywhere -- the panel, a preset, a state load.
     const juce::String scale = ictus_.getScaleName() + " @ " + juce::String (ictus_.getConcertPitch(), 3);
     const bool bass = read (ids::bassMode) > 0;
-    const int padNote = ictus_.getPadNote (PadIndex::kick1);
+    const int padNote = ictus_.getPadNote (PadIndex::kick1) * 128 + ictus_.getPadNote (PadIndex::snare1);
 
     if (scale != shownScale_ || bass != shownBass_ || padNote != shownPadNote_)
     {
@@ -646,6 +839,7 @@ void IctusEditor::timerCallback()
         shownBass_ = bass;
         shownPadNote_ = padNote;
         refreshKeyTooltips();
+        refreshPadStrip();
 
         if (scaleMoved && tuningPage_->isVisible())
             tuningPage_->refresh();
@@ -672,6 +866,7 @@ void IctusEditor::resized()
 
     // Tabs at the right of the strip, the BASS lamp beside them.
     tuningTab_.setBounds (strip.removeFromRight (84).reduced (2, 0));
+    snareTab_.setBounds (strip.removeFromRight (78).reduced (2, 0));
     kickTab_.setBounds (strip.removeFromRight (70).reduced (2, 0));
     strip.removeFromRight (12);
     bassButton_.setBounds (ui::LampButton::sized (64, 26).withCentre (strip.removeFromRight (72).getCentre()));
@@ -680,7 +875,8 @@ void IctusEditor::resized()
     padLabel_.setBounds (strip);
 
     bounds.reduce (8, 6);
-    page_->setBounds (bounds);
+    kickPage_->setBounds (bounds);
+    snarePage_->setBounds (bounds);
     tuningPage_->setBounds (bounds);
 }
 

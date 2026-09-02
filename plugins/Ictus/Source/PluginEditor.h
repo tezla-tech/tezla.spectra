@@ -7,11 +7,12 @@
 
 #pragma once
 
-// The Ictus editor at I2: the shared header (output, oversampling, render
-// quality, A/B, tooltips), a pad strip with a HIT button so the kick can be
-// auditioned without a keyboard, a BASS lamp and two page tabs, then either
-// Kick 1's page in the house look or the shared tuning panel. The pad grid
-// and the per-pad pages arrive with the other engines (I9).
+// The Ictus editor at I3: the shared header (output, oversampling, render
+// quality, A/B, tooltips), a pad strip with a HIT button that strikes the
+// page's pad so a drum can be auditioned without a keyboard, a BASS lamp and
+// three page tabs -- Kick 1's page, Snare 1's page, and the shared tuning
+// panel. The pad grid and the other pads' pages arrive with the editor
+// close-out (I9).
 
 #include <array>
 #include <memory>
@@ -107,9 +108,11 @@ public:
 
 private:
     void timerCallback() override;
-    void buildPage();
+    void buildKickPage();
+    void buildSnarePage();
     void buildTuningPage();
     void showPage (int index);
+    void refreshPadStrip();
     void styleTab (juce::TextButton& tab, bool active);
     void refreshHeaderTooltips();
     void refreshKeyTooltips();
@@ -131,12 +134,18 @@ private:
     ui::LampButton bassButton_ { "Bass" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bassAttachment_;
     juce::TextButton kickTab_ { "KICK" };
+    juce::TextButton snareTab_ { "SNARE" };
     juce::TextButton tuningTab_ { "TUNING" };
     juce::Label hitsLabel_;
 
-    std::unique_ptr<ControlPage> page_;
+    std::unique_ptr<ControlPage> kickPage_;
+    std::unique_ptr<ControlPage> snarePage_;
     std::unique_ptr<ui::TuningPanel> tuningPage_;
     int currentPage_ { 0 };
+
+    /// The pad HIT strikes and the strip names: the page's drum, and the
+    /// last drum page's while the tuning page is up.
+    PadIndex currentPad_ { PadIndex::kick1 };
 
     int shownFactor_ { -1 };
     bool shownOffline_ { false };
@@ -148,6 +157,12 @@ private:
     bool shownTail_ { true };
     bool shownGate_ { true };
     bool shownKeyed_ { true };
+
+    bool shownSnareWires_ { true };
+    bool shownSnareCrack_ { true };
+    bool shownSnareNoise_ { true };
+    bool shownSnareGate_ { true };
+    bool shownSnareKeyed_ { true };
 
     // The live key tooltips are rebuilt only when what they describe moves.
     juce::String shownScale_;

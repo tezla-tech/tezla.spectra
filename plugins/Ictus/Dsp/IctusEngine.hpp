@@ -30,9 +30,10 @@
 // block size cannot bend a sweep and a test holds 64-, 97- and 512-sample
 // blocks bit-identical.
 //
-// I1 shape: the two kick pads are live, the Main bus is the only bus, the
-// six other pads and four other buses are declared here so that I3-I7 add
-// engines and buses without restructuring.
+// I3 shape: the two kick pads and the three snare-engine pads (Snare 1,
+// Snare 2, Perc) are live, the Main bus is the only bus; the hats, the clap
+// and the four other buses are declared here so that I4-I7 add engines and
+// buses without restructuring.
 
 #include <cstdint>
 
@@ -43,6 +44,7 @@
 
 #include "KickEngine.hpp"
 #include "Pad.hpp"
+#include "SnareEngine.hpp"
 
 namespace tezla::ictus {
 
@@ -73,6 +75,12 @@ struct EngineParameters
 {
     KickSettings kick1;
     KickSettings kick2;
+
+    SnareSettings snare1;
+    SnareSettings snare2;
+
+    /// The Perc pad: the snare engine with tom defaults and the wires off.
+    SnareSettings perc { tomSettings() };
 
     /// MIDI note per pad. Held here for the engine; the plugin stores them
     /// as state-tree properties, not parameters (plugins/Ictus/PLAN.md).
@@ -168,6 +176,9 @@ public:
 
     [[nodiscard]] const Pad<KickEngine>& kick1() const noexcept { return kick1_; }
     [[nodiscard]] const Pad<KickEngine>& kick2() const noexcept { return kick2_; }
+    [[nodiscard]] const Pad<SnareEngine>& snare1() const noexcept { return snare1_; }
+    [[nodiscard]] const Pad<SnareEngine>& snare2() const noexcept { return snare2_; }
+    [[nodiscard]] const Pad<SnareEngine>& perc() const noexcept { return perc_; }
 
     /// The tuning Follow key and Bass mode read the landed pitch from. The
     /// scale swap allocates nothing (the Malleus and Sonitus arrangement).
@@ -183,6 +194,12 @@ private:
 
     void startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings& settings,
                     int note, double velocity, bool keyed) noexcept;
+    void startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSettings& settings,
+                     int note, double velocity) noexcept;
+
+    /// The seed rule shared by every pad: a base, a per-pad salt, and the hit
+    /// counter times a golden-ratio constant.
+    [[nodiscard]] std::uint64_t nextSeed (PadIndex index) noexcept;
 
     double sampleRate_ { 48000.0 };
     double internalRate_ { 48000.0 };
@@ -195,6 +212,9 @@ private:
 
     Pad<KickEngine> kick1_;
     Pad<KickEngine> kick2_;
+    Pad<SnareEngine> snare1_;
+    Pad<SnareEngine> snare2_;
+    Pad<SnareEngine> perc_;
 
     dsp::Tuning tuning_;
 

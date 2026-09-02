@@ -18,15 +18,18 @@ humanise and velocity, a sample layer, and per-pad outputs for FL Studio's
 *Auto map outputs*. The plan, with every source and every measured number,
 is [`PLAN.md`](PLAN.md).
 
-**What ships today (phase I2 and the rig's first ear round): the kick.** One
-pad, one page, General MIDI note 36 (C1), a HIT button to audition it without
-a keyboard, five presets, the shared header with output trim, oversampling
-and render quality — and, from the first round on the rig, **Bass mode**
-(every key plays the kick at the key's pitch), a **Gate** with a **Release**
-so a note can end when the key lifts, and the shared **tuning page** behind
-both. The rest of the instrument is declared in the engine and arrives phase
-by phase; nothing already saved will move when it does (parameters are
-append-only, CLAUDE.md §8).
+**What ships today (phase I3): the kick and the snare.** Kick 1 on General
+MIDI note 36 (C1) and Snare 1 on 38 (D1), each with its page; the same snare
+engine also plays the Perc pad on 37 as a tom and Snare 2 on 40, on their
+defaults until their pages arrive; a HIT button that strikes the page's pad
+so a drum can be auditioned without a keyboard; five presets; the shared
+header with output trim, oversampling and render quality; and, from the
+first round on the rig, **Bass mode** (every key plays the kick at the key's
+pitch), a **Gate** with a **Release** on both drums, and the shared **tuning
+page** behind them. The hats, the clap, the punch chain, humanise, the
+sample layer and the per-pad outputs are declared in the engine and arrive
+phase by phase; nothing already saved will move when they do (parameters
+are append-only, CLAUDE.md §8).
 
 ## The kick
 
@@ -51,6 +54,36 @@ Every knob is read when the hit starts and held for its whole length. Every
 stage renders at the internal (oversampled) rate, so the click and the
 harmonics never alias, and the block size cannot bend a sweep: 64-, 97- and
 512-sample blocks are bit-identical.
+
+## The snare
+
+Built from Reid's published analysis of the instrument, never from a
+product (`docs/DSP-REFERENCES.md`): two quasi-harmonic series plus the (0,1)
+pair that decays far faster, wires as noise under an envelope, and velocity
+into the noise filter's cutoff and the tuned/noise mix.
+
+| control | what it does |
+|---|---|
+| **Tune** / Follow key | The shell's fundamental, 60–800 Hz, or the MIDI note through the tuning. |
+| **Spread**, **Tone** | Three modes at 1 : 1.6 : 2.2 of the fundamental at Spread 100 (measured 1.601 and 2.201), one tone at 0; Tone is how hard the upper two are struck, and at 0 only one mode runs. |
+| **Decay** | The fundamental's ring-down; the upper modes die at 0.7 and 0.5 of it, as on the drum. The shell is cut exactly at −120 dB. |
+| **Start**, **Drop** | The crack of the strike: the shell starts *Start* semitones up and glides down over *Drop*, the three modes retuned every 32 internal samples with their ring intact and never once it has landed. |
+| **Body**, **Wires** | Two levels, a plain sum. |
+| **Snappy**, **Snap**, Wires decay | The wires' filter corner, its shape from high-pass (open hiss) to band-pass (a pitched buzz), and the stick's burst on them. |
+| **Rattle** | The shell's own motion driving the wires — the one nonlinearity kept from the physical models — so with it up the wires buzz for as long as the drum rings. Exact off at 0. |
+| **Crack**, Crack tone, **Noise**, Noise time | The stick's contact: the kick's click pair. |
+| Level, **Gate**, Release | Level, and the note-off fade of the whole hit (a snare has no envelope of its own). |
+| Vel > Level / Wires / Crack / Drop | What velocity moves; Vel > Wires moves the wires' level and their corner together, the article's recipe. |
+
+**Measured** (`tezla-tests snare`, `tezla-measure ictus` table 2): a Spread 0
+shell an exact **200.0000 Hz** at 44.1 / 48 / 96 / 192 kHz; a 12-semitone
+drop over 50 ms retunes the bank **704 times and then never again**, landing
+on exactly its pitch; at Rattle 0 the hit is the shell plus the wires **bit
+for bit** (a leak of one part in 10¹² is caught), at Rattle 1 the wires start
+×1.79 and are still there at 100 ms where the plain burst has ended; a hit
+with everything on retires at 0.60 s with **0 hits sounding**; the engine
+costs **15 ns a sample** with everything on at 192 kHz, and the whole kit —
+two kicks and three snares busy — **4.8–5.2 % of a core** at 48 kHz ×4.
 
 ## Bass mode and the tuning page
 
@@ -83,10 +116,10 @@ step; a note-off after the hit has landed changes nothing, bit for bit.
 
 ## Presets
 
-*Init Kit* (the plain body), *DnB Tight*, *Sub Long*, *Jungle Snap*, *Bass
-Keys* (Bass mode, gated, a 40 ms release, no sigh so the pitch holds). A preset
-resets every parameter to its default first, so it is a complete kit, not a
-patch over the last one.
+*Init Kit* (the plain body), *DnB Tight*, *Sub Long*, *Jungle Snap* — each
+with its own snare since I3 — and *Bass Keys* (Bass mode, gated, a 40 ms
+release, no sigh so the pitch holds). A preset resets every parameter to its
+default first, so it is a complete kit, not a patch over the last one.
 
 ## Building and installing
 
@@ -95,4 +128,4 @@ install) and FL Studio finds it on the next scan. The full guide is
 [`docs/BUILD.md`](../../docs/BUILD.md). The plugin builds and passes
 Steinberg's validator on Linux, and the I2 kick **has been built and played on
 the rig** — the first ear round is what Bass mode, Gate and Release came from.
-This round's build has not been loaded there yet.
+Neither that round's build nor the snare has been loaded there yet.

@@ -10,12 +10,15 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <memory>
 #include <numbers>
 #include <vector>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Exact.hpp>
+#include <tezla/dsp/Fft.hpp>
 
 #include <IctusEngine.hpp>
 
@@ -153,6 +156,31 @@ KickSettings everythingOn()
     s.shape = 0.3;
     s.tailMix = 0.5;
     s.tailSeconds = 1.0;
+    s.level = 0.8;
+    return s;
+}
+
+/// Every snare stage engaged: the drop, both upper modes, wires with the
+/// rattle, and the crack pair.
+SnareSettings snareEverythingOn()
+{
+    SnareSettings s;
+    s.tuneHz = 190.0;
+    s.spread = 0.9;
+    s.tone = 0.7;
+    s.decaySeconds = 0.3;
+    s.startSemitones = 8.0;
+    s.dropSeconds = 0.03;
+    s.body = 0.8;
+    s.wires = 0.7;
+    s.snappyHz = 3500.0;
+    s.snap = 0.4;
+    s.wiresDecaySeconds = 0.18;
+    s.rattle = 0.6;
+    s.crack = 0.5;
+    s.crackToneHz = 4000.0;
+    s.crackNoise = 0.4;
+    s.crackNoiseSeconds = 0.0015;
     s.level = 0.8;
     return s;
 }
@@ -607,8 +635,9 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
 {
     // CLAUDE.md section 7: the control grid is the engine's and the render
     // loop is cut at its boundary, so 64-, 97- and 512-sample blocks produce
-    // the same bits -- with both kicks sounding, a retrigger, and every
-    // stage engaged.
+    // the same bits -- with both kicks, the snare and the perc sounding, a
+    // retrigger, and every stage engaged (the snare's drop retuning its
+    // bank per chunk, the rattle, the wires, the crack).
     constexpr double rate = 48000.0;
     constexpr int samples = 24000;
 
@@ -617,9 +646,14 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
     parameters.kick2 = everythingOn();
     parameters.kick2.tuneHz = 60.0;
     parameters.kick2.even = 1.0;
+    parameters.snare1 = snareEverythingOn();
+    parameters.perc = tomSettings();
+    parameters.perc.rattle = 0.5;
+    parameters.perc.wires = 0.3;
     parameters.masterDb = -3.0;
 
-    const std::vector<Hit> hits { { 0, 36, 0.9 }, { 2500, 35, 0.7 }, { 4000, 36, 1.0 } };
+    const std::vector<Hit> hits { { 0, 36, 0.9 }, { 1000, 38, 1.0 }, { 2500, 35, 0.7 },
+                                  { 3100, 37, 0.8 }, { 4000, 36, 1.0 }, { 4700, 38, 0.6 } };
 
     const auto small = render (parameters, rate, samples, hits, 64);
     const auto large = render (parameters, rate, samples, hits, 512);
@@ -640,7 +674,7 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
 // CPU
 // ---------------------------------------------------------------------------
 
-TEZLA_TEST (two_kicks_fit_their_budget_and_an_idle_instrument_costs_nothing)
+TEZLA_TEST (a_kit_of_two_kicks_and_three_snares_fits_its_budget_and_idles_for_nothing)
 {
     constexpr double rate = 48000.0;
     constexpr int block = 480;
@@ -649,6 +683,10 @@ TEZLA_TEST (two_kicks_fit_their_budget_and_an_idle_instrument_costs_nothing)
     EngineParameters parameters;
     parameters.kick1 = everythingOn();
     parameters.kick2 = everythingOn();
+    parameters.snare1 = snareEverythingOn();
+    parameters.snare2 = snareEverythingOn();
+    parameters.snare2.tuneHz = 240.0;
+    parameters.perc = tomSettings();
 
     auto engine = heapEngine();
     engine->prepare (rate, block);
@@ -667,12 +705,22 @@ TEZLA_TEST (two_kicks_fit_their_budget_and_an_idle_instrument_costs_nothing)
 
     for (int b = 0; b < blocks; ++b)
     {
-        // Eight hits a second on each kick, alternating.
+        // Eight hits a second on each kick, alternating; the snares and the
+        // perc between them -- a busy break.
         if (b % 12 == 0)
             engine->noteOn (36, 1.0);
 
         if (b % 12 == 6)
             engine->noteOn (35, 0.8);
+
+        if (b % 12 == 3)
+            engine->noteOn (38, 1.0);
+
+        if (b % 12 == 9)
+            engine->noteOn (40, 0.9);
+
+        if (b % 8 == 4)
+            engine->noteOn (37, 0.7);
 
         engine->process (buffers, block);
         sink += left[0];
@@ -698,10 +746,10 @@ TEZLA_TEST (two_kicks_fit_their_budget_and_an_idle_instrument_costs_nothing)
     const double idleSeconds = std::chrono::duration<double> (
         std::chrono::steady_clock::now() - start).count();
 
-    std::printf ("        [engine cpu] two kicks at 48 kHz x%d: %.2f%% of a core; idle %.3f%% (sink %g)\n",
+    std::printf ("        [engine cpu] two kicks and three snares at 48 kHz x%d: %.2f%% of a core; idle %.3f%% (sink %g)\n",
                  engine->getOversamplingFactor(), 100.0 * activeSeconds, 100.0 * idleSeconds, sink);
 
-    CHECK_CPU_BUDGET (activeSeconds, 0.10, "two kicks, everything on, 48 kHz x4");
+    CHECK_CPU_BUDGET (activeSeconds, 0.12, "two kicks and three snares, everything on, 48 kHz x4");
     CHECK_CPU_BUDGET (idleSeconds, 0.01, "idle instrument");
 }
 
@@ -905,4 +953,414 @@ TEZLA_TEST (in_bass_mode_a_note_off_releases_only_the_hit_its_key_started)
     CHECK (last > 24000);
     CHECK (last < 24000 + static_cast<int> (0.02 * rate) + 400);
     CHECK (engine->activeHitCount() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// I3: the snare
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// Wires 0, crack 0, no drop, body and level 1 with every velocity amount at
+/// 0: the shell at unit gain and nothing else.
+SnareSettings neutralSnare()
+{
+    SnareSettings s;
+    s.tuneHz = 200.0;
+    s.spread = 1.0;
+    s.tone = 1.0;
+    s.decaySeconds = 1.0;
+    s.startSemitones = 0.0;
+    s.body = 1.0;
+    s.wires = 0.0;
+    s.rattle = 0.0;
+    s.crack = 0.0;
+    s.crackNoise = 0.0;
+    s.level = 1.0;
+    s.velocityLevel = 0.0;
+    s.velocityWires = 0.0;
+    s.velocityCrack = 0.0;
+    s.velocityDrop = 0.0;
+    return s;
+}
+
+/// The snare engine on its own at an internal rate, stepped on the engine's
+/// control grid exactly as the engine steps it: `seconds` of one hit.
+std::vector<double> renderSnareEngine (SnareEngine& engine, const SnareSettings& s, double rate,
+                                       double seconds, double hz = 200.0)
+{
+    engine.prepare (rate);
+    engine.start (s, hz, 1.0, 99u, 0);
+
+    const int total = static_cast<int> (seconds * rate);
+    std::vector<double> out (static_cast<std::size_t> (total));
+
+    for (int n = 0; n < total; ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            engine.advanceControl (Engine::kControlIntervalSamples);
+
+        out[static_cast<std::size_t> (n)] = engine.process();
+    }
+
+    return out;
+}
+
+/// The frequency of the largest spectral peak between `lo` and `hi` Hz, from
+/// a zero-padded FFT of the whole signal: 262144 bins, 0.18 Hz each at 48 k.
+double peakHzBetween (const std::vector<double>& x, double rate, double lo, double hi)
+{
+    std::vector<double> padded (1u << 18, 0.0);
+    const std::size_t count = std::min (x.size(), padded.size());
+
+    for (std::size_t n = 0; n < count; ++n)
+        padded[n] = x[n];
+
+    const auto spectrum = fftOfReal (padded);
+    const double binWidth = rate / static_cast<double> (padded.size());
+
+    std::size_t best = 0;
+    double bestPower = -1.0;
+
+    const auto first = static_cast<std::size_t> (lo / binWidth);
+    const auto last = std::min (static_cast<std::size_t> (hi / binWidth), spectrum.size() - 1);
+
+    for (std::size_t bin = first; bin <= last; ++bin)
+    {
+        const double power = std::norm (spectrum[bin]);
+
+        if (power > bestPower)
+        {
+            bestPower = power;
+            best = bin;
+        }
+    }
+
+    return static_cast<double> (best) * binWidth;
+}
+
+double rmsOfDifference (const std::vector<double>& x, const std::vector<double>& minus,
+                        std::size_t from, std::size_t to)
+{
+    double sum = 0.0;
+
+    for (std::size_t n = from; n < to; ++n)
+    {
+        const double d = x[n] - minus[n];
+        sum += d * d;
+    }
+
+    return std::sqrt (sum / static_cast<double> (to - from));
+}
+} // namespace
+
+TEZLA_TEST (the_snare_shell_rings_at_the_sos_mode_ratios)
+{
+    // Spread 1, Tone 1, no wires, no crack, no drop: the three modes at
+    // 1 : 1.6 : 2.2 of a 200 Hz fundamental (Reid's measured snare, rounded;
+    // docs/DSP-REFERENCES.md), read off a zero-padded FFT of the hit at
+    // 0.18 Hz per bin, through the whole engine at Auto oversampling.
+    constexpr double rate = 48000.0;
+
+    EngineParameters parameters;
+    parameters.snare1 = neutralSnare();
+
+    const auto out = render (parameters, rate, 96000, { { 0, 38, 1.0 } });
+
+    const double f0 = peakHzBetween (out, rate, 150.0, 250.0);
+    const double f1 = peakHzBetween (out, rate, 280.0, 360.0);
+    const double f2 = peakHzBetween (out, rate, 400.0, 480.0);
+
+    std::printf ("        [snare modes] %.2f / %.2f / %.2f Hz -- ratios 1 : %.3f : %.3f\n",
+                 f0, f1, f2, f1 / f0, f2 / f0);
+
+    CHECK_NEAR (f0, 200.0, 0.4);
+    CHECK_NEAR (f1 / f0, 1.6, 0.004);
+    CHECK_NEAR (f2 / f0, 2.2, 0.004);
+}
+
+TEZLA_TEST (a_spread_zero_shell_is_one_tone_at_its_pitch_at_every_host_rate)
+{
+    // Spread 0 puts all three modes on the fundamental: one decaying sine.
+    // Its period from zero crossings at 44.1 / 48 / 96 / 192 kHz (Auto
+    // oversampling: x4, x4, x2, x1), cycles 2 to 100, against 200 Hz. The
+    // resonator's pole is built from the internal rate, so the tone is the
+    // same tone at every rate -- and this is the assertion that says so.
+    EngineParameters parameters;
+    parameters.snare1 = neutralSnare();
+    parameters.snare1.spread = 0.0;
+    parameters.snare1.decaySeconds = 2.0;
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        const auto out = render (parameters, rate, static_cast<int> (rate), { { 0, 38, 1.0 } });
+        const auto times = crossings (out, rate);
+
+        CHECK (times.size() > 101);
+
+        if (times.size() < 102)
+            continue;
+
+        double worst = 0.0;
+
+        for (std::size_t k = 1; k < 100; ++k)
+        {
+            const double period = times[k + 1] - times[k];
+            worst = std::max (worst, std::abs (1200.0 * std::log2 (200.0 * period)));
+        }
+
+        const double mean = 99.0 / (times[100] - times[1]);
+
+        std::printf ("        [snare tone] %6.0f Hz host: mean %.4f Hz, worst single cycle %.3f cents\n",
+                     rate, mean, worst);
+
+        CHECK_NEAR (1200.0 * std::log2 (mean / 200.0), 0.0, 0.1);
+        CHECK (worst < 1.0);
+    }
+}
+
+TEZLA_TEST (the_snare_drop_retunes_the_bank_while_it_moves_and_never_once_it_has_landed)
+{
+    // The plan's cost claim: `setMode` per control chunk while the
+    // TensionDrop moves, one last time as it snaps to exactly 1.0, then
+    // never again -- the landed drum costs no transcendentals. The drop
+    // moves past its stated 50 ms landing (where 0.67% of the depth is
+    // left) until the remaining cents fall under `kSnapCents`: from 12 st
+    // that is 50 ms / 5 * ln (1200 / 0.01) = 117 ms, or 702 chunks of 32
+    // samples at 192 kHz, plus the strike's own and the landing's.
+    constexpr double rate = 192000.0;
+
+    SnareSettings s = neutralSnare();
+    s.startSemitones = 12.0;
+    s.dropSeconds = 0.05;
+    s.decaySeconds = 2.0;
+
+    const double snapSeconds = s.dropSeconds / TensionDrop::kLandFactor
+                             * std::log (100.0 * s.startSemitones / TensionDrop::kSnapCents);
+    const int expected = static_cast<int> (std::ceil (snapSeconds * rate / Engine::kControlIntervalSamples));
+
+    SnareEngine engine;
+    engine.prepare (rate);
+    engine.start (s, 200.0, 1.0, 7u, 0);
+
+    double sink = 0.0;
+
+    const auto run = [&] (double seconds)
+    {
+        const int total = static_cast<int> (seconds * rate);
+
+        for (int n = 0; n < total; ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                engine.advanceControl (Engine::kControlIntervalSamples);
+
+            sink += engine.process();
+        }
+    };
+
+    run (0.02);
+    const int during = engine.getRetuneCount();
+    const double duringHz = engine.currentHz();
+
+    run (0.58);
+    const int landed = engine.getRetuneCount();
+    const double landedHz = engine.currentHz();
+
+    run (0.5);
+    const int later = engine.getRetuneCount();
+
+    std::printf ("        [snare drop] retunes: %d in the first 20 ms (at %.2f Hz), %d by 600 ms, %d by 1.1 s; "
+                 "the snap predicts %d chunks; landed on %.9g Hz (sink %g)\n",
+                 during, duringHz, landed, later, expected, landedHz, sink);
+
+    CHECK (during > 100);
+    CHECK (duringHz > 200.0);
+    CHECK (landed >= expected);
+    CHECK (landed <= expected + 3);
+    CHECK (later == landed);
+    CHECK (isExactly (landedHz, 200.0));
+}
+
+TEZLA_TEST (rattle_at_zero_is_exact_and_at_one_drives_the_wires_from_the_shell)
+{
+    // Body and Wires are a sum with nothing between them at Rattle 0: the
+    // hit with both is, bit for bit, the shell alone plus the wires alone --
+    // so the shell's motion cannot be leaking into the wires -- and the
+    // follower reads exactly 0.0 because it was never evaluated. At Rattle 1
+    // the same wires are louder while the shell is loud, and they are still
+    // there at 100 ms, following the shell, where the stick's own 50 ms
+    // burst has landed and the unrattled wires are exactly over.
+    constexpr double rate = 192000.0;
+    constexpr double seconds = 0.4;
+
+    SnareSettings s = neutralSnare();
+    s.decaySeconds = 0.3;
+    s.wires = 1.0;
+    s.snappyHz = 3000.0;
+    s.wiresDecaySeconds = 0.05;
+
+    SnareEngine engine;
+
+    const auto both = renderSnareEngine (engine, s, rate, seconds);
+
+    auto shellOnly = s;
+    shellOnly.wires = 0.0;
+    const auto shell = renderSnareEngine (engine, shellOnly, rate, seconds);
+
+    auto wiresOnly = s;
+    wiresOnly.body = 0.0;
+    const auto wires = renderSnareEngine (engine, wiresOnly, rate, seconds);
+
+    std::size_t mismatches = 0;
+
+    for (std::size_t n = 0; n < both.size(); ++n)
+        if (! isExactly (both[n], shell[n] + wires[n]))
+            ++mismatches;
+
+    CHECK (mismatches == 0);
+
+    // The follower, read mid-hit -- before the hit retires and resets it.
+    const auto followerAfter = [&] (const SnareSettings& settings)
+    {
+        SnareEngine probe;
+        probe.prepare (rate);
+        probe.start (settings, 200.0, 1.0, 99u, 0);
+
+        for (int n = 0; n < 4000; ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                probe.advanceControl (Engine::kControlIntervalSamples);
+
+            (void) probe.process();
+        }
+
+        return probe.getFollowerLevel();
+    };
+
+    auto rattled = s;
+    rattled.rattle = 1.0;
+
+    const double followerOff = followerAfter (s);
+    const double followerOn = followerAfter (rattled);
+
+    CHECK (isExactlyZero (followerOff));
+    CHECK (followerOn > 0.0);
+
+    // The wires at Rattle 1 against Rattle 0 (the shell subtracted from
+    // both): over the first 20 ms, where the shell is loud; and over
+    // 100-120 ms, where the 50 ms burst is exactly over and only the shell,
+    // 20 dB down by then, is driving them.
+    const auto c = renderSnareEngine (engine, rattled, rate, seconds);
+
+    const auto early = static_cast<std::size_t> (0.02 * rate);
+    const auto late0 = static_cast<std::size_t> (0.10 * rate);
+    const auto late1 = static_cast<std::size_t> (0.12 * rate);
+
+    const double plainEarly = rmsOfDifference (both, shell, 0, early);
+    const double rattledEarly = rmsOfDifference (c, shell, 0, early);
+    const double plainLate = rmsOfDifference (both, shell, late0, late1);
+    const double rattledLate = rmsOfDifference (c, shell, late0, late1);
+
+    std::printf ("        [rattle] wires at rattle 1 against 0: x%.3f over the first 20 ms; at 100 ms %.1f dB re "
+                 "their start where the plain wires are %s; follower %.4f (rattle 0: %g)\n",
+                 rattledEarly / plainEarly, 20.0 * std::log10 (rattledLate / rattledEarly),
+                 isExactlyZero (plainLate) ? "exactly over" : "still sounding", followerOn, followerOff);
+
+    CHECK (rattledEarly / plainEarly > 1.3);
+    CHECK (isExactlyZero (plainLate));
+    CHECK (rattledLate > 0.01 * rattledEarly);
+}
+
+TEZLA_TEST (a_snare_hit_retires_exactly_and_leaves_exact_zeros)
+{
+    // Everything on: the shell is cut once it is 120 dB down (a 0.3 s T60
+    // gets there at 0.6 s), the wires' envelope is killed as it lands, the
+    // crack is over in 12 ms -- and the activity count says 0, not merely
+    // the output.
+    constexpr double rate = 48000.0;
+
+    EngineParameters parameters;
+    parameters.snare1 = snareEverythingOn();
+
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+
+    const auto out = render (parameters, rate, 96000, { { 0, 38, 1.0 } }, 256, {}, engine.get());
+    const int last = lastNonZeroSample (out);
+
+    std::printf ("        [snare retire] last non-zero sample at %.3f s (%.2e), active hits %d\n",
+                 last / rate, std::abs (out[static_cast<std::size_t> (last)]), engine->activeHitCount());
+
+    CHECK (engine->activeHitCount() == 0);
+    CHECK (last > 4800);
+    CHECK (last < 48000);
+
+    // The cut lands at the floor, not on an audible ring.
+    CHECK (std::abs (out[static_cast<std::size_t> (last)]) < 1.0e-5);
+}
+
+TEZLA_TEST (a_gated_snare_fades_out_at_note_off_and_a_one_shot_rings_on)
+{
+    // A tom with a 2 s ring, note-off at 100 ms: the one-shot pad plays on;
+    // gated with a 50 ms release it is exactly silent shortly after 150 ms
+    // with no step larger than the strike's own; with Release at 0 it is
+    // gone within 2 ms, ramped rather than cut.
+    constexpr double rate = 48000.0;
+    constexpr int off = 4800;
+
+    EngineParameters parameters;
+    parameters.snare1 = neutralSnare();
+    parameters.snare1.decaySeconds = 2.0;
+    parameters.snare1.wires = 0.5;
+    parameters.snare1.wiresDecaySeconds = 0.4;
+
+    const std::vector<Hit> events { { 0, 38, 1.0 }, { off, 38, -1.0 } };
+
+    // ---- one-shot ----
+    parameters.snare1.gate = false;
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+        const auto out = render (parameters, rate, 48000, events, 256, {}, engine.get());
+
+        CHECK (engine->activeHitCount() == 1);
+        CHECK (peakFrom (out, 24000) > 0.01);
+    }
+
+    const double bodyStep = maxStep (render (parameters, rate, 24000, { { 0, 38, 1.0 } }));
+
+    // ---- gated, 50 ms release ----
+    parameters.snare1.gate = true;
+    parameters.snare1.releaseSeconds = 0.05;
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+        const auto out = render (parameters, rate, 48000, events, 256, {}, engine.get());
+        const int last = lastNonZeroSample (out);
+
+        std::printf ("        [snare gate] release 50 ms: last non-zero at %.1f ms, max step %.4f (strike %.4f)\n",
+                     1000.0 * last / rate, maxStep (out), bodyStep);
+
+        CHECK (engine->activeHitCount() == 0);
+        CHECK (last > off);
+        CHECK (last < off + static_cast<int> (0.05 * rate) + 400);
+        CHECK (maxStep (out) <= bodyStep + 1.0e-3);
+    }
+
+    // ---- gated, release 0: the 1 ms ramp ----
+    parameters.snare1.releaseSeconds = 0.0;
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+        const auto out = render (parameters, rate, 48000, events, 256, {}, engine.get());
+        const int last = lastNonZeroSample (out);
+
+        std::printf ("        [snare gate] release 0: last non-zero at %.2f ms after the note-off, max step %.4f\n",
+                     1000.0 * (last - off) / rate, maxStep (out));
+
+        CHECK (engine->activeHitCount() == 0);
+        CHECK (last > off);
+        CHECK (last < off + static_cast<int> (0.002 * rate) + 100);
+        CHECK (maxStep (out) <= bodyStep + 1.0 / (0.001 * rate) + 1.0e-3);
+    }
 }

@@ -524,7 +524,7 @@ CLAUDE.md.
 | I1 kick engine + engine skeleton + TensionDrop promotion + SoftOdd | done |
 | I2 minimal JUCE layer, kick only, rig build + ear round | done — **played on the rig 2026-09-02** ("wow that sounds great"); the round's asks are the I2.1 row |
 | I2.1 the rig's first ear round: Bass mode, Gate + Release, tuning page | done in code; not yet played on the rig |
-| I3 snare engine | pending |
+| I3 snare engine + SNARE page (and the Perc and Snare 2 pads on the same engine) | done in code; not yet played on the rig |
 | I4 hat + clap engines, choke | pending |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
@@ -604,6 +604,54 @@ user, both about what happens between the keyboard and the pad:
    last non-zero), `Pad::release` ignoring which key started the hit (legato
    test red, D cut with C).
 
+**I3 shipped** (2026-09-02): `plugins/Ictus/Dsp/SnareEngine.hpp` — three
+modes of a `ModalResonator` at `1 + (r0 − 1)·spread`, r0 = {1, 1.6, 2.2}
+(Reid's measured snare, rounded; attributed at the point of use), T60s of
+Decay × {1, 0.7, 0.5}, Tone as the upper modes' strike amounts (0 runs one
+mode), one `TensionDrop` retuning the bank per control chunk while it moves
+and once more as it snaps, the shell cut exactly at −120 dB per chunk; the
+wires as seeded noise through an `SvfFilter` (Snappy the corner, Snap a
+morph from high-pass to band-pass, exact at both ends) under an AHD `Adsr`
+killed at zero; the **Rattle** as a second, *additive* drive on the wires
+following |shell| through a 1 ms one-pole, so with it up the wires buzz as
+long as the drum rings (the first draft scaled the wires' gain instead and
+could not outlive their own envelope: +24 % at full, which is not a knob);
+the crack as the kick's click pair, lifted into `Click.hpp` as `ClickPair`
+and proved bit-identical on a golden kick render; the gate as a release
+ramp on the whole hit, engaged only at note-off. Three pads run it: Snare 1
+(38) with its 24 parameters at `kSchemaV3`, Snare 2 (40) and Perc (37, the
+tom defaults of `tomSettings()`) on their defaults until I9. The editor
+gained the SNARE tab, a HIT button that strikes the page's pad, and greying
+for the wires', crack's and gate's dependents. Presets: the three kits got a
+snare each; nothing reordered.
+
+Measured at I3 (`tezla-tests snare`, `spread_zero`, `rattle`, `kit`;
+`tezla-measure ictus` table 2):
+
+| claim | figure |
+|---|---|
+| modes at Spread 1, 200 Hz fundamental, 0.18 Hz bins | **199.95 / 320.07 / 440.00 Hz — 1 : 1.601 : 2.201** |
+| Spread 0 shell at 44.1 / 48 / 96 / 192 kHz, cycles 2–100 | **200.0000 Hz at all four**, worst single cycle 0.000 cents |
+| retunes for a 12 st / 50 ms drop at 192 kHz (snap predicted at 702 chunks) | 121 by 20 ms (at 219.67 Hz), **704** by 600 ms, 704 by 1.1 s; landed on **exactly 200 Hz** |
+| Rattle 0: hit == shell + wires, bit for bit; follower | **0 mismatches** (a leak of one part in 10¹² is caught); follower exactly 0 |
+| Rattle 1: wires over the first 20 ms / at 100 ms where the plain burst has ended | **×1.789** / −28.7 dB re their start, plain wires exactly over |
+| rattle table (wires 0.3 s), rattle 0.25 / 0.5 / 1, first 20 ms | ×1.129 / 1.260 / 1.528; at 200 ms ×1.012 / 1.024 / 1.048 |
+| wires centroid, high-pass at 2 / 4 / 6 kHz; band-pass at 2 / 4 / 6 kHz | 7837 / 7805 / 8918 Hz; 2581 / 4721 / 6736 Hz |
+| retirement, everything on, 0.3 s shell | last non-zero at **0.601 s** (1.1e-17), active hits **0** |
+| gate, 50 ms release, note-off at 100 ms / Release 0 | silent at 151.3 ms / 2.29 ms after; max step = the strike's own |
+| snare engine at 192 kHz, everything on / bare tom | **15.0 / 7.3 ns per sample** (0.29 % / 0.14 %) |
+| the kit — two kicks and three snares, everything on, 48 kHz ×4 | **4.8–5.2 %** of a core; idle 0.001 % |
+| the kick through `ClickPair` against the I2 render (click 0.4, noise 0.3) | **bit-identical** |
+
+Break-checks at I3, each seen red then reverted: mode ratio 1.6 → 1.5
+(ratio test red), Spread ignored (spread-0 test red at all four rates), the
+drop retuning forever (drop test red, 3601 retunes), the follower run at
+Rattle 0 (exact-zero check red), the shell leaking into the wires by one
+part in 10¹² (sum check red — a first attempt at this break was overwritten
+by the envelope assignment and proved nothing, so it was redone), the
+shell's floor at −400 dB (retire test red, "active hits 1"), `release()`
+emptied (gate test red on both releases).
+
 Break-checks at I1, each seen red then reverted: a staircase increment
 (pitch test red), the control grid restarted per callback (block-size test
 red), no alignment delay (latency test red at ×2/×4/×8), the blocker placed
@@ -611,9 +659,9 @@ in the neutral path (neutral test red), the envelope kill removed (retire
 test red, "active hits 1").
 
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
-file; take the first `pending` phase. The next is I3 — but the user's ears
-run this project: if the rig reports on I2.1 first, that report comes before
-the snare. The non-negotiables every phase here
+file; take the first `pending` phase. The next is I4 — but the user's ears
+run this project: the rig has not yet heard I2.1 or I3, and that report comes
+before the hats. The non-negotiables every phase here
 honours, in one place:
 
 - One phase = one commit. Tests written and RUN in that commit; every

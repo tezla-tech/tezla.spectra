@@ -4672,6 +4672,122 @@ double peakOf (const std::vector<double>& x)
         peak = std::max (peak, std::abs (v));
     return peak;
 }
+
+struct PatternHit
+{
+    double seconds;
+    int note;
+    double velocity;
+};
+
+/// A pattern through the whole engine at a host rate, the blocks cut at
+/// every hit so it lands on its sample; the left channel comes back.
+std::vector<double> renderPattern (const EngineParameters& parameters, double rate, double seconds,
+                                   const std::vector<PatternHit>& hits)
+{
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (rate, 512);
+    engine->setParameters (parameters);
+
+    const int total = static_cast<int> (seconds * rate);
+    std::vector<double> left (static_cast<std::size_t> (total), 0.0);
+    std::vector<double> right (static_cast<std::size_t> (total), 0.0);
+
+    int done = 0;
+
+    while (done < total)
+    {
+        for (const auto& hit : hits)
+            if (static_cast<int> (hit.seconds * rate) == done)
+                engine->noteOn (hit.note, hit.velocity);
+
+        int take = std::min (512, total - done);
+
+        for (const auto& hit : hits)
+        {
+            const int at = static_cast<int> (hit.seconds * rate);
+            if (at > done)
+                take = std::min (take, at - done);
+        }
+
+        double* block[2] = { left.data() + done, right.data() + done };
+        engine->process (block, take);
+        done += take;
+    }
+
+    return left;
+}
+
+/// The largest spectral peak between two frequencies, by the bin of a
+/// zero-padded 262144-point FFT (0.18 Hz per bin at 48 k).
+double peakHzBetween (const std::vector<double>& x, double rate, double lo, double hi)
+{
+    std::vector<double> padded (1u << 18, 0.0);
+    const std::size_t count = std::min (x.size(), padded.size());
+
+    for (std::size_t n = 0; n < count; ++n)
+        padded[n] = x[n];
+
+    const auto spectrum = tezla::measure::fftOfReal (padded);
+    const double binWidth = rate / static_cast<double> (padded.size());
+
+    std::size_t best = 0;
+    double bestPower = -1.0;
+
+    const auto first = static_cast<std::size_t> (lo / binWidth);
+    const auto last = std::min (static_cast<std::size_t> (hi / binWidth), spectrum.size() - 1);
+
+    for (std::size_t bin = first; bin <= last; ++bin)
+    {
+        const double power = std::norm (spectrum[bin]);
+
+        if (power > bestPower)
+        {
+            bestPower = power;
+            best = bin;
+        }
+    }
+
+    return static_cast<double> (best) * binWidth;
+}
+
+/// The power-weighted mean frequency between two limits.
+double centroidHz (const std::vector<double>& x, double rate, double lo, double hi)
+{
+    std::vector<double> padded (1u << 16, 0.0);
+    const std::size_t count = std::min (x.size(), padded.size());
+
+    for (std::size_t n = 0; n < count; ++n)
+        padded[n] = x[n];
+
+    const auto spectrum = tezla::measure::fftOfReal (padded);
+    const double binWidth = rate / static_cast<double> (padded.size());
+
+    double weighted = 0.0;
+    double total = 0.0;
+
+    for (std::size_t bin = 1; bin < spectrum.size(); ++bin)
+    {
+        const double hz = static_cast<double> (bin) * binWidth;
+
+        if (hz < lo || hz > hi)
+            continue;
+
+        const double power = std::norm (spectrum[bin]);
+        weighted += hz * power;
+        total += power;
+    }
+
+    return total > 0.0 ? weighted / total : 0.0;
+}
+
+double rmsBetween (const std::vector<double>& x, std::size_t from, std::size_t to)
+{
+    double sum = 0.0;
+    for (std::size_t n = from; n < to && n < x.size(); ++n)
+        sum += x[n] * x[n];
+    return std::sqrt (sum / static_cast<double> (to - from));
+}
 } // namespace ictusMeasure
 
 int runIctus (const Args& args)
@@ -4922,20 +5038,240 @@ int runIctus (const Args& args)
                      nsFull, nsNeutral, nsFull * 192000.0 / 1.0e7, nsNeutral * 192000.0 / 1.0e7, sink);
     }
 
-    // ---- 6. a WAV to listen to ------------------------------------------
+    // ======================================================================
+    // table 2, the snare
+    // ======================================================================
+
+    std::printf ("\n\ntezla-measure ictus -- table 2, the snare\n\n");
+
+    // The shell alone at unit gain: wires, crack and drop off, every velocity
+    // amount 0, so what is measured is the modes.
+    SnareSettings shell;
+    shell.tuneHz = 200.0;
+    shell.spread = 1.0;
+    shell.tone = 1.0;
+    shell.decaySeconds = 1.0;
+    shell.startSemitones = 0.0;
+    shell.body = 1.0;
+    shell.wires = 0.0;
+    shell.crack = 0.0;
+    shell.crackNoise = 0.0;
+    shell.level = 1.0;
+    shell.velocityLevel = 0.0;
+    shell.velocityWires = 0.0;
+    shell.velocityCrack = 0.0;
+    shell.velocityDrop = 0.0;
+
+    // ---- 1. the shell's modes against the SOS ratios --------------------
+
+    {
+        EngineParameters parameters;
+        parameters.snare1 = shell;
+
+        const auto out = renderPattern (parameters, rate, 2.0, { { 0.0, 38, 1.0 } });
+
+        const double f0 = peakHzBetween (out, rate, 150.0, 250.0);
+        const double f1 = peakHzBetween (out, rate, 280.0, 360.0);
+        const double f2 = peakHzBetween (out, rate, 400.0, 480.0);
+
+        std::printf ("Shell at 200 Hz, spread 1, tone 1, at %.0f Hz host (Auto): modes at %.2f / %.2f / %.2f Hz,\n"
+                     "ratios 1 : %.3f : %.3f against the article's 1 : 1.6 : 2.2 (0.18 Hz per bin)\n",
+                     rate, f0, f1, f2, f1 / f0, f2 / f0);
+
+        for (const double spread : { 0.0, 0.5, 1.0 })
+        {
+            parameters.snare1.spread = spread;
+            const auto swept = renderPattern (parameters, rate, 2.0, { { 0.0, 38, 1.0 } });
+            std::printf ("  spread %.1f: peaks at %.1f / %.1f / %.1f Hz\n", spread,
+                         peakHzBetween (swept, rate, 150.0, 250.0),
+                         peakHzBetween (swept, rate, 250.0, 360.0),
+                         peakHzBetween (swept, rate, 360.0, 480.0));
+        }
+    }
+
+    // ---- 2. the drop: retunes while it moves, none once landed ----------
+
+    {
+        SnareEngine engine;
+        engine.prepare (192000.0);
+
+        SnareSettings s = shell;
+        s.startSemitones = 12.0;
+        s.dropSeconds = 0.05;
+        s.decaySeconds = 2.0;
+
+        engine.start (s, 200.0, 1.0, 7u, 0);
+
+        double sink = 0.0;
+        int at50 = 0;
+        int at100 = 0;
+
+        for (int n = 0; n < 192000; ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                engine.advanceControl (Engine::kControlIntervalSamples);
+
+            sink += engine.process();
+
+            if (n == 9600)
+                at50 = engine.getRetuneCount();
+
+            if (n == 19200)
+                at100 = engine.getRetuneCount();
+        }
+
+        std::printf ("\nDrop of 12 st over 50 ms at 192 kHz: %d bank retunes by 50 ms, %d by 100 ms, %d by 1 s;"
+                     " landed on %.9g Hz (sink %g)\n", at50, at100, engine.getRetuneCount(), engine.currentHz(), sink);
+    }
+
+    // ---- 3. the wires' colour: Snappy and Snap ----------------------------
+
+    {
+        std::printf ("\nWires alone (body 0), power centroid 500 Hz - 20 kHz of the first 0.3 s at %.0f Hz host:\n", rate);
+
+        for (const double snap : { 0.0, 1.0 })
+            for (const double snappy : { 2000.0, 4000.0, 6000.0 })
+            {
+                EngineParameters parameters;
+                parameters.snare1 = shell;
+                parameters.snare1.body = 0.0;
+                parameters.snare1.wires = 1.0;
+                parameters.snare1.snappyHz = snappy;
+                parameters.snare1.snap = snap;
+                parameters.snare1.wiresDecaySeconds = 0.3;
+
+                const auto out = renderPattern (parameters, rate, 0.3, { { 0.0, 38, 1.0 } });
+
+                std::printf ("  snap %.0f (%s), snappy %4.0f Hz: centroid %6.0f Hz, peak %.3f\n",
+                             snap, snap > 0.5 ? "band-pass" : "high-pass", snappy,
+                             centroidHz (out, rate, 500.0, 20000.0), peakOf (out));
+            }
+    }
+
+    // ---- 4. the rattle: the wires following the shell ------------------
+
+    {
+        SnareEngine engine;
+
+        SnareSettings s = shell;
+        s.decaySeconds = 0.3;
+        s.wires = 1.0;
+        s.wiresDecaySeconds = 0.3;
+
+        const auto run = [&] (const SnareSettings& settings)
+        {
+            engine.prepare (192000.0);
+            engine.start (settings, 200.0, 1.0, 99u, 0);
+
+            std::vector<double> out (static_cast<std::size_t> (0.4 * 192000.0));
+
+            for (std::size_t n = 0; n < out.size(); ++n)
+            {
+                if (n % static_cast<std::size_t> (Engine::kControlIntervalSamples) == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+
+                out[n] = engine.process();
+            }
+
+            return out;
+        };
+
+        auto shellOnly = s;
+        shellOnly.wires = 0.0;
+        const auto shellOut = run (shellOnly);
+
+        std::printf ("\nRattle: the wires' RMS gain against Rattle 0 (192 kHz, shell T60 0.3 s, wires 0.3 s):\n");
+        std::printf ("  %6s %10s %10s %10s\n", "rattle", "0-20 ms", "50-70 ms", "200-220 ms");
+
+        std::vector<double> reference;
+
+        for (const double rattle : { 0.0, 0.25, 0.5, 1.0 })
+        {
+            auto settings = s;
+            settings.rattle = rattle;
+            auto out = run (settings);
+
+            for (std::size_t n = 0; n < out.size(); ++n)
+                out[n] -= shellOut[n];
+
+            if (reference.empty())
+                reference = out;
+
+            const auto window = [&] (double from, double to)
+            {
+                const auto a = static_cast<std::size_t> (from * 192000.0);
+                const auto b = static_cast<std::size_t> (to * 192000.0);
+                return rmsBetween (out, a, b) / rmsBetween (reference, a, b);
+            };
+
+            std::printf ("  %6.2f %10.3f %10.3f %10.4f\n", rattle, window (0.0, 0.02), window (0.05, 0.07), window (0.2, 0.22));
+        }
+    }
+
+    // ---- 5. CPU ---------------------------------------------------------
+
+    {
+        SnareEngine engine;
+        engine.prepare (192000.0);
+
+        SnareSettings full;
+        full.decaySeconds = 0.5;
+        full.wires = 0.7;
+        full.rattle = 0.6;
+        full.crack = 0.5;
+        full.crackNoise = 0.4;
+        full.startSemitones = 8.0;
+
+        constexpr int samples = 192000;
+        double sink = 0.0;
+
+        const auto time = [&] (const SnareSettings& settings)
+        {
+            engine.start (settings, 200.0, 1.0, 1234, 0);
+            const auto start = std::chrono::steady_clock::now();
+
+            for (int n = 0; n < samples; ++n)
+            {
+                if (n % Engine::kControlIntervalSamples == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+                sink += engine.process();
+            }
+
+            return 1.0e9 * std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count()
+                 / samples;
+        };
+
+        SnareSettings tom = tomSettings();
+        tom.decaySeconds = 2.0;
+        tom.crack = 0.0;
+
+        const double nsFull = time (full);
+        const double nsTom = time (tom);
+
+        std::printf ("\nSnare engine, one second at 192 kHz: %.1f ns/sample everything on (0.5 s shell), %.1f ns/sample"
+                     " a bare tom (2 s shell, wires off) -- %.2f%% / %.2f%% of a core at 192 kHz; sink %g\n",
+                     nsFull, nsTom, nsFull * 192000.0 / 1.0e7, nsTom * 192000.0 / 1.0e7, sink);
+    }
+
+    // ---- 6. a WAV to listen to: a bar of kick and snare ------------------
 
     if (! args.outPath.empty())
     {
-        KickSettings s;
-        s.harmonics = 0.4;
-        s.click = 0.4;
-        s.clickNoise = 0.3;
-        s.toneEnabled = true;
+        EngineParameters parameters;
+        parameters.kick1.harmonics = 0.4;
+        parameters.kick1.click = 0.4;
+        parameters.kick1.clickNoise = 0.3;
+        parameters.kick1.toneEnabled = true;
+        parameters.snare1.crack = 0.4;
+        parameters.snare1.crackNoise = 0.3;
+        parameters.snare1.rattle = 0.4;
 
-        const auto out = renderHit (s, rate, 1.5);
+        const auto out = renderPattern (parameters, rate, 2.4,
+                                        { { 0.0, 36, 1.0 }, { 0.5, 38, 1.0 }, { 1.0, 36, 1.0 },
+                                          { 1.25, 36, 0.7 }, { 1.5, 38, 1.0 }, { 1.75, 37, 0.8 } });
 
         if (measure::writeWav (args.outPath, { out }, rate))
-            std::printf ("\nWrote %s (one hit, %.0f Hz, harmonics 0.4, click 0.4, tone x8)\n", args.outPath.c_str(), rate);
+            std::printf ("\nWrote %s (kick, snare, kick, kick, snare, perc; %.0f Hz)\n", args.outPath.c_str(), rate);
         else
             std::printf ("\nCould not write %s\n", args.outPath.c_str());
     }
@@ -4967,7 +5303,7 @@ void printUsage()
     std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
     std::printf ("  phonoss          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
     std::printf ("  membrana        [--fs --out FILE]  proximity, sphere limits, fit, curves, CPU\n");
-    std::printf ("  ictus           [--fs --out FILE]  kick pitch trajectory at four rates, DC, aliasing, CPU\n");
+    std::printf ("  ictus           [--fs --out FILE]  kick pitch at four rates, DC, aliasing; snare modes, drop, wires, rattle; CPU\n");
 }
 
 } // namespace

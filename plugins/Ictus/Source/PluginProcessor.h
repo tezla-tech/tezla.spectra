@@ -24,6 +24,10 @@
 // Bass mode (every key plays Kick 1 at the key's pitch), and the shared
 // tuning page behind both -- the processor is the ui::TuningHost, exactly as
 // Malleus is, with the scale handed to the audio thread by a swap.
+//
+// Schema 3 (I3): Snare 1's 24 controls. Snare 2 and the Perc pad run the
+// same engine on their defaults until their pages arrive with the editor
+// close-out (I9).
 
 #include <atomic>
 #include <vector>
@@ -95,6 +99,41 @@ inline constexpr auto k1Release   = "k1Release";
 
 // GLOBAL -- Bass mode
 inline constexpr auto bassMode    = "bassMode";
+
+// ---- schema 3: the snare (I3) ------------------------------------------------
+// SNARE 1 -- shell
+inline constexpr auto s1Tune       = "s1Tune";
+inline constexpr auto s1FollowKey  = "s1FollowKey";
+inline constexpr auto s1Spread     = "s1Spread";
+inline constexpr auto s1Tone       = "s1Tone";
+inline constexpr auto s1Decay      = "s1Decay";
+inline constexpr auto s1Start      = "s1Start";
+inline constexpr auto s1Drop       = "s1Drop";
+inline constexpr auto s1Body       = "s1Body";
+
+// SNARE 1 -- wires
+inline constexpr auto s1Wires      = "s1Wires";
+inline constexpr auto s1Snappy     = "s1Snappy";
+inline constexpr auto s1Snap       = "s1Snap";
+inline constexpr auto s1WiresDecay = "s1WiresDecay";
+inline constexpr auto s1Rattle     = "s1Rattle";
+
+// SNARE 1 -- crack
+inline constexpr auto s1Crack      = "s1Crack";
+inline constexpr auto s1CrackTone  = "s1CrackTone";
+inline constexpr auto s1Noise      = "s1Noise";
+inline constexpr auto s1NoiseTime  = "s1NoiseTime";
+
+// SNARE 1 -- level and gate
+inline constexpr auto s1Level      = "s1Level";
+inline constexpr auto s1Gate       = "s1Gate";
+inline constexpr auto s1Release    = "s1Release";
+
+// SNARE 1 -- velocity
+inline constexpr auto s1VelLevel   = "s1VelLevel";
+inline constexpr auto s1VelWires   = "s1VelWires";
+inline constexpr auto s1VelCrack   = "s1VelCrack";
+inline constexpr auto s1VelDrop    = "s1VelDrop";
 } // namespace ids
 
 /// Choice lists. **APPEND-ONLY**: a choice parameter stores an index.
@@ -187,7 +226,7 @@ public:
     /// Live tooltips for the BASS lamp and the KEY switch: what a key plays
     /// right now, through which scale, in Hz -- not something to work out.
     [[nodiscard]] juce::String describeKeying() const;
-    [[nodiscard]] juce::String describeFollowKey() const;
+    [[nodiscard]] juce::String describeFollowKey (PadIndex pad) const;
 
     // ---- what the editor reads ------------------------------------------
 
