@@ -156,6 +156,12 @@ them rather than by drawing mockups. What they say:
 - **A size hierarchy.** A group's lead control is drawn 1.32× and a set-once
   trim 0.74×, so the eye has something to land on. The cell keeps its footprint
   either way; only the control inside it moves.
+- **The controls that add colour wear colour.** A knob whose job is to make
+  the sound less exact — analogue drift, humanise — is marked
+  `ui::spectralKnob` and draws its ring as a pastel rainbow along its travel
+  instead of the group tint, faintly even at zero so the ring says what the
+  control is for. One kind of control per plate, or the mark is spent; the
+  numbers are `design::kSpectral*` in `PanelDesign.hpp`.
 - **Knobs sit in a countersunk well**, lit from above, with a machined skirt.
   Geometry separates a knob from its plate, not hue — a body drawn a few points
   lighter than the plate behind it reads as a smudge.

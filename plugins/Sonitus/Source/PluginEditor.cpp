@@ -220,6 +220,23 @@ constexpr int kPagePad = 5;
     return design::Emphasis::normal;
 }
 
+/// The controls that add colour to the sound, and wear it: the house spectral
+/// ring, a pastel rainbow along the travel (PanelDesign.hpp, "The spectral
+/// ring"). Both kinds of analogue drift, and nothing else -- the ring is the
+/// mark of a control whose job is to make the sound less exact, and giving it
+/// to a second kind of control would spend it. Same shape as `emphasisOf`, for
+/// the same reason.
+[[nodiscard]] bool isSpectral (const juce::String& id) noexcept
+{
+    static const char* spectral[] { "driftA", "driftB", "voiceDrift" };
+
+    for (const char* name : spectral)
+        if (id == name)
+            return true;
+
+    return false;
+}
+
 /// The strip along the bottom of the *editor* that carries the current page's
 /// note. It used to be the last thing on the page itself, which put it below
 /// the fold on exactly the two pages long enough to scroll -- and the MANGLE
@@ -517,6 +534,9 @@ KnobCell::KnobCell (juce::AudioProcessorValueTreeState& state, const juce::Strin
     // then, so a cell that is never tinted still looks like a knob.
     ui::styleKnob (slider_, palette_, palette_.accent, emphasisOf (parameterId));
     ui::resetsToDefault (slider_, state, parameterId);
+
+    if (isSpectral (parameterId))
+        ui::spectralKnob (slider_);
 
     slider_.setTooltip (tooltip);
     label_.setTooltip (tooltip);

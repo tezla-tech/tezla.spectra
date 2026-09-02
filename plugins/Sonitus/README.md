@@ -889,6 +889,13 @@ ever sit genuinely inside the loop without iterating.
 
 ### Unreleased
 
+**The drift knobs wear a pastel rainbow.** All three — Drift on each
+oscillator and the FILTER page's Drift — draw their ring as a pastel hue sweep
+along the travel, faintly even at zero and fully where the value is, with the
+pointer taking the hue under it. The mark of a control whose job is to add
+colour to the sound, and it is a house variant (`ui::spectralKnob`, the
+numbers in `PanelDesign.hpp`) rather than a knob styled by hand.
+
 **Voice drift.** A second kind of analogue drift, on the FILTER page: the
 voice card's temperature. Cutoff and resonance wander together, each voice
 with its own fixed mismatch and its own slow wander that carries on between
