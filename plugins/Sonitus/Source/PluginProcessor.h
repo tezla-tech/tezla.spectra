@@ -207,6 +207,10 @@ inline constexpr auto tilt        = "tilt";
 // ---- global ----------------------------------------------------------------
 inline constexpr auto output      = "output";
 inline constexpr auto oversampling = "oversampling";
+
+/// What an offline bounce runs at. Appended at schema V6, defaulting to "Same
+/// as live", so a project saved before it existed bounces what it played.
+inline constexpr auto renderOversampling = "renderOversampling";
 } // namespace ids
 
 /// The option lists behind the choice parameters.
@@ -244,6 +248,11 @@ inline const juce::StringArray lfoDivision = []
     return names;
 }();
 inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
+
+/// What an offline bounce runs at. Index 0 is neutral; the rest are the live
+/// list without Off, in its order, and map by arithmetic onto
+/// `dsp::RenderOversampling`. **Append-only**, like every list here.
+inline const juce::StringArray renderOversampling { "Same as live", "Auto", "x2", "x4", "x8" };
 
 /// The modulation sources, in the order the matrix indexes them.
 inline const juce::StringArray modSource { "Off", "Amp env", "Mod env 1", "Mod env 2",
@@ -335,6 +344,11 @@ static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
             && static_cast<int> (dsp::OversamplingMode::Off)  == 1
             && static_cast<int> (dsp::OversamplingMode::X8)   == 4,
                "the oversampling option list is indexed straight into OversamplingMode");
+
+static_assert (static_cast<int> (dsp::RenderOversampling::sameAsLive) == 0
+            && static_cast<int> (dsp::RenderOversampling::Auto)       == 1
+            && static_cast<int> (dsp::RenderOversampling::X8)         == 4,
+               "the render option list is indexed straight into RenderOversampling");
 
 static_assert (static_cast<int> (ModSource::none)      == 0
             && static_cast<int> (ModSource::sequencer) == 9
@@ -624,6 +638,7 @@ public:
     // ---- what the panel reads ----------------------------------------------
 
     [[nodiscard]] juce::String describeOversampling() const;
+    [[nodiscard]] juce::String describeRenderQuality() const;
     [[nodiscard]] juce::String describeLatency() const;
     [[nodiscard]] juce::String describeComb() const;
 

@@ -96,10 +96,24 @@ public:
     /// nor Capstone has a dry/wet at all -- Halo's `amount` is how much
     /// harmonic content is *generated*, which is a drive and not a blend, and
     /// putting it here labelled MIX would be a lie about what it does.
+    ///
+    /// `renderParameterId` is the **render quality** -- what an offline bounce
+    /// runs at, a `dsp::RenderOversampling` choice -- and sits beside OS on the
+    /// plugins that offer it. Defaulted to null so a plugin that has not been
+    /// given the control yet is unchanged.
     void attachSuiteControls (juce::AudioProcessorValueTreeState& state,
                               const char* mixParameterId,
                               const char* outputParameterId,
-                              const char* oversamplingParameterId);
+                              const char* oversamplingParameterId,
+                              const char* renderParameterId = nullptr);
+
+    /// Replaces the oversampling box's tooltip with a live one -- what Auto is
+    /// doing at the session's actual rate -- which only the processor knows.
+    /// A no-op when the box was not attached.
+    void setOversamplingTooltip (const juce::String& text);
+
+    /// The same for the render box.
+    void setRenderTooltip (const juce::String& text);
 
     /// Which slot is live, so the button can show it.
     void setActiveSlot (bool isSlotB);
@@ -138,9 +152,14 @@ private:
     juce::Label oversamplingLabel_ { {}, "OS" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> oversamplingAttachment_;
 
+    juce::ComboBox renderBox_;
+    juce::Label renderLabel_ { {}, "RENDER" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> renderAttachment_;
+
     bool hasMix_ { false };
     bool hasOutput_ { false };
     bool hasOversampling_ { false };
+    bool hasRender_ { false };
 
     bool hasBypass_ { true };
     bool slotB_ { false };

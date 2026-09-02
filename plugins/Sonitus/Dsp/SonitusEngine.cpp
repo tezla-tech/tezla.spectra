@@ -43,7 +43,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
     maxBlockSize_ = std::max (maxBlockSize, 1);
 
-    oversampler_.prepare (maxBlockSize_, 2, factorFor (pending_.oversampling, sampleRate_));
+    oversampler_.prepare (maxBlockSize_, 2, factorFor (effectiveOversampling(), sampleRate_));
 
     rebuildForRate();
 
@@ -727,7 +727,11 @@ void Engine::process (double* const* output, int numSamples) noexcept
     // this is checked against what was actually built rather than against a
     // "have the parameters arrived" flag -- CLAUDE.md section 7, and the bug
     // that made Emberdrive's oversampling control silently inert on load.
-    const int wanted = factorFor (pending_.oversampling, sampleRate_);
+    //
+    // The *effective* mode: the render setting while the host is bouncing
+    // offline, the live one otherwise. A bounce at x8 is therefore the same
+    // graph a live x8 would build, and a test holds it to that bit for bit.
+    const int wanted = factorFor (effectiveOversampling(), sampleRate_);
 
     if (wanted != oversampler_.getFactor())
     {

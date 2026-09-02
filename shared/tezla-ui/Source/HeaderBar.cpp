@@ -23,6 +23,8 @@ constexpr int kCopyWidth    = 52;
 constexpr int kOutputWidth  = 104;
 constexpr int kOutputKnobHeight = 36;
 constexpr int kOversamplingWidth = 82;
+constexpr int kRenderWidth = 104;      // wide enough for "Same as live"
+constexpr int kRenderLabelWidth = 48;
 constexpr int kMixWidth     = 92;
 constexpr int kGap          = 6;
 } // namespace
@@ -188,7 +190,8 @@ void HeaderBar::setActiveSlot (bool isSlotB)
 void HeaderBar::attachSuiteControls (juce::AudioProcessorValueTreeState& state,
                                      const char* mixParameterId,
                                      const char* outputParameterId,
-                                     const char* oversamplingParameterId)
+                                     const char* oversamplingParameterId,
+                                     const char* renderParameterId)
 {
     if (mixParameterId != nullptr && *mixParameterId != 0)
     {
@@ -272,7 +275,45 @@ void HeaderBar::attachSuiteControls (juce::AudioProcessorValueTreeState& state,
         addAndMakeVisible (oversamplingLabel_);
     }
 
+    if (renderParameterId != nullptr && *renderParameterId != 0)
+    {
+        hasRender_ = true;
+
+        if (auto* parameter = dynamic_cast<juce::AudioParameterChoice*> (
+                                  state.getParameter (renderParameterId)))
+            renderBox_.addItemList (parameter->choices, 1);
+
+        renderBox_.setColour (juce::ComboBox::backgroundColourId, palette_.panel.brighter (0.12f));
+        renderBox_.setColour (juce::ComboBox::textColourId, palette_.text);
+        renderBox_.setTooltip (
+            "What an offline bounce runs at. Same as live renders exactly what you heard; "
+            "anything else applies only while the host renders, so it costs render time and "
+            "no CPU at all while you play.");
+        addAndMakeVisible (renderBox_);
+
+        renderAttachment_
+          = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                state, renderParameterId, renderBox_);
+
+        renderLabel_.setJustificationType (juce::Justification::centredRight);
+        renderLabel_.setColour (juce::Label::textColourId, palette_.dimText);
+        renderLabel_.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        addAndMakeVisible (renderLabel_);
+    }
+
     resized();
+}
+
+void HeaderBar::setOversamplingTooltip (const juce::String& text)
+{
+    if (hasOversampling_ && text.isNotEmpty())
+        oversamplingBox_.setTooltip (text);
+}
+
+void HeaderBar::setRenderTooltip (const juce::String& text)
+{
+    if (hasRender_ && text.isNotEmpty())
+        renderBox_.setTooltip (text);
 }
 
 void HeaderBar::setTooltipsEnabled (bool enabled)
@@ -352,6 +393,16 @@ void HeaderBar::resized()
         oversamplingBox_.setBounds (strip.removeFromRight (kOversamplingWidth));
         strip.removeFromRight (4);
         oversamplingLabel_.setBounds (strip.removeFromRight (26));
+    }
+
+    // Render quality beside OS, on the plugins that have it: the two settings
+    // are one question -- what factor, and when -- and read as a pair.
+    if (hasRender_)
+    {
+        strip.removeFromRight (kGap * 2);
+        renderBox_.setBounds (strip.removeFromRight (kRenderWidth));
+        strip.removeFromRight (4);
+        renderLabel_.setBounds (strip.removeFromRight (kRenderLabelWidth));
     }
 
     if (hasOutput_)

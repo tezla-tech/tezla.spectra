@@ -356,6 +356,13 @@ struct EngineParameters
     double outputDb { 0.0 };
 
     dsp::OversamplingMode oversampling { dsp::OversamplingMode::Auto };
+
+    /// What an offline bounce runs at. `sameAsLive` is neutral -- the render
+    /// is exactly what the session played -- and anything else takes effect
+    /// only while the host reports it is rendering offline; see
+    /// `Engine::setOffline`. Appended, defaulting to neutral: a project saved
+    /// before it existed bounces the same.
+    dsp::RenderOversampling renderOversampling { dsp::RenderOversampling::sameAsLive };
 };
 
 class Engine
@@ -448,6 +455,27 @@ public:
     [[nodiscard]] int getOversamplingFactor() const noexcept
     {
         return oversampler_.getFactor();
+    }
+
+    /// Tells the engine whether the host is rendering offline -- bouncing a
+    /// track rather than playing it -- which is the only time
+    /// `EngineParameters::renderOversampling` applies.
+    ///
+    /// Taken at the next `process` (or the next `prepare`) like every other
+    /// graph change: a different factor is a rebuild, and the rebuild cuts the
+    /// sounding notes, the clean stop a factor change has always been here. A
+    /// host that flips the flag and then re-prepares, which is what the VST3
+    /// contract asks of it, gets a graph built at the render factor before the
+    /// first offline sample and never hears the cut.
+    void setOffline (bool offline) noexcept { offline_ = offline; }
+    [[nodiscard]] bool isOffline() const noexcept { return offline_; }
+
+    /// The oversampling mode actually in force -- the render setting while
+    /// offline, the live one otherwise.
+    [[nodiscard]] dsp::OversamplingMode effectiveOversampling() const noexcept
+    {
+        return dsp::effectiveOversamplingMode (pending_.oversampling,
+                                               pending_.renderOversampling, offline_);
     }
 
     /// The current values of the global modulation sources. **Same thread
@@ -602,6 +630,9 @@ private:
     double beatsIntoBlock_ { 0.0 };
     bool transportRunning_ { false };
     int sinceControl_ { 0 };
+
+    /// Whether the host says it is rendering offline. See `setOffline`.
+    bool offline_ { false };
 };
 
 } // namespace tezla::sonitus
