@@ -829,8 +829,7 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). **Ictus is in
   flight** — the drum synthesiser (`Tzic`), `plugins/Ictus/PLAN.md`, resumed
   from its first `pending` phase; its thirteen sources are user-supplied PDFs
-  in `technical references/drumsynth./` (the folder name ends in a dot), read
-  first-hand on 2026-09-02. Prism remains parked at the user's request.
+  in `technical references/drumsynth/`, read first-hand on 2026-09-02. Prism remains parked at the user's request.
 - **What is parked lives in `docs/ROADMAP.md`** — the other half of the PLAN.md
   rule. A plan tracks work in flight; the roadmap tracks work deliberately not
   started, and each item names the reason it was parked and the specific thing
