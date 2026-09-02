@@ -30,6 +30,11 @@
     measured to make no runtime difference to the DSP and it slows every link.
     See docs\BUILD.md, "A note on TEZLA_LTO".
 
+.PARAMETER Avx2
+    AVX2 code generation (/arch:AVX2). Bit-identical output to the default
+    build and about 11% less CPU; off by default because the binary then needs
+    a 2013-or-newer CPU. See docs\BUILD.md, "A note on TEZLA_ENABLE_AVX2".
+
 .PARAMETER Clean
     Delete the build folder first.
 
@@ -54,6 +59,7 @@ param(
     [switch]   $Install,
     [switch]   $Test,
     [switch]   $Lto,
+    [switch]   $Avx2,
     [switch]   $Clean,
     [switch]   $List
 )
@@ -128,6 +134,12 @@ if ($Generator) {
 # difference to the DSP and it slows every link. See docs\BUILD.md.
 if ($Lto) {
     $cmakeArgs += '-DTEZLA_LTO=ON'
+}
+
+# AVX2 code generation: bit-identical output, about 11% less CPU, but the
+# binary then needs a 2013-or-newer CPU. For this rig, not for hand-outs.
+if ($Avx2) {
+    $cmakeArgs += '-DTEZLA_ENABLE_AVX2=ON'
 }
 
 if ($Install) {

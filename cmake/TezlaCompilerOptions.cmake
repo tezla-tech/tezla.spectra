@@ -24,6 +24,21 @@ if(TEZLA_ENABLE_AVX2 AND NOT _tezla_is_x86)
     message(WARNING "TEZLA_ENABLE_AVX2 is set but this is not an x86 target; ignoring it.")
 endif()
 
+# A universal macOS build compiles every file once per slice with the same
+# flags, and Apple clang refuses -mavx2 for the arm64 slice, so the option
+# cannot apply to one. It should not want to: AVX2 is for a build of the
+# machine in front of you, and a universal bundle is for handing out. Fail with
+# the fix named rather than let the arm64 slice fail deep inside the build.
+list(LENGTH CMAKE_OSX_ARCHITECTURES _tezla_osx_arch_count)
+if(TEZLA_ENABLE_AVX2 AND _tezla_is_x86 AND _tezla_osx_arch_count GREATER 1)
+    message(FATAL_ERROR
+        "TEZLA_ENABLE_AVX2 cannot apply to a universal (${CMAKE_OSX_ARCHITECTURES}) build: "
+        "the arm64 slice would be compiled with -mavx2 and fail. Build for one "
+        "architecture instead: ./scripts/build.sh --native --avx2, or "
+        "-DCMAKE_OSX_ARCHITECTURES=x86_64. A universal bundle is for handing out, "
+        "and an AVX2 binary should not be.")
+endif()
+
 if(MSVC)
     target_compile_options(tezla_compiler_options INTERFACE
         /W4                 # warnings are how DSP bugs announce themselves early

@@ -72,7 +72,13 @@ option(TEZLA_BUILD_STANDALONE "Also build a standalone app for each plugin"   OF
 option(TEZLA_BUILD_RENDER     "Also build an offline renderer for each plugin" OFF)
 option(TEZLA_COPY_AFTER_BUILD "Copy built VST3 bundles to the system VST3 folder" OFF)
 option(TEZLA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors"           OFF)
-option(TEZLA_ENABLE_AVX2      "Build with AVX2 (needs a 2013-or-newer CPU)"   OFF)
+# Off because it is a distribution decision: an AVX2 binary will not load on a
+# CPU older than 2013. It is NOT a quality decision -- with contraction off
+# (TezlaCompilerOptions.cmake) the AVX2 build's output is bit-identical to the
+# SSE2 build's, checked on 32 Sonitus golden renders, and it measured about
+# 11% less CPU on the Sonitus stress case. `-avx2` / `--avx2` in the scripts;
+# docs/BUILD.md, "A note on TEZLA_ENABLE_AVX2".
+option(TEZLA_ENABLE_AVX2      "Build with AVX2 (bit-exact, ~11% faster; needs a 2013-or-newer CPU)" OFF)
 option(TEZLA_BUILD_AU         "Also build Audio Unit versions (macOS only)"   ON)
 
 # **Off, deliberately -- and measured, not assumed.**

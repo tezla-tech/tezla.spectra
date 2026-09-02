@@ -35,6 +35,11 @@
 #    --lto            link-time optimisation for a release build. Slow to
 #                     link, and measured to make no runtime difference to the
 #                     DSP -- see docs/BUILD.md, "A note on TEZLA_LTO"
+#    --avx2           AVX2 code generation (x86 only): bit-identical output,
+#                     about 11% less CPU; needs a 2013-or-newer CPU, so not
+#                     for a build you hand to someone else. Ignored on ARM;
+#                     on an Intel Mac pair it with --native, because a
+#                     universal build refuses it (its arm64 slice cannot)
 #    --help
 #
 #  Everything here has a documented manual equivalent in docs/BUILD-MACOS.md.
@@ -62,7 +67,13 @@ case "$(uname -s)" in
     *)      platform="other" ;;
 esac
 
-usage() { sed -n '3,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# Prints the header above, from its title line to the manual-equivalent note.
+# A numeric line range went stale as options were added: --help stopped at
+# --test and never mentioned --native, --lto or --avx2.
+usage() {
+    sed -n '/^#  tezla.spectra build script/,/^#  Everything here has a documented manual equivalent/p' \
+        "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
 
 list_plugins() {
     echo "Available plugins:"
@@ -84,6 +95,7 @@ while [[ $# -gt 0 ]]; do
         --juce-system) extra_args+=("-DTEZLA_JUCE_SOURCE=System"); shift ;;
         --native)      extra_args+=("-DTEZLA_UNIVERSAL_BINARY=OFF"); shift ;;
         --lto)         extra_args+=("-DTEZLA_LTO=ON"); shift ;;
+        --avx2)        extra_args+=("-DTEZLA_ENABLE_AVX2=ON"); shift ;;
         --test)        run_tests=1; shift ;;
         --install)     do_install=1; shift ;;
         --installbuild) do_install=1; install_only=1; shift ;;

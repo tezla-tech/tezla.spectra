@@ -662,6 +662,13 @@ function into which everything is already inlined, so there is no boundary for
 LTO to cross. MSVC on the rig is unmeasured — run the command there with and
 without `-lto` — and the same structural argument applies.
 
+**An AVX2 build is a lever, and a bit-exact one.** With contraction off the
+compiler vectorises without reordering sums, so the AVX2 build's 32 golden
+renders are byte-identical to the SSE2 build's; interleaved on the stress
+case it reads ×8 1561 → 1400 ms/s (−10 %), ×4 799 → 702 (−12 %), off 210 →
+186 (−11 %). It is off by default only because an AVX2 binary needs a
+2013-or-newer CPU — see `BUILD.md`, "A note on `TEZLA_ENABLE_AVX2`".
+
 **What was done, under the rule that the output must not change by a single
 bit.** Every change was checked against 32 golden renders — eight patches (the
 stress case, PM with feedback, hard sync, pulse/triangle with morph,

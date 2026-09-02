@@ -85,6 +85,7 @@ scripts\build.bat -ninja                   :: force Ninja (needs a developer pro
 scripts\build.bat -juce C:\dev\JUCE        :: use a JUCE you already have
 scripts\build.bat -juce-system             :: use a JUCE you installed
 scripts\build.bat -lto                     :: link-time optimisation (release builds; see §3.2)
+scripts\build.bat -avx2                    :: AVX2 build for this PC (bit-exact, ~11 % less CPU; see §3.2)
 ```
 
 Options take **one dash or two** — `-install` and `--install` are the same
@@ -171,6 +172,7 @@ Useful extra options, all optional:
 | `-DTEZLA_BUILD_TESTS=OFF` | Skip the unit tests |
 | `-DTEZLA_BUILD_TOOLS=OFF` | Skip the measurement tools |
 | `-DTEZLA_BUILD_STANDALONE=ON` | Also build a standalone `.exe` per plugin |
+| `-DTEZLA_ENABLE_AVX2=ON` | Compile for AVX2 (`/arch:AVX2` on MSVC). **Bit-identical output, measured**, and about 11 % less CPU on Sonitus — see the note below. Needs a 2013-or-newer CPU; a build you hand to someone else should not assume one. `-avx2` / `--avx2` in the scripts |
 | `-DTEZLA_WARNINGS_AS_ERRORS=ON` | Treat warnings as errors |
 | `-DTEZLA_LTO=ON` | Link-time optimisation. **Off by default: slow to link, and measured to gain nothing at runtime** — see below. `-lto` / `--lto` in the scripts |
 | `-DTEZLA_JUCE_PATH=C:/dev/JUCE` | Use a JUCE you already have — see [section 4](#4-juce-getting-it-or-using-one-you-already-have) |
@@ -260,6 +262,35 @@ long wait even in the thin form.
 
 **The released builds do not use it**, and CI does not pass the flag, so
 nothing turns it back on by accident.
+
+### A note on `TEZLA_ENABLE_AVX2`
+
+The opposite result from LTO, and measured the same day on the same harness.
+Because this tree compiles with floating-point contraction off everywhere (see
+`cmake/TezlaCompilerOptions.cmake` for why), the compiler may vectorise
+element-wise loops for AVX2 but may not reorder a floating-point sum, so the
+output should be the same bits as the SSE2 build — and it is: the 32 Sonitus
+golden renders (eight patches, four oversampling factors) compare identical,
+byte for byte, between the two builds. Timed interleaved on the stress case,
+GCC 13, best of three:
+
+| oversampling | SSE2 | AVX2 | |
+|---|---|---|---|
+| ×8 | 1561 ms/s | 1400 ms/s | −10 % |
+| ×4 | 799 | 702 | −12 % |
+| off | 210 | 186 | −11 % |
+
+(The absolute numbers move with the machine's load between runs; the ratio
+within a run is the measurement.)
+
+**Off by default because it is a distribution decision, not a quality one.**
+An AVX2 binary will not load on a CPU older than 2013. On your own rig, turn
+it on — `scripts\build.bat -avx2`, or `-DTEZLA_ENABLE_AVX2=ON` — and measure
+with `tezla-measure sonitus-stress`. A build handed to someone else should
+either stay SSE2 or dispatch at run time, which this tree does not yet do.
+On a Mac the option is Intel-only and wants `--native`: a universal build
+refuses it, because its arm64 slice cannot take the flag — see
+[`BUILD-MACOS.md`](BUILD-MACOS.md).
 
 ### 3.3 Using Ninja instead (faster)
 
