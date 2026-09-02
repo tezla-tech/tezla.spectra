@@ -522,7 +522,7 @@ CLAUDE.md.
 |---|---|
 | I0 plan + registry + references + roadmap | done |
 | I1 kick engine + engine skeleton + TensionDrop promotion + SoftOdd | done |
-| I2 minimal JUCE layer, kick only, rig build + ear round | pending |
+| I2 minimal JUCE layer, kick only, rig build + ear round | done in code; **the rig's ear round is the user's and has not happened** |
 | I3 snare engine | pending |
 | I4 hat + clap engines, choke | pending |
 | I5 punch chain + TransientShaper | pending |
@@ -550,6 +550,19 @@ host unless said; the container's CPU figures are noisy, quoted as a range):
 | even-curve DC bump after the blocker at 5 / 10 / 20 / 40 Hz | −16.2 / **−20.3** / −25.5 / −29.0 dB re peak (10 Hz stays the default: 20 Hz would cost 0.64 dB at 50 Hz) |
 | harmonics stage, 55 Hz full scale at 192 kHz, gain 4 | THD −17.9 dB, inharmonic **−155 dB** (−189 dB audible) |
 | default kick: rise to −3 dB / energy below 80 Hz | 1.10 ms / 41.8 % |
+
+**I2 shipped** (2026-09-02): `plugins/Ictus/CMakeLists.txt` (`Tzic`, synth,
+MIDI in, `Instrument|Drum`), the processor (26 Kick 1 parameters at
+`kSchemaV1`, `output`, `oversampling`, `renderOversampling`; pad notes as
+state-tree properties; a HIT button hand-off as one atomic bit per pad; A/B
+compare; the Sonitus oversampling and render-quality plumbing with the
+latency re-declared per block), four presets (*Init Kit*, *DnB Tight*,
+*Sub Long*, *Jungle Snap*), and a one-page editor in the house look (the
+shared header, a pad strip with HIT and the hit count, seven columns of
+knobs and two lamp switches, greying for Even / Tone / Tail time). Built and
+photographed through `tezla-render-Ictus editor`: a scripted press and
+release on HIT, 150 ms of audio and two timer ticks read "1 hit sounding".
+Steinberg's validator: 47 of 47. Nobody has loaded it in FL Studio yet.
 
 Break-checks at I1, each seen red then reverted: a staircase increment
 (pitch test red), the control grid restarted per callback (block-size test
