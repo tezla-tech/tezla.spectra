@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <numbers>
 #include <vector>
@@ -536,6 +537,149 @@ TEZLA_TEST (every_control_at_every_extreme_stays_finite_and_bounded)
     // number is pinned so a change to either shows up here rather than in a
     // session.
     CHECK (worst < 12.0);
+}
+
+// ---------------------------------------------------------------------------
+// The analogue drift does not retrigger; everything else does
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_drift_carries_on_through_a_note_and_never_repeats)
+{
+    // The user's rule: the unison and every other oscillator signal retrigger
+    // exactly as they always have, and *only* the analogue drift is a
+    // non-retriggering, non-repeating wander. A real oscillator's wander is a
+    // property of the voice card, not of the note -- a key going down does not
+    // reset the temperature of a transistor -- and one that restarted would
+    // play the same wander on every press. Which is what this voice did:
+    // note-on called the bank's full reset, which re-seeded its one random
+    // stream and zeroed the walk, so a given slot repeated itself on every key.
+    constexpr double rate = 48000.0;
+
+    Voice voice;
+    voice.prepare (rate, 7);
+
+    auto parameters = basic();
+    parameters.unisonA = 7;
+    parameters.detuneA = 15.0;
+    parameters.driftA = 20.0;
+
+    voice.noteOn (57, 220.0, 1.0, false);
+
+    // Two seconds: the walk has long since left zero.
+    const auto first = render (voice, parameters, static_cast<int> (rate * 2.0));
+
+    voice.noteOff();
+    render (voice, parameters, static_cast<int> (rate * 0.3));   // the 50 ms release, and then some
+    CHECK (! voice.isActive());
+
+    double before[UnisonBank::kMaxVoices] {};
+    double furthest = 0.0;
+
+    for (int i = 0; i < UnisonBank::kMaxVoices; ++i)
+    {
+        before[i] = voice.bankA().driftOf (i);
+        furthest = std::max (furthest, std::abs (before[i]));
+    }
+
+    CHECK (furthest > 0.05);                     // it has wandered somewhere
+
+    voice.noteOn (57, 220.0, 1.0, false);
+
+    // Untouched by the key, every copy.
+    for (int i = 0; i < UnisonBank::kMaxVoices; ++i)
+        CHECK (isExactly (voice.bankA().driftOf (i), before[i]));
+
+    const auto second = render (voice, parameters, static_cast<int> (rate * 2.0));
+
+    // And so the second note is not the first one again.
+    CHECK (std::memcmp (first.left.data(), second.left.data(),
+                        first.left.size() * sizeof (double)) != 0);
+}
+
+TEZLA_TEST (the_unison_scatter_retriggers_exactly_as_before)
+{
+    // The other half of the rule, and the proof that nothing but the drift
+    // moved: with the drift at zero a repeated note *is* the first note again,
+    // byte for byte -- the same seven scattered phases, the same everything --
+    // once the cutoff and gain smoothers have snapped. The first note starts
+    // them from the prepare-time values (1 kHz, silence) and the second from
+    // where the first left them, and a smoother only snaps to its target when
+    // it is within an absolute 1e-9 of it: from 1 kHz to 18 kHz at a 4 ms time
+    // constant that is ln(17000 / 1e-9) = 30.5 time constants, 122 ms. So the
+    // comparison starts at 0.25 s, twice that, and a first draft that started
+    // it at 0.1 s failed for exactly this reason.
+    constexpr double rate = 48000.0;
+    constexpr std::size_t settle = 12000;
+
+    Voice voice;
+    voice.prepare (rate, 7);
+
+    auto parameters = basic();
+    parameters.unisonA = 7;
+    parameters.detuneA = 15.0;
+    parameters.driftA = 0.0;
+
+    voice.noteOn (57, 220.0, 1.0, false);
+
+    double firstPhases[UnisonBank::kMaxVoices] {};
+
+    for (int i = 0; i < UnisonBank::kMaxVoices; ++i)
+        firstPhases[i] = voice.bankA().phaseOf (i);
+
+    const auto first = render (voice, parameters, static_cast<int> (rate * 0.75));
+
+    voice.noteOff();
+    render (voice, parameters, static_cast<int> (rate * 0.3));
+    CHECK (! voice.isActive());
+
+    voice.noteOn (57, 220.0, 1.0, false);
+
+    for (int i = 0; i < UnisonBank::kMaxVoices; ++i)
+        CHECK (isExactly (voice.bankA().phaseOf (i), firstPhases[i]));
+
+    const auto second = render (voice, parameters, static_cast<int> (rate * 0.75));
+
+    CHECK (first.left.size() == second.left.size());
+    CHECK (std::memcmp (first.left.data() + settle, second.left.data() + settle,
+                        (first.left.size() - settle) * sizeof (double)) == 0);
+}
+
+TEZLA_TEST (a_fresh_prepare_renders_the_same_bits_twice)
+{
+    // The drift's stream is seeded from the voice's seed at prepare, so a
+    // bounce from a fresh session is reproducible: two voices prepared alike
+    // and played alike render the same doubles, drift and all. Only the key
+    // presses *within* a session stop repeating.
+    constexpr double rate = 48000.0;
+
+    const auto take = [rate]
+    {
+        Voice voice;
+        voice.prepare (rate, 7);
+
+        auto parameters = basic();
+        parameters.unisonA = 7;
+        parameters.detuneA = 15.0;
+        parameters.driftA = 20.0;
+
+        voice.noteOn (57, 220.0, 1.0, false);
+        auto out = render (voice, parameters, static_cast<int> (rate * 1.0)).left;
+
+        voice.noteOff();
+        render (voice, parameters, static_cast<int> (rate * 0.3));
+
+        voice.noteOn (57, 220.0, 1.0, false);
+        const auto second = render (voice, parameters, static_cast<int> (rate * 1.0)).left;
+
+        out.insert (out.end(), second.begin(), second.end());
+        return out;
+    };
+
+    const auto a = take();
+    const auto b = take();
+
+    CHECK (a.size() == b.size());
+    CHECK (std::memcmp (a.data(), b.data(), a.size() * sizeof (double)) == 0);
 }
 
 TEZLA_TEST (the_voice_is_block_size_independent)

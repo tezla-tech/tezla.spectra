@@ -3591,8 +3591,11 @@ void SonitusEditor::buildPages()
 
         page.addKnob (driftId, "Drift",
             "Slow random wander on each copy's pitch, in cents. What an analogue oscillator bank "
-            "does because its components are warm and imperfect. A little is life; a lot is a "
-            "broken machine, which is occasionally what you want.");
+            "does because its components are warm and imperfect. Per copy on purpose -- separate "
+            "VCOs wander against each other, and that is the part you hear -- and it carries on "
+            "between notes: a key restarts the unison's phases exactly as it always has, never "
+            "the drift, so two presses of the same key are two different notes. A little is "
+            "life; a lot is a broken machine, which is occasionally what you want.");
     };
 
     osc->addHeading ("OSCILLATOR A -- the sync master", 6);

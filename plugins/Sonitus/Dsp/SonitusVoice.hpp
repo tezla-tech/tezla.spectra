@@ -549,9 +549,13 @@ public:
         {
             // A cold voice starts from silence and from scattered phases, which
             // is what makes a unison stack sound like several oscillators
-            // rather than one loud one.
-            bankA_.reset();
-            bankB_.reset();
+            // rather than one loud one. `restartNote`, not `reset`: the scatter
+            // and every oscillator's transient state restart exactly as they
+            // always have, and the analogue drift does not -- it is the voice
+            // card's wander, not the note's, and a key does not reset it. See
+            // the header of UnisonBank.hpp.
+            bankA_.restartNote();
+            bankB_.restartNote();
             sub_.reset (0.0);
             syncPhase_ = 0.0;
 
@@ -634,6 +638,11 @@ public:
 
     /// This note's random draw. Fixed for the note's whole life.
     [[nodiscard]] double getNoteRandom() const noexcept { return random_; }
+
+    /// The two unison banks, read-only, for the tests that pin what a note-on
+    /// restarts (the scatter) and what it must not (the drift).
+    [[nodiscard]] const UnisonBank& bankA() const noexcept { return bankA_; }
+    [[nodiscard]] const UnisonBank& bankB() const noexcept { return bankB_; }
 
     /// The cutoff multiplier a given modulator value produces.
     ///

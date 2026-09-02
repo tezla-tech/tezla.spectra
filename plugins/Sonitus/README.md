@@ -113,7 +113,7 @@ slave and PM target.
 | Unison | 1–7 copies |
 | Detune | How far they spread, in cents. **The comb that costs nothing** |
 | Spread | Across the stereo field. The centre copy stays centred, so the mono sum keeps its fundamental |
-| Drift | Slow random pitch wander, in cents. What an analogue oscillator bank does |
+| Drift | Slow random pitch wander, in cents, per copy. What an analogue oscillator bank does — and it carries on between notes: a key restarts the unison scatter exactly as before, never the drift |
 
 **Sync B** — hard sync. B's phase resets on the played note's period, so B's own
 pitch stops being a pitch and becomes a formant. This is the Pro-53 sound, and
@@ -844,6 +844,21 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+**The analogue drift no longer retriggers.** Every cold note used to call the
+unison banks' full reset, which re-seeded the one random stream that fed both
+the phase scatter and the drift and zeroed the walk — so a given voice slot
+replayed the same wander from zero on every press, and note two sounded exactly
+like note one. The bank now has two streams: the scatter's is re-seeded on
+every cold note, so the unison and every other oscillator signal retrigger
+byte-for-byte as they always have (tested: with the drift at zero a repeated
+note *is* the first note again); the drift's is seeded once, at prepare, and
+never by a note, so the walk carries on through a key press and two presses
+are two different notes (tested: every copy's drift reads the same value
+before and after the note-on, and the second note differs). A bounce from a
+fresh session is still reproducible — two engines prepared alike render the
+same doubles. Of the 32 golden renders, 28 are byte-identical to before; the
+four of the drift patch changed, as they had to.
 
 **Render quality.** A second oversampling setting, RENDER, in the header
 beside OS: what an offline bounce runs at. *Same as live* is the default and
