@@ -205,3 +205,16 @@ set, with the residual's peak in dBFS. Items 2–4 are contained and could be
 offered that way in an afternoon each; item 1 is a design change with its own
 plan and measurement pass. None of them is worth doing quietly, and none will
 be.
+
+## 8. Sonitus CPU — multicore voices and a lane-parallel unison bank, parked
+
+**Parked 2026-09-02 at the user's request**, with the plan written and kept:
+`plugins/Sonitus/PLAN-CPU.md`. Both items are bit-exact by design — voices
+rendered on worker threads and summed in voice order; the polynomial oscillator
+shapes (saw, pulse, triangle, double saw) advanced in SIMD lanes against the
+scalar `Oscillator` as the reference — and neither has a line of code yet.
+
+**What would unpark it:** the user saying go, item by item, multicore first.
+The plan names the phases, the tests that must be seen red, and the
+measurements (`tezla-measure sonitus-stress`, the 32 goldens) that decide
+whether each phase lands.
