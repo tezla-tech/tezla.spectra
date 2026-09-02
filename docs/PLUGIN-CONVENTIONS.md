@@ -203,6 +203,28 @@ than knobs on plates, it has its own look, and it does not use
 
 ---
 
+## Render quality
+
+An oversampling plugin may offer a second, offline-only setting beside its
+`oversampling` control: `renderOversampling`, a choice over
+`dsp::RenderOversampling` — *Same as live · Auto · x2 · x4 · x8*. It resolves
+through `dsp::effectiveOversamplingMode (live, render, host.isNonRealtime())`,
+so every plugin answers the question the same way, and it defaults to *Same as
+live*, which is neutral: a project saved before the control existed bounces
+exactly what it played.
+
+The rules: the offline flag is pushed into the engine before `prepare` and
+before every `process`; the engine treats the effective factor like any other
+factor change (a graph rebuild, latency re-declared, sounding notes cut cleanly
+if the host did not re-prepare); a bounce at a factor is the live graph at that
+factor, bit for bit, and a test says so; and the tooltip says the setting costs
+render time and no CPU while playing, reading the live flag to say whether it
+is in force *right now*. `ui::HeaderBar::attachSuiteControls` takes the
+parameter id as its last argument and puts the RENDER box beside OS. Sonitus
+has it; the effects have not been given it yet.
+
+---
+
 ## Latency and bypass
 
 - **Report latency to the host**, and re-report whenever it changes

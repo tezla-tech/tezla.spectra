@@ -904,6 +904,8 @@ private:
     int shownShapeA_     { -1 };
     int shownShapeB_     { -1 };
     int shownNotch_      { -1 };
+    int shownRender_     { -1 };
+    int shownOffline_    { -1 };
     juce::String shownScale_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SonitusEditor)

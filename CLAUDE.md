@@ -349,6 +349,13 @@ squarely the plugin's problem, not the host's, for two reasons:
 
 - The control also offers manual `Off / ×2 / ×4 / ×8`, so the user can trade
   CPU for headroom deliberately.
+- **A render-only override is allowed, and must be neutral by default.**
+  `dsp::RenderOversampling` (*Same as live / Auto / ×2 / ×4 / ×8*) applies only
+  while the host reports offline rendering, resolved through
+  `dsp::effectiveOversamplingMode`, so a bounce can run ×8 that the session
+  could not afford live. *Same as live* is the default and changes nothing; a
+  render at a factor is the live graph at that factor, bit for bit; latency is
+  re-declared. Sonitus has it — `docs/PLUGIN-CONVENTIONS.md`, "Render quality".
 - **The tooltip must state the consequence in plain language**, e.g.:
   *"Auto — oversamples to ~192 kHz internally. Your session is at 96 kHz, so
   this is running ×2. At 192 kHz sessions Auto turns oversampling off, since

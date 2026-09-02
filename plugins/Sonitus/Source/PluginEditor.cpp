@@ -3404,7 +3404,8 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     header_->setActiveSlot (sonitus_.getAbCompare().isSlotB());
     header_->setOtherSlotFilled (sonitus_.getAbCompare().otherSlotFilled());
     header_->setTooltipsEnabled (sonitus_.getTooltipsEnabled());
-    header_->attachSuiteControls (sonitus_.getState(), nullptr, ids::output, ids::oversampling);
+    header_->attachSuiteControls (sonitus_.getState(), nullptr, ids::output, ids::oversampling,
+                                  ids::renderOversampling);
     addAndMakeVisible (*header_);
 
     tooltips_.setEnabled (sonitus_.getTooltipsEnabled());
@@ -4108,6 +4109,8 @@ void SonitusEditor::updateForSwitches()
     const int combMode = index (ids::combMode);
     const int keyMode = index (ids::keyMode);
     const int oversample = index (ids::oversampling);
+    const int render = index (ids::renderOversampling);
+    const int offline = sonitus_.isNonRealtime() ? 1 : 0;
     const int syncB = index (ids::syncB);
     const int shapeA = index (ids::shapeA);
     const int shapeB = index (ids::shapeB);
@@ -4124,7 +4127,7 @@ void SonitusEditor::updateForSwitches()
     if (combMode == shownCombMode_ && keyMode == shownKeyMode_ && oversample == shownOversample_
         && latency == shownLatency_ && syncB == shownSyncB_ && shapeA == shownShapeA_
         && shapeB == shownShapeB_ && notch == shownNotch_ && scale == shownScale_
-        && lfoSync == shownLfoSync_)
+        && lfoSync == shownLfoSync_ && render == shownRender_ && offline == shownOffline_)
         return;
 
     const bool combChanged = combMode != shownCombMode_;
@@ -4142,6 +4145,8 @@ void SonitusEditor::updateForSwitches()
     shownNotch_ = notch;
     shownScale_ = scale;
     shownLfoSync_ = lfoSync;
+    shownRender_ = render;
+    shownOffline_ = offline;
 
     // A synced LFO's Rate knob is inert and its Division is live; free, the
     // other way round. Greyed rather than hidden, because a control that
@@ -4208,6 +4213,13 @@ void SonitusEditor::updateForSwitches()
     juce::ignoreUnused (osc, filter);
 
     notes_[kManglePage] = sonitus_.describeComb() + "  " + sonitus_.describeOversampling();
+
+    // The header's two oversampling boxes get the live descriptions -- what
+    // Auto is doing at the session's actual rate, and whether a bounce is
+    // running at the render setting right now -- which only the processor
+    // knows. CLAUDE.md section 6: the tooltip reads the live value.
+    header_->setOversamplingTooltip (sonitus_.describeOversampling());
+    header_->setRenderTooltip (sonitus_.describeRenderQuality());
 
     notes_[kOscPage] = syncB != 0
         ? juce::String ("Sync is on: B restarts every time the note's period comes round, so its "

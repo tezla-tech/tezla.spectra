@@ -47,7 +47,11 @@ constexpr int kSchemaV4 = 4;
 /// piece of work.
 constexpr int kSchemaV5 = 5;
 
-constexpr int kStateSchemaVersion = kSchemaV5;
+/// Render quality -- the one parameter this version appends. A version of its
+/// own, so the hint keeps meaning one piece of work.
+constexpr int kSchemaV6 = 6;
+
+constexpr int kStateSchemaVersion = kSchemaV6;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -987,6 +991,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         juce::ParameterID { ids::oversampling, kSchemaV1 }, "Oversampling",
         choices::oversampling, 0));
 
+    // What an offline bounce runs at. Default 0, "Same as live": neutral, so a
+    // project saved before this existed renders exactly what it played.
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::renderOversampling, kSchemaV6 }, "Render quality",
+        choices::renderOversampling, 0));
+
     return layout;
 }
 
@@ -1023,6 +1033,13 @@ void SonitusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamp
     // would cut any note already sounding.
     pullParameters();
     engine_.setParameters (parameters_);
+
+    // Whether the host is rendering offline, taken before `prepare` so the
+    // graph is built at the render factor from the first bounced sample. The
+    // VST3 wrapper sets the flag in setupProcessing, before activation, which
+    // is exactly this order; a host that only flips it per block gets the
+    // rebuild -- and its clean stop -- at the first offline block instead.
+    engine_.setOffline (isNonRealtime());
 
     engine_.prepare (sampleRate_, std::max (maximumExpectedSamplesPerBlock, 1));
 
@@ -1322,6 +1339,8 @@ void SonitusProcessor::pullParameters()
 
     p.outputDb = valueOf (state_, ids::output);
     p.oversampling = static_cast<dsp::OversamplingMode> (indexOf (state_, ids::oversampling));
+    p.renderOversampling
+        = static_cast<dsp::RenderOversampling> (indexOf (state_, ids::renderOversampling));
 }
 
 // ---------------------------------------------------------------------------
@@ -1372,6 +1391,10 @@ void SonitusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
 
     if (numSamples <= 0)
         return;
+
+    // The offline flag first: the VST3 wrapper refreshes it per block, and the
+    // engine reads it when it decides the factor at the top of `process`.
+    engine_.setOffline (isNonRealtime());
 
     pullParameters();
     engine_.setParameters (parameters_);
@@ -1675,6 +1698,16 @@ juce::String SonitusProcessor::describeOversampling() const
     const int factor = engine_.getOversamplingFactor();
     const double internal = sampleRate_ * factor;
 
+    // While a bounce runs at a render setting, the factor the engine reports
+    // is the render one, and attributing it to Auto would be a lie.
+    const int render = static_cast<int> (std::lround (
+        state_.getRawParameterValue (ids::renderOversampling)->load()));
+
+    if (isNonRealtime() && render != 0)
+        return "Rendering offline, so Render quality is in force instead: x" + juce::String (factor)
+                 + " (" + rateText (internal) + " internally). This setting comes back when "
+                   "playback does.";
+
     if (mode == 0)
     {
         juce::String text = "Auto -- your session is at " + rateText (sampleRate_) + ", so this is ";
@@ -1693,6 +1726,52 @@ juce::String SonitusProcessor::describeOversampling() const
     return "x" + juce::String (factor) + " -- " + rateText (internal) + " internally, "
              + juce::String (factor) + " times the CPU of Off. Auto would pick x"
              + juce::String (dsp::autoOversamplingFactor (sampleRate_)) + " here.";
+}
+
+juce::String SonitusProcessor::describeRenderQuality() const
+{
+    const auto indexOfParameter = [this] (const char* id)
+    {
+        return static_cast<int> (std::lround (state_.getRawParameterValue (id)->load()));
+    };
+
+    const int render = indexOfParameter (ids::renderOversampling);
+    const bool offline = isNonRealtime();
+
+    if (render == 0)
+    {
+        juce::String text = "Same as live -- an offline bounce runs at whatever Oversampling is set "
+                            "to, so the render is exactly what you heard. Pick x8 here to bounce at "
+                            "the highest quality without paying for it while you play: it applies "
+                            "only while the host renders offline, and costs render time, not CPU.";
+
+        if (offline)
+            text += " The host is rendering offline right now, at the live setting.";
+
+        return text;
+    }
+
+    const auto live = static_cast<dsp::OversamplingMode> (indexOfParameter (ids::oversampling));
+    const auto mode = dsp::renderOversamplingMode (static_cast<dsp::RenderOversampling> (render), live);
+    const int factor = dsp::oversamplingFactor (mode, sampleRate_);
+    const int liveFactor = dsp::oversamplingFactor (live, sampleRate_);
+
+    juce::String text = (render == 1 ? juce::String ("Auto") : "x" + juce::String (factor))
+                      + " while rendering -- an offline bounce runs x" + juce::String (factor)
+                      + " (" + rateText (sampleRate_ * factor) + " internally)";
+
+    if (liveFactor == factor)
+        text += ", which is what Oversampling gives you live anyway, so this changes nothing.";
+    else
+        text += ", against x" + juce::String (liveFactor) + " live. Nothing while you play; the "
+                "bounce costs about " + juce::String (static_cast<double> (factor) / liveFactor, 1)
+              + " times the live CPU, paid in render time. A bounce at a higher factor than you "
+                "auditioned is the point, and also why the default is Same as live.";
+
+    if (offline)
+        text += " Rendering offline right now, so this is what is running.";
+
+    return text;
 }
 
 juce::String SonitusProcessor::describeLatency() const

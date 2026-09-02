@@ -68,6 +68,54 @@ enum class OversamplingMode
     return 1;
 }
 
+/// What an offline render runs at, as distinct from what the session plays at.
+///
+/// A host that is bouncing a track is not on a deadline: the CPU that x8 costs
+/// is paid in render time rather than dropouts, so the factor a player settles
+/// on for the live session -- a CPU decision -- need not be the one the bounce
+/// gets. `sameAsLive` is the neutral default and the only entry that changes
+/// nothing: a project saved before this existed renders exactly what it played.
+///
+/// **Append-only** -- a choice parameter stores an index (CLAUDE.md section
+/// 8). The entries after `sameAsLive` are the live list without Off, in the
+/// live list's order. There is no "render at less quality than live" because
+/// nobody has asked for one; if somebody does, it goes on the end.
+enum class RenderOversampling
+{
+    sameAsLive = 0,
+    Auto,
+    X2,
+    X4,
+    X8
+};
+
+/// The mode a render setting resolves to, given the live one. `sameAsLive`
+/// hands back `live` untouched.
+[[nodiscard]] inline OversamplingMode renderOversamplingMode (RenderOversampling render,
+                                                              OversamplingMode live) noexcept
+{
+    switch (render)
+    {
+        case RenderOversampling::Auto: return OversamplingMode::Auto;
+        case RenderOversampling::X2:   return OversamplingMode::X2;
+        case RenderOversampling::X4:   return OversamplingMode::X4;
+        case RenderOversampling::X8:   return OversamplingMode::X8;
+
+        case RenderOversampling::sameAsLive:
+        default:                       return live;
+    }
+}
+
+/// The mode actually in force: the render setting while the host is rendering
+/// offline, the live one otherwise. One function, so every plugin that offers
+/// the control resolves it the same way.
+[[nodiscard]] inline OversamplingMode effectiveOversamplingMode (OversamplingMode live,
+                                                                 RenderOversampling render,
+                                                                 bool offline) noexcept
+{
+    return offline ? renderOversamplingMode (render, live) : live;
+}
+
 /// Cascaded halfband oversampler, x1 / x2 / x4 / x8.
 ///
 /// Tap counts per stage are chosen so the total round-trip latency is a whole

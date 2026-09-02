@@ -718,6 +718,29 @@ multiply:
   and on a patch that barely distorts the answer is "very little". At 96 kHz
   sessions Auto already halves the factor, and at 192 kHz it turns off.
 
+### Render quality
+
+The factor a session *plays* at is a CPU decision, and the factor a bounce
+*gets* need not be the same one: a host rendering offline is not on a
+deadline, so ×8 there is paid in render time rather than dropouts. **RENDER**
+in the header, beside OS, is that second setting. *Same as live* — the default,
+and neutral — bounces exactly what was played; *Auto / ×2 / ×4 / ×8* apply only
+while the host reports it is rendering offline, and the engine then builds the
+same graph it would for that factor live. A bounce at ×8 is therefore a live
+×8 bit for bit, and a test holds it to that sample for sample — armed but not
+rendering it changes nothing either, checked the same way. Latency is
+re-declared at the render factor.
+
+Two honest caveats. A bounce at a higher factor than the session played at is
+not what was auditioned — that is the point, and also why the default is *same
+as live*. And whether a host flips the offline flag before rendering, and
+when, is the host's business: the VST3 contract is that it does so before
+re-activating the plugin, which builds the graph at the render factor before
+the first sample. FL Studio has not been checked from here. If a bounce turns
+out to begin with a cut note, that is the host flipping the flag per block
+instead of re-preparing, and the clean-stop rebuild the OS control has always
+done.
+
 ### Tuning
 
 - 12-TET against `440·2^((n−69)/12)`, worst of 128 notes: **3.6e-12 Hz**
@@ -821,6 +844,17 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+**Render quality.** A second oversampling setting, RENDER, in the header
+beside OS: what an offline bounce runs at. *Same as live* is the default and
+neutral; *Auto / ×2 / ×4 / ×8* take effect only while the host reports offline
+rendering, through `dsp::RenderOversampling` and one shared resolver, so a
+session can play at ×2 and bounce at ×8 without the ×8 ever costing a live
+dropout. The bounce is the live graph at that factor, bit for bit (tested
+against a live ×8 sample for sample, and against a live ×2 with the setting
+armed but the host playing). Parameter `renderOversampling`, schema V6; the
+header's OS and RENDER tooltips now read the live state. See "Render quality"
+under Measured for the caveats.
 
 **The panel gets its own design, and the wheel stops editing.** Eight variants
 of this panel were built as real editors and photographed; the one chosen is

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <numbers>
 #include <string>
@@ -643,6 +644,178 @@ TEZLA_TEST (the_oversampling_control_actually_does_something)
 
         CHECK (engine.getOversamplingFactor() == autoOversamplingFactor (hostRate));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Render quality
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// A note through the whole instrument at one set of oversampling settings,
+/// every output sample kept, so two settings can be compared byte for byte.
+struct RenderedTake
+{
+    std::vector<double> left;
+    std::vector<double> right;
+    int factor { 0 };
+    int latency { 0 };
+};
+
+RenderedTake renderTake (OversamplingMode live, RenderOversampling render, bool offline)
+{
+    constexpr double rate = 48000.0;
+    constexpr int block = 512;
+    constexpr int blocks = 24;
+
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
+
+    auto parameters = brutal();
+    parameters.oversampling = live;
+    parameters.renderOversampling = render;
+
+    engine.setParameters (parameters);
+    engine.setOffline (offline);
+    engine.prepare (rate, block);
+
+    RenderedTake take;
+    take.left.reserve (static_cast<std::size_t> (blocks * block));
+    take.right.reserve (static_cast<std::size_t> (blocks * block));
+
+    Buffers buffers (block);
+    engine.noteOn (40, 1.0);
+
+    for (int b = 0; b < blocks; ++b)
+    {
+        if (b == 12)
+            engine.noteOff (40);
+
+        engine.process (buffers.pointers, block);
+
+        take.left.insert (take.left.end(), buffers.left.begin(), buffers.left.end());
+        take.right.insert (take.right.end(), buffers.right.begin(), buffers.right.end());
+    }
+
+    take.factor = engine.getOversamplingFactor();
+    take.latency = engine.getLatencySamples();
+
+    return take;
+}
+
+/// Byte for byte rather than `==`: a signed zero passes `==` and fails a
+/// raw-file comparison, and the raw file is the standard the goldens use.
+bool sameBits (const RenderedTake& a, const RenderedTake& b)
+{
+    return a.left.size() == b.left.size() && a.right.size() == b.right.size()
+        && std::memcmp (a.left.data(), b.left.data(), a.left.size() * sizeof (double)) == 0
+        && std::memcmp (a.right.data(), b.right.data(), a.right.size() * sizeof (double)) == 0;
+}
+} // namespace
+
+TEZLA_TEST (render_quality_only_applies_while_the_host_renders_offline)
+{
+    // The render setting is the factor an offline bounce gets, and nothing
+    // else. Two claims, each checked sample for sample:
+    //
+    //  * with the host playing live it changes no bit of the output, whatever
+    //    it is set to -- it has to be impossible to hear in the session;
+    //  * while the host renders, a bounce at x8 *is* a live x8: the same graph
+    //    at the same factor, not a second code path that resembles one.
+    const auto liveX2 = renderTake (OversamplingMode::X2, RenderOversampling::sameAsLive, false);
+    const auto liveX8 = renderTake (OversamplingMode::X8, RenderOversampling::sameAsLive, false);
+
+    // First, that the comparison can tell the factors apart at all -- or the
+    // rest of this proves nothing.
+    CHECK (! sameBits (liveX2, liveX8));
+    CHECK (liveX2.factor == 2);
+    CHECK (liveX8.factor == 8);
+
+    // Armed but not rendering: inert, bit for bit, latency included.
+    const auto armed = renderTake (OversamplingMode::X2, RenderOversampling::X8, false);
+    CHECK (armed.factor == 2);
+    CHECK (armed.latency == Oversampler::latencyForFactor (2));
+    CHECK (sameBits (armed, liveX2));
+
+    // Rendering: the live x8, exactly.
+    const auto bounced = renderTake (OversamplingMode::X2, RenderOversampling::X8, true);
+    CHECK (bounced.factor == 8);
+    CHECK (bounced.latency == Oversampler::latencyForFactor (8));
+    CHECK (sameBits (bounced, liveX8));
+
+    // The neutral default is neutral offline too: a project saved before the
+    // control existed bounces what it played.
+    const auto neutral = renderTake (OversamplingMode::X2, RenderOversampling::sameAsLive, true);
+    CHECK (neutral.factor == 2);
+    CHECK (sameBits (neutral, liveX2));
+
+    // Auto resolves from the host rate at render time, like the live Auto.
+    const auto autoRender = renderTake (OversamplingMode::Off, RenderOversampling::Auto, true);
+    CHECK (autoRender.factor == autoOversamplingFactor (48000.0));
+}
+
+TEZLA_TEST (an_offline_switch_mid_stream_is_a_clean_stop_and_a_new_latency)
+{
+    // A host that flips the flag without re-preparing -- the VST3 wrapper sets
+    // it per block as well as in setupProcessing -- gets the factor change at
+    // the next block: the rebuild the OS control has always done, sounding
+    // notes cut rather than left "playing" silence, and the new latency
+    // reported from that block on.
+    constexpr double rate = 48000.0;
+    constexpr int block = 512;
+
+    const auto enginePtr = heapEngine();
+    auto& engine = *enginePtr;
+
+    auto parameters = brutal();
+    parameters.oversampling = OversamplingMode::X2;
+    parameters.renderOversampling = RenderOversampling::X8;
+
+    engine.setParameters (parameters);
+    engine.prepare (rate, block);
+
+    Buffers buffers (block);
+
+    const auto peak = [&buffers]
+    {
+        double value = 0.0;
+
+        for (const double x : buffers.left)
+            value = std::max (value, std::abs (x));
+
+        return value;
+    };
+
+    engine.noteOn (40, 1.0);
+
+    for (int b = 0; b < 8; ++b)
+        engine.process (buffers.pointers, block);
+
+    CHECK (engine.getOversamplingFactor() == 2);
+    CHECK (engine.getLatencySamples() == Oversampler::latencyForFactor (2));
+    CHECK (engine.activeVoiceCount() == 1);
+    CHECK (peak() > 0.01);
+
+    engine.setOffline (true);
+    engine.process (buffers.pointers, block);
+
+    CHECK (engine.getOversamplingFactor() == 8);
+    CHECK (engine.getLatencySamples() == Oversampler::latencyForFactor (8));
+    CHECK (engine.activeVoiceCount() == 0);          // the clean stop
+
+    engine.noteOn (40, 1.0);
+
+    for (int b = 0; b < 8; ++b)
+        engine.process (buffers.pointers, block);
+
+    CHECK (engine.activeVoiceCount() == 1);
+    CHECK (peak() > 0.01);                            // and it plays again
+
+    engine.setOffline (false);
+    engine.process (buffers.pointers, block);
+
+    CHECK (engine.getOversamplingFactor() == 2);
+    CHECK (engine.getLatencySamples() == Oversampler::latencyForFactor (2));
 }
 
 // ---------------------------------------------------------------------------
