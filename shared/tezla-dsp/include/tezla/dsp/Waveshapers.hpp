@@ -281,6 +281,75 @@ private:
     double gain_ { 1.0 };
 };
 
+/// The odd partner of SoftEven: f(u) = u|u| / (1 + u^2), u = gain * x.
+///
+/// Odd, so it makes only odd harmonics -- the third first -- and bounded, so a
+/// hot transient produces harmonics rather than an explosion. Like SoftEven
+/// it has **no linear term**: for quiet input it is u|u|, second order in the
+/// level, so used in parallel (`y = x + h * f(x)`) it adds nothing at all to
+/// the fundamental of a small signal and everything it adds at a large one is
+/// content the input did not have. That is the property a drum's Harmonics
+/// control wants -- a knob that thickens a body without turning it up -- and
+/// it is what a series soft clip cannot offer, since a series clip with gain
+/// 1 is the signal itself.
+///
+/// Gain 0 is exactly the zero function, so a knob at zero is bit-exactly
+/// nothing rather than a quiet version of something.
+class SoftOdd
+{
+public:
+    explicit SoftOdd (double gain = 1.0) noexcept { setGain (gain); }
+
+    void setGain (double gain) noexcept { gain_ = std::max (gain, 0.0); }
+
+    [[nodiscard]] double getGain() const noexcept { return gain_; }
+
+    [[nodiscard]] double evaluate (double x) const noexcept
+    {
+        const double u = gain_ * x;
+        return u * std::abs (u) / (1.0 + u * u);
+    }
+
+    /// Antiderivative, F1(0) = 0:  (|u| - atan|u|) / g.
+    ///
+    /// Even, as the antiderivative of an odd function is -- the first draft
+    /// carried the curve's sign into it and the integral test caught it on
+    /// its first run. The same subtraction trap SoftEven documents applies:
+    /// as the gain falls |u| and atan|u| agree to within |u|^3 / 3 and the
+    /// direct form returns rounding. Below the threshold the series for
+    /// |u| - atan|u| is evaluated instead, which subtracts nothing.
+    [[nodiscard]] double antiderivative (double x) const noexcept
+    {
+        if (gain_ <= 0.0)
+            return 0.0;
+
+        const double a = std::abs (gain_ * x);
+
+        if (a < kSeriesThreshold)
+        {
+            const double a2 = a * a;
+
+            // |u| - atan|u| = |u|^3/3 - |u|^5/5 + |u|^7/7 - |u|^9/9 + |u|^11/11
+            const double series = a * a2 * (1.0 / 3.0
+                                    + a2 * (-1.0 / 5.0
+                                    + a2 * (1.0 / 7.0
+                                    + a2 * (-1.0 / 9.0
+                                    + a2 * (1.0 / 11.0)))));
+
+            return series / gain_;
+        }
+
+        return (a - std::atan (a)) / gain_;
+    }
+
+private:
+    /// Where the two forms are equally wrong, as for SoftEven: below this the
+    /// subtraction dominates the error, above it the truncated series does.
+    static constexpr double kSeriesThreshold = 0.05;
+
+    double gain_ { 1.0 };
+};
+
 /// Hard clip, kept for measurement baselines rather than for musical use.
 /// Its aliasing figures are the numbers everything else is compared against.
 class HardClip
