@@ -153,6 +153,10 @@ Zero-delay-feedback state variable, with drive inside the loop.
   filter is a fixed formant and the low notes are darker, which is usually what
   a bass wants.
 - **FM** is oscillator A on the cutoff at audio rate — not a wobble.
+- **Drift** is the voice card's temperature, in cents of cutoff: a fixed
+  per-voice mismatch plus a slow wander that carries on between notes, moving
+  cutoff and resonance together and the whole voice's tuning a little. See
+  "Analogue drift" under Measured for the model and the numbers.
 
 Keyboard: **Poly / Mono / Legato**, 1–32 voices (16 by default), glide, bend range.
 Legato does not retrigger the envelopes, so a phrase played without gaps runs
@@ -741,6 +745,46 @@ out to begin with a cut note, that is the host flipping the flag per block
 instead of re-preparing, and the clean-stop rebuild the OS control has always
 done.
 
+### Analogue drift: the voice card's temperature
+
+Two kinds of drift, because a real voice card has two. **Per oscillator** (the
+OSC page's Drift, per bank): each VCO has its own exponential converter and its
+own tempco, so the copies of a unison stack wander *against each other*, and
+that differential wander is the part the ear hears as alive — a linked-only
+drift would freeze the stack's internal beating, which is the "one loud saw"
+the drift exists to prevent. **Per voice** (the FILTER page's Drift): the whole
+card warms and cools together, so its VCF, its resonance and its VCOs all move
+a little *in the same direction* — audible not within one voice but between
+the voices of a chord.
+
+The per-voice process, D being the control in cents:
+
+- A **fixed mismatch** per voice slot, drawn once at prepare (real polysynths
+  trim their filters by hand, and not to zero), and a **wander**: a one-pole at
+  0.15 Hz towards a new uniform target every 0.5 s — slower than the
+  oscillators' 0.35 Hz because a filter board is thermally heavier than a
+  transistor pair. Stepped once per control chunk for every voice, sounding or
+  not, and **never restarted by a key**; only a prepare restarts it.
+- **Cutoff**: × 2^(D·w / 1200), w the composite (half mismatch, half wander),
+  so bounded by ±D. Lands on the 4 ms cutoff smoother's target: click-free, and
+  the per-sample filter path is untouched.
+- **Resonance, paired**: + 0.2 · (D / 600) · w, clamped to 0…1 — ±0.01 at the
+  30 cents a warm polysynth does, ±0.2 at full.
+- **Pitch, a little**: min(D / 4, 15) cents × the wander only, on both banks
+  and the sub — VCOs get autotuned at power-up and VCFs do not, so the mismatch
+  belongs to the filter alone; capped so the creative end moves the filter,
+  not the tuning.
+- **At 0 nothing runs**: every application sits behind a branch on the
+  control, so the default changes no bit — the goldens are the check.
+
+Measured, 8 voices at D = 100 cents over 4 s: every voice's cutoff drift stays
+within ±100 cents (the furthest any voice went was **69.0 cents**), no two
+voices agree at any instant, and the largest step between control chunks is
+**0.047 cents** (the test allows 0.1). At D = 600 with resonance at full, the
+resonance stays within 0…1. The tuning never moves more than the cap: at
+D = 600 the furthest was **9.2 cents** against a cap of 15; at D = 40,
+**6.1 cents** against 10.
+
 ### Tuning
 
 - 12-TET against `440·2^((n−69)/12)`, worst of 128 notes: **3.6e-12 Hz**
@@ -844,6 +888,15 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+**Voice drift.** A second kind of analogue drift, on the FILTER page: the
+voice card's temperature. Cutoff and resonance wander together, each voice
+with its own fixed mismatch and its own slow wander that carries on between
+notes, and the whole voice's tuning moves a little with them (a quarter of the
+amount, capped at 15 cents). About 40 cents is what a warm polysynth does; the
+control goes to 600 for creative use, and at 0 it is bit-exactly off (the 32
+goldens are unchanged by it). Parameter `voiceDrift`, schema V7. The model and
+the measurements are under "Analogue drift" in Measured.
 
 **The analogue drift no longer retriggers.** Every cold note used to call the
 unison banks' full reset, which re-seeded the one random stream that fed both

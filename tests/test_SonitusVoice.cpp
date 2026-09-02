@@ -494,48 +494,50 @@ TEZLA_TEST (every_control_at_every_extreme_stays_finite_and_bounded)
 
     double worst = 0.0;
 
-    for (const int unison : { 1, 7 })
-        for (const double fold : { 0.0, 1.0 })
-            for (const double ring : { 0.0, 1.0 })
-                for (const double resonance : { 0.0, 1.0 })
-                    for (const double drive : { 0.0, 1.0 })
-                        for (const double pm : { 0.0, 8.0 })
-                            for (const double fm : { 0.0, 1.0 })
-                            {
-                                auto parameters = basic();
+    for (const double voiceDrift : { 0.0, 600.0 })
+        for (const int unison : { 1, 7 })
+            for (const double fold : { 0.0, 1.0 })
+                for (const double ring : { 0.0, 1.0 })
+                    for (const double resonance : { 0.0, 1.0 })
+                        for (const double drive : { 0.0, 1.0 })
+                            for (const double pm : { 0.0, 8.0 })
+                                for (const double fm : { 0.0, 1.0 })
+                                {
+                                    auto parameters = basic();
 
-                                parameters.unisonA = unison;
-                                parameters.unisonB = unison;
-                                parameters.detuneA = 50.0;
-                                parameters.detuneB = 50.0;
-                                parameters.spreadA = 1.0;
-                                parameters.driftA = 20.0;
-                                parameters.levelB = 1.0;
-                                parameters.subLevel = 1.0;
-                                parameters.foldAmount = fold;
-                                parameters.ringAmount = ring;
-                                parameters.resonance = resonance;
-                                parameters.filterDrive = drive;
-                                parameters.pmIndex = pm;
-                                parameters.filterFm = fm;
-                                parameters.cutoffHz = 200.0;
-                                parameters.syncB = true;
+                                    parameters.unisonA = unison;
+                                    parameters.unisonB = unison;
+                                    parameters.detuneA = 50.0;
+                                    parameters.detuneB = 50.0;
+                                    parameters.spreadA = 1.0;
+                                    parameters.driftA = 20.0;
+                                    parameters.levelB = 1.0;
+                                    parameters.subLevel = 1.0;
+                                    parameters.foldAmount = fold;
+                                    parameters.ringAmount = ring;
+                                    parameters.resonance = resonance;
+                                    parameters.filterDrive = drive;
+                                    parameters.pmIndex = pm;
+                                    parameters.filterFm = fm;
+                                    parameters.cutoffHz = 200.0;
+                                    parameters.syncB = true;
+                                    parameters.voiceDrift = voiceDrift;
 
-                                Voice voice;
-                                voice.prepare (rate);
-                                voice.noteOn (36, 65.40639132514966, 1.0, false);
+                                    Voice voice;
+                                    voice.prepare (rate);
+                                    voice.noteOn (36, 65.40639132514966, 1.0, false);
 
-                                const auto rendered = render (voice, parameters, 9600, 7200);
+                                    const auto rendered = render (voice, parameters, 9600, 7200);
 
-                                for (const double sample : rendered.left)
-                                    CHECK (std::isfinite (sample));
+                                    for (const double sample : rendered.left)
+                                        CHECK (std::isfinite (sample));
 
-                                worst = std::max (worst, rendered.peak);
-                            }
+                                    worst = std::max (worst, rendered.peak);
+                                }
 
-    // Everything is bounded by the filter's rail and the amp envelope. The
-    // number is pinned so a change to either shows up here rather than in a
-    // session.
+        // Everything is bounded by the filter's rail and the amp envelope. The
+        // number is pinned so a change to either shows up here rather than in a
+        // session.
     CHECK (worst < 12.0);
 }
 
@@ -680,6 +682,228 @@ TEZLA_TEST (a_fresh_prepare_renders_the_same_bits_twice)
 
     CHECK (a.size() == b.size());
     CHECK (std::memcmp (a.data(), b.data(), a.size() * sizeof (double)) == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Voice drift: the voice card's temperature
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (voice_drift_at_zero_reaches_nothing_while_the_walk_keeps_walking)
+{
+    // At a control of 0 the process still runs -- it is the card's temperature
+    // and the walk must be somewhere when the knob comes up -- but nothing it
+    // produces reaches the sound: every application is behind a branch on the
+    // control, and the three amounts read exactly zero. The goldens are the
+    // whole-instrument version of this claim.
+    constexpr double rate = 48000.0;
+
+    Voice voice;
+    voice.prepare (rate, 3);
+
+    auto parameters = basic();
+    parameters.voiceDrift = 0.0;
+
+    voice.noteOn (57, 220.0, 1.0, false);
+
+    for (int chunk = 0; chunk < static_cast<int> (rate * 2.0) / Voice::kControlIntervalSamples; ++chunk)
+    {
+        voice.advanceDrift();
+        voice.applyControls (parameters, GlobalSources {});
+
+        for (int i = 0; i < Voice::kControlIntervalSamples; ++i)
+        {
+            double left = 0.0;
+            double right = 0.0;
+            voice.process (left, right);
+        }
+    }
+
+    CHECK (std::abs (voice.getVoiceDriftWander()) > 0.01);        // it walked
+    CHECK (isExactlyZero (voice.getVoiceDriftCents()));           // and touched nothing
+    CHECK (isExactlyZero (voice.getVoiceDriftPitchCents()));
+    CHECK (isExactlyZero (voice.getVoiceDriftResonanceOffset()));
+    CHECK (isExactly (voice.bankA().getFrequency(), 220.0));
+}
+
+TEZLA_TEST (voice_drift_is_per_voice_bounded_and_slow)
+{
+    // Eight voices at 100 cents for four seconds: every voice's cutoff drift
+    // inside +/-100 cents at every chunk (the bound is the control, by
+    // construction), no two voices agreeing (the fixed mismatch), and the
+    // largest step between control chunks below a tenth of a cent -- slow
+    // enough that the 4 ms cutoff smoother makes it click-free.
+    constexpr double rate = 48000.0;
+    constexpr int voices = 8;
+    constexpr double drift = 100.0;
+
+    const auto managerPtr = heapVoiceManager();
+    auto& manager = *managerPtr;
+    manager.prepare (rate);
+    manager.setPolyphony (voices);
+
+    auto parameters = basic();
+    parameters.voiceDrift = drift;
+    parameters.cutoffHz = 1000.0;
+    parameters.resonance = 1.0;
+
+    for (int n = 0; n < voices; ++n)
+        manager.noteOn (48 + n * 3, 1.0);
+
+    double previous[voices] {};
+    double largestStep = 0.0;
+    double largestCents = 0.0;
+    bool allAgree = true;
+
+    const int chunks = static_cast<int> (rate * 4.0) / Voice::kControlIntervalSamples;
+
+    for (int chunk = 0; chunk < chunks; ++chunk)
+    {
+        manager.advanceDrift();
+        manager.applyControls (parameters, GlobalSources {});
+
+        for (int i = 0; i < Voice::kControlIntervalSamples; ++i)
+        {
+            double left = 0.0;
+            double right = 0.0;
+            manager.process (left, right);
+        }
+
+        allAgree = true;
+
+        for (int n = 0; n < voices; ++n)
+        {
+            const double cents = manager.voice (n).getVoiceDriftCents();
+
+            largestCents = std::max (largestCents, std::abs (cents));
+
+            if (chunk > 0)
+                largestStep = std::max (largestStep, std::abs (cents - previous[n]));
+
+            previous[n] = cents;
+
+            if (n > 0 && ! isExactly (cents, previous[0]))
+                allAgree = false;
+
+            const double resonance = manager.voice (n).getFilterResonance();
+            CHECK (resonance >= 0.0 && resonance <= 1.0);
+        }
+    }
+
+    std::printf ("      voice drift at %.0f cents: largest %.3f cents, largest step %.4f cents\n",
+                 drift, largestCents, largestStep);
+
+    CHECK (largestCents <= drift);
+    CHECK (largestStep < 0.1);
+    CHECK (! allAgree);
+}
+
+TEZLA_TEST (voice_drift_carries_on_between_notes)
+{
+    // The same rule as the oscillators' drift: a key restarts the note, not
+    // the card's temperature. The walk and the mismatch read the same before
+    // and after a note-on, and so the second note is not the first one again.
+    constexpr double rate = 48000.0;
+
+    Voice voice;
+    voice.prepare (rate, 5);
+
+    auto parameters = basic();
+    parameters.voiceDrift = 100.0;
+    parameters.cutoffHz = 800.0;
+    parameters.resonance = 0.6;
+
+    const auto play = [&] (double seconds)
+    {
+        std::vector<double> out;
+        const int chunks = static_cast<int> (rate * seconds) / Voice::kControlIntervalSamples;
+
+        for (int chunk = 0; chunk < chunks; ++chunk)
+        {
+            voice.advanceDrift();
+            voice.applyControls (parameters, GlobalSources {});
+
+            for (int i = 0; i < Voice::kControlIntervalSamples; ++i)
+            {
+                double left = 0.0;
+                double right = 0.0;
+                voice.process (left, right);
+                out.push_back (left);
+            }
+        }
+
+        return out;
+    };
+
+    voice.noteOn (57, 220.0, 1.0, false);
+    const auto first = play (2.0);
+
+    voice.noteOff();
+    play (0.3);
+    CHECK (! voice.isActive());
+
+    const double wander = voice.getVoiceDriftWander();
+    const double fixed = voice.getVoiceDriftStatic();
+    CHECK (std::abs (wander) > 0.01);
+
+    voice.noteOn (57, 220.0, 1.0, false);
+
+    CHECK (isExactly (voice.getVoiceDriftWander(), wander));
+    CHECK (isExactly (voice.getVoiceDriftStatic(), fixed));
+
+    const auto second = play (2.0);
+
+    CHECK (first.size() == second.size());
+    CHECK (std::memcmp (first.data(), second.data(), first.size() * sizeof (double)) != 0);
+}
+
+TEZLA_TEST (voice_drift_moves_the_tuning_a_little_and_never_past_the_cap)
+{
+    // The common-mode share: the bank's frequency follows the drift's pitch
+    // cents exactly, and those cents never exceed min (D / 4, 15) -- 10 at a
+    // control of 40, 15 at 600 however far the walk goes. Read off the bank
+    // rather than measured from the waveform, because the ratio is applied in
+    // one place and the bank's frequency is that place's output.
+    constexpr double rate = 48000.0;
+
+    for (const double drift : { 40.0, 600.0 })
+    {
+        const double cap = std::min (0.25 * drift, 15.0);
+
+        Voice voice;
+        voice.prepare (rate, 9);
+
+        auto parameters = basic();
+        parameters.voiceDrift = drift;
+
+        voice.noteOn (57, 220.0, 1.0, false);
+
+        double furthest = 0.0;
+        const int chunks = static_cast<int> (rate * 6.0) / Voice::kControlIntervalSamples;
+
+        for (int chunk = 0; chunk < chunks; ++chunk)
+        {
+            voice.advanceDrift();
+            voice.applyControls (parameters, GlobalSources {});
+
+            for (int i = 0; i < Voice::kControlIntervalSamples; ++i)
+            {
+                double left = 0.0;
+                double right = 0.0;
+                voice.process (left, right);
+            }
+
+            const double cents = voice.getVoiceDriftPitchCents();
+            furthest = std::max (furthest, std::abs (cents));
+
+            CHECK (std::abs (cents) <= cap);
+            CHECK_NEAR (voice.bankA().getFrequency(), 220.0 * std::pow (2.0, cents / 1200.0), 1e-9);
+        }
+
+        std::printf ("      voice drift %.0f cents: tuning moved at most %.2f cents (cap %.0f)\n",
+                     drift, furthest, cap);
+
+        CHECK (furthest > 0.5);      // it does move -- the cap is not a zero
+    }
 }
 
 TEZLA_TEST (the_voice_is_block_size_independent)

@@ -355,6 +355,12 @@ struct VoiceParameters
     /// How much velocity opens the filter.
     double filterVelocity { 0.0 };     ///< 0 .. 1
 
+    /// The voice card's temperature, in cents of cutoff. A fixed per-voice
+    /// mismatch plus a slow wander that carries on between notes, moving the
+    /// cutoff by up to this many cents, the resonance with it, and the whole
+    /// voice's tuning a little. 0 is bit-exactly off. See `Voice::advanceDrift`.
+    double voiceDrift { 0.0 };
+
     // ---- envelopes -----------------------------------------------------------
 
     /// One envelope's five times and three tensions.
@@ -454,6 +460,27 @@ public:
     /// does bite.
     static constexpr int kControlIntervalSamples = 32;
 
+    /// The voice card's temperature -- see `advanceDrift` -- as constants.
+    ///
+    /// Its wander's corner, in Hz. Slower than the oscillators' 0.35 Hz: a
+    /// filter board is thermally heavier than a VCO's transistor pair.
+    static constexpr double kVoiceDriftHz = 0.15;
+
+    /// How often the wander picks a new target, in seconds.
+    static constexpr double kVoiceDriftTargetSeconds = 0.5;
+
+    /// The share of the cutoff drift that reaches the tuning, and its cap in
+    /// cents. A quarter, because the same warmth moves a VCO's converter and a
+    /// VCF's alike but only the VCO gets autotuned at power-up; capped so the
+    /// creative end of the control moves the filter, not the tuning.
+    static constexpr double kVoiceDriftPitchShare = 0.25;
+    static constexpr double kVoiceDriftPitchCapCents = 15.0;
+
+    /// How far the resonance moves at the control's full travel: +/-0.2 at
+    /// 600 cents, so +/-0.01 at the 30 cents a warm polysynth actually does.
+    static constexpr double kVoiceDriftFullCents = 600.0;
+    static constexpr double kVoiceDriftResonanceAtFull = 0.2;
+
     /// How fast a cutoff or a level moves to a new modulated value.
     ///
     /// Short, because these are re-aimed every 32 samples and the smoothing is
@@ -475,6 +502,16 @@ public:
         noise_.seed (scramble (seed, 0x9e3779b97f4a7c15ull));
         bankA_.setSeed (scramble (seed, 0xbf58476d1ce4e5b9ull));
         bankB_.setSeed (scramble (seed, 0x94d049bb133111ebull));
+
+        // The voice card's temperature: its own stream, so nothing that already
+        // draws from noise_ (the per-note random) changes; the fixed mismatch
+        // drawn once, here, and kept until the next prepare -- a real polysynth's
+        // VCFs are trimmed by hand, and not to zero.
+        driftRandom_.seed (scramble (seed, 0xd6e8feb86659fd93ull));
+        driftStatic_ = driftRandom_.bipolar();
+        driftCoefficient_ = std::clamp (6.283185307179586 * kVoiceDriftHz
+                                          * kControlIntervalSamples / sampleRate_,
+                                        0.0, 1.0);
 
         bankA_.prepare (sampleRate_);
         bankB_.prepare (sampleRate_);
@@ -518,6 +555,12 @@ public:
 
         cutoff_.setCurrentAndTarget (parameters_.cutoffHz);
         gain_.setCurrentAndTarget (0.0);
+
+        // The wander restarts with the graph, never with a note. The static
+        // mismatch is the card's and survives even this.
+        driftWander_ = 0.0;
+        driftTarget_ = 0.0;
+        driftCountdown_ = 0;
 
         note_ = -1;
         velocity_ = 0.0;
@@ -644,6 +687,68 @@ public:
     [[nodiscard]] const UnisonBank& bankA() const noexcept { return bankA_; }
     [[nodiscard]] const UnisonBank& bankB() const noexcept { return bankB_; }
 
+    /// Steps the voice card's temperature by one control chunk.
+    ///
+    /// **For every voice, sounding or not, and never restarted by a key.** It
+    /// is the card's temperature, not the note's: a one-pole at kVoiceDriftHz
+    /// walking towards a new uniform target every kVoiceDriftTargetSeconds,
+    /// the same shape as the oscillators' drift and slower. What it moves --
+    /// cutoff, resonance, a little pitch -- is applied in `applyControls`, and
+    /// only when `voiceDrift` is above zero; at zero nothing here reaches the
+    /// sound, bit for bit, and the walk just keeps walking.
+    void advanceDrift() noexcept
+    {
+        if (driftCountdown_ <= 0)
+        {
+            driftTarget_ = driftRandom_.bipolar();
+            driftCountdown_ = static_cast<int> (sampleRate_ * kVoiceDriftTargetSeconds);
+        }
+
+        driftCountdown_ -= kControlIntervalSamples;
+        driftWander_ += driftCoefficient_ * (driftTarget_ - driftWander_);
+    }
+
+    /// The cutoff drift in force, in cents: the control times the card's
+    /// composite temperature (half fixed mismatch, half wander), so it is
+    /// bounded by the control by construction. Exactly 0 at a control of 0.
+    [[nodiscard]] double getVoiceDriftCents() const noexcept
+    {
+        if (dsp::isExactlyZero (parameters_.voiceDrift))
+            return 0.0;
+
+        return parameters_.voiceDrift * driftComposite();
+    }
+
+    /// The share of it that reaches the tuning, in cents: wander only (VCOs
+    /// get autotuned; the mismatch belongs to the filter) and capped.
+    [[nodiscard]] double getVoiceDriftPitchCents() const noexcept
+    {
+        if (dsp::isExactlyZero (parameters_.voiceDrift))
+            return 0.0;
+
+        return std::min (kVoiceDriftPitchShare * parameters_.voiceDrift, kVoiceDriftPitchCapCents)
+                 * driftWander_;
+    }
+
+    /// What the resonance is offset by, in resonance units -- the same
+    /// temperature, the same direction as the cutoff.
+    [[nodiscard]] double getVoiceDriftResonanceOffset() const noexcept
+    {
+        if (dsp::isExactlyZero (parameters_.voiceDrift))
+            return 0.0;
+
+        return kVoiceDriftResonanceAtFull * (parameters_.voiceDrift / kVoiceDriftFullCents)
+                 * driftComposite();
+    }
+
+    /// The raw walk and the fixed mismatch, for the tests that pin that a key
+    /// does not restart the one and a prepare draws the other.
+    [[nodiscard]] double getVoiceDriftWander() const noexcept { return driftWander_; }
+    [[nodiscard]] double getVoiceDriftStatic() const noexcept { return driftStatic_; }
+
+    /// The filter's resonance as set, drift included, for the bound test.
+    [[nodiscard]] double getFilterResonance() const noexcept { return filters_[0].getResonance(); }
+
     /// The cutoff multiplier a given modulator value produces.
     ///
     /// Exposed because the property that matters is not visible in the audio:
@@ -722,7 +827,13 @@ public:
 
         resolveModulation (global);
 
-        const double pitchRatio = std::pow (2.0, amount (ModDestination::pitch) / 1200.0);
+        double pitchRatio = std::pow (2.0, amount (ModDestination::pitch) / 1200.0);
+
+        // The voice card's warmth reaching the tuning: both banks and the sub,
+        // through the one ratio they share. Skipped at zero rather than
+        // multiplied by a computed 1.0, so the control's default changes no bit.
+        if (! dsp::isExactlyZero (parameters.voiceDrift))
+            pitchRatio *= std::pow (2.0, getVoiceDriftPitchCents() / 1200.0);
 
         const double nominalA = frequency_ * pitchRatio
                                   * ratioFor (parameters.octaveA, parameters.semitonesA,
@@ -785,8 +896,15 @@ public:
             filter.setMode (parameters.filterMode);
             filter.setMorph (std::clamp (parameters.filterMorph
                                            + amount (ModDestination::filterMorph), -1.0, 1.0));
-            filter.setResonance (std::clamp (parameters.resonance
-                                               + amount (ModDestination::resonance), 0.0, 1.0));
+            // Resonance drifts with the cutoff -- paired, the same temperature
+            // in the same direction -- and, like everything the card's warmth
+            // touches, only when the control is above zero.
+            double resonanceTarget = parameters.resonance + amount (ModDestination::resonance);
+
+            if (! dsp::isExactlyZero (parameters.voiceDrift))
+                resonanceTarget += getVoiceDriftResonanceOffset();
+
+            filter.setResonance (std::clamp (resonanceTarget, 0.0, 1.0));
             filter.setDrive (std::clamp (parameters.filterDrive
                                            + amount (ModDestination::filterDrive), 0.0, 1.0));
         }
@@ -809,7 +927,16 @@ public:
 
         folder_.setGain (dsp::isExactlyZero (fold_) ? 0.0 : std::pow (kMaximumFold, fold_));
 
-        cutoff_.setTarget (targetCutoff (amount (ModDestination::cutoff)));
+        // The cutoff drift lands on the smoother's target, so the 4 ms smoother
+        // makes it click-free and the per-sample filter path is untouched. The
+        // exponential-converter law: cents, like the oscillators' drift.
+        double cutoffTarget = targetCutoff (amount (ModDestination::cutoff));
+
+        if (! dsp::isExactlyZero (parameters.voiceDrift))
+            cutoffTarget = std::clamp (cutoffTarget * std::pow (2.0, getVoiceDriftCents() / 1200.0),
+                                       20.0, sampleRate_ * 0.45);
+
+        cutoff_.setTarget (cutoffTarget);
         gain_.setTarget (targetGain (amount (ModDestination::level)));
     }
 
@@ -1208,6 +1335,12 @@ private:
         return std::clamp (parameters_.level * byVelocity * (1.0 + modulation), 0.0, 4.0);
     }
 
+    /// Half fixed mismatch, half wander: bounded by 1 by construction.
+    [[nodiscard]] double driftComposite() const noexcept
+    {
+        return 0.5 * driftStatic_ + 0.5 * driftWander_;
+    }
+
     [[nodiscard]] double filterScale (double modulator) const noexcept
     {
         if (dsp::isExactlyZero (parameters_.filterFm))
@@ -1242,6 +1375,14 @@ private:
 
     dsp::SmallRandom noise_;
     double random_ { 0.0 };
+
+    /// The voice card's temperature -- see `advanceDrift`.
+    dsp::SmallRandom driftRandom_;
+    double driftStatic_ { 0.0 };        ///< fixed mismatch, drawn at prepare, [-1, 1]
+    double driftWander_ { 0.0 };        ///< the slow walk, [-1, 1]
+    double driftTarget_ { 0.0 };
+    double driftCoefficient_ { 0.0 };
+    int    driftCountdown_ { 0 };
 
     std::array<double, static_cast<std::size_t> (ModDestination::count)> amounts_ {};
 

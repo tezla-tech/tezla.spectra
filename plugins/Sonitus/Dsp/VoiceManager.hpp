@@ -312,6 +312,15 @@ public:
     ///
     /// Counted in samples so the glide takes the same time however the host
     /// cuts the callback up -- the same rule as everything else here.
+    /// Steps every voice card's temperature by one control chunk -- every
+    /// voice, sounding or not, because it is the card's temperature and not
+    /// the note's. Cheap: a handful of flops per voice per chunk.
+    void advanceDrift() noexcept
+    {
+        for (auto& voice : voices_)
+            voice.advanceDrift();
+    }
+
     void advanceGlide (int samples) noexcept
     {
         if (mode_ == KeyboardMode::poly || monoNote_ < 0)

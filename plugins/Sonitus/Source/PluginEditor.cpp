@@ -205,7 +205,7 @@ constexpr int kPagePad = 5;
     // Set once per patch, if ever. Drift, spread and humanise are texture
     // rather than shape.
     static const char* trims[] {
-        "driftA", "driftB", "spreadA", "spreadB", "fineA", "fineB",
+        "driftA", "driftB", "voiceDrift", "spreadA", "spreadB", "fineA", "fineB",
         "combSpread", "combDamp", "octaveA", "octaveB", "subOctave"
     };
 
@@ -3734,6 +3734,15 @@ void SonitusEditor::buildPages()
     filter->addKnob (ids::filterVel, "Velocity",
         "How far velocity opens the filter. The standard expressive link, and the reason a "
         "programmed bassline can breathe.");
+
+    filter->addKnob (ids::voiceDrift, "Drift",
+        "The voice card's temperature, in cents of cutoff. Cutoff and resonance wander "
+        "together, slowly, and never the same way on two voices: each has its own fixed "
+        "mismatch and its own wander, which carries on between notes rather than restarting "
+        "with them. Up to about 40 cents is what a warm analogue polysynth does; past that it "
+        "is a creative control. The same warmth nudges the whole voice's tuning by a quarter of "
+        "the amount, capped at 15 cents, which is what makes an analogue chord shimmer against "
+        "itself. Costs nothing, and at 0 it is exactly off.");
 
     filter->addHeading ("KEYBOARD", 4, true);
 
