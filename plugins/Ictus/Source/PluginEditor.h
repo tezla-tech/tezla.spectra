@@ -169,6 +169,10 @@ private:
     bool shownBass_ { false };
     int shownPadNote_ { -1 };
 
+    // The NOTE lamps' tooltips name what Tune snaps to: rebuilt when a Tune
+    // or a lamp moves (as tenths of a Hz and the two lamp bits, packed).
+    juce::int64 shownSnapKey_ { -1 };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IctusEditor)
 };
 

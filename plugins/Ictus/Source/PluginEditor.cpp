@@ -345,7 +345,7 @@ void IctusEditor::buildKickPage()
 {
     auto& state = ictus_.getState();
 
-    kickPage_ = std::make_unique<ControlPage> (state, palette_, 7);
+    kickPage_ = std::make_unique<ControlPage> (state, palette_, 8);
     auto& page_ = kickPage_;
 
     // ---- pitch ----
@@ -360,6 +360,11 @@ void IctusEditor::buildKickPage()
     page_->addSwitch (ids::k1FollowKey, "Follow key", "Key",
         "Lit: the landed pitch comes from the MIDI note through the TUNING page's "
         "scale. Dark: Tune sets it.");
+
+    // Live too: which note Tune snaps to right now.
+    page_->addSwitch (ids::k1NoteSnap, "Note snap", "Note",
+        "Lit: Tune snaps to the nearest note of the TUNING page's scale, so the "
+        "kick sits in the key of the bass line. Dark: Tune is free.");
 
     page_->addKnob (ids::k1Start, "Start",
         "How far above the landed pitch the hit starts, 0 to 60 semitones. This is "
@@ -527,6 +532,10 @@ void IctusEditor::buildSnarePage()
         "Lit: the fundamental comes from the MIDI note through the TUNING page's "
         "scale. Dark: Tune sets it.");
 
+    page->addSwitch (ids::s1NoteSnap, "Note snap", "Note",
+        "Lit: Tune snaps to the nearest note of the TUNING page's scale, so the "
+        "snare sits in the key of the bass line. Dark: Tune is free.");
+
     page->addKnob (ids::s1Spread, "Spread",
         "How far the two upper modes sit above the fundamental: 0 puts all three "
         "on one pitch (a tom), 100 is the snare's set at 1.6 and 2.2 times it -- "
@@ -569,7 +578,7 @@ void IctusEditor::buildSnarePage()
         "2 kHz is a fat, papery snare, 6 kHz a tight hiss (measured centroids 7.8 "
         "to 8.9 kHz). Band-passed, the buzz sits at it (2.6 to 6.7 kHz).");
 
-    page->addKnob (ids::s1Snap, "Snap",
+    page->addKnob (ids::s1Snap, "Shape",
         "The wires' filter shape: 0 is a high-pass above Snappy -- open hiss; "
         "100 a band-pass at it -- a pitched, focused buzz. A crossfade that is "
         "exact at both ends.");
@@ -725,6 +734,8 @@ void IctusEditor::refreshKeyTooltips()
     bassButton_.setTooltip (ictus_.describeKeying());
     kickPage_->setTooltip (ids::k1FollowKey, ictus_.describeFollowKey (PadIndex::kick1));
     snarePage_->setTooltip (ids::s1FollowKey, ictus_.describeFollowKey (PadIndex::snare1));
+    kickPage_->setTooltip (ids::k1NoteSnap, ictus_.describeNoteSnap (PadIndex::kick1));
+    snarePage_->setTooltip (ids::s1NoteSnap, ictus_.describeNoteSnap (PadIndex::snare1));
 }
 
 void IctusEditor::updateGreying()
@@ -831,13 +842,27 @@ void IctusEditor::timerCallback()
     const bool bass = read (ids::bassMode) > 0;
     const int padNote = ictus_.getPadNote (PadIndex::kick1) * 128 + ictus_.getPadNote (PadIndex::snare1);
 
-    if (scale != shownScale_ || bass != shownBass_ || padNote != shownPadNote_)
+    // The two Tunes and the two NOTE lamps, packed into one key.
+    const auto readRaw = [this] (const char* id)
+    {
+        if (auto* raw = ictus_.getState().getRawParameterValue (id))
+            return raw->load();
+
+        return 0.0f;
+    };
+
+    const juce::int64 snapKey = static_cast<juce::int64> (std::lround (10.0f * readRaw (ids::k1Tune))) * 100000
+                              + static_cast<juce::int64> (std::lround (10.0f * readRaw (ids::s1Tune))) * 4
+                              + (read (ids::k1NoteSnap) > 0 ? 2 : 0) + (read (ids::s1NoteSnap) > 0 ? 1 : 0);
+
+    if (scale != shownScale_ || bass != shownBass_ || padNote != shownPadNote_ || snapKey != shownSnapKey_)
     {
         const bool scaleMoved = scale != shownScale_;
 
         shownScale_ = scale;
         shownBass_ = bass;
         shownPadNote_ = padNote;
+        shownSnapKey_ = snapKey;
         refreshKeyTooltips();
         refreshPadStrip();
 

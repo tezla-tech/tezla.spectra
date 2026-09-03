@@ -38,7 +38,7 @@ circuit's values (`docs/DSP-REFERENCES.md`, "Drum synthesis — Ictus"):
 
 | control | what it does |
 |---|---|
-| **Tune** / Follow key | The pitch the kick lands on, 20–400 Hz, or the MIDI note through the tuning page's scale. With the pad on one note, Follow key is a fixed transposition — the pad only sounds on its own note; the keyboard is Bass mode's. |
+| **Tune** / Follow key / Note | The pitch the kick lands on, 20–400 Hz, or the MIDI note through the tuning page's scale. With the pad on one note, Follow key is a fixed transposition — the pad only sounds on its own note; the keyboard is Bass mode's. **Note** snaps Tune to the nearest note of the tuning (12-TET until a scale is loaded), so the kick sits in the key of the bass line; its tooltip names the note it lands on. |
 | **Start**, **Drop** | The punch: the body starts *Start* semitones above and drops over *Drop* ms. The TR-808 analysis's fast attack jump; the 909's Tune Depth and Tune Decay. |
 | **Sigh**, Sigh time | A second, slow drop through the decay — the 808's pitch sigh, the "couple of semitones" a real shell relaxes by. |
 | **Phase** | Where the body starts its cycle. 90° is a full-scale step: a click by construction. |
@@ -64,16 +64,22 @@ into the noise filter's cutoff and the tuned/noise mix.
 
 | control | what it does |
 |---|---|
-| **Tune** / Follow key | The shell's fundamental, 60–800 Hz, or the MIDI note through the tuning. |
+| **Tune** / Follow key / Note | The shell's fundamental, 60–800 Hz, or the MIDI note through the tuning; **Note** snaps it to the tuning's nearest note, the upper modes keeping their ratios to it. |
 | **Spread**, **Tone** | Three modes at 1 : 1.6 : 2.2 of the fundamental at Spread 100 (measured 1.601 and 2.201), one tone at 0; Tone is how hard the upper two are struck, and at 0 only one mode runs. |
 | **Decay** | The fundamental's ring-down; the upper modes die at 0.7 and 0.5 of it, as on the drum. The shell is cut exactly at −120 dB. |
 | **Start**, **Drop** | The crack of the strike: the shell starts *Start* semitones up and glides down over *Drop*, the three modes retuned every 32 internal samples with their ring intact and never once it has landed. |
 | **Body**, **Wires** | Two levels, a plain sum. |
-| **Snappy**, **Snap**, Wires decay | The wires' filter corner, its shape from high-pass (open hiss) to band-pass (a pitched buzz), and the stick's burst on them. |
+| **Snappy**, **Shape**, Wires decay | The wires' filter corner, its shape from high-pass (open hiss) to band-pass (a pitched buzz), and the stick's burst on them. |
 | **Rattle** | The shell's own motion driving the wires — the one nonlinearity kept from the physical models — so with it up the wires buzz for as long as the drum rings. Exact off at 0. |
 | **Crack**, Crack tone, **Noise**, Noise time | The stick's contact: the kick's click pair. |
 | Level, **Gate**, Release | Level, and the note-off fade of the whole hit (a snare has no envelope of its own). |
 | Vel > Level / Wires / Crack / Drop | What velocity moves; Vel > Wires moves the wires' level and their corner together, the article's recipe. |
+
+**Note snap, measured** (`tezla-tests note_snap`): a kick at 52 Hz lands on
+G#1, 51.913 Hz; a snare at 205 Hz on G#3, 207.652 Hz; with a five-tone scale
+loaded the same kick lands on that scale's degree at 55.000 Hz instead —
+the snap is the tuning's, so a drum snapped in a microtuned project sits in
+it.
 
 **Measured** (`tezla-tests snare`, `tezla-measure ictus` table 2): a Spread 0
 shell an exact **200.0000 Hz** at 44.1 / 48 / 96 / 192 kHz; a 12-semitone

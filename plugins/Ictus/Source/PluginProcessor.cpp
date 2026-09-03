@@ -28,7 +28,9 @@ constexpr int kSchemaV1 = 1;
 constexpr int kSchemaV2 = 2;
 /// Schema 3: Snare 1 (I3).
 constexpr int kSchemaV3 = 3;
-constexpr int kStateSchemaVersion = kSchemaV3;
+/// Schema 4: Note snap on the kick and the snare.
+constexpr int kSchemaV4 = 4;
+constexpr int kStateSchemaVersion = kSchemaV4;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -460,8 +462,10 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::s1Snappy, kSchemaV3 }, "Snare 1 Snappy",
         skewed (1000.0f, 8000.0f, 1.0f, 3000.0f), 3000.0f, attributes ("Hz")));
 
+    // The display name says "Wire shape" (the ID stays `s1Snap`, frozen), so
+    // it cannot be read as the note snap that arrived at schema 4.
     parameters.push_back (std::make_unique<Parameter> (
-        juce::ParameterID { ids::s1Snap, kSchemaV3 }, "Snare 1 Snap",
+        juce::ParameterID { ids::s1Snap, kSchemaV3 }, "Snare 1 Wire shape",
         Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
 
     parameters.push_back (std::make_unique<Parameter> (
@@ -515,6 +519,14 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::s1VelDrop, kSchemaV3 }, "Snare 1 Velocity to drop",
         Range (0.0f, 100.0f, 0.1f), 30.0f, attributes ("%")));
 
+    // ---- schema 4: note snap -- APPENDED ---------------------------------------
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::k1NoteSnap, kSchemaV4 }, "Kick 1 Note snap", false));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::s1NoteSnap, kSchemaV4 }, "Snare 1 Note snap", false));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -560,6 +572,7 @@ void IctusProcessor::pullParameters()
 
     k.tuneHz = valueOf (state_, ids::k1Tune);
     k.followKey = valueOf (state_, ids::k1FollowKey) > 0.5f;
+    k.noteSnap = valueOf (state_, ids::k1NoteSnap) > 0.5f;
     k.startSemitones = valueOf (state_, ids::k1Start);
     k.dropSeconds = valueOf (state_, ids::k1Drop) * 0.001;
     k.sighSemitones = valueOf (state_, ids::k1Sigh);
@@ -596,6 +609,7 @@ void IctusProcessor::pullParameters()
 
     n.tuneHz = valueOf (state_, ids::s1Tune);
     n.followKey = valueOf (state_, ids::s1FollowKey) > 0.5f;
+    n.noteSnap = valueOf (state_, ids::s1NoteSnap) > 0.5f;
     n.spread = valueOf (state_, ids::s1Spread) * 0.01;
     n.tone = valueOf (state_, ids::s1Tone) * 0.01;
     n.decaySeconds = valueOf (state_, ids::s1Decay) * 0.001;
@@ -996,6 +1010,50 @@ juce::String IctusProcessor::describeKeying() const
              + "). Lit: every key plays Kick 1 tuned to the key -- a sub-bass instrument made "
                "of the kick -- through the TUNING page's scale, " + scale + ", so "
              + plays (36) + " and " + plays (48) + ". The other pads fall silent while it is lit.";
+}
+
+juce::String IctusProcessor::noteNameFor (double hz) const
+{
+    if (! (hz > 0.0))
+        return {};
+
+    // The nearest keyboard note at the current concert pitch, and how far
+    // the frequency sits from it in cents. A snapped Tune on 12-TET reads
+    // +0c; on a loaded scale the degree's own offset shows.
+    const double a4 = concertPitchHz_;
+    const double semitones = 12.0 * std::log2 (hz / a4) + 69.0;
+    const int nearest = juce::jlimit (0, 127, juce::roundToInt (semitones));
+    const int cents = juce::roundToInt (100.0 * (semitones - nearest));
+
+    return juce::MidiMessage::getMidiNoteName (nearest, true, true, 3)
+             + (cents == 0 ? juce::String (" +0c")
+                           : juce::String (cents > 0 ? " +" : " ") + juce::String (cents) + "c");
+}
+
+double IctusProcessor::previewSnappedHz (double hz) const
+{
+    return previewTuning_.nearestScaleHz (hz);
+}
+
+juce::String IctusProcessor::describeNoteSnap (PadIndex pad) const
+{
+    const bool kick = pad == PadIndex::kick1 || pad == PadIndex::kick2;
+    const double tune = state_.getRawParameterValue (kick ? ids::k1Tune : ids::s1Tune)->load();
+    const bool lit = state_.getRawParameterValue (kick ? ids::k1NoteSnap : ids::s1NoteSnap)->load() > 0.5f;
+    const double snapped = previewSnappedHz (tune);
+    const juce::String scale = scaleName_ + " at A4 = " + juce::String (concertPitchHz_, 1) + " Hz";
+
+    juce::String text = (lit ? "Lit -- " : "Dark -- Tune is free. Lit: ")
+                      + juce::String ("Tune snaps to the nearest degree of the TUNING page's scale (")
+                      + scale + "), so the drum sits in the key of the bass line: right now "
+                      + juce::String (tune, 1) + " Hz " + (lit ? "becomes " : "would become ")
+                      + juce::String (snapped, 2) + " Hz, " + noteNameFor (snapped)
+                      + ". Costs nothing: one lookup per hit.";
+
+    if (! kick)
+        text += " Snaps the shell's fundamental; the upper modes keep their ratios to it.";
+
+    return text;
 }
 
 juce::String IctusProcessor::describeFollowKey (PadIndex pad) const

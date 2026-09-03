@@ -72,6 +72,7 @@ struct SnareSettings
     // ---- shell ----------------------------------------------------------
     double tuneHz { 180.0 };             ///< the fundamental, 60..800 Hz
     bool   followKey { false };          ///< take the fundamental from the MIDI note instead
+    bool   noteSnap { false };           ///< snap Tune to the nearest degree of the tuning
     double spread { 1.0 };               ///< 0 = one tone, 1 = the snare's set 1 : 1.6 : 2.2
     double tone { 0.6 };                 ///< how hard the upper two modes are struck, 0..1; 0 runs one mode
     double decaySeconds { 0.25 };        ///< the fundamental's T60, 0.05..2; the others at x0.7 and x0.5

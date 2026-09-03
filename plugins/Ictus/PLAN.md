@@ -643,6 +643,18 @@ Measured at I3 (`tezla-tests snare`, `spread_zero`, `rattle`, `kit`;
 | the kit — two kicks and three snares, everything on, 48 kHz ×4 | **4.8–5.2 %** of a core; idle 0.001 % |
 | the kick through `ClickPair` against the I2 render (click 0.4, noise 0.3) | **bit-identical** |
 
+**Note snap** (2026-09-03, the user's ask after I3): `noteSnap` on
+`KickSettings` and `SnareSettings`; `Engine::startKick`/`startSnare` land an
+un-keyed Tune on `dsp::Tuning::nearestScaleHz` when it is lit — the tuning's
+nearest degree, 12-TET until a scale is loaded — so a drum can sit in the key
+of the bass line. `k1NoteSnap` / `s1NoteSnap` at `kSchemaV4`; NOTE lamps beside
+Key with live tooltips naming the note Tune lands on (`describeNoteSnap`,
+`noteNameFor`); the wires' `s1Snap` knob is displayed as *Shape* so the two
+cannot be confused (the ID is frozen). Measured: 52 Hz → 51.913 Hz (G#1),
+205 Hz → 207.652 Hz (G#3), and with 5-TET swapped in 52 Hz → 55.000 Hz, the
+scale's degree. Break-check: both snaps removed from the engine → the test
+red on all three.
+
 Break-checks at I3, each seen red then reverted: mode ratio 1.6 → 1.5
 (ratio test red), Spread ignored (spread-0 test red at all four rates), the
 drop retuning forever (drop test red, 3601 retunes), the follower run at
