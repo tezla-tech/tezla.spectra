@@ -825,7 +825,10 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   of the shape. Sonitus **phases 4 and 5 are complete** —
   `plugins/Sonitus/PLAN-PHASE5.md` is the horror phase (Stack, Tract, Sag),
   asked for on 2026-09-03 with the plan written first at the user's request and
-  built through H5 the same day; **none of it has been heard on the rig yet.**
+  built through H5 the same day. **Shepard has been played on the rig and
+  works** — the user's patch was a slow pitch-down envelope on oscillator A
+  under the glide, long release, slow amplitude attack: "sounds real horror
+  80s". Stack's other modes, Tract and Sag are still unheard.
   Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
   positions); **Membrana is complete through MB7** — the microphone stage

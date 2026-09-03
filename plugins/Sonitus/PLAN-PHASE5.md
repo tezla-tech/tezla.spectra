@@ -518,9 +518,19 @@ Updated **in the same commit as each phase**, so whichever session picks this up
 — after a context loss, a model change, or a fresh clone — needs nothing beyond
 this file and CLAUDE.md.
 
-**Phase 5 is complete.** Every row below is `done`. **Nothing in it has been
-heard on the rig** — that is the one step this container cannot take, and it is
-the acceptance test.
+**Phase 5 is complete.** Every row below is `done`.
+
+**Shepard passed the acceptance test on 2026-09-03**, which is the only one that
+counts: the user played it on the rig and it works. Their patch is worth keeping
+because it is not the obvious one — a **slow pitch-down envelope on oscillator
+A's pitch** underneath the glide, with a long release and a slow amplitude
+attack and release. The glide supplies the climb that never arrives and the
+envelope supplies a fall that does, and the two against each other are the
+sound: "sounds real horror 80s". Nothing in the presets does that; a seventh
+one built around it is the obvious follow-up.
+
+**Stack's other modes, Tract and Sag are still unheard.** Cluster and Scale in a
+loaded tuning are the two most likely to need a number moved.
 
 **Phase status** (flip `pending` → `done` in the phase's own commit):
 
