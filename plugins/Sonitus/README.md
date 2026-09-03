@@ -1043,6 +1043,79 @@ inside the loop without iterating.
 
 ### Unreleased
 
+### Shepard retrigger, DICEROLL's twenty-one blind spots, and a converging riser
+
+**Shepard *Retrigger*** (`shepardRetrig`, schema V10, off by default and
+bit-exact there). A note starts its own climb from the bottom instead of
+joining the one already running.
+
+Implemented as an **offset per voice**, not as a reset of the shared clock, and
+that is the design rather than an implementation detail. The accumulator is one
+clock for the instrument on purpose — a chord has to climb as one gesture — so
+resetting it on a note-on would drag every voice already sounding back to the
+bottom of its octave. The offset has neither problem: the clock keeps running,
+a sounding voice keeps its own offset and does not move, and the new voice
+starts at phase zero where its amplitude envelope is also at zero.
+
+Measured: a note played two seconds into a climb lands on the same partial as
+one played at the start, to **+0.00 cents**; without retrigger it would be 1.4
+octaves up. A note-on never writes to the shared clock, asserted exactly.
+
+Two lessons from the break-checks are worth carrying:
+
+- The flag was first stored on the *voice* and read in `noteOn`, where it is
+  still false — a voice reads its parameters on control chunks and a note-on
+  can be the first thing that ever happens to it. It lives on the manager,
+  which outlives every voice. The test caught this on its first run.
+- The click test does **not** discriminate this design from the rejected one:
+  resetting the clock leaves oscillator phases continuous, so there is no
+  sample-level step to find, only every sounding voice's pitch jumping. A
+  discontinuity test cannot see a pitch jump. What defends the design is a
+  separate test asserting the clock is never written by a note-on.
+
+**DICEROLL was ignoring twenty-one parameters**, and had been for three phases.
+`diceSectionFor` classifies by id and returns `unknown` for anything it does not
+recognise; the roller treats unknown as locked. So Stack, Shepard, Tract, Sag,
+the four macros, the voice drift and the render quality were all silently never
+rolled. All twenty-one are now classified, and the per-section split moved
+OSC 37 → 49, FILTER 7 → 10, MOD 63 → 69, MANGLE 21 → 23, OUTPUT 2 → 3.
+
+The reason it went unnoticed is the more useful part. `DiceSections.hpp` has
+said since it was written that *"`tezla-render dice` lists every unknown and the
+count is expected to be zero"* — and **that command was never built**. The
+framework-free test that should have caught it holds a hand-copied list of ids,
+which sat at 324 while the plugin grew to 349, so it passed throughout. A
+promise in a comment is not a gate. `tezla-render dice` now exists, walks the
+live parameter list, and **exits non-zero** if anything is unclassified.
+
+**Conflux** (preset 45, −11.34 dBFS at one note) — the converging riser that
+opened films in the eighties, built from the published sketch of the technique
+rather than from any product.
+
+**The first version had the gesture backwards**, which is the part worth
+recording. It started the voices spread over three octaves and converged them
+inward onto the played note. The sketch — supplied by the player, and the
+author's own — says the opposite: thirty voices at random pitches in a narrow
+band between **200 and 400 Hz**, moving slowly and randomly, then all
+proceeding *direct to target*, three slightly detuned voices per note and two
+per note in the bass. It is narrow-to-wide. What reads as convergence is that
+every voice stops moving at the same instant.
+
+So the width is modulated detune: both banks start at 0 cents (a genuine
+unison, fourteen copies of one pitch) and two long attacks open `detuneA` to
+660 cents and `detuneB` to 840 cents over eleven and thirteen seconds. Drift
+runs high on both banks and keeps running after the arrival, so the held chord
+is not static.
+
+**What one instance cannot do**, stated rather than papered over: a voice's
+starting pitch is independent of its target — everything begins near 300 Hz
+whether it ends in the bass or three octaves up. That needs displacement
+proportional to the played note, faded out over time, which is key tracking
+*multiplied* by an envelope. This matrix adds sources; it does not multiply
+them. `docs/WHATS-NEW.md` carries the several-instance recipe that does
+reproduce it exactly.
+
+
 ### Phase 6 — the three deferred Stack items, and the filter's own voice
 
 Four controls, all appended at schema V9, all neutral at their defaults. Proved

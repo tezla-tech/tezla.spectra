@@ -108,11 +108,19 @@ namespace detail
     // filter. `pmIndex`/`pmReverse`/`feedbackA`/`feedbackB` are here because
     // an FM pair is an oscillator arrangement, not a modulation route -- the
     // MOD section is the matrix, not everything that modulates.
+    //
+    // **`stack*` and `shepard*` are here** because Stack is the unison bank --
+    // where the copies go is the same decision as how many and how far apart,
+    // and all of it sits on the OSC page. That includes the SHEPARD group's
+    // rate, sync, division and shear, which are one glide clock for the
+    // instrument but are grouped with the mode that uses them: a lock the
+    // player cannot find by looking at the panel is a lock they will not trust.
     if (startsWith (id, "shape") || startsWith (id, "octave") || startsWith (id, "semitones")
         || startsWith (id, "cents") || startsWith (id, "width") || startsWith (id, "morph")
         || startsWith (id, "unison") || startsWith (id, "detune") || startsWith (id, "spread")
         || startsWith (id, "drift") || startsWith (id, "level") || startsWith (id, "sub")
         || startsWith (id, "kargyraa") || startsWith (id, "feedback")
+        || startsWith (id, "stack") || startsWith (id, "shepard")
         || startsWith (id, "pm"))
         return DiceSection::osc;
 
@@ -120,7 +128,13 @@ namespace detail
         return DiceSection::osc;
 
     // ---- FILTER ------------------------------------------------------------
-    if (startsWith (id, "filter") || isOneOf (id, { "cutoff", "resonance" }))
+    //
+    // `voiceDrift` is the voice card's temperature and it lives on the FILTER
+    // page, which is where it is locked from. It is deliberately *not* caught
+    // by the OSC branch's "drift" prefix above -- that one is the per-copy
+    // oscillator wander, a different control on a different page, and the two
+    // names are close enough that this is worth saying out loud.
+    if (startsWith (id, "filter") || isOneOf (id, { "cutoff", "resonance", "voiceDrift" }))
         return DiceSection::filter;
 
     // ---- ENV ---------------------------------------------------------------
@@ -132,8 +146,14 @@ namespace detail
         return DiceSection::envelope;
 
     // ---- MOD ---------------------------------------------------------------
+    //
+    // `macro*` and `sag*` are both here because both are *sources* rather than
+    // things being modulated: the four macros are the performance controls the
+    // matrices read, and Sag is the machine's temperature, a slow walk that is
+    // a global modulation source whether or not its depth is up. Both sit on
+    // the MOD page.
     if (startsWith (id, "lfo") || startsWith (id, "seq") || startsWith (id, "mod")
-        || startsWith (id, "gmod"))
+        || startsWith (id, "gmod") || startsWith (id, "macro") || startsWith (id, "sag"))
         return DiceSection::modulation;
 
     // ---- MANGLE ------------------------------------------------------------
@@ -143,8 +163,13 @@ namespace detail
     // They live on the MANGLE page but they are the sub oscillator's routing,
     // so locking OSC should hold them. Said here because a reader arriving at
     // the MANGLE list would otherwise expect to find them in it.
+    //
+    // `tract` is the vowel filter's throat length -- one ratio on all three of
+    // its formants -- so it belongs with `formant*` rather than being its own
+    // thing. It is only spelt separately because it is not named for the
+    // filter it scales.
     if (startsWith (id, "comb") || startsWith (id, "phase") || startsWith (id, "formant")
-        || isOneOf (id, { "splitHz", "order", "tubeDrive", "tilt" }))
+        || isOneOf (id, { "splitHz", "order", "tubeDrive", "tilt", "tract" }))
         return DiceSection::mangle;
 
     // ---- PLAY --------------------------------------------------------------
@@ -162,7 +187,12 @@ namespace detail
     // `tilt` is not here despite being an output tone control: it lives on the
     // MANGLE page, and a lock the player cannot find by looking at the panel
     // is a lock they will not trust.
-    if (isOneOf (id, { "output", "oversampling" }))
+    //
+    // `renderOversampling` is the third: it is the other half of the header's
+    // oversampling pair, and rolling it changes what an offline bounce sounds
+    // like without changing anything you can hear while auditioning the roll.
+    // That is exactly the kind of surprise the OUTPUT lock exists to hold.
+    if (isOneOf (id, { "output", "oversampling", "renderOversampling" }))
         return DiceSection::output;
 
     return DiceSection::unknown;

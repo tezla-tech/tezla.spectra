@@ -170,6 +170,26 @@ standard practice in electroacoustic composition and in the "spectral" school
 sound are treated as separate objects to be placed. Here it falls out of the
 Shepard construction for free.
 
+### Retrigger (new)
+
+**What it is.** Whether a note starts its own Shepard climb from the bottom, or
+joins the one already running.
+
+**How to use it.** Off is the original behaviour and the right default: one
+glide clock for the instrument, so a chord climbs as a single gesture. Turn it
+on when you want a riser to *land* somewhere — each note then begins at the
+bottom of the octave and counts from its own start, so you can place a rise
+against a bar line instead of catching the clock wherever it happens to be.
+
+Notes already sounding are never disturbed: the clock itself does not reset,
+each voice just remembers where it came in. So a chord struck together still
+climbs together, and a note added later climbs its own line through the others.
+
+**Where it comes from.** The same question every free-running modulator raises —
+does a new note sync to it or start its own? Analogue sequencers and LFOs have
+had a "retrigger / free" switch since the 1970s for exactly this reason, and
+this is that switch applied to a glide instead of a waveform.
+
 ### Tract
 
 **What it is.** One ratio scaling all three of the vowel filter's formants at
@@ -281,6 +301,54 @@ level of the individual oscillator and the individual voice card. Separate VCOs
 wander *against* each other, and that relative motion is what the ear actually
 hears as "analogue" — which is why per-copy drift sounds like an instrument and
 one global drift sounds like a tuning error.
+
+### Conflux — the converging riser (a preset, not a control)
+
+**What it is.** Preset 45. The sound that opened films in the eighties: a mass
+of voices that begins as a tight cluster, wanders slowly, then opens out and
+arrives all at once on an enormous chord that simply sits there.
+
+**How to use it.** Play a **wide** chord — the wider the better, three or four
+octaves — and **hold it**. It takes about twelve seconds to open, and it is not
+finished until it has. The arrival is the whole point, so give it the time.
+
+**How it is made.** The width is *modulated detune*, not a fixed stack. Both
+banks start at 0 cents, so a note begins as a genuine unison — one pitch,
+fourteen copies of it. Both mod envelopes then run a long attack to a held
+sustain, opening `detune A` to 660 cents and `detune B` to 840 cents over
+eleven and thirteen seconds. Drift is high on both banks and keeps running
+after the arrival, which is what stops the held chord being static.
+
+**Where it comes from, and what one instance cannot do.** The method was
+published by its author as a sketch: thirty voices at random pitches in a narrow
+band between **200 and 400 Hz**, each moving slowly and randomly, then all
+proceeding direct to their target note — three slightly detuned voices per note,
+and two per note in the bass, over a chord spread across several octaves. It is
+narrow-to-wide, not wide-to-narrow; what reads as "converging" is that every
+voice stops moving at the same instant.
+
+The part a single instance genuinely cannot reproduce is that **a voice's
+starting pitch is unrelated to its target**: everything begins near 300 Hz
+whether it ends in the bass or three octaves up. That needs a displacement
+proportional to the played note, faded out over time — a *product* of key
+tracking and an envelope. Sonitus's matrix adds sources, it does not multiply
+them, so there is no route to it from one instance.
+
+**The faithful route is several instances**, which is worth doing once:
+
+1. Put three or four Sonitus instances on their own tracks — one per register
+   (bass, low-mid, high-mid, top).
+2. Load *Conflux* on each, and on each one add a route from **Mod env 1 → pitch**
+   with a long decay to sustain 0 (so it starts displaced and lands).
+3. Set that route's **depth per instance** so the instance's start pitch lands
+   in the 200–400 Hz band: a large negative depth on the top instance so it
+   starts far below its notes, near zero in the middle, a large positive depth
+   on the bass instance so it starts far above.
+4. Give every instance the *same* decay time, so they all arrive together, and
+   hold each instance's own chord tones.
+
+That reproduces the structure exactly: everything starts in one band, everything
+ends where it belongs, and the arrival is simultaneous.
 
 ---
 

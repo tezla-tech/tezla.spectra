@@ -265,6 +265,12 @@ inline constexpr auto shepardShear = "shepardShear";
 /// How far past its own damping the filter is driven. 0 is the filter that
 /// shipped, bit for bit.
 inline constexpr auto filterSing  = "filterSing";
+
+/// **Phase 6a**, appended at schema V10 and neutral at its default.
+///
+/// Whether a note starts its Shepard climb from the bottom. Off is the shared
+/// glide that shipped, bit for bit.
+inline constexpr auto shepardRetrig = "shepardRetrig";
 } // namespace ids
 
 /// The option lists behind the choice parameters.

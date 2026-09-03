@@ -653,6 +653,15 @@ void Engine::advanceGlobalSources (int samples) noexcept
     sources_.shepardOctaves = shepardOctaves_;
     sources_.shepardOctavesB = shepardOctavesB_;
 
+    // And to the voice manager, so a note taken with Shepard *Retrigger* on
+    // knows where the instrument's glide had got to at the instant it started.
+    // Pushed from here rather than from the control chunk because this is the
+    // one function every path runs -- the idle skip advances the sources and
+    // returns without ever reaching `applyControls`, and a note arriving out of
+    // that silence is exactly the one that must retrigger correctly.
+    voices_.setShepardPhase (shepardOctaves_, shepardOctavesB_,
+                             active_.voice.shepardRetrigger);
+
     // **Sag.** One walk, stepped once for the whole instrument, published like
     // the macros so the voices and the mangle read the identical figure on the
     // identical chunk rather than two copies a chunk apart.

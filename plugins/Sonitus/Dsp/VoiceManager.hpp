@@ -180,6 +180,31 @@ public:
     // Playing
     // -----------------------------------------------------------------------
 
+    /// Where the instrument's Shepard glide has got to, and whether a note
+    /// should start its own from there.
+    ///
+    /// Pushed by the engine from `advanceGlobalSources`, which is the one place
+    /// that runs on every path -- including the idle-skip, where the control
+    /// chunk does not.
+    ///
+    /// **The flag lives here rather than on the voice**, and that is not
+    /// tidiness: a voice reads its parameters on control chunks, and a
+    /// note-on can be the first thing that ever happens to a freshly claimed
+    /// voice. The first version of this put `shepardRetrigger` on the voice
+    /// and read it in `noteOn`, where it was still false -- so a note played
+    /// into a climb already running retriggered on the *second* control chunk
+    /// or not at all. The manager outlives every voice, so it always has it.
+    ///
+    /// Three plain values, read only at the next note-on: nothing is cleared
+    /// and no running process is re-aimed, so CLAUDE.md section 7's no-op
+    /// guard does not apply.
+    void setShepardPhase (double octaves, double octavesB, bool retrigger) noexcept
+    {
+        shepardOctaves_ = octaves;
+        shepardOctavesB_ = octavesB;
+        shepardRetrigger_ = retrigger;
+    }
+
     void noteOn (int note, double velocity)
     {
         if (note < 0 || note > 127)
@@ -202,7 +227,8 @@ public:
         {
             Voice& voice = claimVoice();
 
-            voice.noteOn (note, hz, velocity, false);
+            voice.noteOn (note, hz, velocity, false,
+                          shepardRetrigger_, shepardOctaves_, shepardOctavesB_);
             return;
         }
 
@@ -215,7 +241,8 @@ public:
         monoNote_ = note;
         aimGlide (note, ! alreadySounding);
 
-        voice.noteOn (note, currentGlideFrequency (note), velocity, retrigger);
+        voice.noteOn (note, currentGlideFrequency (note), velocity, retrigger,
+                      shepardRetrigger_, shepardOctaves_, shepardOctavesB_);
     }
 
     void noteOff (int note)
@@ -558,6 +585,10 @@ private:
     double glideStartCents_ { 0.0 };
     double glideTargetCents_ { 0.0 };
     unsigned long long noteOns_ { 0 };
+
+    double shepardOctaves_ { 0.0 };
+    double shepardOctavesB_ { 0.0 };
+    bool shepardRetrigger_ { false };
 
     int monoNote_ { -1 };
 

@@ -432,6 +432,15 @@ struct VoiceParameters
     /// cancels the resonance's damping the filter sings on its own.
     double filterSing { 0.0 };
 
+    /// Whether a note starts its Shepard climb from the bottom.
+    ///
+    /// **Off is what shipped and is bit-exact**: every voice reads the one
+    /// global accumulator, so a held chord climbs as a single gesture. On, a
+    /// voice captures the accumulator at note-on and subtracts it, so its
+    /// climb starts at zero while everything already sounding carries on
+    /// untouched -- see `shepardOffsetA_`.
+    bool shepardRetrigger { false };
+
     /// How much the played note moves the cutoff. 1 is one octave of cutoff per
     /// octave of note, which keeps the timbre constant across the keyboard.
     double filterKeyTrack { 0.0 };     ///< 0 .. 1
@@ -663,7 +672,9 @@ public:
     /// Starts a note. `frequency` comes from the Tuning, so the voice never
     /// computes a pitch from a note number and the whole microtuning question
     /// lives in one place.
-    void noteOn (int note, double frequency, double velocity, bool retrigger)
+    void noteOn (int note, double frequency, double velocity, bool retrigger,
+                 bool shepardRetrigger = false,
+                 double shepardOctaves = 0.0, double shepardOctavesB = 0.0)
     {
         note_ = note;
         frequency_ = frequency > 0.0 ? frequency : 0.0;
@@ -674,6 +685,41 @@ public:
         // One draw per note, held for the note's whole life. A source that
         // changed while a note sounded would be a slow LFO, not a random.
         random_ = noise_.bipolar();
+
+        // **Where this note's Shepard climb starts.**
+        //
+        // Captured here and subtracted later, rather than resetting the shared
+        // accumulator, and that distinction is the whole design. The
+        // accumulator is one clock for the instrument on purpose -- a chord has
+        // to climb as one thing -- so *resetting* it on a note-on would drag
+        // every voice already sounding back to the bottom of its octave. That
+        // is not a retrigger, it is a glitch in every other note: the copies'
+        // frequencies would step, and their window gains would step with them,
+        // which is a click rather than a rise.
+        //
+        // An offset per voice has neither problem. The clock keeps running, an
+        // already-sounding voice keeps its own offset and does not move, and
+        // the new voice starts at phase zero -- where its amplitude envelope is
+        // also at zero, so there is nothing to click.
+        //
+        // Both accumulators, so a sheared pair keeps its relationship from the
+        // note's own start rather than inheriting the shear accumulated since
+        // the plugin loaded.
+        // Taken as arguments rather than remembered from the last control
+        // chunk, because a note-on can land mid-chunk and the last chunk's
+        // reading would be up to 32 internal samples stale -- and a voice that
+        // has never run has no reading at all, which would make the *first*
+        // note after loading the one that did not retrigger.
+        if (shepardRetrigger)
+        {
+            shepardOffsetA_ = shepardOctaves;
+            shepardOffsetB_ = shepardOctavesB;
+        }
+        else
+        {
+            shepardOffsetA_ = 0.0;
+            shepardOffsetB_ = 0.0;
+        }
 
         if (! retrigger)
         {
@@ -958,7 +1004,7 @@ public:
                        parameters.detuneA + amount (ModDestination::detuneA),
                        parameters.spreadA, parameters.driftA, nominalA,
                        parameters.stackA, parameters.stackStepA, parameters.stackOriginA,
-                       global.shepardOctaves, parameters.shepardPanA);
+                       global.shepardOctaves - shepardOffsetA_, parameters.shepardPanA);
 
         // A's nominal pitch, not any one of its detuned oscillators -- see
         // propagateSync().
@@ -974,7 +1020,7 @@ public:
                          * ratioFor (parameters.octaveB, parameters.semitonesB,
                                      parameters.centsB + amount (ModDestination::pitchB)),
                        parameters.stackB, parameters.stackStepB, parameters.stackOriginB,
-                       global.shepardOctavesB, parameters.shepardPanB);
+                       global.shepardOctavesB - shepardOffsetB_, parameters.shepardPanB);
 
         // The mix destination is a crossfade between the two banks rather than
         // a level on each, so sweeping it holds the loudness.
@@ -1634,6 +1680,14 @@ private:
 
     dsp::SmallRandom noise_;
     double random_ { 0.0 };
+
+    /// Where this note's Shepard climb started, subtracted from the global
+    /// accumulator every control chunk. Exactly 0 unless the note was taken
+    /// with retrigger on, so the subtraction is `x - 0.0` and the ordinary
+    /// path is untouched bit for bit.
+    double shepardOffsetA_ { 0.0 };
+    double shepardOffsetB_ { 0.0 };
+
 
     /// The voice card's temperature -- see `advanceDrift`.
     dsp::SmallRandom driftRandom_;
