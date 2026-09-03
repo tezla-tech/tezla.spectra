@@ -197,6 +197,16 @@ enum class ModDestination
     /// no envelope could sweep.
     filterMorph,
 
+    /// How hard the filter is pushed past its own damping and into a limit
+    /// cycle of its own. Appended, as every entry in this list has been -- a
+    /// stored slot is an index (CLAUDE.md section 8).
+    ///
+    /// It belongs here rather than beside resonance because the two do
+    /// different jobs: resonance sets how long the filter rings, and this sets
+    /// whether it stops. An envelope on it is a filter that howls up out of a
+    /// note and settles back into it.
+    filterSing,
+
     count
 };
 
@@ -275,6 +285,14 @@ struct GlobalSources
     /// share it too. Carried here for the same reason the macros are -- so
     /// every voice reads the identical figure on the identical chunk.
     double shepardOctaves { 0.0 };
+
+    /// Oscillator B's, which is A's scaled by the **shear** control. At the
+    /// default they are the same number and B climbs with A; at full shear it
+    /// is A's negated and B falls while A rises. A second accumulator rather
+    /// than a second rate applied to the first, because the two have to stay
+    /// where they are when the shear is moved -- scaling a shared position
+    /// would jump B every time the knob did.
+    double shepardOctavesB { 0.0 };
 };
 
 /// Everything a voice is told, all of it shared across voices and set from the
@@ -305,6 +323,11 @@ struct VoiceParameters
     StackMode stackA { StackMode::detune };
     int stackStepA { 1 };
 
+    /// **Phase 6.** Which way the ranks run, and whether a sliding stack pans
+    /// by its place on the ramp rather than by rank. Both neutral by default.
+    StackOrigin stackOriginA { StackOrigin::centre };
+    bool shepardPanA { false };
+
     /// **Sag** -- how deep the machine's shared instability reaches this voice.
     /// The walk itself arrives in `GlobalSources::sag`; this is only the depth.
     /// Exactly 0 is bit-exactly out of the path.
@@ -326,6 +349,9 @@ struct VoiceParameters
 
     StackMode stackB { StackMode::detune };
     int stackStepB { 1 };
+
+    StackOrigin stackOriginB { StackOrigin::centre };
+    bool shepardPanB { false };
 
     /// B is hard-synced to A. The Pro-53 trick: B's own pitch stops setting the
     /// note and starts setting the *timbre*, so sweeping it is a formant sweep
@@ -400,6 +426,11 @@ struct VoiceParameters
     /// -1 .. +1 along lowpass -> bandpass -> highpass, centred on
     /// `filterMode`. 0 is the mode itself, bit-exactly.
     double filterMorph { 0.0 };
+
+    /// How far past its own damping the filter is driven, 0 .. 1. At 0 the
+    /// filter is the one that shipped, bit for bit; above the point where it
+    /// cancels the resonance's damping the filter sings on its own.
+    double filterSing { 0.0 };
 
     /// How much the played note moves the cutoff. 1 is one octave of cutoff per
     /// octave of note, which keeps the timbre constant across the keyboard.
@@ -926,7 +957,8 @@ public:
                        parameters.unisonA,
                        parameters.detuneA + amount (ModDestination::detuneA),
                        parameters.spreadA, parameters.driftA, nominalA,
-                       parameters.stackA, parameters.stackStepA, global.shepardOctaves);
+                       parameters.stackA, parameters.stackStepA, parameters.stackOriginA,
+                       global.shepardOctaves, parameters.shepardPanA);
 
         // A's nominal pitch, not any one of its detuned oscillators -- see
         // propagateSync().
@@ -941,7 +973,8 @@ public:
                        frequency_ * pitchRatio
                          * ratioFor (parameters.octaveB, parameters.semitonesB,
                                      parameters.centsB + amount (ModDestination::pitchB)),
-                       parameters.stackB, parameters.stackStepB, global.shepardOctaves);
+                       parameters.stackB, parameters.stackStepB, parameters.stackOriginB,
+                       global.shepardOctavesB, parameters.shepardPanB);
 
         // The mix destination is a crossfade between the two banks rather than
         // a level on each, so sweeping it holds the loudness.
@@ -990,6 +1023,24 @@ public:
             filter.setResonance (std::clamp (resonanceTarget, 0.0, 1.0));
             filter.setDrive (std::clamp (parameters.filterDrive
                                            + amount (ModDestination::filterDrive), 0.0, 1.0));
+
+            // **Sing**, and the seed it needs. A loop at exactly zero stays at
+            // exactly zero however negative the damping is, so a filter asked
+            // to sing into silence -- a held note with the oscillators muted,
+            // a pad whose attack has not opened yet -- would never start.
+            //
+            // The seed goes here, at control rate, rather than at note-on,
+            // because Sing is a destination: an envelope can bring it up in
+            // the middle of a note that has already gone quiet. `seedIfSilent`
+            // is its own guard and does nothing to a filter that is running,
+            // so the common case costs two compares.
+            const double sing = std::clamp (parameters.filterSing
+                                              + amount (ModDestination::filterSing), 0.0, 1.0);
+
+            filter.setSing (sing);
+
+            if (! dsp::isExactlyZero (sing))
+                filter.seedIfSilent();
         }
 
         // The folder's gain is a *geometric* control, so its first half is not
@@ -1264,12 +1315,14 @@ private:
     struct StackCache
     {
         StackMode mode { StackMode::count };   ///< count = nothing cached yet
+        StackOrigin origin { StackOrigin::count };
         int copies { 0 };
         int step { 0 };
         int note { -2 };
 
         std::array<double, kMaxStackCopies> cents {};
         std::array<double, kMaxStackCopies> gains {};
+        std::array<double, kMaxStackCopies> pans {};
     };
 
     /// Pushes `mode`'s rank offsets at `bank`, through the cache above.
@@ -1285,13 +1338,15 @@ private:
     /// voice per chunk cost **3.9% of a core** at sixteen voices, which is more
     /// than the interval arithmetic it was protecting.
     void applyStack (UnisonBank& bank, StackCache& cache, StackMode mode,
-                     int copies, int step, double shepardOctaves) noexcept
+                     int copies, int step, StackOrigin origin,
+                     double shepardOctaves, bool panByPhase) noexcept
     {
         if (mode == StackMode::detune)
         {
             // Neutral, which is what a bank that was never told looks like --
             // and the bank's own guard makes this free once it has landed.
             bank.setRankOffsets (nullptr, nullptr, 0);
+            bank.setRankPans (nullptr, 0);
             cache.mode = StackMode::detune;
             return;
         }
@@ -1300,6 +1355,7 @@ private:
 
         const bool stale = sliding
                         || cache.mode != mode
+                        || cache.origin != origin
                         || cache.copies != copies
                         || cache.step != step
                         || cache.note != note_;
@@ -1309,15 +1365,27 @@ private:
 
         const dsp::Tuning& tuning = tuning_ != nullptr ? *tuning_ : fallbackTuning();
 
-        stackRanks (mode, copies, step, shepardOctaves, tuning, note_,
+        stackRanks (mode, copies, step, shepardOctaves, origin, tuning, note_,
                     cache.cents.data(), cache.gains.data());
 
         cache.mode = mode;
+        cache.origin = origin;
         cache.copies = copies;
         cache.step = step;
         cache.note = note_;
 
         bank.setRankOffsets (cache.cents.data(), cache.gains.data(), copies);
+
+        // Panning by the ramp only means anything while something is sliding.
+        if (sliding && panByPhase)
+        {
+            shepardPans (shepardOctaves, copies, cache.pans.data());
+            bank.setRankPans (cache.pans.data(), copies);
+        }
+        else
+        {
+            bank.setRankPans (nullptr, 0);
+        }
     }
 
     /// Twelve-tone equal temperament, for a voice that was never handed the
@@ -1333,7 +1401,8 @@ private:
     void configureBank (UnisonBank& bank, StackCache& cache, OscShape shape,
                         double width, double morph, int unison,
                         double detune, double spread, double drift, double frequency,
-                        StackMode stack, int step, double shepardOctaves) noexcept
+                        StackMode stack, int step, StackOrigin origin,
+                        double shepardOctaves, bool panByPhase) noexcept
     {
         bank.setShape (shape);
         bank.setWidth (width);
@@ -1345,7 +1414,7 @@ private:
 
         // After the count, because the offsets are pushed for that many copies.
         applyStack (bank, cache, stack, std::clamp (unison, 1, kMaxStackCopies),
-                    step, shepardOctaves);
+                    step, origin, shepardOctaves, panByPhase);
 
         bank.setFrequency (frequency);
     }

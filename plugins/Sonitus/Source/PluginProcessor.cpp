@@ -59,7 +59,13 @@ constexpr int kSchemaV7 = 7;
 /// VST3 parameter ID, so one version means one piece of work forever.
 constexpr int kSchemaV8 = 8;
 
-constexpr int kStateSchemaVersion = kSchemaV8;
+/// **Phase 6.** The three deferred Stack items -- origin, shear and phase
+/// panning -- and the filter's own limit cycle. All appended here, all neutral
+/// at their defaults, and its own version for the same reason as every version
+/// above it.
+constexpr int kSchemaV9 = 9;
+
+constexpr int kStateSchemaVersion = kSchemaV9;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -371,6 +377,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                                           const char* detuneId, const char* spreadId,
                                           const char* driftId, const char* levelId,
                                           const char* stackId, const char* stackStepId,
+                                          const char* stackOriginId, const char* shepardPanId,
                                           const juce::String& prefix, float defaultLevel)
     {
         layout.add (std::make_unique<Choice> (
@@ -433,15 +440,31 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         layout.add (std::make_unique<Integer> (
             juce::ParameterID { stackStepId, kSchemaV8 }, prefix + " stack step",
             kMinimumStackStep, kMaximumStackStep, 1));
+
+        // **Origin** -- which side of the played note the stack builds on.
+        // Centre is what shipped and is index 0. Exactly one copy sits at rank
+        // 0 at every count and every origin, so this moves the stack without
+        // ever moving the note.
+        layout.add (std::make_unique<Choice> (
+            juce::ParameterID { stackOriginId, kSchemaV9 }, prefix + " stack origin",
+            choices::stackOrigin, 0));
+
+        // **Phase pan** -- a Shepard stack sweeping the image as it climbs.
+        // Off is what shipped: the copies then pan by their rank, which is
+        // fixed, so the stereo picture stands still while the pitch moves.
+        layout.add (std::make_unique<Boolean> (
+            juce::ParameterID { shepardPanId, kSchemaV9 }, prefix + " shepard pan", false));
     };
 
     addOscillator (ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
                    ids::morphA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
-                   ids::stackA, ids::stackStepA, "Osc A", 1.0f);
+                   ids::stackA, ids::stackStepA, ids::stackOriginA, ids::shepardPanA,
+                   "Osc A", 1.0f);
 
     addOscillator (ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::morphB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
-                   ids::stackB, ids::stackStepB, "Osc B", 0.0f);
+                   ids::stackB, ids::stackStepB, ids::stackOriginB, ids::shepardPanB,
+                   "Osc B", 0.0f);
 
     // **The Shepard glissando's speed**, in octaves per second, signed --
     // negative falls. One control for the instrument, because the phase is one
@@ -453,6 +476,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::shepardSync, kSchemaV8 }, "Shepard sync", false));
+
+    // **Shear** -- how far oscillator B's Shepard phase runs against A's. At 0
+    // the two share one accumulator exactly, which is what shipped; at 1 B
+    // falls at the same rate A rises, so the two stacks pass through each
+    // other and the beating between them is the sound. Linear, because the
+    // interesting settings are spread across the whole travel rather than
+    // bunched at one end: the midpoint is B held still while A climbs.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::shepardShear, kSchemaV9 }, "Shepard shear",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
     // **Sag** -- one slow instability shared by every voice. 0 is bit-exactly
     // out of the path, and the walk keeps walking regardless: it is still a
@@ -590,6 +623,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::filterMorph, kSchemaV5 }, "Filter morph",
         juce::NormalisableRange<float> { -1.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    // **Sing** -- the filter driven past its own damping and into a limit
+    // cycle. 0 is bit-exactly the filter that shipped: the damping is 1/Q and
+    // so is positive until this asks otherwise, and the sample loop tests that
+    // sign rather than a flag.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::filterSing, kSchemaV9 }, "Filter sing",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
 
     // ---- envelopes ----------------------------------------------------------
 
@@ -1285,6 +1326,17 @@ void SonitusProcessor::pullParameters()
                                  static_cast<int> (valueOf (state_, ids::stackStepA)));
     v.stackStepB = juce::jlimit (kMinimumStackStep, kMaximumStackStep,
                                  static_cast<int> (valueOf (state_, ids::stackStepB)));
+
+    // Which side of the played note the stack builds on, and whether a Shepard
+    // stack sweeps the image while it climbs. Both index 0 / false are what
+    // shipped.
+    v.stackOriginA = static_cast<StackOrigin> (juce::jlimit (0, static_cast<int> (StackOrigin::count) - 1,
+                                                             indexOf (state_, ids::stackOriginA)));
+    v.stackOriginB = static_cast<StackOrigin> (juce::jlimit (0, static_cast<int> (StackOrigin::count) - 1,
+                                                             indexOf (state_, ids::stackOriginB)));
+
+    v.shepardPanA = valueOf (state_, ids::shepardPanA) > 0.5f;
+    v.shepardPanB = valueOf (state_, ids::shepardPanB) > 0.5f;
     v.syncB = valueOf (state_, ids::syncB) > 0.5f;
     v.pmIndex = valueOf (state_, ids::pmIndex);
 
@@ -1305,6 +1357,7 @@ void SonitusProcessor::pullParameters()
     v.resonance = valueOf (state_, ids::resonance);
     v.filterDrive = valueOf (state_, ids::filterDrive);
     v.filterMorph = valueOf (state_, ids::filterMorph);
+    v.filterSing = valueOf (state_, ids::filterSing);
     v.voiceDrift = valueOf (state_, ids::voiceDrift);
     v.filterKeyTrack = valueOf (state_, ids::filterTrack);
     v.filterFm = valueOf (state_, ids::filterFm);
@@ -1434,6 +1487,10 @@ void SonitusProcessor::pullParameters()
             // Bipolar already, and the voice clamps the sum to -1..+1, so full
             // depth reaches either end of the axis from wherever the knob sits.
             case ModDestination::filterMorph:
+
+            // A fraction the voice clamps to 0..1, like the group above: full
+            // depth reaches either end of the control from wherever it is set.
+            case ModDestination::filterSing:
             case ModDestination::count:
             default:                          v.slots[slot].depth = depth; break;
         }
@@ -1500,6 +1557,7 @@ void SonitusProcessor::pullParameters()
     // The Shepard glissando, which is one control for the instrument because
     // its phase is one accumulator for the instrument.
     p.shepardRate = valueOf (state_, ids::shepardRate);
+    p.shepardShear = valueOf (state_, ids::shepardShear);
     p.shepardSync = valueOf (state_, ids::shepardSync) > 0.5f;
     p.shepardDivision = indexOf (state_, ids::shepardDiv);
 
@@ -3610,6 +3668,222 @@ const std::vector<Preset>& presets()
                 { ids::tubeDrive, 9.0f },
                 { ids::polyphony, 6.0f },
                 { ids::output, -8.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        // **Phase 6.** Origin, shear, phase panning and Sing -- and, first, the
+        // patch the player built on the rig out of phase 5 and sent back.
+        // Appended, like every preset here.
+        // -------------------------------------------------------------------
+        {
+            // **The player's own patch, written down.** Reported from the rig
+            // on 2026-09-03: a Shepard stack with a slow envelope pulling the
+            // pitch down underneath it, a long release, and an amplitude
+            // envelope slow at both ends. Their words for it were "real horror
+            // 80s", which is exactly right and worth understanding: the two
+            // motions disagree. Shepard climbs and never arrives; the envelope
+            // falls and does arrive. So the ear hears a rise that is losing,
+            // which is a different feeling from either one alone.
+            //
+            // A slow amplitude attack is the other half. Nothing has an onset,
+            // so there is no moment to locate the sound at -- it is simply
+            // already happening by the time you notice it.
+            //
+            // Hold a low chord. It wants three or four seconds before it means
+            // anything.
+            "Slow Descent -- a rise that is losing",
+            {
+                { ids::shapeA, 0.0f },                             // saw
+                { ids::stackA, 7.0f },                             // Shepard
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.7f },
+                { ids::shepardPanA, 1.0f },                        // the fixed fan
+                { ids::shepardRate, 0.18f },                       // slow rise
+
+                { ids::levelB, 0.35f }, { ids::shapeB, 0.0f },
+                { ids::octaveB, -1.0f }, { ids::centsB, -7.0f },
+
+                { ids::subLevel, 0.4f }, { ids::subOctave, -1.0f },
+
+                // The slow fall. Mod env 1 into pitch, negative, so the whole
+                // voice sinks a fifth over about four seconds and stays down.
+                { ids::env1Attack, 4.0f }, { ids::env1Sustain, 1.0f },
+                { ids::env1Release, 6.0f }, { ids::env1AttackT, -0.4f },
+                { ids::modSource (0), 2.0f },                      // Mod env 1
+                { ids::modDest (0), 13.0f },                       // pitch
+                { ids::modDepth (0), -0.35f },
+
+                { ids::cutoff, 1400.0f }, { ids::resonance, 0.4f },
+                { ids::filterDrive, 0.3f }, { ids::filterTrack, 0.3f },
+                { ids::voiceDrift, 14.0f },
+
+                // Slow at both ends, so it neither starts nor stops.
+                { ids::ampAttack, 1.6f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 5.0f },
+                { ids::ampAttackT, -0.3f },
+
+                { ids::sag, 0.3f }, { ids::sagRate, 30.0f },
+
+                { ids::combMode, 1.0f }, { ids::combTime, 26.0f },
+                { ids::combFeed, 0.4f }, { ids::combMix, 0.3f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -10.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Origin Up.** Five copies at fifths, all of them *above* the
+            // played note, so the low end stays exactly one note wide and
+            // everything the stack adds happens over the top of it. The sub
+            // then has somewhere to sit that nothing is competing for, which
+            // is the whole reason the control exists.
+            //
+            // Play it low. Centre origin at this width would put two copies
+            // under the note and the bass would be a chord.
+            "Overhead -- the stack that opens above the note",
+            {
+                { ids::shapeA, 0.0f },
+                { ids::stackA, 2.0f },                             // Fifths
+                { ids::stackOriginA, 1.0f },                       // Up
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.6f },
+                { ids::detuneA, 6.0f },
+
+                { ids::levelB, 0.0f },
+                { ids::subLevel, 0.75f }, { ids::subOctave, -1.0f },
+                { ids::subShape, 1.0f },                           // square
+
+                { ids::cutoff, 2600.0f }, { ids::resonance, 0.3f },
+                { ids::filterDrive, 0.4f }, { ids::filterTrack, 0.5f },
+
+                { ids::ampAttack, 0.01f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.6f },
+
+                { ids::tubeDrive, 6.0f },
+                { ids::polyphony, 8.0f },
+                { ids::output, -14.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Shear at full.** Both oscillators on Shepard, B falling exactly
+            // as fast as A rises, so the two stacks pass through each other
+            // forever. Neither one is a chord and together they are not either;
+            // what you hear is the beating where partials cross, at a rate set
+            // by the distance between the two speeds rather than by any tuning.
+            //
+            // Origin Down on B puts its weight underneath, so the falling half
+            // is the one you feel and the rising half is the one you hear.
+            "Two Ways at Once -- one stack rising through another falling",
+            {
+                { ids::shapeA, 3.0f },                             // sine
+                { ids::stackA, 7.0f }, { ids::unisonA, 5.0f },
+                { ids::spreadA, 0.8f }, { ids::shepardPanA, 1.0f },
+
+                { ids::shapeB, 3.0f }, { ids::levelB, 0.9f },
+                { ids::stackB, 7.0f }, { ids::unisonB, 5.0f },
+                { ids::stackOriginB, 2.0f },                       // Down
+                { ids::spreadB, 0.8f }, { ids::shepardPanB, 1.0f },
+
+                { ids::shepardRate, 0.3f },
+                { ids::shepardShear, 1.0f },                       // B falls as A rises
+
+                { ids::subLevel, 0.3f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 5000.0f }, { ids::resonance, 0.25f },
+                { ids::filterTrack, 0.4f },
+
+                { ids::ampAttack, 0.9f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 3.5f },
+
+                { ids::sag, 0.2f }, { ids::sagRate, 45.0f },
+
+                { ids::polyphony, 6.0f },
+                { ids::output, -13.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The filter as the instrument.** Both oscillators silent; the
+            // only sound in the patch is the filter singing at its own cutoff.
+            // Key track at full makes it playable, the envelope on Sing makes
+            // it arrive rather than simply be there, and FM gives it an edge
+            // that no oscillator in this instrument makes.
+            //
+            // Resonance is high on purpose: Sing has to cancel the damping
+            // before it can go past it, so a high resonance is what puts the
+            // interesting part of Sing's travel where a knob can find it.
+            "The Filter Sings -- no oscillators at all",
+            {
+                { ids::levelA, 0.0f }, { ids::levelB, 0.0f },
+                { ids::subLevel, 0.0f },
+
+                { ids::cutoff, 220.0f }, { ids::resonance, 0.95f },
+                { ids::filterSing, 0.55f },
+                { ids::filterTrack, 1.0f },
+                { ids::filterFm, 0.0f },
+                { ids::filterMode, 1.0f },                         // bandpass
+                { ids::voiceDrift, 20.0f },
+
+                // Sing under an envelope: the tone builds rather than being
+                // switched on, and the release lets it decay out on its own.
+                { ids::env1Attack, 0.8f }, { ids::env1Sustain, 1.0f },
+                { ids::env1Release, 2.0f },
+                { ids::modSource (0), 2.0f },                      // Mod env 1
+                { ids::modDest (0), 23.0f },                       // filter sing
+                { ids::modDepth (0), 0.4f },
+
+                // And a slow sweep of where it sings.
+                { ids::lfo1Rate, 0.11f }, { ids::lfo1Wave, 1.0f },
+                { ids::modSource (1), 7.0f },                      // LFO 1
+                { ids::modDest (1), 1.0f },                        // cutoff
+                { ids::modDepth (1), 0.25f },
+
+                { ids::ampAttack, 0.05f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 2.5f },
+
+                { ids::sag, 0.35f }, { ids::sagRate, 25.0f },
+
+                { ids::combMode, 1.0f }, { ids::combTime, 18.0f },
+                { ids::combFeed, 0.45f }, { ids::combMix, 0.35f },
+
+                { ids::polyphony, 6.0f },
+                { ids::output, -4.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Sing under the oscillators rather than instead of them.** A
+            // held saw through a filter that is just over the edge, so the
+            // resonant peak is a note of its own sitting inside the chord --
+            // the sound a real filter makes when it is turned up too far and
+            // the reason people turn it up too far.
+            //
+            // Key track is deliberately part-way: the singing peak then drifts
+            // against the played note as you move up the keyboard, so the
+            // interval between them is different in every register.
+            "Overtone -- a filter just over the edge",
+            {
+                { ids::shapeA, 0.0f }, { ids::unisonA, 3.0f },
+                { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
+                { ids::stackA, 1.0f },                             // Octaves
+                { ids::stackOriginA, 2.0f },                       // Down
+
+                { ids::levelB, 0.0f },
+                { ids::subLevel, 0.5f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 1600.0f }, { ids::resonance, 0.88f },
+                { ids::filterSing, 0.22f },
+                { ids::filterDrive, 0.3f },
+                { ids::filterTrack, 0.45f },
+
+                { ids::ampAttack, 0.02f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.9f },
+
+                { ids::tubeDrive, 7.0f },
+                { ids::tilt, -1.5f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -11.0f },
             }
         },
 

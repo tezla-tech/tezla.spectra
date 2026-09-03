@@ -288,40 +288,45 @@ and every saved project's PDC moves.
 
 **Parked 2026-09-03 while `plugins/Sonitus/PLAN-PHASE5.md` was written**, so the
 first build is the plan and not the plan plus its afterthoughts. **Phase 5 is
-now complete**: **Stack** (the unison bank at musical intervals, at the loaded
-tuning's degrees, or as a Shepard glissando), **Tract** (one ratio resizing the
-vowel filter's three formants) and **Sag** (one slow instability shared by every
-voice) all shipped. These four were cut from it deliberately and are still
-parked.
+complete**: **Stack**, **Tract** and **Sag** all shipped. Four items were cut
+from it deliberately. **Phase 6 then shipped three of them**, on the same day
+and at the user's ask, so only the fourth is still parked.
 
-1. **`stackOrigin` — Centre / Up / Down.** Stack's ranks are symmetric
-   (`rank(i) = i - floor((N-1)/2)`), so seven copies of *Octaves* puts one copy
-   three octaves **below** the played note — at A2 that is 13.75 Hz, a rattle
-   rather than a pitch. An organ registration is normally upward. Would change:
-   one append-only choice per oscillator and the one line computing `rank(i)`.
-   **Decided by:** whether the octave stack sounds bottom-heavy on the rig.
-2. **Shepard shear — A rising while B falls.** The Shepard phase is one global
-   accumulator on purpose: a held chord has to glide as one, and independent
-   phases smear a rise into a wash. A *second* accumulator for B, or a signed
-   per-oscillator rate scale, would give the two-directions-at-once effect.
-   Would change: a second accumulator in `SonitusEngine` and one parameter.
-   **Decided by:** whether one global rate feels like a gesture too few once it
-   has been played.
-3. **Shepard panning by phase rather than by rank.** Copies keep the pan slot
-   their rank gives them (`position(i) * spread_`), so the tone rises but stays
-   put in the image. Panning by `u` instead would sweep it across the field as
-   it climbs. Would change: two lines in the offsets the caller pushes, plus a
-   measurement that the mono sum still holds. **Decided by:** the user's ear.
+1. ~~**`stackOrigin` — Centre / Up / Down.**~~ **Shipped in phase 6** as
+   `stackOriginA`/`stackOriginB` at schema V9. Exactly one copy stays on the
+   played note at every count and every origin, so it moves the stack's weight
+   and never its tuning; greyed in Detune mode, which has no side to build on.
+2. ~~**Shepard shear — A rising while B falls.**~~ **Shipped in phase 6** as
+   `shepardShear`. A second accumulator advanced by `(1 − 2·shear)` of the
+   first's step, so 0 is the shared phase that shipped (bit-identical), 0.5
+   holds B still, 1 makes B fall exactly as fast as A rises.
+3. ~~**Shepard panning by phase rather than by rank.**~~ **Shipped in phase 6**
+   as `shepardPanA`/`shepardPanB` — and the measurement turned the reasoning
+   here on its head, which is worth recording. This entry predicted panning by
+   phase would "sweep it across the field as it climbs". Per copy it does; the
+   *ensemble* does the opposite, because phase sets a copy's pitch, its window
+   gain and its position together, so one copy always arrives where another
+   leaves. Measured over five seconds, panning by rank swings a band's balance
+   from −0.159 to −0.524 to +0.497 while panning by phase reads −0.182 three
+   times: it is rank panning that churns, and phase panning that produces a
+   **stationary fan**, low at one side and high at the other. Numbers in
+   `StackShapes.hpp` and `tests/test_Stack.cpp`.
 4. **More vowels stays blocked exactly as it was**, on a source and on the
    append-only decision about `formantMorph` (`plugins/Sonitus/README.md`,
    Roadmap). **Tract does not unblock it and does not touch it**: it is a new
    parameter at its own schema version, and the vowel list and the meaning of a
-   stored morph position are unchanged.
+   stored morph position are unchanged. **This is the one still parked.**
 
-**Still the next horror item after phase 5, and still only scoped:**
-self-oscillation via Zavalishin's antisaturator, in `plugins/Sonitus/README.md`.
-It needs CLAUDE.md §7's treatment — a bound inside the loop that cannot be
-defeated, swept across the whole parameter space rather than sampled — which is
-most of the work and is why it is a phase of its own rather than a knob here.
+**Self-oscillation also shipped in phase 6**, and not by the route scoped here.
+The plan was Zavalishin's antisaturator; the measurement rejected two designs
+before the third. Bounding the loop with the existing rail is rate-dependent by
+construction — growth per cycle is rate-independent but the rail compresses once
+per *sample*, so the limit cycle ran 1.17 to 1.69 across four rates and sang 45
+cents flat. Level-dependent damping fixes that, but only once the amplitude it
+reads has no ripple: `|s1|` swings within every cycle and pulled the pitch 2.34%
+sharp at 6 kHz / 44.1 kHz. The two integrator states are in exact quadrature and
+of exactly equal magnitude, so `sqrt((s1² + s2²)/(1 + g²))` is the bandpass
+envelope exactly. Amplitude then reads **0.800000** and frequency error
+**0.0000%** at every rate, cutoff and resonance. Derivation in `SvfFilter.hpp`.
 
-**What would unpark each:** the user saying so, per item.
+**What would unpark item 4:** the user saying so.

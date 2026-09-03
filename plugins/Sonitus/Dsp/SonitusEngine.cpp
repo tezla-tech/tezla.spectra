@@ -106,7 +106,9 @@ void Engine::reset() noexcept
     // It is not a note property -- nothing about a key restarts it -- but a
     // graph rebuild is exactly when it should start over.
     shepardOctaves_ = 0.0;
+    shepardOctavesB_ = 0.0;
     sources_.shepardOctaves = 0.0;
+    sources_.shepardOctavesB = 0.0;
 
     // A graph rebuild starts the machine cold. A *note* never does -- see
     // `SlowWalk::reset`.
@@ -629,15 +631,27 @@ void Engine::advanceGlobalSources (int samples) noexcept
         ? std::copysign (dsp::divisionRateHz (active_.shepardDivision, bpm_), shepardKnob)
         : shepardKnob;
 
-    shepardOctaves_ += shepardRate * static_cast<double> (samples) / internalRate_;
+    const double shepardStep = shepardRate * static_cast<double> (samples) / internalRate_;
+
+    shepardOctaves_ += shepardStep;
+
+    // **Shear**: B's own rate, as a share of A's. `1 - 2 * shear` is exactly
+    // 1.0 at the default, so B's accumulator tracks A's bit for bit until the
+    // control is moved -- and moving it bends B's glide from where it is
+    // rather than jumping it, which scaling A's position at read time would.
+    shepardOctavesB_ += shepardStep
+                          * (1.0 - 2.0 * std::clamp (active_.shepardShear, 0.0, 1.0));
 
     // Wrapped rather than left to grow, so a session left open all day has the
     // same precision as one just started. 420 octaves is a whole number of
     // turns for every copy count from 1 to 7, so this costs no jump.
     shepardOctaves_ -= kShepardWrapOctaves
                          * std::floor (shepardOctaves_ / kShepardWrapOctaves);
+    shepardOctavesB_ -= kShepardWrapOctaves
+                          * std::floor (shepardOctavesB_ / kShepardWrapOctaves);
 
     sources_.shepardOctaves = shepardOctaves_;
+    sources_.shepardOctavesB = shepardOctavesB_;
 
     // **Sag.** One walk, stepped once for the whole instrument, published like
     // the macros so the voices and the mangle read the identical figure on the

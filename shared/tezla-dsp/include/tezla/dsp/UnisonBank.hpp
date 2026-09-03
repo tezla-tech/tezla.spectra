@@ -320,6 +320,48 @@ public:
             updateIncrements();
     }
 
+    /// Where each copy sits across the stereo field, in [-1, 1], **replacing**
+    /// the rank-derived position the spread is normally applied to.
+    ///
+    /// `Spread` still scales it, so this changes *where* the copies are rather
+    /// than how wide they go. Null (the default) restores the rank ordering
+    /// exactly: the neutral path is the expression that always ran, so a caller
+    /// that never touches this gets the same samples it always did.
+    ///
+    /// It exists for a sliding stack. A Shepard copy's rank says nothing about
+    /// where it currently *is* -- it climbs the whole span and wraps -- so
+    /// panning by rank leaves a rising tone stuck in one place. Panning by its
+    /// place on the ramp sweeps it across the field as it climbs, and the pan
+    /// jump at the wrap is inaudible for the same reason the frequency jump is:
+    /// the window is exactly zero there.
+    void setRankPans (const double* pans, int count) noexcept
+    {
+        const int wanted = std::clamp (count, 0, kMaxVoices);
+
+        bool changed = pans == nullptr ? hasRankPans_ : false;
+
+        for (int i = 0; i < kMaxVoices; ++i)
+        {
+            const auto index = static_cast<std::size_t> (i);
+            const double pan = (pans != nullptr && i < wanted) ? pans[index] : 0.0;
+
+            if (! isExactly (pan, rankPans_[index]))
+            {
+                rankPans_[index] = pan;
+                changed = true;
+            }
+        }
+
+        if (pans != nullptr && ! hasRankPans_)
+            changed = true;
+
+        if (! changed)
+            return;
+
+        hasRankPans_ = pans != nullptr;
+        updateIncrements();
+    }
+
     /// Copy `index`'s offset and gain as currently set, for tests and displays.
     [[nodiscard]] double rankCentsOf (int index) const noexcept
     {
@@ -477,7 +519,11 @@ private:
 
             // Equal-power panning, so the stack's width does not change its
             // loudness. The centre voice of an odd stack lands at 0.5/0.5.
-            const double pan = position (i) * spread_;
+            //
+            // The position is the copy's rank unless a caller has supplied one
+            // -- see `setRankPans`. With none supplied this is the expression
+            // that always ran, not an equivalent of it.
+            const double pan = (hasRankPans_ ? rankPans_[index] : position (i)) * spread_;
             const double angle = (pan * 0.5 + 0.5) * 1.5707963267948966;
 
             gainL_[index] = std::cos (angle) * rankGains_[index];
@@ -560,6 +606,13 @@ private:
     /// class has always been.
     std::array<double, kMaxVoices> rankCents_ {};
     std::array<double, kMaxVoices> rankGains_ { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+
+    /// Per-copy stereo positions, and whether any were supplied -- see
+    /// `setRankPans`. The flag rather than a sentinel value, because 0.0 is a
+    /// legitimate position (dead centre) and the neutral path has to be the
+    /// original expression rather than a value that reproduces it.
+    std::array<double, kMaxVoices> rankPans_ {};
+    bool hasRankPans_ { false };
 
     std::array<double, kMaxVoices> drift_ {};
     std::array<double, kMaxVoices> driftTarget_ {};

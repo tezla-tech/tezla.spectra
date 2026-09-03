@@ -493,22 +493,29 @@ Sonitus level rule.
 Written down now rather than rediscovered, per CLAUDE.md §11 — an item nobody
 can act on without asking a question first has not been written down properly.
 
-- **`stackOrigin` (Centre / Up / Down).** Ranks are symmetric, so seven copies
-  of Octaves puts one copy three octaves *below* the note — at A2 that is
-  13.75 Hz, a rattle rather than a pitch. An organ registration is normally
-  upward. **Unpark if** the octave stack sounds bottom-heavy on the rig; it is
-  two more parameters and a one-line change to `rank(i)`.
-- **Shepard shear** — A rising while B falls. **Unpark if** the single global
-  rate feels like one gesture too few once it has been played.
-- **Shepard panning by phase** rather than by rank, so the rising tone also
-  sweeps the image. **Unpark** on the user's ear; it is a two-line change and a
-  measurement of whether the mono sum still holds.
+**Four were deferred; three were unparked the same day and shipped as phase 6**
+(the user asked for them directly on 2026-09-03, along with self-oscillation).
+Struck through below and detailed in `docs/ROADMAP.md` §11.
+
+- ~~**`stackOrigin` (Centre / Up / Down).**~~ **Shipped** at schema V9 as
+  `stackOriginA`/`stackOriginB`.
+- ~~**Shepard shear** — A rising while B falls.~~ **Shipped** as `shepardShear`,
+  a second accumulator advanced by `(1 − 2·shear)` of the first's step.
+- ~~**Shepard panning by phase** rather than by rank, so the rising tone also
+  sweeps the image.~~ **Shipped** as `shepardPanA`/`shepardPanB` — and the
+  measurement inverted the reasoning: per copy it does sweep, but the ensemble
+  stands *still*, because phase sets pitch, gain and position together. It is
+  rank panning that churns. `docs/ROADMAP.md` §11 carries the numbers.
 - **More vowels** stays blocked exactly as `README.md`'s roadmap says — on a
   source, and on the append-only decision about `formantMorph`. **Tract does not
   unblock it and does not touch it**: it is a new parameter with its own schema
-  version, and the vowel list and the morph's meaning are untouched.
-- **Self-oscillation** (Zavalishin's antisaturator) remains the next horror item
-  after this phase, and remains scoped in `README.md`.
+  version, and the vowel list and the morph's meaning are untouched. **This is
+  the one still parked.**
+- ~~**Self-oscillation** (Zavalishin's antisaturator) remains the next horror
+  item after this phase.~~ **Shipped** as `filterSing`, and *not* by the
+  antisaturator route: two designs were measured and rejected first. See
+  `SvfFilter.hpp`'s header for the derivation and `tests/test_SvfSing.cpp` for
+  both failures, pinned as numbers.
 
 ---
 
@@ -518,9 +525,19 @@ Updated **in the same commit as each phase**, so whichever session picks this up
 — after a context loss, a model change, or a fresh clone — needs nothing beyond
 this file and CLAUDE.md.
 
-**Phase 5 is complete.** Every row below is `done`. **Nothing in it has been
-heard on the rig** — that is the one step this container cannot take, and it is
-the acceptance test.
+**Phase 5 is complete.** Every row below is `done`.
+
+**Shepard passed the acceptance test on 2026-09-03**, which is the only one that
+counts: the user played it on the rig and it works. Their patch is worth keeping
+because it is not the obvious one — a **slow pitch-down envelope on oscillator
+A's pitch** underneath the glide, with a long release and a slow amplitude
+attack and release. The glide supplies the climb that never arrives and the
+envelope supplies a fall that does, and the two against each other are the
+sound: "sounds real horror 80s". Nothing in the presets does that; a seventh
+one built around it is the obvious follow-up.
+
+**Stack's other modes, Tract and Sag are still unheard.** Cluster and Scale in a
+loaded tuning are the two most likely to need a number moved.
 
 **Phase status** (flip `pending` → `done` in the phase's own commit):
 
@@ -532,6 +549,7 @@ the acceptance test.
 | H3 Tract | done |
 | H4 Sag | done |
 | H5 close-out | done |
+| **phase 6** (no plan file — see the section at the end) | done |
 
 **What H1 actually landed, where it differs from the row above.** Three
 headers rather than two, and one small move:
@@ -590,3 +608,44 @@ hardest here, kept because they will bite the next phase too:
 - **The acceptance test is the user's ears on the Windows rig**, not a green
   suite. Get Stack in front of them before H3 and H4 are polished — Shepard is
   the one that either lands or does not.
+
+---
+
+## Phase 6 — what happened after this plan closed
+
+Phase 6 has **no plan file of its own**, deliberately: it is the deferred list
+above, unparked by the user on the day phase 5 closed, plus the self-oscillation
+item. A session resuming Sonitus work should read this section and then
+`plugins/Sonitus/README.md`'s *Phase 6* changelog entry, which carries the
+numbers.
+
+| phase | status |
+|---|---|
+| H6-1 `SvfFilter::setSing` — quadrature amplitude, k walked to zero | done |
+| H6-2 parameters at schema V9 (origin, pan, shear, sing) | done |
+| H6-3 editor controls, greying and tooltips | done |
+| H6-4 tests and break-checks | done |
+| H6-5 five presets, peaks measured | done |
+| H6-6 docs, validator, neutrality proof | done |
+
+**Proved neutral** the same way phase 5 was: all forty pre-existing presets at
+three notes each, 11,796,480 samples, hash `c9c9195a96584985` before and after;
+a one-ulp change to `kMaximumQ` moves it to `ddf5b6458105327a`, so the
+comparison discriminates.
+
+**Three tests were found to be decorations during the break-checks and were
+rewritten**, which is the part worth carrying forward:
+
+1. `sing_at_zero_is_bit_exact...` compared two instances of the *same* class, so
+   a change to the shared sample loop perturbed both sides equally and cancelled
+   — the identical mistake made in H1. It now asserts the invariant that makes
+   the branch safe (`k_ > 0` unless Sing asked otherwise) plus a round trip, and
+   says in its own comment what it cannot cover.
+2. The phase-panning test asserted the image *sweeps*. It does not; the
+   measurement said so and the feature is better than the claim was.
+3. `a_filter_below_the_singing_threshold_stays_exactly_silent` asserted exact
+   zero for a decaying loop, which reaches about 1e-127 rather than 0. Split
+   into the real §7 rule (a singing filter never *starts* from silence, asserted
+   bit for bit over two seconds) and a decay assertion.
+
+**Still not heard on the rig:** none of the four phase-6 controls.

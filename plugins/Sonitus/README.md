@@ -992,22 +992,43 @@ otherwise, and this project has now twice proved how that goes. And a decision:
 ### More on the horror thread
 
 Phase 5 built Stack, Tract and Sag (`PLAN-PHASE5.md`). Four things were cut from
-it deliberately and live in [`../../docs/ROADMAP.md`](../../docs/ROADMAP.md) §11
-with what would unpark each: an origin control for the stack's ranks, a Shepard
-"shear" with A rising while B falls, Shepard panning by phase rather than rank,
-and the vowel list, which Tract does **not** unblock and does not touch.
+it deliberately. **Three of them shipped in phase 6** — the origin control, the
+Shepard shear and phase panning, all described under *Phase 6* in the changelog.
+What remains parked in [`../../docs/ROADMAP.md`](../../docs/ROADMAP.md) §11 is
+the vowel list, which Tract does **not** unblock and does not touch.
 
-### Self-oscillation, from the filter book
+### Self-oscillation — shipped in phase 6, and not by the book's route
 
-Zavalishin's route to an SVF that can be driven past self-oscillation is an
-**antisaturator** — `sinh`, faster than linear — in parallel with the damping
-gain, so damping grows with level. Our fixed rail bounds the state instead,
-which reaches the same place he describes ("effectively makes the state of the
-first integrator saturate") but does not offer the *R* < 0 region where the
-filter sings on its own. §6.7's second-order saturation curves are the related
-note: replacing `tanh x` with `x/(1+|x|)` makes the nonlinear zero-delay
-equation analytically solvable, which is the route if the nonlinearity should
-ever sit genuinely inside the loop without iterating.
+This section used to say that Zavalishin's route to an SVF driven past
+self-oscillation is an **antisaturator** — `sinh`, faster than linear — in
+parallel with the damping gain, and that our fixed rail did not offer the
+*R* < 0 region where a filter sings on its own.
+
+It does now, and it did not arrive that way. The rail was the wrong bound to
+reach for and the measurement said so: growth per cycle is rate-independent but
+the rail compresses once per *sample*, so a higher rate compresses more often
+per cycle and the limit cycle settled somewhere nobody chose — **1.17 to 1.69
+across four rates and three cutoffs**, above full scale at the top, and 45 cents
+flat, because a state past the knee is not the state the prewarp was computed
+for.
+
+What ships makes the damping level-dependent, which is where the antisaturator
+was heading, approached from the other end: `k(a) = kSing·(1 − a/kSingAmplitude)`,
+walked to exactly zero so the equilibrium does not move with resonance. The
+amplitude `a` is the part that had to be exactly right — the obvious choice, the
+bandpass state `|s1|`, swings within every cycle and so modulates the damping at
+twice the oscillation frequency, which pulled the pitch **+2.34% sharp at
+6 kHz / 44.1 kHz against +0.47% at 192 kHz**. The two integrator states are in
+exact quadrature and of exactly equal magnitude, so `sqrt((s1² + s2²)/(1 + g²))`
+is the bandpass envelope with no ripple at all. Measured over 44.1 / 48 / 96 /
+192 kHz against 110 Hz to 12 kHz and resonance 0 to 1: amplitude **0.800000 in
+every cell**, frequency error **0.0000%**. Derivation and table in
+`SvfFilter.hpp`; numbers pinned in `tests/test_SvfSing.cpp`.
+
+§6.7's second-order saturation curves remain the related note: replacing
+`tanh x` with `x/(1+|x|)` makes the nonlinear zero-delay equation analytically
+solvable, which is the route if the nonlinearity should ever sit genuinely
+inside the loop without iterating.
 
 ### Not doing
 
@@ -1021,6 +1042,72 @@ ever sit genuinely inside the loop without iterating.
 ## Changelog
 
 ### Unreleased
+
+### Phase 6 — the three deferred Stack items, and the filter's own voice
+
+Four controls, all appended at schema V9, all neutral at their defaults. Proved
+neutral the same way every phase here has been: an offline render of **all forty
+existing presets at three notes each — 11,796,480 samples** — hashes identically
+before and after (`c9c9195a96584985`), and a one-ulp change to `kMaximumQ` moves
+that hash to `ddf5b6458105327a`, so the comparison discriminates.
+
+**Origin** (per oscillator, `stackOriginA`/`stackOriginB`) — which side of the
+played note the stack builds on: Centre (what shipped), Up or Down. Exactly one
+copy sits on the played note at every count and every origin, so this moves the
+stack's weight and never its tuning. Up keeps the low end one note wide, which
+is what makes room for a sub under a wide chord. Greyed in Detune mode, which is
+symmetric by definition and so has no side to build on.
+
+**Shear** (`shepardShear`) — how far oscillator B's Shepard phase runs against
+A's. A second accumulator advanced by `(1 − 2·shear)` of A's step: 0 locks them
+(what shipped, and bit-identical), 0.5 holds B still while A climbs, 1 makes B
+fall exactly as fast as A rises. Two endless stacks passing through each other
+never finish passing.
+
+**Phase pan** (per oscillator, `shepardPanA`/`shepardPanB`) — pans a Shepard
+copy by where it is in its climb rather than by its rank, and the audible result
+is the opposite of what that sounds like. Off, a copy's position is fixed while
+its pitch climbs through it, so the two are out of step and the picture churns;
+on, they move together and the *image* stops moving, becoming a fixed fan across
+the field. Measured, five copies at Spread 1 over five seconds of a slow rise:
+
+| band | by rank, 1 s / 3 s / 5 s | by phase, 1 s / 3 s / 5 s |
+|---|---|---|
+| 60–130 Hz | −0.159, −0.524, +0.497 | −0.182, −0.182, −0.182 |
+| 260–520 Hz | +0.000, −0.253, −0.961 | +0.013, +0.013, +0.013 |
+| 1040–2080 Hz | +1.000, +0.236, +0.001 | +0.747, +0.746, +0.747 |
+
+**Sing** (`filterSing`, and a voice modulation destination) — the filter driven
+past its own damping until it oscillates on its own, at the Cutoff frequency and
+at a fixed level. Both oscillators can be silent; the filter is then the whole
+instrument. Two designs were measured and rejected first and both failures are
+pinned in `tests/test_SvfSing.cpp`; the roadmap section above tells that story.
+What ships settles at **0.800000 amplitude and 0.0000% frequency error** at every
+sample rate, cutoff and resonance. It costs one square root per sample **only
+while singing** — `k` is 1/Q and so positive unless Sing asked otherwise, so the
+sample loop's test for "is this singing" is the sign of a number it already has,
+and a patch that never touches the control pays one predictable compare.
+
+Where Sing bites depends on Resonance, because it has to cancel that damping
+before it can go past it: 0.008 of the travel at Resonance 1, 0.89 at Resonance
+0. That is the physics rather than a taper worth fixing, and the tooltip says so.
+
+**Five presets, appended** (peaks at one note, measured through `tezla-render`):
+
+| # | preset | peak |
+|---|---|---|
+| 40 | Slow Descent — a rise that is losing | −5.65 dBFS |
+| 41 | Overhead — the stack that opens above the note | −6.15 dBFS |
+| 42 | Two Ways at Once — one stack rising through another falling | −6.17 dBFS |
+| 43 | The Filter Sings — no oscillators at all | −4.37 dBFS |
+| 44 | Overtone — a filter just over the edge | −5.61 dBFS |
+
+*Slow Descent* is the player's own patch from the rig, reported on 2026-09-03
+and written down: a Shepard stack with a slow envelope pulling the pitch down
+underneath it, long release, amplitude slow at both ends. The two motions
+disagree — Shepard climbs and never arrives, the envelope falls and does — so
+the ear hears a rise that is losing.
+
 
 **The drift knobs wear a pastel rainbow.** All three — Drift on each
 oscillator and the FILTER page's Drift — draw their ring as a pastel hue sweep

@@ -38,14 +38,15 @@ struct Ranks
 };
 
 Ranks ranksFor (StackMode mode, int copies, int step = 1, double octaves = 0.0,
-                const Tuning* tuning = nullptr, int note = 60)
+                const Tuning* tuning = nullptr, int note = 60,
+                StackOrigin origin = StackOrigin::centre)
 {
     static const Tuning twelveEqual {};
 
     Ranks r;
     r.gains.fill (1.0);
 
-    stackRanks (mode, copies, step, octaves,
+    stackRanks (mode, copies, step, octaves, origin,
                 tuning != nullptr ? *tuning : twelveEqual, note,
                 r.cents.data(), r.gains.data());
 
@@ -141,6 +142,109 @@ std::vector<double> play (Engine& engine, const EngineParameters& parameters, in
     }
 
     return out;
+}
+
+/// Plays one note and returns both channels, for the tests that are about
+/// where a copy *is* rather than what pitch it is.
+struct Stereo
+{
+    std::vector<double> left, right;
+};
+
+Stereo playStereo (Engine& engine, const EngineParameters& parameters, int note,
+                   int samples, int blockSize = 256)
+{
+    engine.setParameters (parameters);
+
+    {
+        Buffers settle (64);
+        engine.process (settle.pointers, 64);
+    }
+
+    engine.noteOn (note, 1.0);
+
+    Stereo out;
+    out.left.reserve (static_cast<std::size_t> (samples));
+    out.right.reserve (static_cast<std::size_t> (samples));
+
+    Buffers buffers (blockSize);
+    int done = 0;
+
+    while (done < samples)
+    {
+        const int take = std::min (blockSize, samples - done);
+
+        std::fill (buffers.left.begin(), buffers.left.end(), 0.0);
+        std::fill (buffers.right.begin(), buffers.right.end(), 0.0);
+
+        engine.process (buffers.pointers, take);
+
+        for (int i = 0; i < take; ++i)
+        {
+            out.left.push_back (buffers.left[static_cast<std::size_t> (i)]);
+            out.right.push_back (buffers.right[static_cast<std::size_t> (i)]);
+        }
+
+        done += take;
+    }
+
+    return out;
+}
+
+/// Where **one band** sits in the image over a window: +1 hard right, -1 hard
+/// left, 0 centred.
+///
+/// Per band rather than broadband, and that is the point rather than a detail.
+/// A Shepard stack is symmetric by construction -- for every copy leaving one
+/// edge there is one arriving at the other -- so its *broadband* balance is
+/// near zero and near constant whatever the panning does, and a broadband
+/// measurement reports "nothing is happening" for both modes. What differs is
+/// where a given frequency comes from, which needs the spectrum.
+double bandBalance (const Stereo& s, std::size_t from, double low, double high)
+{
+    constexpr std::size_t kSize = 8192;
+
+    if (from + kSize > s.left.size())
+        return 0.0;
+
+    const auto energy = [&] (const std::vector<double>& x)
+    {
+        std::vector<double> block (x.begin() + static_cast<std::ptrdiff_t> (from),
+                                   x.begin() + static_cast<std::ptrdiff_t> (from + kSize));
+
+        // Blackman-Harris, as everywhere else here: the bands are a couple of
+        // octaves wide and leakage from a loud neighbour would land in them.
+        for (std::size_t i = 0; i < kSize; ++i)
+        {
+            const double t = static_cast<double> (i) / static_cast<double> (kSize - 1);
+
+            block[i] *= 0.35875 - 0.48829 * std::cos (2.0 * std::numbers::pi * t)
+                                + 0.14128 * std::cos (4.0 * std::numbers::pi * t)
+                                - 0.01168 * std::cos (6.0 * std::numbers::pi * t);
+        }
+
+        const auto spectrum = measure::fftOfReal (block);
+
+        double sum = 0.0;
+
+        // The upper half of the transform is the mirror, so only the first
+        // half is summed -- doubling the energy would not change a ratio, but
+        // reading a band that straddles Nyquist's mirror would.
+        for (std::size_t k = 1; k < kSize / 2; ++k)
+        {
+            const double hz = kRate * static_cast<double> (k) / static_cast<double> (kSize);
+
+            if (hz >= low && hz < high)
+                sum += std::norm (spectrum[k]);
+        }
+
+        return sum;
+    };
+
+    const double l = std::sqrt (energy (s.left));
+    const double r = std::sqrt (energy (s.right));
+
+    return l + r > 0.0 ? (r - l) / (r + l) : 0.0;
 }
 
 /// The spectral centroid of a window, in Hz. What "the pitch is climbing"
@@ -910,4 +1014,271 @@ TEZLA_TEST (sag_is_the_same_at_every_block_size)
     std::printf ("    sag at 64 vs 512 samples: %zu of %zu differ\n", differing, small.size());
 
     CHECK (differing == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 -- origin, shear and phase panning
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (every_origin_still_puts_exactly_one_copy_on_the_played_pitch)
+{
+    // The rule the whole Stack control rests on, re-checked for the two new
+    // origins. Up and Down move the *weight* of the stack; if either of them
+    // could also move the note, the control would be a tuning error waiting to
+    // happen -- and with `stackRank` returning `index` and `index - last`, an
+    // off-by-one either way is exactly what it would look like.
+    for (int copies = 1; copies <= kMaxStackCopies; ++copies)
+        for (const auto origin : { StackOrigin::centre, StackOrigin::up, StackOrigin::down })
+            for (const auto mode : { StackMode::octaves, StackMode::fifths, StackMode::tritones,
+                                     StackMode::cluster, StackMode::diminished, StackMode::scale })
+            {
+                const auto r = ranksFor (mode, copies, 1, 0.0, nullptr, 60, origin);
+
+                int atPitch = 0;
+
+                for (int i = 0; i < copies; ++i)
+                    if (r.cents[static_cast<std::size_t> (i)] == 0.0)
+                        ++atPitch;
+
+                if (atPitch != 1)
+                    std::printf ("    mode %d, origin %d, %d copies: %d at the played pitch\n",
+                                 static_cast<int> (mode), static_cast<int> (origin),
+                                 copies, atPitch);
+
+                CHECK (atPitch == 1);
+            }
+}
+
+TEZLA_TEST (origin_puts_the_stack_where_it_says_and_nowhere_else)
+{
+    // Up is every copy at or above the note, Down every copy at or below it,
+    // and Centre is what shipped -- which is asserted by comparing against the
+    // shipped placement rather than by recomputing it, so a change to the
+    // centring rule is caught here too.
+    for (int copies = 2; copies <= kMaxStackCopies; ++copies)
+    {
+        const auto up = ranksFor (StackMode::octaves, copies, 1, 0.0, nullptr, 60, StackOrigin::up);
+        const auto down = ranksFor (StackMode::octaves, copies, 1, 0.0, nullptr, 60, StackOrigin::down);
+
+        double highestUp = 0.0, lowestDown = 0.0;
+
+        for (int i = 0; i < copies; ++i)
+        {
+            const auto index = static_cast<std::size_t> (i);
+
+            CHECK (up.cents[index] >= 0.0);
+            CHECK (down.cents[index] <= 0.0);
+
+            highestUp = std::max (highestUp, up.cents[index]);
+            lowestDown = std::min (lowestDown, down.cents[index]);
+        }
+
+        // And they span the same distance in opposite directions: n copies at
+        // octaves reach n-1 octaves away either way.
+        const double span = 1200.0 * static_cast<double> (copies - 1);
+
+        CHECK_NEAR (highestUp, span, 1.0e-9);
+        CHECK_NEAR (lowestDown, -span, 1.0e-9);
+    }
+}
+
+TEZLA_TEST (a_shepard_stack_pans_by_where_a_copy_is_rather_than_by_its_rank)
+{
+    // Panning by rank leaves a rising stack standing still in the image: the
+    // ranks never change, so neither does the picture. Panning by phase means
+    // each copy crosses the field once per turn.
+    //
+    // What is asserted is that a *single* copy sweeps monotonically from one
+    // side to the other over one turn, which is the claim the tooltip makes,
+    // and that the set of copies always spans the field -- so the image is
+    // never momentarily collapsed while one copy is mid-crossing.
+    constexpr int kCopies = 5;
+
+    double pans[kMaxStackCopies] {};
+    double previous = -2.0;
+
+    for (int step = 0; step <= 40; ++step)
+    {
+        // One turn is `count` octaves of travel, so this walks exactly one.
+        const double octaves = static_cast<double> (kCopies) * static_cast<double> (step) / 41.0;
+
+        shepardPans (octaves, kCopies, pans);
+
+        CHECK (pans[0] > previous);
+        previous = pans[0];
+
+        double lowest = 2.0, highest = -2.0;
+
+        for (int k = 0; k < kCopies; ++k)
+        {
+            CHECK (pans[k] >= -1.0 && pans[k] <= 1.0);
+            lowest = std::min (lowest, pans[k]);
+            highest = std::max (highest, pans[k]);
+        }
+
+        // Five copies evenly spaced around the cycle: the gap between the
+        // outermost two is never less than (count-1)/count of the whole field.
+        CHECK (highest - lowest >= 2.0 * (kCopies - 1) / static_cast<double> (kCopies) - 1.0e-9);
+    }
+}
+
+TEZLA_TEST (phase_panning_fixes_where_a_frequency_comes_from_and_rank_panning_does_not)
+{
+    // **The first version of this test asserted the opposite** and failed, which
+    // is the whole reason it is worth reading. The intuition was "phase panning
+    // sweeps the image"; what a Shepard stack actually does is tie a copy's
+    // pitch, its window gain *and* its position to one phase, so the copies
+    // move and the ensemble does not. One arrives where another leaves.
+    //
+    // Panning by *rank* is the one that churns, because rank is fixed while
+    // pitch climbs through it, so position and pitch are out of step.
+    //
+    // So what is measured is where a given **band** comes from, over time.
+    auto p = bareStack (StackMode::shepard, 5);
+
+    p.voice.spreadA = 1.0;
+    p.shepardRate = 0.5;
+    p.voice.amp.decay = 8.0;
+    p.voice.amp.sustain = 1.0;
+
+    const int samples = static_cast<int> (kRate * 6.0);
+
+    auto byRank = std::make_unique<Engine>();
+    auto byPhase = std::make_unique<Engine>();
+
+    byRank->prepare (kRate, 512);
+    byPhase->prepare (kRate, 512);
+
+    auto q = p;
+    q.voice.shepardPanA = true;
+
+    const auto fixed = playStereo (*byRank, p, 60, samples);
+    const auto swept = playStereo (*byPhase, q, 60, samples);
+
+    struct Band { double low, high; const char* name; };
+
+    const Band bands[] = { { 60.0, 130.0, "  60-130" }, { 260.0, 520.0, " 260-520" },
+                           { 1040.0, 2080.0, "1040-2080" } };
+
+    std::printf ("    band Hz      by rank: 1s / 3s / 5s        by phase: 1s / 3s / 5s\n");
+
+    double rankSwing = 0.0;
+    double phaseSwing = 0.0;
+    double lowest = 2.0, highest = -2.0;
+
+    for (const auto& band : bands)
+    {
+        double rank[3] {}, phase[3] {};
+        int slot = 0;
+
+        for (const double seconds : { 1.0, 3.0, 5.0 })
+        {
+            const auto from = static_cast<std::size_t> (kRate * seconds);
+
+            rank[slot] = bandBalance (fixed, from, band.low, band.high);
+            phase[slot] = bandBalance (swept, from, band.low, band.high);
+            ++slot;
+        }
+
+        std::printf ("    %-9s  %+7.3f %+7.3f %+7.3f      %+7.3f %+7.3f %+7.3f\n",
+                     band.name, rank[0], rank[1], rank[2], phase[0], phase[1], phase[2]);
+
+        for (int i = 0; i < 3; ++i)
+            for (int j = i + 1; j < 3; ++j)
+            {
+                rankSwing = std::max (rankSwing, std::abs (rank[i] - rank[j]));
+                phaseSwing = std::max (phaseSwing, std::abs (phase[i] - phase[j]));
+            }
+
+        lowest = std::min (lowest, phase[0]);
+        highest = std::max (highest, phase[0]);
+    }
+
+    // By phase, a band comes from the same place all the way through --
+    // measured at 0.001 across five seconds, so 0.02 is twenty times the
+    // observed drift and still an order of magnitude below the rank figure.
+    CHECK (phaseSwing < 0.02);
+
+    // By rank, it does not: measured swings past 1.0 of the whole field.
+    CHECK (rankSwing > 0.5);
+
+    // And the fan really is a fan: the lowest band and the highest sit in
+    // different places. Measured -0.182 against +0.747.
+    CHECK (highest - lowest > 0.5);
+}
+
+TEZLA_TEST (shear_runs_the_second_stack_against_the_first)
+{
+    // Shear is arithmetic on the second accumulator: B advances by
+    // `(1 - 2 * shear)` of A's step, so 0 locks them, 0.5 holds B still and 1
+    // makes B fall exactly as fast as A rises. Asserted on the accumulators
+    // themselves through the engine's own advance, because the audible effect
+    // -- two stacks beating against each other -- is not a number a spectrum
+    // can hand back cleanly.
+    struct Case { double shear, expected; };
+
+    for (const auto c : { Case { 0.0, 1.0 }, Case { 0.25, 0.5 },
+                          Case { 0.5, 0.0 }, Case { 1.0, -1.0 } })
+    {
+        auto p = bareStack (StackMode::shepard, 5);
+
+        p.voice.stackB = StackMode::shepard;
+        p.voice.unisonB = 5;
+        p.voice.levelB = 1.0;
+        p.shepardRate = 1.0;
+        p.shepardShear = c.shear;
+
+        auto engine = std::make_unique<Engine>();
+        engine->prepare (kRate, 512);
+
+        const auto rendered = play (*engine, p, 60, static_cast<int> (kRate * 2.0));
+
+        (void) rendered;
+
+        const double a = engine->getShepardOctaves();
+
+        // **Unwrapped first.** Both accumulators wrap at kShepardWrapOctaves,
+        // and a falling one wraps immediately -- two octaves down reads as 418
+        // up. That is the wrap working (420 is divisible by every copy count,
+        // so the window's phase is identical either side of it), but it is not
+        // a ratio, and reading it as one is how a test reports a working
+        // mechanism as broken.
+        double b = engine->getShepardOctavesB();
+
+        if (b > 0.5 * kShepardWrapOctaves)
+            b -= kShepardWrapOctaves;
+
+        std::printf ("    shear %.2f:  A %+.4f octaves,  B %+.4f  (ratio %+.4f)\n",
+                     c.shear, a, b, a != 0.0 ? b / a : 0.0);
+
+        CHECK (a > 0.5);                       // A really did climb
+        CHECK_NEAR (b / a, c.expected, 1.0e-9);
+    }
+}
+
+TEZLA_TEST (shear_at_zero_leaves_the_two_stacks_bit_identical)
+{
+    // The default has to be what shipped: one accumulator's worth of climb,
+    // shared. Compared as numbers rather than as audio, because "the two
+    // stacks sound the same" is exactly the claim a shared accumulator makes
+    // trivially true and a sheared one does not.
+    auto p = bareStack (StackMode::shepard, 4);
+
+    p.voice.stackB = StackMode::shepard;
+    p.voice.unisonB = 4;
+    p.voice.levelB = 1.0;
+    p.shepardRate = 0.7;
+    p.shepardShear = 0.0;
+
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (kRate, 512);
+
+    for (int i = 0; i < 8; ++i)
+    {
+        const auto rendered = play (*engine, p, 60, static_cast<int> (kRate * 0.25));
+
+        (void) rendered;
+
+        CHECK (engine->getShepardOctaves() == engine->getShepardOctavesB());
+    }
 }

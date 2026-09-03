@@ -242,6 +242,29 @@ inline constexpr auto tract       = "tract";
 /// bit-exactly out of the path; the walk keeps walking regardless.
 inline constexpr auto sag         = "sag";
 inline constexpr auto sagRate     = "sagRate";
+
+/// **Phase 6.** All appended at schema V9, all neutral at their defaults, so a
+/// project saved before any of them existed reopens sounding identical.
+///
+/// Where the stack's copies sit relative to the played note: centred (what
+/// shipped), all above it, or all below it. Exactly one copy is always at the
+/// note itself, at every count and every origin, so Stack never detunes the
+/// instrument.
+inline constexpr auto stackOriginA = "stackOriginA";
+inline constexpr auto stackOriginB = "stackOriginB";
+
+/// Whether a Shepard stack also sweeps the stereo image as it climbs -- a copy
+/// entering at the bottom arrives at one side and leaves at the other.
+inline constexpr auto shepardPanA = "shepardPanA";
+inline constexpr auto shepardPanB = "shepardPanB";
+
+/// How far oscillator B's Shepard phase runs against A's. 0 is the two locked
+/// together, which is what shipped; 1 is B falling exactly as fast as A rises.
+inline constexpr auto shepardShear = "shepardShear";
+
+/// How far past its own damping the filter is driven. 0 is the filter that
+/// shipped, bit for bit.
+inline constexpr auto filterSing  = "filterSing";
 } // namespace ids
 
 /// The option lists behind the choice parameters.
@@ -285,6 +308,11 @@ inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 inline const juce::StringArray stack { "Detune", "Octaves", "Fifths", "Tritones",
                                        "Cluster", "Diminished", "Scale", "Shepard" };
 
+/// Where the stack's copies sit relative to the played note. **Append-only**,
+/// like every list here, and indexed straight into `StackOrigin`. Index 0 is
+/// what shipped.
+inline const juce::StringArray stackOrigin { "Centre", "Up", "Down" };
+
 /// What an offline bounce runs at. Index 0 is neutral; the rest are the live
 /// list without Off, in its order, and map by arithmetic onto
 /// `dsp::RenderOversampling`. **Append-only**, like every list here.
@@ -312,7 +340,9 @@ inline const juce::StringArray modDest { "Off", "Cutoff", "Resonance", "Filter d
                                          "Pitch", "Pitch B", "Level",
                                          "Kargyraa", "Morph A", "Morph B",
                                          "Feedback A", "Feedback B", "PM reverse",
-                                         "Filter morph" };
+                                         "Filter morph",
+                                         // Phase 6, appended.
+                                         "Filter sing" };
 
 /// How many oscillator cycles one kargyraa modulator cycle spans.
 ///
@@ -360,6 +390,12 @@ static_assert (static_cast<int> (StackMode::detune)     == 0
             && static_cast<int> (StackMode::shepard)    == 7
             && static_cast<int> (StackMode::count)      == 8,
                "the stack option list is indexed straight into StackMode");
+
+static_assert (static_cast<int> (StackOrigin::centre) == 0
+            && static_cast<int> (StackOrigin::up)     == 1
+            && static_cast<int> (StackOrigin::down)   == 2
+            && static_cast<int> (StackOrigin::count)  == 3,
+               "the stack origin option list is indexed straight into StackOrigin");
 
 static_assert (static_cast<int> (SubShape::sine)   == 0
             && static_cast<int> (SubShape::square) == 1
@@ -424,7 +460,8 @@ static_assert (static_cast<int> (ModDestination::none)     == 0
             && static_cast<int> (ModDestination::feedbackB) == 20
             && static_cast<int> (ModDestination::pmReverse) == 21
             && static_cast<int> (ModDestination::filterMorph) == 22
-            && static_cast<int> (ModDestination::count)       == 23,
+            && static_cast<int> (ModDestination::filterSing)  == 23
+            && static_cast<int> (ModDestination::count)       == 24,
                "the modulation destination list is indexed straight into ModDestination");
 
 static_assert (static_cast<int> (GlobalSource::none)         == 0

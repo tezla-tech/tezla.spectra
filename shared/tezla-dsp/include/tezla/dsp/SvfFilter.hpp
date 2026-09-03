@@ -85,6 +85,116 @@
 // identity bit for bit, not nearly the identity. That is a stronger claim than
 // a bypass branch could make, and it is why there is no bypass branch.
 //
+// ---------------------------------------------------------------------------
+// Sing -- and why it needed no new nonlinearity
+// ---------------------------------------------------------------------------
+//
+// The comment on kMaximumQ below has said for a long time that k <= 0 would
+// give "a stable limit cycle, which is exactly how an analogue filter
+// self-oscillates and is perfectly bounded", and declined to offer it because
+// a filter that never stops is a stuck note. The README's roadmap had a
+// different plan -- Zavalishin's antisaturator, a sinh in parallel with the
+// damping -- and that plan turns out to be for a filter that does not already
+// have a rail. This one does, and the rail is the bound. Nothing was added to
+// the loop.
+//
+// **`setSing` drives k negative**, sweeping linearly from whatever the
+// resonance chose down to -kSingCeiling, so at 0 it is `k - 0.0 * (...)`, which
+// is k bit for bit. Past zero the loop gains energy every sample.
+//
+// **Leaving the rail to stop it was measured and was wrong**, which is worth
+// the paragraph because it is the obvious design and it fails quietly. A loop
+// that grows until it meets its supply does settle, and it does so at an
+// amplitude nobody chose: the growth per cycle is rate-independent but the
+// *compression* is applied once per sample, so a higher rate compresses more
+// often per cycle and settles lower. Measured across four rates and three
+// cutoffs, the limit cycle ran from **1.17 to 1.69** -- half a decibel to four
+// decibels apart, and above full scale at the top -- and it sang **45 cents
+// flat**, because a state sitting past the rail's knee is not the state the
+// prewarp was computed for. Both are CLAUDE.md section 6 failures: the same
+// patch, a different session rate, a different sound.
+//
+// So the damping is **level-dependent instead**, which is the same idea the
+// README's roadmap reached for through Zavalishin's antisaturator, arrived at
+// from the other end:
+//
+//     k(a) = kSing * (1 - a / kSingAmplitude)
+//
+// with `a` the loop's amplitude. At silence the damping is fully negative and
+// the loop grows; at `kSingAmplitude` it is exactly zero and the loop holds;
+// above it the sign flips and the loop decays. One stable amplitude, and it is
+// a constant.
+//
+// **What `a` is measured from is the whole design**, and the obvious choice is
+// wrong in a way that took a second measurement to see. Using `|s1|` -- the
+// bandpass state -- gives an `a` that swings from zero to the peak *within
+// every cycle*, so the damping is modulated at twice the oscillation
+// frequency. That is a parametric term, its effect per sample scales with `g`,
+// and it pulls the pitch: measured, the limit cycle ran **+0.75 % sharp at
+// 2 kHz / 44.1 kHz against +0.06 % at 2 kHz / 192 kHz**, and at 6 kHz the same
+// grid spread **+2.34 % to +0.47 %** -- 32 cents between two session rates on
+// one patch, which is the section 6 failure the rail was rejected for.
+//
+// The fix is exact rather than approximate, and it is a property of this
+// topology worth stating plainly: **the two integrator states are in exact
+// quadrature and of exactly equal magnitude.** Writing the recurrences for a
+// steady oscillation at theta = 2*pi*f/Fs,
+//
+//     s1[n] + s1[n-1] = 2*bp[n]           =>  s1 = B*sin(theta*n + theta/2)
+//     s2[n] - s2[n-1] = 2*g*bp[n]         =>  s2 = C*sin(theta*n + theta/2 - pi/2)
+//
+// with B = A/cos(theta/2) and C = g*A/sin(theta/2); and at the limit cycle
+// f = fc, so g = tan(theta/2) and **C = B exactly**. Two equal sinusoids a
+// quarter cycle apart have a constant sum of squares, so
+//
+//     a = sqrt((s1^2 + s2^2) / (1 + g^2))
+//
+// is the bandpass amplitude A itself -- ripple-free, with nothing left to
+// modulate the damping. `1 + g^2` is `1/cos^2(theta/2)`, and taking it from the
+// `g` in force this sample is what keeps it right under filter FM.
+//
+// **And k is walked to exactly zero, not merely towards it.** `k - k*r` is k at
+// r = 0 and 0 at r = 1, so the equilibrium is at `a = kSingAmplitude` whatever
+// the resonance -- where the first attempt, which added a fixed term back,
+// settled where k reached 1/Q instead and sang **19 dB quieter at resonance 0
+// than at resonance 1**.
+//
+// Measured over the grid that condemned the rail, extended: 44.1 / 48 / 96 /
+// 192 kHz against 110 / 440 / 2000 / 6000 / 12000 Hz, and resonance 0 to 1
+// against sing 0.5 to 1 --
+//
+//   * amplitude **0.800000 in every cell**, six figures, against the rail's
+//     1.17 to 1.69;
+//   * frequency error **0.0000 %** in every cell, against +2.34 % worst;
+//   * crest sqrt(2) wherever the sample grid resolves a peak (the readings
+//     below it are peak-picking at eight samples a cycle -- CLAUDE.md section
+//     10's own warning -- and the amplitude column is RMS, which is why it is
+//     flat).
+//
+// The rail is then genuinely not involved over the range that matters, and the
+// bound on where is arithmetic rather than hope: the state sits at
+// A/cos(theta/2), so it stays under `kRailKnee` while fc/Fs < 0.2048. Inside
+// Sonitus's oversampled section the internal rate is ~176-192 kHz at every
+// host rate, which puts that corner at 36 kHz and the whole audible range
+// under it. With oversampling *off* at 44.1 kHz the corner falls to 9.0 kHz,
+// and above it the rail shaves the loop -- at 12 kHz / 44.1 kHz the amplitude
+// reads 0.794881 rather than 0.800000, which is **-0.06 dB and -0.0003 %** of
+// pitch. That is the honest edge of the claim, not a defect. Numbers pinned in
+// `tests/test_SvfSing.cpp`.
+//
+// Sing's travel is then honestly one thing: **how fast it arrives.** Nearly a
+// second at the bottom of the control, under a twentieth at the top.
+//
+// **The stuck note the old comment worried about is not one here**, and the
+// architecture is why: the filter sits before the VCA, and `Voice::process`
+// returns the moment the amplitude envelope is done. A singing filter is
+// silenced by the envelope like anything else and the voice retires normally.
+// What it does need is something to sing *from* -- a loop at exactly zero
+// stays at exactly zero however negative k is -- so `seedIfSilent` nudges a
+// silent filter when one is asked for. A real one starts from its own noise;
+// this starts from a number small enough to be inaudible and fixed enough to
+// be testable.
+//
 // The cost, stated plainly: above about Q = 30 the steady-state peak stops
 // growing, because it is against the rail. The top half of the resonance
 // control changes how long the filter *rings* -- 0.07 s at Q = 31.6 against
@@ -148,6 +258,51 @@ public:
     /// rather than nearly clean.
     static constexpr double kRailKnee = 1.0;
     static constexpr double kRailCeiling = 2.0;
+
+    /// How far below zero the damping goes at full `Sing`.
+    ///
+    /// Negative k is what makes the loop gain energy; how negative sets how
+    /// fast, and so how long the filter takes to arrive. It does **not** set
+    /// how loud -- `kSingAmplitude` does, and independently. Picked by
+    /// measurement rather than by feel; the table is in
+    /// `tests/test_SvfSing.cpp`.
+    ///
+    /// It is also the distance Sing has to travel *back* before it bites, since
+    /// the sweep starts from whatever damping the resonance left: the crossing
+    /// is at `sing > k / (k + kSingCeiling)`, which is 0.008 of the travel at
+    /// resonance 1 and 0.89 at resonance 0.
+    static constexpr double kSingCeiling = 0.25;
+
+    /// What a silent filter is nudged to when it has been asked to sing.
+    ///
+    /// Small enough to be inaudible as a click at any level, large enough that
+    /// the slowest build arrives inside a note, and fixed rather than random so
+    /// the test can predict the trajectory.
+    static constexpr double kSingSeed = 1.0e-6;
+
+    /// Where a singing loop settles, as a **bandpass amplitude** -- and it
+    /// settles there exactly, to six figures, at every sample rate, every
+    /// cutoff and every resonance. What stops the growth is the damping
+    /// returning to zero, not the supply running out.
+    ///
+    /// **Below `kRailKnee` with room to spare over the range that matters**,
+    /// which is a bound rather than a hope: the integrator states sit at
+    /// `kSingAmplitude / cos(pi * fc / Fs)`, so the rail stays out of it while
+    /// fc/Fs < 0.2048. Sonitus runs this inside the oversampled section at
+    /// ~176-192 kHz, which puts that corner above 36 kHz. With oversampling off
+    /// at 44.1 kHz it falls to 9.0 kHz, and a singing filter tuned above that
+    /// is shaved a little by the rail -- 0.06 dB at 12 kHz, measured. The
+    /// header carries the table.
+    static constexpr double kSingAmplitude = 0.8;
+
+    /// How far past the settling amplitude the restoring term keeps growing.
+    ///
+    /// Without a ceiling a transient far above the target would swing the
+    /// damping to several times its resonant value and ring the loop *down*
+    /// audibly. Two lets it decay firmly and stops there -- `k - k*r` at r = 2
+    /// is `-k`, so the damping a singing filter can reach is exactly as
+    /// positive as it was negative, and no more.
+    static constexpr double kSingReachCeiling = 2.0;
 
     /// How hard the drive control pushes the loop into that rail, at the top of
     /// its travel. Geometric: `gain = kDriveRange ^ drive`, so 8 means 18 dB
@@ -259,6 +414,47 @@ public:
 
     [[nodiscard]] double getResonance() const noexcept { return resonance_; }
 
+    /// How far past the resonance's ceiling the damping is pushed, into the
+    /// region where the filter sings on its own. 0 is off and **bit-exact**.
+    ///
+    /// It is deliberately a separate control rather than more travel on the
+    /// resonance: the resonance's map is geometric in Q and every saved patch
+    /// stores a position on it, so widening that range would silently change
+    /// what every one of them means. CLAUDE.md section 8, and the same argument
+    /// `Formant::kLockedNarrowing` makes for not widening `kNarrowest`.
+    void setSing (double sing) noexcept
+    {
+        const double wanted = std::clamp (sing, 0.0, 1.0);
+
+        if (isExactly (wanted, sing_))
+            return;
+
+        sing_ = wanted;
+        updateCoefficients();
+    }
+
+    [[nodiscard]] double getSing() const noexcept { return sing_; }
+
+    /// The damping actually in force, after Sing. Negative means the loop is
+    /// gaining energy. For the tests and for a display.
+    [[nodiscard]] double getDamping() const noexcept { return k_; }
+
+    /// Nudges a silent filter, so a singing one has something to grow from.
+    ///
+    /// Does nothing unless **both** integrator states are exactly zero, so it
+    /// cannot disturb a filter that is already running, and returns whether it
+    /// did. A loop at exactly zero stays there however negative the damping is;
+    /// a real filter starts from its own noise and this is the deterministic
+    /// stand-in for that.
+    bool seedIfSilent (double amount = kSingSeed) noexcept
+    {
+        if (! (isExactlyZero (s1_) && isExactlyZero (s2_)))
+            return false;
+
+        s1_ = amount;
+        return true;
+    }
+
     /// The control setting that gives a particular Q -- the inverse of the
     /// geometric mapping in `updateCoefficients`.
     ///
@@ -316,11 +512,40 @@ public:
         //     hp = (in - (2R + g) * s1 - s2) / (1 + 2R*g + g^2)
         //
         // written with the division folded into a single reciprocal.
-        const double denominator = 1.0 / (1.0 + g * (g + k_));
+        //
+        // **The damping, which is level-dependent only while singing.** `k_` is
+        // 1/Q and so is positive for every patch that is merely resonant; only
+        // Sing can drive it below zero, and a loop with k >= 0 cannot gain
+        // energy and needs no bound. So the test *is* the branch: a
+        // non-singing filter takes the else and runs the original arithmetic
+        // bit for bit, having paid one perfectly-predicted compare.
+        //
+        // While singing, this walks k linearly back to **exactly zero** as the
+        // loop reaches `kSingAmplitude`, and past zero above it: `k - k*r` is
+        // k at r = 0, 0 at r = 1 and -k at the ceiling. One stable amplitude,
+        // reached from either side, and it lands on `kSingAmplitude` whatever
+        // the resonance and whatever the sample rate.
+        //
+        // `amplitude` is the **bandpass envelope**, and getting it right is the
+        // whole design (see the header). The two integrator states are in exact
+        // quadrature and of exactly equal magnitude B = A/cos(theta/2), so
+        // `sqrt((s1^2 + s2^2) / (1 + g^2))` is A -- constant over the cycle,
+        // with no ripple to modulate the damping and pull the pitch. Taking the
+        // local `g` rather than a cached one is what keeps it correct under
+        // filter FM, where the corner moves every sample.
+        double k = k_;
+
+        if (k < 0.0)
+        {
+            const double amplitude = std::sqrt ((s1_ * s1_ + s2_ * s2_) / (1.0 + g * g));
+            k -= k * std::min (amplitude * (1.0 / kSingAmplitude), kSingReachCeiling);
+        }
+
+        const double denominator = 1.0 / (1.0 + g * (g + k));
 
         const double driven = input * driveGain_;
 
-        const double highpass = (driven - s1_ * (g + k_) - s2_) * denominator;
+        const double highpass = (driven - s1_ * (g + k) - s2_) * denominator;
 
         const double bandpass = highpass * g + s1_;
         s1_ = bandpass + highpass * g;
@@ -558,11 +783,33 @@ private:
         // pow(x, 0.0) is exactly 1.0, so a control at zero still gives k = 2
         // exactly -- the neutral stays bit-exact rather than nearly so.
         k_ = 1.0 / (kMinimumQ * std::pow (kMaximumQ / kMinimumQ, resonance_));
+
+        // **Sing**, sweeping the damping linearly from there down past zero.
+        //
+        // Written as a two-sided blend rather than as `k -= sing * (k +
+        // kSingCeiling)`, because only this form is exact at **both** ends:
+        // `1 * k + 0 * c` is k bit for bit and `0 * k + 1 * c` is c bit for
+        // bit, where the subtracting form recovers k exactly but misses
+        // -kSingCeiling by an ulp at three points of the resonance travel
+        // (2.78e-17 at resonance 0.40, 0.50 and 0.65 -- the rounding in
+        // `k + 0.25` is not undone by subtracting k back). Same lesson as
+        // Biquad's `a0 / a0`: assume nothing about a landmark until a test has
+        // compared it bit for bit.
+        //
+        // The crossing is not at the same point of travel at every resonance,
+        // and that is the physics rather than a taper worth fixing: Sing has to
+        // cancel the damping that is there before it can go past it, so it
+        // bites at sing > k / (k + kSingCeiling) -- 0.008 of the travel at
+        // resonance 1, 0.20 at 0.5, 0.89 at 0. Turn the resonance up and Sing
+        // bites almost at once; leave it down and most of Sing's travel is
+        // spent undoing the damping. The tooltip says so.
+        k_ = (1.0 - sing_) * k_ + sing_ * -kSingCeiling;
     }
 
     double sampleRate_ { 48000.0 };
     double cutoffHz_   { 1000.0 };
     double resonance_  { 0.0 };
+    double sing_       { 0.0 };
     double drive_      { 0.0 };
     double driveGain_  { 1.0 };
     double driveTrim_  { 1.0 };
