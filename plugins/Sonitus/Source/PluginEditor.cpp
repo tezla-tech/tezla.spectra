@@ -3666,27 +3666,6 @@ void SonitusEditor::buildPages()
                    ids::morphB, ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB,
                    ids::driftB, ids::stackB, ids::stackStepB, "B");
 
-    osc->addHeading ("SHEPARD -- the endless rise", 3);
-
-    osc->addKnob (ids::shepardRate, "Speed",
-        "How fast the glissando climbs, in **octaves per second**, and the sign is the "
-        "direction: positive rises, negative falls. The illusion repeats once per octave, so "
-        "0.02 is a fifty-second riser and 4 is a siren.\n\n"
-        "**Zero is a setting, not the bottom of a range** -- it reads *held*, and what you get "
-        "is a static octave stack with its ends rolled off, which is an organ registration of "
-        "its own.\n\n"
-        "One speed for the whole instrument, because the glide is one accumulator for the whole "
-        "instrument: a held chord has to climb as one thing, and voices with their own phases "
-        "would smear a rise into a wash. It does nothing unless an oscillator's Stack is set to "
-        "Shepard.");
-
-    osc->addToggle (ids::shepardSync, "Sync",
-        "Locks the climb to the host tempo: **one octave per division**, taking its direction "
-        "from Speed's sign. One octave per bar at 174 BPM is 0.73 octaves a second.");
-
-    osc->addChoice (ids::shepardDiv, "Division",
-        "How long one octave of climb takes, in note values. Greyed unless Sync is on.");
-
     osc->addHeading ("SUB, RING AND FOLD", 5);
 
     osc->addChoice (ids::subShape, "Sub shape",
@@ -3712,6 +3691,27 @@ void SonitusEditor::buildPages()
         "the harder you push the more harmonics appear -- the opposite of a clipper, which runs "
         "out. Antialiased, and at full fold it is the widest-band thing in the instrument: this "
         "is the one control that genuinely wants x8 oversampling.");
+
+    osc->addHeading ("SHEPARD -- the endless rise", 3, true);
+
+    osc->addKnob (ids::shepardRate, "Speed",
+        "How fast the glissando climbs, in **octaves per second**, and the sign is the "
+        "direction: positive rises, negative falls. The illusion repeats once per octave, so "
+        "0.02 is a fifty-second riser and 4 is a siren.\n\n"
+        "**Zero is a setting, not the bottom of a range** -- it reads *held*, and what you get "
+        "is a static octave stack with its ends rolled off, which is an organ registration of "
+        "its own.\n\n"
+        "One speed for the whole instrument, because the glide is one accumulator for the whole "
+        "instrument: a held chord has to climb as one thing, and voices with their own phases "
+        "would smear a rise into a wash. It does nothing unless an oscillator's Stack is set to "
+        "Shepard.");
+
+    osc->addToggle (ids::shepardSync, "Sync",
+        "Locks the climb to the host tempo: **one octave per division**, taking its direction "
+        "from Speed's sign. One octave per bar at 174 BPM is 0.73 octaves a second.");
+
+    osc->addChoice (ids::shepardDiv, "Division",
+        "How long one octave of climb takes, in note values. Greyed unless Sync is on.");
 
     osc->addHeading ("SYNC AND PM", 2, true);
 

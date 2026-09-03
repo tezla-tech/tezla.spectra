@@ -518,6 +518,10 @@ Updated **in the same commit as each phase**, so whichever session picks this up
 — after a context loss, a model change, or a fresh clone — needs nothing beyond
 this file and CLAUDE.md.
 
+**Phase 5 is complete.** Every row below is `done`. **Nothing in it has been
+heard on the rig** — that is the one step this container cannot take, and it is
+the acceptance test.
+
 **Phase status** (flip `pending` → `done` in the phase's own commit):
 
 | phase | status |
@@ -527,7 +531,7 @@ this file and CLAUDE.md.
 | H2 Stack | done |
 | H3 Tract | done |
 | H4 Sag | done |
-| H5 close-out | pending |
+| H5 close-out | done |
 
 **What H1 actually landed, where it differs from the row above.** Three
 headers rather than two, and one small move:
@@ -566,8 +570,10 @@ multicore and SIMD work **parked at the user's request**. Ictus is in flight at
 (the punch chain) the first pending phase there. This phase and Ictus are
 independent; whichever the user asks for next is the one to do.
 
-**To resume:** read CLAUDE.md in full, then this file, then start at the first
-`pending` row. The non-negotiables that bite hardest here:
+**To resume:** there is no pending row. What is left is the user's ears, and
+then whatever they ask for — the four deferred items in `docs/ROADMAP.md` §11,
+or self-oscillation, which is still only scoped. The non-negotiables that bit
+hardest here, kept because they will bite the next phase too:
 
 - **Every new parameter at `kSchemaV8`, appended, neutral at its default.**
   Existing parameters keep the version they were born at, forever.

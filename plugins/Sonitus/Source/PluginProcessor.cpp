@@ -3401,6 +3401,217 @@ const std::vector<Preset>& presets()
                 { ids::output, -6.0f },
             }
         },
+        // -------------------------------------------------------------------
+        // **Phase 5 -- the horror set.** Stack, Tract and Sag, one apiece and
+        // then together. Appended, like every preset here: a program is
+        // recalled by index, so inserting one would repoint every saved choice.
+        // -------------------------------------------------------------------
+        {
+            // **Shepard falling.** Seven copies an octave apart under the
+            // window, sliding down one octave every four seconds, into a comb
+            // that key-tracks. Nothing arrives and nothing resolves.
+            //
+            // Hold one note. The illusion needs no playing at all -- and it
+            // needs the sustain up, because a decay would end the descent that
+            // is the entire point.
+            "Descent -- the fall that never lands",
+            {
+                { ids::shapeA, 0.0f },                            // saw
+                { ids::stackA, 7.0f },                            // Shepard
+                { ids::unisonA, 7.0f }, { ids::spreadA, 0.7f },
+                { ids::shepardRate, -0.25f },
+                { ids::levelB, 0.0f },
+
+                { ids::subLevel, 0.3f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 2600.0f }, { ids::resonance, 0.25f },
+                { ids::filterTrack, 0.0f },
+
+                { ids::combMode, 1.0f }, { ids::combTrack, 0.8f },
+                { ids::combFeed, 0.62f }, { ids::combMix, 0.4f },
+                { ids::combSpread, 0.6f }, { ids::combDamp, 0.35f },
+
+                { ids::ampAttack, 0.9f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 1.6f },
+
+                { ids::sag, 0.25f }, { ids::sagRate, 40.0f },
+
+                { ids::polyphony, 4.0f },
+                { ids::output, -15.0f },   // measured: -7 peaked at +3.53 dBFS
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The same trick upward, and faster.** A rising Shepard into a
+            // resonant filter that an envelope opens -- the stinger, rather
+            // than the drone. Short release, so it can be played as stabs.
+            "Ascent -- the riser that never arrives",
+            {
+                { ids::shapeA, 1.0f }, { ids::widthA, 0.35f },     // pulse
+                { ids::stackA, 7.0f },
+                { ids::unisonA, 7.0f }, { ids::spreadA, 0.55f },
+                { ids::shepardRate, 0.9f },
+                { ids::levelB, 0.0f },
+
+                { ids::cutoff, 700.0f }, { ids::resonance, 0.62f },
+                { ids::filterDrive, 0.35f }, { ids::filterTrack, 0.3f },
+
+                { ids::ampAttack, 0.02f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.5f },
+
+                { ids::env1Attack, 1.4f }, { ids::env1Decay, 1.0f },
+                { ids::env1Sustain, 1.0f },
+                { ids::modSource (0), 2.0f }, { ids::modDest (0), 1.0f },
+                { ids::modDepth (0), 0.55f },                      // cutoff
+
+                { ids::tubeDrive, 6.0f },
+                { ids::polyphony, 6.0f },
+                { ids::output, -8.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **A cluster in a tuning that cannot resolve it.** Stack at Scale,
+            // one key per copy, five copies -- so what you get depends entirely
+            // on the TUNING page. In twelve-tone equal temperament it is a
+            // chromatic cluster; load Werckmeister III or a Persian dastgah and
+            // it becomes a cluster with a history.
+            //
+            // Slow attack, long release, and the drift up, so the cluster
+            // breathes rather than sitting still.
+            "Cloister -- a cluster in whatever tuning is loaded",
+            {
+                { ids::shapeA, 4.0f }, { ids::morphA, 0.45f },     // vintage saw
+                { ids::stackA, 6.0f },                            // Scale
+                { ids::stackStepA, 1.0f },
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.85f },
+                { ids::detuneA, 4.0f }, { ids::driftA, 7.0f },
+
+                { ids::shapeB, 3.0f }, { ids::levelB, 0.35f },     // sine
+                { ids::octaveB, -1.0f },
+
+                { ids::cutoff, 1500.0f }, { ids::resonance, 0.2f },
+                { ids::filterTrack, 0.5f },
+
+                { ids::ampAttack, 1.2f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 2.2f },
+
+                { ids::voiceDrift, 8.0f },
+                { ids::sag, 0.18f }, { ids::sagRate, 55.0f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -9.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Something much too big is talking.** Tract at 0.55 -- a 32 cm
+            // throat -- with the vowel morph crawling under a slow LFO, over
+            // noise rather than an oscillator. The anti-formant is in, because
+            // a nasal is what makes it read as a mouth rather than as a filter.
+            "Long Room -- a throat thirty centimetres too big",
+            {
+                { ids::shapeA, 8.0f }, { ids::morphA, 0.35f },     // noise
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.9f },
+                { ids::levelB, 0.0f },
+
+                { ids::cutoff, 3200.0f }, { ids::resonance, 0.15f },
+
+                { ids::formantMix, 0.8f }, { ids::formantMorph, 0.3f },
+                { ids::tubeDrive, 12.0f },
+                { ids::formantSharp, 0.7f },
+                { ids::tract, 0.55f },
+                { ids::formantNotch, 1100.0f }, { ids::formantNotchDepth, 0.5f },
+
+                { ids::lfo1Rate, 0.09f }, { ids::lfo1Wave, 6.0f },  // smooth random
+                { ids::globalSource (0), 1.0f },                    // LFO 1
+                { ids::globalDest (0), 5.0f },                      // vowel
+                { ids::globalDepth (0), 0.6f },
+
+                { ids::globalSource (1), 1.0f },
+                { ids::globalDest (1), 10.0f },                     // tract
+                { ids::globalDepth (1), 0.25f },
+
+                { ids::ampAttack, 0.6f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 1.4f },
+
+                { ids::sag, 0.3f }, { ids::sagRate, 25.0f },
+
+                { ids::polyphony, 4.0f },
+                { ids::output, 10.0f },   // measured: -5 peaked at -29.3 dBFS
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **A drone on a machine that is giving up.** Stacked fifths --
+            // hollow, wide, no third to say major or minor -- under deep slow
+            // sag, so the whole thing goes flat and dull together and then
+            // comes back. Sixty-second period: it lurches about twice a
+            // chorus.
+            //
+            // The one to leave running while something else happens over it.
+            "Cellar -- fifths on a failing machine",
+            {
+                { ids::shapeA, 0.0f },
+                { ids::stackA, 2.0f },                            // Fifths
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.75f },
+                { ids::detuneA, 9.0f }, { ids::driftA, 6.0f },
+
+                { ids::shapeB, 0.0f }, { ids::levelB, 0.5f },
+                { ids::stackB, 1.0f },                            // Octaves
+                { ids::unisonB, 3.0f }, { ids::octaveB, -1.0f },
+
+                { ids::subLevel, 0.5f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 900.0f }, { ids::resonance, 0.3f },
+                { ids::filterDrive, 0.25f }, { ids::filterTrack, 0.35f },
+
+                { ids::ampAttack, 0.8f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 2.5f },
+
+                { ids::sag, 0.85f }, { ids::sagRate, 60.0f },
+                { ids::voiceDrift, 10.0f },
+
+                { ids::tubeDrive, 5.0f },
+                { ids::polyphony, 6.0f },
+                { ids::output, -9.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The action one.** Stacked tritones -- symmetric, rootless, and
+            // the interval that will not sit still -- with PM for teeth and the
+            // sequencer chopping the level into sixteenths. Short and hard.
+            //
+            // Play it as one held note and let the sequencer do the rhythm.
+            "Tritone Engine -- the pulse that will not resolve",
+            {
+                { ids::shapeA, 1.0f }, { ids::widthA, 0.3f },
+                { ids::stackA, 3.0f },                            // Tritones
+                { ids::unisonA, 3.0f }, { ids::spreadA, 0.5f },
+
+                { ids::shapeB, 3.0f }, { ids::levelB, 0.0f },
+                { ids::pmIndex, 2.2f }, { ids::semitonesB, 7.0f },
+                { ids::feedbackA, 0.35f },
+
+                { ids::subLevel, 0.55f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 1800.0f }, { ids::resonance, 0.45f },
+                { ids::filterDrive, 0.5f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.12f },
+
+                { ids::seqRate, 8.0f }, { ids::seqLength, 16.0f },
+                { ids::modSource (0), 9.0f },                      // sequencer
+                { ids::modDest (0), 15.0f },                       // level
+                { ids::modDepth (0), 0.85f },
+
+                { ids::tubeDrive, 9.0f },
+                { ids::polyphony, 6.0f },
+                { ids::output, -8.0f },
+            }
+        },
 
     };
 

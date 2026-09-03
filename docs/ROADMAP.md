@@ -287,11 +287,12 @@ and every saved project's PDC moves.
 ## 11. Sonitus phase 5 — ideas parked at the plan stage
 
 **Parked 2026-09-03 while `plugins/Sonitus/PLAN-PHASE5.md` was written**, so the
-first build is the plan and not the plan plus its afterthoughts. Phase 5 adds
-**Stack** (the unison bank at musical intervals, at the loaded tuning's degrees,
-or as a Shepard glissando), **Tract** (one ratio resizing the vowel filter's
-three formants) and **Sag** (one slow instability shared by every voice). These
-four were cut from it deliberately.
+first build is the plan and not the plan plus its afterthoughts. **Phase 5 is
+now complete**: **Stack** (the unison bank at musical intervals, at the loaded
+tuning's degrees, or as a Shepard glissando), **Tract** (one ratio resizing the
+vowel filter's three formants) and **Sag** (one slow instability shared by every
+voice) all shipped. These four were cut from it deliberately and are still
+parked.
 
 1. **`stackOrigin` — Centre / Up / Down.** Stack's ranks are symmetric
    (`rank(i) = i - floor((N-1)/2)`), so seven copies of *Octaves* puts one copy
