@@ -194,6 +194,18 @@ juce::AudioParameterFloatAttributes tractAttributes()
         .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
 }
 
+/// Whole seconds, for a control whose useful range is tens of them.
+juce::AudioParameterFloatAttributes secondsAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withLabel ("s")
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            return juce::String (value, value < 10.0f ? 1 : 0) + " s";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
+}
+
 /// Octaves per second, signed, with zero shown as "held" rather than 0.00 --
 /// the same reading LFO rate 0 already gets, and for the same reason: it is a
 /// deliberate setting, not the bottom of a range.
@@ -441,6 +453,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::shepardSync, kSchemaV8 }, "Shepard sync", false));
+
+    // **Sag** -- one slow instability shared by every voice. 0 is bit-exactly
+    // out of the path, and the walk keeps walking regardless: it is still a
+    // modulation source there, because the depth is how much reaches the voice
+    // directly rather than whether the machine has a temperature.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::sag, kSchemaV8 }, "Sag",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::sagRate, kSchemaV8 }, "Sag rate",
+        skewedRange (2.0f, 120.0f, 20.0f), 20.0f, secondsAttributes()));
 
     // **Tract** -- the size of the throat the vowel filter is modelling, as a
     // ratio on all three formants. Geometric about 1.0, because it is a
@@ -1480,6 +1504,12 @@ void SonitusProcessor::pullParameters()
     p.shepardDivision = indexOf (state_, ids::shepardDiv);
 
     p.formantTract = valueOf (state_, ids::tract);
+
+    // Sag: the depth reaches the voices through `VoiceParameters`, the period
+    // stays with the engine that owns the walk.
+    p.voice.sagDepth = valueOf (state_, ids::sag);
+    p.sagDepth = p.voice.sagDepth;
+    p.sagPeriodSeconds = valueOf (state_, ids::sagRate);
 
     for (int macro = 0; macro < 4; ++macro)
         p.macros[static_cast<std::size_t> (macro)] = valueOf (state_, ids::macro (macro));

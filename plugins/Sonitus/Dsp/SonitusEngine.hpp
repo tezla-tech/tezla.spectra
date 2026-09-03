@@ -82,6 +82,7 @@
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/Formant.hpp>
 #include <tezla/dsp/Lfo.hpp>
+#include <tezla/dsp/SlowWalk.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Phaser.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
@@ -367,6 +368,20 @@ struct EngineParameters
     bool shepardSync { false };
     int shepardDivision { dsp::defaultDivision };
 
+    /// **Sag** -- how deep the machine's one shared instability runs, 0 to 1.
+    ///
+    /// The complement of the two drifts already here, both of which are
+    /// uncorrelated on purpose: this one is **common-mode across every voice**,
+    /// so the instrument goes wrong together the way a tape machine or a
+    /// failing supply does rather than getting thicker. Exactly 0 is bit-exactly
+    /// out of the path, and the walk keeps walking regardless -- it is still a
+    /// modulation source at 0, because the depth knob is how much reaches the
+    /// voice *directly*, not whether the machine has a temperature.
+    double sagDepth { 0.0 };
+
+    /// How long between the walk's new targets, in seconds.
+    double sagPeriodSeconds { 20.0 };
+
     double phaseFrequencyHz { 800.0 };
     int phaseStages { 4 };
 
@@ -460,6 +475,19 @@ public:
     /// The Shepard glissando's accumulator, in octaves travelled. For the test
     /// that pins the wrap, and for a display.
     [[nodiscard]] double getShepardOctaves() const noexcept { return shepardOctaves_; }
+
+    /// Where the machine's temperature has got to, in [-1, 1]. For the panel
+    /// and for the tests that pin it.
+    [[nodiscard]] double getSag() const noexcept { return sagWalk_.value(); }
+
+    /// What the sag is doing to the tuning right now, in cents. Common-mode
+    /// across every voice, which is the point of it.
+    [[nodiscard]] double getSagCents() const noexcept
+    {
+        return dsp::isExactlyZero (active_.sagDepth)
+                 ? 0.0
+                 : kSagPitchCents * active_.sagDepth * sagWalk_.value();
+    }
 
     dsp::Tuning& tuning() noexcept { return voices_.tuning(); }
     [[nodiscard]] const dsp::Tuning& tuning() const noexcept { return voices_.tuning(); }
@@ -678,6 +706,12 @@ private:
     /// divisible by every copy count the bank allows, which makes the wrap an
     /// exact whole number of turns at any count rather than a small jump.
     double shepardOctaves_ { 0.0 };
+
+    /// **The machine's temperature.** One walk for the whole instrument, on the
+    /// control grid, never restarted by a note -- a key going down does not
+    /// reset the temperature of a transistor, and it does not reset this
+    /// either. What it moves is below.
+    dsp::SlowWalk sagWalk_;
     bool transportRunning_ { false };
     int sinceControl_ { 0 };
 

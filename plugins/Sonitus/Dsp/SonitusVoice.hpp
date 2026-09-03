@@ -235,6 +235,20 @@ struct ModSlot
     return std::copysign (depth * depth, depth);
 }
 
+/// **What Sag moves at full depth, and all of it from the one walk.**
+///
+/// Three things moving together from one cause is what reads as *one machine*;
+/// three separate knobs would read as three effects. The same argument
+/// `voiceDrift` makes for pairing cutoff and resonance, applied across the
+/// whole instrument instead of within a voice.
+///
+/// - **pitch**, in cents: the capstan slipping, and the audible half.
+/// - **cutoff**, in octaves: the sound dulling as it sags.
+/// - **level**, in decibels: the amplifier drooping.
+inline constexpr double kSagPitchCents = 40.0;
+inline constexpr double kSagCutoffOctaves = 0.4;
+inline constexpr double kSagLevelDb = 1.5;
+
 struct GlobalSources
 {
     double lfo1 { 0.0 };
@@ -290,6 +304,11 @@ struct VoiceParameters
     /// Scale mode. See `StackShapes.hpp`.
     StackMode stackA { StackMode::detune };
     int stackStepA { 1 };
+
+    /// **Sag** -- how deep the machine's shared instability reaches this voice.
+    /// The walk itself arrives in `GlobalSources::sag`; this is only the depth.
+    /// Exactly 0 is bit-exactly out of the path.
+    double sagDepth { 0.0 };
 
     // ---- oscillator B --------------------------------------------------------
 
@@ -876,6 +895,27 @@ public:
         if (! dsp::isExactlyZero (parameters.voiceDrift))
             pitchRatio *= std::pow (2.0, getVoiceDriftPitchCents() / 1200.0);
 
+        // **Sag, and it goes here rather than into `centsA`/`centsB` beside the
+        // pitch bend.** That distinction is not cosmetic and it took reading
+        // `subIncrement` to find: the sub reads `frequency_ * pitchRatio` and
+        // ignores the cents, so sagging through the cents field would leave the
+        // sub sitting perfectly in tune underneath a sagging top. Half the
+        // instrument failing is not the effect.
+        //
+        // Common-mode: every voice reads the same walk from `GlobalSources`, so
+        // a chord stays in tune with itself and the whole instrument goes flat
+        // together -- which is what a slipping capstan sounds like, and the
+        // opposite of what the two per-voice drifts are for.
+        //
+        // The zero guard is a **cost saving and not an exactness one**: at
+        // depth 0 the exponent is exactly 0 and `pow(2, 0)` is exactly 1.0, so
+        // the branch changes no bit either way. It skips a `pow` per voice per
+        // chunk. Said plainly because the same shape of comment on Ictus's Air
+        // branch claimed exactness and a break-check proved it wrong.
+        if (! dsp::isExactlyZero (parameters.sagDepth))
+            pitchRatio *= std::pow (2.0, kSagPitchCents * parameters.sagDepth
+                                           * global.sag / 1200.0);
+
         const double nominalA = frequency_ * pitchRatio
                                   * ratioFor (parameters.octaveA, parameters.semitonesA,
                                               parameters.centsA);
@@ -979,8 +1019,24 @@ public:
             cutoffTarget = std::clamp (cutoffTarget * std::pow (2.0, getVoiceDriftCents() / 1200.0),
                                        20.0, sampleRate_ * 0.45);
 
+        double sagGain = 1.0;
+
+        // The other two thirds of the sag, from the same walk and in the same
+        // direction as the pitch -- the sound dulling and the amplifier
+        // drooping as the machine goes wrong. All three moving together is what
+        // makes it one machine rather than three effects.
+        if (! dsp::isExactlyZero (parameters.sagDepth))
+        {
+            const double sag = parameters.sagDepth * global.sag;
+
+            cutoffTarget = std::clamp (cutoffTarget * std::pow (2.0, kSagCutoffOctaves * sag),
+                                       20.0, sampleRate_ * 0.45);
+
+            sagGain = std::pow (10.0, kSagLevelDb * sag / 20.0);
+        }
+
         cutoff_.setTarget (cutoffTarget);
-        gain_.setTarget (targetGain (amount (ModDestination::level)));
+        gain_.setTarget (targetGain (amount (ModDestination::level)) * sagGain);
     }
 
     /// One sample into a stereo pair. Adds rather than overwrites, so a bank of

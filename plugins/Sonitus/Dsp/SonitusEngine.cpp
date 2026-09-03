@@ -64,6 +64,12 @@ void Engine::rebuildForRate() noexcept
     lfo2_.prepare (internalRate_);
     sequencer_.prepare (internalRate_);
 
+    // The machine's temperature, on the same control grid everything else here
+    // runs on -- counted in samples, so the host's buffer size cannot reach it.
+    // Here rather than in `prepare` because `internalRate_` is only known once
+    // the factor is, and because a factor change has to re-derive it too.
+    sagWalk_.prepare (internalRate_, Voice::kControlIntervalSamples);
+
     for (int channel = 0; channel < 2; ++channel)
     {
         split_[channel].prepare (internalRate_);
@@ -101,6 +107,11 @@ void Engine::reset() noexcept
     // graph rebuild is exactly when it should start over.
     shepardOctaves_ = 0.0;
     sources_.shepardOctaves = 0.0;
+
+    // A graph rebuild starts the machine cold. A *note* never does -- see
+    // `SlowWalk::reset`.
+    sagWalk_.reset();
+    sources_.sag = 0.0;
 
     oversampler_.reset();
 
@@ -627,6 +638,21 @@ void Engine::advanceGlobalSources (int samples) noexcept
                          * std::floor (shepardOctaves_ / kShepardWrapOctaves);
 
     sources_.shepardOctaves = shepardOctaves_;
+
+    // **Sag.** One walk, stepped once for the whole instrument, published like
+    // the macros so the voices and the mangle read the identical figure on the
+    // identical chunk rather than two copies a chunk apart.
+    sagWalk_.setPeriodSeconds (active_.sagPeriodSeconds);
+    sagWalk_.advance();
+
+    sources_.sag = sagWalk_.value();
+
+    // The depth is a destination too, so an envelope can make the machine fail
+    // on cue. Resolved here rather than in `applyGlobalModulation` for the same
+    // reason the glide's rate is: the voices read it on this chunk.
+    active_.voice.sagDepth = std::clamp (active_.sagDepth
+                                           + globalModulationFor (GlobalDestination::sagDepth),
+                                         0.0, 1.0);
 }
 
 void Engine::mangle (double& left, double& right) noexcept

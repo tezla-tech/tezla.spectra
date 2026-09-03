@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <tezla/dsp/Denormals.hpp>
@@ -677,4 +678,236 @@ TEZLA_TEST (a_shepard_stack_costs_what_the_tooltip_says)
     // comes from. The ceiling is set above those with room for a slower
     // machine, and well below the 2x that would mean something had gone wrong.
     CHECK_CPU_BUDGET (shepard, detune * 1.50, "a shepard stack against a detune stack");
+}
+
+// ---------------------------------------------------------------------------
+// Sag -- one slow instability, shared
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// A patch with nothing moving but the sag, so what is measured is the sag.
+EngineParameters bareSag (double depth, double period)
+{
+    auto p = bareStack (StackMode::detune, 1);
+
+    p.voice.amp.attack = 0.005;
+    p.voice.amp.decay = 60.0;
+    p.voice.amp.sustain = 1.0;
+
+    p.voice.sagDepth = depth;
+    p.sagDepth = depth;
+    p.sagPeriodSeconds = period;
+
+    return p;
+}
+} // namespace
+
+TEZLA_TEST (sag_at_zero_is_bit_exactly_out_of_the_path)
+{
+    // The walk keeps walking -- it is still a modulation source at depth 0 --
+    // but nothing it does reaches the audio.
+    //
+    // **The `isExactlyZero` guards on the three shares are a cost saving, not
+    // what makes this true**, and a break-check said so: removing the one on
+    // the pitch left this passing, because `pow(2, 40 * 0 * sag / 1200)` is
+    // `pow(2, 0)` and that is exactly 1.0 by IEEE, as are the level's `pow(10,
+    // 0)` and the cutoff's. Exactly the shape of Ictus's Air branch, which was
+    // mis-described the same way. What this test actually holds is that the
+    // depth is the only thing standing between the walk and the audio -- which
+    // is the claim worth having, and which a share reading some other control
+    // by mistake would break.
+    ScopedNoDenormals guard;
+
+    auto still = std::make_unique<Engine>();
+    auto walking = std::make_unique<Engine>();
+
+    still->prepare (kRate, 512);
+    walking->prepare (kRate, 512);
+
+    // Identical patches; one has a sag *rate* set, which moves the walk without
+    // moving the depth.
+    auto a = bareSag (0.0, 20.0);
+    auto b = bareSag (0.0, 2.0);
+
+    const int samples = static_cast<int> (kRate * 1.0);
+
+    const auto quiet = play (*still, a, 57, samples);
+    const auto lively = play (*walking, b, 57, samples);
+
+    std::size_t differing = 0;
+
+    for (std::size_t i = 0; i < quiet.size(); ++i)
+        if (quiet[i] != lively[i])
+            ++differing;
+
+    std::printf ("    depth 0, two walk rates: %zu of %zu samples differ\n",
+                 differing, quiet.size());
+
+    CHECK (differing == 0);
+
+    // ...and the walk really was moving, or the test above proves nothing.
+    std::printf ("    the walk reached %+.4f while contributing nothing\n", walking->getSag());
+
+    CHECK (std::abs (walking->getSag()) > 0.01);
+}
+
+TEZLA_TEST (sag_moves_every_voice_by_the_same_cents)
+{
+    // The whole point, and what separates it from the two drifts already here:
+    // common-mode. A chord stays in tune with itself and the instrument goes
+    // flat as one machine. `voiceDrift` is the control that must *not* behave
+    // like this, so it is measured beside it.
+    ScopedNoDenormals guard;
+
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (kRate, 512);
+
+    auto p = bareSag (1.0, 3.0);
+    engine->setParameters (p);
+
+    Buffers buffers (512);
+    engine->process (buffers.pointers, 512);
+
+    for (const int note : { 40, 52, 64 })
+        engine->noteOn (note, 1.0);
+
+    for (int block = 0; block < 200; ++block)
+        engine->process (buffers.pointers, 512);
+
+    const double cents = engine->getSagCents();
+
+    std::printf ("    three voices sagging by %+.2f cents, from a walk at %+.4f\n",
+                 cents, engine->getSag());
+
+    // One number for the instrument, and it is the walk times the depth times
+    // the documented share.
+    CHECK_NEAR (cents, kSagPitchCents * engine->getSag(), 1.0e-9);
+    CHECK (std::abs (cents) > 0.5);
+}
+
+TEZLA_TEST (sag_reaches_the_sub_as_well_as_the_top)
+{
+    // The bug this arrangement exists to avoid: the sub reads
+    // `frequency_ * pitchRatio` and ignores `centsA`, so sagging through the
+    // cents field -- the obvious place, beside the pitch bend -- would leave
+    // the sub perfectly in tune underneath a sagging top. Half the instrument
+    // failing is not the effect.
+    //
+    // Measured with the sub *alone*: if it does not move, nothing here does.
+    ScopedNoDenormals guard;
+
+    const auto subPitch = [] (double depth)
+    {
+        auto engine = std::make_unique<Engine>();
+        engine->prepare (kRate, 512);
+
+        auto p = bareSag (depth, 3.0);
+        p.voice.levelA = 0.0;
+        p.voice.levelB = 0.0;
+        p.voice.subLevel = 1.0;
+        p.voice.subShape = SubShape::sine;
+        p.voice.subOctave = 0;
+        p.subSplit = false;
+
+        engine->setParameters (p);
+
+        Buffers buffers (512);
+        engine->process (buffers.pointers, 512);
+
+        // Let the walk run somewhere well away from zero before the note, so
+        // the note itself is rendered at a settled offset.
+        for (int block = 0; block < 400; ++block)
+            engine->process (buffers.pointers, 512);
+
+        engine->noteOn (57, 1.0);       // A3, 220 Hz
+
+        std::vector<double> out;
+        Buffers render (512);
+
+        for (int block = 0; block < 24; ++block)
+        {
+            std::fill (render.left.begin(), render.left.end(), 0.0);
+            std::fill (render.right.begin(), render.right.end(), 0.0);
+
+            engine->process (render.pointers, 512);
+
+            for (double v : render.left)
+                out.push_back (v);
+        }
+
+        return std::pair { partialNear (out, 4096, 220.0), engine->getSagCents() };
+    };
+
+    const auto [neutral, neutralCents] = subPitch (0.0);
+    const auto [sagged, saggedCents] = subPitch (1.0);
+
+    const double measured = 1200.0 * std::log2 (sagged / neutral);
+
+    std::printf ("    sub at %.2f Hz neutral, %.2f Hz sagging: %+.1f cents measured,"
+                 " %+.1f expected\n",
+                 neutral, sagged, measured, saggedCents - neutralCents);
+
+    CHECK (std::abs (saggedCents) > 5.0);
+    CHECK_NEAR (measured, saggedCents - neutralCents, 4.0);
+}
+
+TEZLA_TEST (sag_does_not_restart_on_a_note)
+{
+    // A key going down does not reset the temperature of a transistor, and it
+    // does not reset this either -- the same rule the unison drift and the
+    // voice card already follow. A sag that restarted per note would be a
+    // per-note effect wearing an instrument-wide name.
+    ScopedNoDenormals guard;
+
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (kRate, 512);
+
+    engine->setParameters (bareSag (1.0, 4.0));
+
+    Buffers buffers (512);
+
+    for (int block = 0; block < 300; ++block)
+        engine->process (buffers.pointers, 512);
+
+    const double before = engine->getSag();
+
+    engine->noteOn (60, 1.0);
+    engine->process (buffers.pointers, 512);
+
+    const double after = engine->getSag();
+
+    std::printf ("    walk %+.6f before a note, %+.6f after\n", before, after);
+
+    // It has stepped on, because a control chunk went by -- but by a chunk's
+    // worth, not back to zero.
+    CHECK (std::abs (after - before) < 0.02);
+    CHECK (std::abs (before) > 0.02);
+}
+
+TEZLA_TEST (sag_is_the_same_at_every_block_size)
+{
+    ScopedNoDenormals guard;
+
+    auto first = std::make_unique<Engine>();
+    auto second = std::make_unique<Engine>();
+
+    first->prepare (kRate, 512);
+    second->prepare (kRate, 512);
+
+    const auto p = bareSag (1.0, 2.0);
+    const int samples = static_cast<int> (kRate * 0.5);
+
+    const auto small = play (*first, p, 55, samples, 64);
+    const auto large = play (*second, p, 55, samples, 512);
+
+    std::size_t differing = 0;
+
+    for (std::size_t i = 0; i < small.size(); ++i)
+        if (small[i] != large[i])
+            ++differing;
+
+    std::printf ("    sag at 64 vs 512 samples: %zu of %zu differ\n", differing, small.size());
+
+    CHECK (differing == 0);
 }

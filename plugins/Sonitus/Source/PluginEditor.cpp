@@ -206,7 +206,7 @@ constexpr int kPagePad = 5;
     // rather than shape.
     static const char* trims[] {
         "driftA", "driftB", "voiceDrift", "spreadA", "spreadB", "fineA", "fineB",
-        "combSpread", "combDamp", "octaveA", "octaveB", "subOctave"
+        "combSpread", "combDamp", "octaveA", "octaveB", "subOctave", "sagRate"
     };
 
     for (const char* lead : leads)
@@ -228,7 +228,10 @@ constexpr int kPagePad = 5;
 /// the same reason.
 [[nodiscard]] bool isSpectral (const juce::String& id) noexcept
 {
-    static const char* spectral[] { "driftA", "driftB", "voiceDrift" };
+    // The rainbow ring marks a control whose job is instability -- drift, and
+    // now the machine's shared temperature, which is the same family of thing
+    // one level up.
+    static const char* spectral[] { "driftA", "driftB", "voiceDrift", "sag" };
 
     for (const char* name : spectral)
         if (id == name)
@@ -3933,6 +3936,29 @@ void SonitusEditor::buildPages()
             "own direction. It is the control a performance needs and a matrix has no row for.\n\n"
             "At 0 it contributes exactly nothing wherever it is pointed, so an unassigned macro "
             "is free and a patch saved before they existed is untouched.");
+
+    mod->addHeading ("SAG -- the machine going wrong, all of it together", 2, true);
+
+    mod->addKnob (ids::sag, "Depth",
+        "**One slow instability, shared by every voice.** The two drifts this instrument already "
+        "has -- the copies' and the voice card's -- are uncorrelated on purpose, and that is what "
+        "makes a stack thick. This is the opposite: one wander applied common-mode, so the whole "
+        "machine goes wrong *together* the way a tape machine or a failing supply does.\n\n"
+        "From the one walk, and all in the same direction, it moves the **pitch** by up to 40 "
+        "cents (the capstan slipping), the **cutoff** by 0.4 octaves (the sound dulling) and the "
+        "**level** by 1.5 dB (the amplifier drooping). Three things from one cause is what reads "
+        "as one machine; three knobs would read as three effects.\n\n"
+        "It mostly sits still and occasionally lurches, and it never repeats -- which is why an "
+        "LFO cannot do this: the ear locks onto a repeat inside a bar. It is what stops a "
+        "three-minute drone becoming wallpaper.\n\n"
+        "**At 0 it is bit-exactly out of the path**, and the walk keeps walking regardless: Sag "
+        "is a modulation source in both matrices whatever this is set to, so you can point the "
+        "machine's temperature at the comb time and leave the voices alone.");
+
+    mod->addKnob (ids::sagRate, "Rate",
+        "How long between the walk's new destinations, in seconds -- and roughly how long it "
+        "takes to get to each one. Two seconds is an unsteady machine; two minutes is one that "
+        "sags once a chorus. Twenty is the default and is about right for a drone.");
 
     mod->addHeading ("GLOBAL MATRIX -- one chain, shared by every note", 6);
 
