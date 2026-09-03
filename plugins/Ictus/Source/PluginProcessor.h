@@ -221,6 +221,10 @@ inline constexpr auto cpBodyRing  = "cpBodyRing";
 inline constexpr auto cpWidth     = "cpWidth";
 inline constexpr auto cpTailTone  = "cpTailTone";
 inline constexpr auto cpDrive     = "cpDrive";
+
+// CLAP, schema 8 -- the gate the other pads had
+inline constexpr auto cpGate      = "cpGate";
+inline constexpr auto cpRelease   = "cpRelease";
 } // namespace ids
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and

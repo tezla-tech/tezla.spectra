@@ -139,6 +139,7 @@ private:
     bool shownHatGate_ { true };
     bool shownClapBody_ { true };
     bool shownClapNoise_ { true };
+    bool shownClapGate_ { true };
 
     // The live key tooltips and the Tune readouts are rebuilt only when
     // what they describe moves.

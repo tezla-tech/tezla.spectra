@@ -841,7 +841,10 @@ void IctusEditor::buildClapPage()
 
     page.addKnob (ids::cpDrive, "Drive",
         "An antialiased soft clip over the whole clap, for a harder, flatter "
-        "one that sits in front of a mix. 0 is exact.");
+        "one that sits in front of a mix. Trimmed by the gain it adds, so it "
+        "buys harmonics and not loudness: measured across the whole range the "
+        "clap's RMS moves 1.7 dB while its peak falls by more than half, which "
+        "is the clipping doing its job. 0 is exact.");
 
     // ---- out ----
     page.beginPlate ("Out", "level and velocity", kTintVelocity, true);
@@ -852,6 +855,18 @@ void IctusEditor::buildClapPage()
 
     page.addKnob (ids::cpVelLevel, "Vel > Level",
         "How much velocity moves the level, 0 to 100%.", Emphasis::trim);
+
+    page.addLamp (ids::cpGate, "Gate", "Gate",
+        "Lit: a note-off fades the WHOLE clap out over Release from wherever "
+        "it is -- the bursts still to come, the cavity's ring and the room "
+        "alike. That is how you stop a long clap by lifting the key rather "
+        "than waiting for the room to finish. Dark: a one-shot that ignores "
+        "note-off, and the HIT button always plays the whole hit either way.");
+
+    page.addKnob (ids::cpRelease, "Release",
+        "How long a gated clap takes to fade after the key lifts, 0 to 2 s. 0 "
+        "is a 1 ms ramp, the shortest that does not click. Does nothing with "
+        "Gate dark.");
 
     page.setNote ("The clap is on D#1 by default. Bursts of noise a Flam apart with their "
                   "envelopes summed, a cavity struck by each of them, and then the room: the "
@@ -1128,6 +1143,14 @@ void IctusEditor::updateGreying()
         {
             shownClapNoise_ = noise;
             clapPage_->setControlEnabled (ids::cpNoiseTone, noise);
+        }
+
+        const bool clapGate = value (ids::cpGate) > 0.5;
+
+        if (clapGate != shownClapGate_)
+        {
+            shownClapGate_ = clapGate;
+            clapPage_->setControlEnabled (ids::cpRelease, clapGate);
         }
     }
 }

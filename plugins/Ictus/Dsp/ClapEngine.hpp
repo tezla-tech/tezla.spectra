@@ -37,6 +37,9 @@
 //   TAIL     the room, starting with the last burst, with its own TONE as a
 //            ratio of Colour -- a room is duller than the hands that fill it.
 //   DRIVE    an antialiased soft clip over the sum, for a harder clap.
+//   GATE     with RELEASE, the kick's: a note-off fades the whole hit from
+//            wherever it is, so a long clap can be stopped by lifting the
+//            key rather than by waiting for the room to finish.
 //
 // EVERYTHING IS SNAPSHOTTED AT `start()`. The tail is a `dsp::Adsr` killed
 // the moment it reaches its zero sustain, the bursts are cut to exactly zero
@@ -153,6 +156,8 @@ struct ClapSettings
     double tailTone { 0.7 };        ///< its band as a ratio of Colour, 0.25..1.5
 
     double level { 0.75 };          ///< 0..1
+    bool   gate { false };          ///< lit: a note-off fades the hit over `releaseSeconds`
+    double releaseSeconds { 0.0 };  ///< 0..2; 0 is a 1 ms cut
     double velocityLevel { 1.0 };   ///< x * ((1 - a) + a * v), as everywhere here
 };
 
@@ -184,12 +189,27 @@ public:
     static constexpr double kOpenQ = 0.5;
 
     static constexpr double kDriveRange = 10.0;
-    static constexpr double kDriveTrimExponent = 0.7;
+
+    /// How much of the pre-gain is trimmed back off again.
+    ///
+    /// A clipper's output level depends on where the signal already sat
+    /// against the threshold, so no single exponent holds both engines
+    /// exactly level: a full 1/g is right for the clap, whose sum peaks at
+    /// 0.37 and is barely clipped, and 8 dB too much for the hat, whose
+    /// layers already reach 1.5 before the stage. 0.75 is the compromise,
+    /// measured: over the whole control the clap moves +2.1 dB and the hat
+    /// -2.7 dB, so Drive buys harmonics rather than loudness either way
+    /// (CLAUDE.md section 7) without a level detector in the path.
+    static constexpr double kDriveTrimExponent = 0.75;
 
     /// Skew's range, as the ratio each gap is multiplied by: at -1 every gap
     /// is two thirds of the one before, at +1 half again.
     static constexpr double kSkewLow = 0.667;
     static constexpr double kSkewHigh = 1.5;
+
+    /// The shortest release -- a note-off with Release at 0 ramps out over
+    /// this rather than stepping to zero (the kick's, snare's and hat's).
+    static constexpr double kMinimumReleaseSeconds = 0.001;
 
     static constexpr std::uint64_t kNoiseSalt = 0x14057B7EF767814Full;
 
@@ -211,6 +231,7 @@ public:
         body_.setModeCount (kBodyModes);
 
         tail_.prepare (rate_);
+        gateEnv_.prepare (rate_);
 
         reset();
     }
@@ -227,6 +248,8 @@ public:
         noiseTone_.reset();
         body_.reset();
         tail_.kill();
+        gateEnv_.kill();
+        releasing_ = false;
         shaper_.reset();
 
         for (auto& level : burstLevel_)
@@ -262,6 +285,10 @@ public:
 
         const double v = std::clamp (velocity, 0.0, 1.0);
         const double amount = std::clamp (s.velocityLevel, 0.0, 1.0);
+
+        // The gate first: it is the one thing a note-off can reach.
+        gate_ = s.gate;
+        release_ = std::max (kMinimumReleaseSeconds, std::clamp (s.releaseSeconds, 0.0, 2.0));
 
         bursts_ = std::clamp (s.bursts, 2, kMaxBursts);
         const double flam = std::clamp (s.flamSeconds, 0.004, 0.030);
@@ -334,8 +361,36 @@ public:
         }
     }
 
-    /// A clap is a one-shot; a note-off does not shorten it.
-    void release() noexcept {}
+    /// Note-off. With Gate lit the WHOLE hit ramps out over the release from
+    /// wherever it is -- the bursts still to come, the cavity's ring and the
+    /// room alike -- so a long clap can be stopped by lifting the key. A
+    /// one-shot ignores this entirely.
+    ///
+    /// A ramp on the output rather than a release on the envelopes, for the
+    /// hat's reason: the layers are filtered after they are enveloped, so
+    /// releasing the envelopes would leave the bands ringing past the key.
+    void release() noexcept
+    {
+        if (! active_ || ! gate_ || releasing_)
+            return;
+
+        // A release envelope parked at 1.0: attack, hold and decay instant
+        // with the sustain at 1, so three samples land it in its sustain
+        // stage at exactly 1.0 and the note-off releases from there.
+        gateEnv_.setAttackSeconds (0.0);
+        gateEnv_.setHoldSeconds (0.0);
+        gateEnv_.setDecaySeconds (0.0);
+        gateEnv_.setSustain (1.0);
+        gateEnv_.setReleaseSeconds (release_);
+        gateEnv_.setReleaseTension (1.0);
+        gateEnv_.noteOn();
+        (void) gateEnv_.skip (3);
+        gateEnv_.noteOff();
+
+        releasing_ = true;
+    }
+
+    [[nodiscard]] bool isGated() const noexcept { return gate_; }
 
     /// One internal sample. Exactly 0.0 once every burst, the body and the
     /// tail have landed.
@@ -414,9 +469,41 @@ public:
             x += kBodyGain * bodyLevel_ * body_.process();
 
         if (driveOn_)
-            x = shaper_.process (x * driveGain_, clip_) * driveTrim_;
+        {
+            // `SoftClipExcess` is what the clipper CHANGES -- clip(x) - x --
+            // not the clipped signal, so it is ADDED back to the driven
+            // signal to make one. Subtracting it, or worse taking it alone,
+            // leaves only the clipping residue: exactly zero below the knee
+            // and a harsh remnant above it. That was the first version, and
+            // it read as a drive that muted the pad as it was turned down
+            // and stripped the tail off as it was turned up.
+            //
+            // The trim is 1/g, so small signals pass at unity and the control
+            // buys harmonics rather than loudness (CLAUDE.md section 7).
+            // Measured over the whole range, the clap's RMS moves 0.023 ->
+            // 0.023 / 0.022 / 0.021 / 0.019: 1.7 dB, while its peak falls
+            // 0.320 -> 0.119, which is the clipping doing its job.
+            const double driven = x * driveGain_;
 
-        return x * gain_;
+            x = (driven + shaper_.process (driven, clip_)) * driveTrim_;
+        }
+
+        x *= gain_;
+
+        // ---- the gate's release ramp ----
+        if (releasing_)
+        {
+            x *= gateEnv_.process();
+
+            if (! gateEnv_.isActive())
+            {
+                // Landed at exactly 0: the hit is over, whatever was ringing.
+                reset();
+                return 0.0;
+            }
+        }
+
+        return x;
     }
 
     [[nodiscard]] bool isActive() const noexcept { return active_; }
@@ -437,6 +524,11 @@ private:
 
     dsp::Adsr tail_;
     double tailSeconds_ { 0.18 };
+
+    dsp::Adsr gateEnv_;
+    bool gate_ { false };
+    bool releasing_ { false };
+    double release_ { kMinimumReleaseSeconds };
 
     dsp::SvfFilter colour_, tailBand_, noiseTone_;
     dsp::SmallRandom random_;

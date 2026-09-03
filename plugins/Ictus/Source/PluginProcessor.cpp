@@ -38,7 +38,10 @@ constexpr int kSchemaV6 = 6;
 
 /// Schema 7: the depth the first hats and clap did not have (I4.1).
 constexpr int kSchemaV7 = 7;
-constexpr int kStateSchemaVersion = kSchemaV7;
+
+/// Schema 8: the clap's gate, which every other pad already had.
+constexpr int kSchemaV8 = 8;
+constexpr int kStateSchemaVersion = kSchemaV8;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -1001,6 +1004,15 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::cpDrive, kSchemaV7 }, "Clap Drive",
         Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
 
+    // ---- schema 8: the clap's gate -----------------------------------------
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::cpGate, kSchemaV8 }, "Clap Gate", false));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpRelease, kSchemaV8 }, "Clap Release",
+        skewed (0.0f, 2000.0f, 1.0f, 100.0f), 0.0f, attributes ("ms")));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -1145,6 +1157,8 @@ void IctusProcessor::pullParameters()
     c.colourHz = valueOf (state_, ids::cpColour);
     c.tailSeconds = valueOf (state_, ids::cpTail) * 0.001;
     c.tailTone = valueOf (state_, ids::cpTailTone) * 0.01;
+    c.gate = valueOf (state_, ids::cpGate) > 0.5f;
+    c.releaseSeconds = valueOf (state_, ids::cpRelease) * 0.001;
     c.level = valueOf (state_, ids::cpLevel) * 0.01;
     c.velocityLevel = valueOf (state_, ids::cpVelLevel) * 0.01;
 

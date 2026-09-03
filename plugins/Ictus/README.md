@@ -183,7 +183,9 @@ kick's, on both pads at once: with Gate lit a note-off fades the whole hit —
 metal, hiss and the filters' ring — so a long open hat can be stopped by
 lifting the key rather than by waiting for a closed hit.
 
-Velocity moves the level, the decay, Colour and the stick.
+Velocity moves the level, the decay, Colour and the stick. **Drive** is
+trimmed by the gain it adds — measured, the hat's level moves 2.7 dB across
+the whole control while its peak falls by more than half.
 
 Measured: inharmonic energy in the audible band is **−74 to −77 dB** at the
 rate Auto runs, against **−12 to −17 dB** for the same six pulses generated
@@ -209,7 +211,13 @@ the Nord Modular percussion chapter, read first-hand.
   to land within 0.3 Hz of where Pitch puts them.
 - **Colour**, **Width**, **Tail**, **Tail tone** and **Drive** place the whole
   thing: the band it is heard through, the room after the last burst, and how
-  much duller that room is than the hands filling it.
+  much duller that room is than the hands filling it. Drive is trimmed by the
+  gain it adds, so it buys harmonics and not loudness — measured across the
+  whole control the clap's level moves 2.1 dB while its peak falls by more
+  than half.
+- **Gate** and **Release** are the kick's, on the clap too: a note-off fades
+  the whole hit from wherever it is, so a long clap stops when the key lifts
+  rather than when the room finishes.
 
 The bursts are counted in samples, converted once at note-on, so the pattern
 lands on the same instants at 44.1 and at 192 kHz — measured to the sample.

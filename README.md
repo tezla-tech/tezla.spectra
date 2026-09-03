@@ -151,7 +151,7 @@ are both latency-matched to the sample. See
 | **[Membrana](plugins/Membrana/)** | Effect — the microphone stage, before Phonoss: pattern, body diffraction (the exact rigid-sphere series at finite range), distance and angle from the physics, plus presence that **rides** (leans in when the singer backs off) and a floored detail lift — consonants up, hiss exactly untouched | v0.1.0 — 47/47 on Steinberg's validator |
 | **[Ictus](plugins/Ictus/)** | **Instrument** — the drum synthesiser for drum and bass, in progress: the kick (a sine body under the two pitch drops the TR-808 analysis separates, parallel odd/even harmonics through ADAA, a pitch-tracking tone, click and noise, a tail) the snare (a three-mode shell at the published ratios under a tension drop, wires that rattle with the shell, the stick's crack), the hats (six band-limited pulses at incommensurate ratios, ring-modulated into a dense wash, overdriven, damped as they decay, with the noise layer rung through the metal's own partials) and the clap (four noise bursts a flam apart, then the room), with the punch chain, humanise, sample layer and per-pad outputs to follow | v0.1.0 (kick, snare, ghost snare, hats, clap) — 47/47 on Steinberg's validator; the kick played on the rig, whose first ear round added Bass mode, Gate + Release and the tuning page; the rest not yet |
 
-1050 framework-free DSP tests pass on Linux x86-64, which is where development
+1052 framework-free DSP tests pass on Linux x86-64, which is where development
 currently happens. The last time the suite was run on Windows, macOS and ARM64 it
 was 579 tests and it passed on all four — those platforms are **paused on
 purpose** while the x86-64 Windows build is finished, so the ARM64 and macOS

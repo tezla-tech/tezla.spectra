@@ -527,7 +527,8 @@ CLAUDE.md.
 | I3 snare engine + SNARE page (and the Perc and Snare 2 pads on the same engine) | done in code; not yet played on the rig |
 | The rounds after I3 (user asks, 2026-09-03): Note snap; the panel; the ghost snare on the second snare pad with LINK | done in code; not yet played on the rig |
 | I4 hat + clap engines, choke | done in code; not yet played on the rig |
-| I4.1 the rig's verdict on the hats: depth, and the noise made part of the metal | done in code; not yet played on the rig |
+| I4.1 the rig's verdict on the hats: depth, and the noise made part of the metal | **played on the rig**; the round's findings are the I4.2 row |
+| I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
 | I7 multi-out buses | pending |
@@ -963,6 +964,45 @@ not catch because it computed what it expected from the same table -- so it
 now asserts inharmonicity against the integers instead, and that assertion
 promptly rejected the third ratio (2.13, only 6 % off a harmonic 2), which
 moved to 2.41.
+
+**I4.2 -- the rig's second round** (2026-09-03). Three findings, two fixed
+here and one deliberately left.
+
+1. **Drive was broken in both engines, and the report described the bug
+   exactly.** "At 100% it makes some audible driven clap with no noise tail,
+   as I reduce it to 0 the sound goes almost completely silent, at 0 I hear my
+   good clap." `dsp::SoftClipExcess` evaluates to what the clipper CHANGES --
+   `clip(x) - x` -- and not to the clipped signal, and it was being taken
+   ALONE: below the knee that is exactly zero, so the pad went silent at low
+   drive; above it, only the harsh residue survives and every quiet part, the
+   tail included, is gone; at exactly 0 the branch skips the stage and the pad
+   is right. The excess is ADDED back to the driven signal now, which is what
+   the ADAA adaptor's own comment describes and what `KickEngine` already did.
+   The trim went with it: `g^-0.75`, chosen by measurement because a clipper's
+   output depends on where the signal already sat against the threshold and no
+   single exponent holds both engines level -- the clap's sum peaks at 0.37 and
+   is barely clipped, the hat's reaches 1.5 before the stage. Measured over the
+   whole control: the clap rises **2.1 dB** and the hat falls **2.7 dB**, with
+   peaks falling 0.367 -> 0.175 and 1.486 -> 0.672.
+2. **The clap has a Gate and a Release**, at `kSchemaV8`, matching the kick,
+   the snare and (from I4.1) the hats. A ramp on the output rather than a
+   release on the envelopes, for the hat's reason: the layers are filtered
+   after they are enveloped, so releasing the envelopes would leave the bands
+   ringing past the key.
+3. **The presets are bad and were LEFT THAT WAY, at the user's instruction**
+   ("your default parameters for the hats and clap are really bad in the
+   presets, but if I do my own changes, I can make it sound good ... besides
+   fixing drive, gate, release, you may leave it"). Worth knowing before
+   touching them: every kit ships Drive between 20 and 55 %, so **every one of
+   them was voiced through the broken drive** and none has been heard since
+   the fix. Re-judge them on the rig before changing a number -- they may now
+   be wrong in a different direction, or closer than they were. The user can
+   dial in a good sound by hand, so the engines are not the problem; the
+   starting points are.
+
+Break-checks at I4.2, each seen red then reverted: the drive taking the
+clipper's residue alone (the original bug, 4 checks red across both engines);
+the clap's gate ignoring note-off.
 
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
 file; take the first `pending` phase. The next is **I5, the punch chain**.
