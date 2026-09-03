@@ -10,10 +10,12 @@
 // The Ictus editor: the shared header (output, oversampling, render quality,
 // A/B, tooltips); a pad strip whose eight pads light when struck and open
 // their pages; a HIT button for the page's pad; the BASS lamp; the TUNING
-// tab; then the page -- Kick 1's or Snare 1's control plates in the house
-// look, each plate a group with its own colour, its lead control drawn
-// larger, its set-and-forget controls smaller, and a picture of what the
-// group does drawn from the knobs (Displays.h); or the shared tuning panel.
+// tab; then the page -- Kick 1's, Snare 1's or the ghost's control plates in
+// the house look, each plate a group with its own colour, its lead control
+// drawn larger, its set-and-forget controls smaller, and a picture of what
+// the group does drawn from the knobs (Displays.h); or the shared tuning
+// panel. The snare page is built once, for either snare-engine pad; the
+// ghost's adds LINK, and greys what LINK borrows from the main snare.
 
 #include <memory>
 
@@ -44,10 +46,25 @@ public:
     void resized() override;
 
 private:
+    /// The three pictures a snare page carries, for the timer's refresh.
+    struct SnareViews
+    {
+        ModesView* modes { nullptr };
+        WiresView* wires { nullptr };
+        EnvelopeView* envelope { nullptr };
+    };
+
+    /// What a snare page's greying was last set to.
+    struct SnareShown
+    {
+        bool wires { true }, crack { true }, noise { true }, gate { true }, keyed { true }, linked { false };
+    };
+
     void timerCallback() override;
     void buildKickPage();
-    void buildSnarePage();
+    SnareViews buildSnarePage (PlatePage& page, const SnareIds& ids, PadIndex pad);
     void buildTuningPage();
+    void updateSnareGreying (PlatePage& page, const SnareIds& ids, SnareShown& shown);
     void showPage (int index);
     void selectPad (PadIndex pad);
     void styleTab (juce::TextButton& tab, bool active);
@@ -76,14 +93,14 @@ private:
 
     std::unique_ptr<PlatePage> kickPage_;
     std::unique_ptr<PlatePage> snarePage_;
+    std::unique_ptr<PlatePage> ghostPage_;
     std::unique_ptr<ui::TuningPanel> tuningPage_;
 
     // The pictures, owned by their pages; kept for the timer's refresh.
     PitchView* pitchView_ { nullptr };
     EnvelopeView* kickEnvelope_ { nullptr };
-    ModesView* modesView_ { nullptr };
-    WiresView* wiresView_ { nullptr };
-    EnvelopeView* snareEnvelope_ { nullptr };
+    SnareViews snareViews_;
+    SnareViews ghostViews_;
 
     int currentPage_ { 0 };
 
@@ -103,11 +120,8 @@ private:
     bool shownGate_ { true };
     bool shownKeyed_ { true };
 
-    bool shownSnareWires_ { true };
-    bool shownSnareCrack_ { true };
-    bool shownSnareNoise_ { true };
-    bool shownSnareGate_ { true };
-    bool shownSnareKeyed_ { true };
+    SnareShown shownSnare_;
+    SnareShown shownGhost_;
 
     // The live key tooltips and the Tune readouts are rebuilt only when
     // what they describe moves.

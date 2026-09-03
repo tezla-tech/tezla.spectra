@@ -11,9 +11,9 @@ namespace tezla::ictus {
 
 namespace
 {
-/// The strip's order: the pads that have engines first, in the order a
-/// break is built -- kick, snare, the ghost, the perc, the second kick --
-/// then the three that arrive with I4.
+/// The strip's order: the pads that have pages first, in the order a break
+/// is built -- kick, snare, the ghost -- then the perc and the second kick
+/// on their engines' defaults, then the three that arrive with I4.
 struct PadEntry
 {
     PadIndex pad;
@@ -24,7 +24,7 @@ struct PadEntry
 constexpr PadEntry kPads[kPadCount] {
     { PadIndex::kick1,     "KICK",    true },
     { PadIndex::snare1,    "SNARE",   true },
-    { PadIndex::snare2,    "SNARE 2", false },
+    { PadIndex::snare2,    "GHOST",   true },
     { PadIndex::perc,      "PERC",    false },
     { PadIndex::kick2,     "KICK 2",  false },
     { PadIndex::hatClosed, "HAT C",   false },

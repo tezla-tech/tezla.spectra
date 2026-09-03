@@ -30,7 +30,9 @@ constexpr int kSchemaV2 = 2;
 constexpr int kSchemaV3 = 3;
 /// Schema 4: Note snap on the kick and the snare.
 constexpr int kSchemaV4 = 4;
-constexpr int kStateSchemaVersion = kSchemaV4;
+/// Schema 5: the ghost snare on the second snare pad, with its LINK.
+constexpr int kSchemaV5 = 5;
+constexpr int kStateSchemaVersion = kSchemaV5;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -130,6 +132,17 @@ const std::vector<Preset>& presets()
                 { ids::s1Crack, 50.0f },
                 { ids::s1CrackTone, 4500.0f },
                 { ids::s1Noise, 30.0f },
+                // The ghost: the same drum, a lighter, shorter stroke --
+                // mostly wire, a little crack, well under the main hit.
+                { ids::g1Decay, 90.0f },
+                { ids::g1Start, 3.0f },
+                { ids::g1Drop, 8.0f },
+                { ids::g1Body, 45.0f },
+                { ids::g1Wires, 85.0f },
+                { ids::g1WiresDecay, 70.0f },
+                { ids::g1Rattle, 20.0f },
+                { ids::g1Crack, 30.0f },
+                { ids::g1Level, 55.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -161,6 +174,14 @@ const std::vector<Preset>& presets()
                 { ids::s1WiresDecay, 220.0f },
                 { ids::s1Rattle, 50.0f },
                 { ids::s1Crack, 30.0f },
+                // The ghost: softer and shorter, the wires still rattling
+                // with the shell.
+                { ids::g1Decay, 150.0f },
+                { ids::g1Body, 55.0f },
+                { ids::g1Wires, 70.0f },
+                { ids::g1WiresDecay, 110.0f },
+                { ids::g1Rattle, 40.0f },
+                { ids::g1Level, 50.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -204,6 +225,16 @@ const std::vector<Preset>& presets()
                 { ids::s1Noise, 50.0f },
                 { ids::s1NoiseTime, 1.0f },
                 { ids::s1VelCrack, 80.0f },
+                // The ghost: the tightest of them, nearly all wire.
+                { ids::g1Decay, 70.0f },
+                { ids::g1Start, 5.0f },
+                { ids::g1Drop, 6.0f },
+                { ids::g1Body, 35.0f },
+                { ids::g1Wires, 90.0f },
+                { ids::g1WiresDecay, 50.0f },
+                { ids::g1Crack, 40.0f },
+                { ids::g1Noise, 30.0f },
+                { ids::g1Level, 60.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -527,6 +558,110 @@ IctusProcessor::createParameterLayout()
     parameters.push_back (std::make_unique<Switch> (
         juce::ParameterID { ids::s1NoteSnap, kSchemaV4 }, "Snare 1 Note snap", false));
 
+    // ---- schema 5: the GHOST snare -- APPENDED ------------------------------
+    // Its defaults are a ghost's: linked to the main snare's drum, a lighter
+    // and shorter stroke that is mostly wire, well under the main hit.
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Tune, kSchemaV5 }, "Ghost Tune",
+        skewed (60.0f, 800.0f, 0.1f, 200.0f), 180.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::g1FollowKey, kSchemaV5 }, "Ghost Follow key", false));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::g1NoteSnap, kSchemaV5 }, "Ghost Note snap", false));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Spread, kSchemaV5 }, "Ghost Spread",
+        Range (0.0f, 100.0f, 0.1f), 100.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Tone, kSchemaV5 }, "Ghost Tone",
+        Range (0.0f, 100.0f, 0.1f), 60.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Decay, kSchemaV5 }, "Ghost Decay",
+        skewed (50.0f, 2000.0f, 1.0f, 300.0f), 110.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Start, kSchemaV5 }, "Ghost Start",
+        Range (0.0f, 24.0f, 0.1f), 3.0f, attributes ("st")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Drop, kSchemaV5 }, "Ghost Drop",
+        skewed (2.0f, 200.0f, 0.1f, 30.0f), 12.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Body, kSchemaV5 }, "Ghost Body",
+        Range (0.0f, 100.0f, 0.1f), 50.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Wires, kSchemaV5 }, "Ghost Wires",
+        Range (0.0f, 100.0f, 0.1f), 80.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Snappy, kSchemaV5 }, "Ghost Snappy",
+        skewed (1000.0f, 8000.0f, 1.0f, 3000.0f), 3000.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Snap, kSchemaV5 }, "Ghost Wire shape",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1WiresDecay, kSchemaV5 }, "Ghost Wires decay",
+        skewed (50.0f, 400.0f, 1.0f, 150.0f), 80.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Rattle, kSchemaV5 }, "Ghost Rattle",
+        Range (0.0f, 100.0f, 0.1f), 20.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Crack, kSchemaV5 }, "Ghost Crack",
+        Range (0.0f, 100.0f, 0.1f), 20.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1CrackTone, kSchemaV5 }, "Ghost Crack tone",
+        skewed (200.0f, 8000.0f, 1.0f, 2000.0f), 4000.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Noise, kSchemaV5 }, "Ghost Noise",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1NoiseTime, kSchemaV5 }, "Ghost Noise time",
+        skewed (0.5f, 8.0f, 0.01f, 2.0f), 1.5f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Level, kSchemaV5 }, "Ghost Level",
+        Range (0.0f, 100.0f, 0.1f), 60.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::g1Gate, kSchemaV5 }, "Ghost Gate", false));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1Release, kSchemaV5 }, "Ghost Release",
+        skewed (0.0f, 2000.0f, 1.0f, 100.0f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1VelLevel, kSchemaV5 }, "Ghost Velocity to level",
+        Range (0.0f, 100.0f, 0.1f), 100.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1VelWires, kSchemaV5 }, "Ghost Velocity to wires",
+        Range (0.0f, 100.0f, 0.1f), 40.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1VelCrack, kSchemaV5 }, "Ghost Velocity to crack",
+        Range (0.0f, 100.0f, 0.1f), 60.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1VelDrop, kSchemaV5 }, "Ghost Velocity to drop",
+        Range (0.0f, 100.0f, 0.1f), 30.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::g1Link, kSchemaV5 }, "Ghost Link", true));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -605,37 +740,24 @@ void IctusProcessor::pullParameters()
     k.gate = valueOf (state_, ids::k1Gate) > 0.5f;
     k.releaseSeconds = valueOf (state_, ids::k1Release) * 0.001;
 
-    auto& n = parameters_.snare1;
+    pullSnare (parameters_.snare1, kSnare1Ids);
+    pullSnare (parameters_.snare2, kGhostIds);
 
-    n.tuneHz = valueOf (state_, ids::s1Tune);
-    n.followKey = valueOf (state_, ids::s1FollowKey) > 0.5f;
-    n.noteSnap = valueOf (state_, ids::s1NoteSnap) > 0.5f;
-    n.spread = valueOf (state_, ids::s1Spread) * 0.01;
-    n.tone = valueOf (state_, ids::s1Tone) * 0.01;
-    n.decaySeconds = valueOf (state_, ids::s1Decay) * 0.001;
-    n.startSemitones = valueOf (state_, ids::s1Start);
-    n.dropSeconds = valueOf (state_, ids::s1Drop) * 0.001;
-    n.body = valueOf (state_, ids::s1Body) * 0.01;
+    // LINK: the ghost is the main snare's drum -- the same shell and the
+    // same wire colour -- and only its stroke is its own.
+    if (valueOf (state_, ids::g1Link) > 0.5f)
+    {
+        auto& ghost = parameters_.snare2;
+        const auto& main = parameters_.snare1;
 
-    n.wires = valueOf (state_, ids::s1Wires) * 0.01;
-    n.snappyHz = valueOf (state_, ids::s1Snappy);
-    n.snap = valueOf (state_, ids::s1Snap) * 0.01;
-    n.wiresDecaySeconds = valueOf (state_, ids::s1WiresDecay) * 0.001;
-    n.rattle = valueOf (state_, ids::s1Rattle) * 0.01;
-
-    n.crack = valueOf (state_, ids::s1Crack) * 0.01;
-    n.crackToneHz = valueOf (state_, ids::s1CrackTone);
-    n.crackNoise = valueOf (state_, ids::s1Noise) * 0.01;
-    n.crackNoiseSeconds = valueOf (state_, ids::s1NoiseTime) * 0.001;
-
-    n.level = valueOf (state_, ids::s1Level) * 0.01;
-    n.gate = valueOf (state_, ids::s1Gate) > 0.5f;
-    n.releaseSeconds = valueOf (state_, ids::s1Release) * 0.001;
-
-    n.velocityLevel = valueOf (state_, ids::s1VelLevel) * 0.01;
-    n.velocityWires = valueOf (state_, ids::s1VelWires) * 0.01;
-    n.velocityCrack = valueOf (state_, ids::s1VelCrack) * 0.01;
-    n.velocityDrop = valueOf (state_, ids::s1VelDrop) * 0.01;
+        ghost.tuneHz = main.tuneHz;
+        ghost.followKey = main.followKey;
+        ghost.noteSnap = main.noteSnap;
+        ghost.spread = main.spread;
+        ghost.tone = main.tone;
+        ghost.snappyHz = main.snappyHz;
+        ghost.snap = main.snap;
+    }
 
     for (int pad = 0; pad < kPadCount; ++pad)
         parameters_.padNotes[pad] = padNotes_[pad].load();
@@ -650,6 +772,39 @@ void IctusProcessor::pullParameters()
     parameters_.renderOversampling = static_cast<dsp::RenderOversampling> (
         juce::jlimit (0, static_cast<int> (dsp::RenderOversampling::X8),
                       static_cast<int> (std::lround (valueOf (state_, ids::renderOversampling)))));
+}
+
+void IctusProcessor::pullSnare (SnareSettings& n, const SnareIds& p)
+{
+    n.tuneHz = valueOf (state_, p.tune);
+    n.followKey = valueOf (state_, p.followKey) > 0.5f;
+    n.noteSnap = valueOf (state_, p.noteSnap) > 0.5f;
+    n.spread = valueOf (state_, p.spread) * 0.01;
+    n.tone = valueOf (state_, p.tone) * 0.01;
+    n.decaySeconds = valueOf (state_, p.decay) * 0.001;
+    n.startSemitones = valueOf (state_, p.start);
+    n.dropSeconds = valueOf (state_, p.drop) * 0.001;
+    n.body = valueOf (state_, p.body) * 0.01;
+
+    n.wires = valueOf (state_, p.wires) * 0.01;
+    n.snappyHz = valueOf (state_, p.snappy);
+    n.snap = valueOf (state_, p.snap) * 0.01;
+    n.wiresDecaySeconds = valueOf (state_, p.wiresDecay) * 0.001;
+    n.rattle = valueOf (state_, p.rattle) * 0.01;
+
+    n.crack = valueOf (state_, p.crack) * 0.01;
+    n.crackToneHz = valueOf (state_, p.crackTone);
+    n.crackNoise = valueOf (state_, p.noise) * 0.01;
+    n.crackNoiseSeconds = valueOf (state_, p.noiseTime) * 0.001;
+
+    n.level = valueOf (state_, p.level) * 0.01;
+    n.gate = valueOf (state_, p.gate) > 0.5f;
+    n.releaseSeconds = valueOf (state_, p.release) * 0.001;
+
+    n.velocityLevel = valueOf (state_, p.velLevel) * 0.01;
+    n.velocityWires = valueOf (state_, p.velWires) * 0.01;
+    n.velocityCrack = valueOf (state_, p.velCrack) * 0.01;
+    n.velocityDrop = valueOf (state_, p.velDrop) * 0.01;
 }
 
 void IctusProcessor::handleMidi (const juce::MidiMessage& message)
@@ -1045,8 +1200,14 @@ double IctusProcessor::previewSnappedHz (double hz) const
 juce::String IctusProcessor::describeNoteSnap (PadIndex pad) const
 {
     const bool kick = pad == PadIndex::kick1 || pad == PadIndex::kick2;
-    const double tune = state_.getRawParameterValue (kick ? ids::k1Tune : ids::s1Tune)->load();
-    const bool lit = state_.getRawParameterValue (kick ? ids::k1NoteSnap : ids::s1NoteSnap)->load() > 0.5f;
+    const auto& snare = snareIdsFor (pad);
+
+    if (! kick && snare.link != nullptr && isGhostLinked())
+        return "LINK is lit, so the ghost's Tune and Note snap are SNARE's: "
+               + describeNoteSnap (PadIndex::snare1);
+
+    const double tune = state_.getRawParameterValue (kick ? ids::k1Tune : snare.tune)->load();
+    const bool lit = state_.getRawParameterValue (kick ? ids::k1NoteSnap : snare.noteSnap)->load() > 0.5f;
     const double snapped = previewSnappedHz (tune);
     const juce::String scale = scaleName_ + " at A4 = " + juce::String (concertPitchHz_, 1) + " Hz";
 
@@ -1068,6 +1229,11 @@ juce::String IctusProcessor::describeFollowKey (PadIndex pad) const
     const int note = getPadNote (pad);
     const juce::String scale = scaleName_ + " at A4 = " + juce::String (concertPitchHz_, 1) + " Hz";
     const bool kick = pad == PadIndex::kick1 || pad == PadIndex::kick2;
+
+    if (pad == PadIndex::snare2 && isGhostLinked())
+        return "LINK is lit, so the ghost follows SNARE's Follow key. Its own note is "
+               + juce::MidiMessage::getMidiNoteName (note, true, true, 3) + " (" + juce::String (note)
+               + "): it always sounds there, whatever sets the pitch.";
 
     juce::String text = "Lit: the " + juce::String (kick ? "landed pitch" : "shell's fundamental")
                       + " comes from the MIDI note through the TUNING page's scale (" + scale

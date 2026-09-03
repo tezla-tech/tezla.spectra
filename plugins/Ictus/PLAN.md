@@ -525,6 +525,7 @@ CLAUDE.md.
 | I2 minimal JUCE layer, kick only, rig build + ear round | done — **played on the rig 2026-09-02** ("wow that sounds great"); the round's asks are the I2.1 row |
 | I2.1 the rig's first ear round: Bass mode, Gate + Release, tuning page | done in code; not yet played on the rig |
 | I3 snare engine + SNARE page (and the Perc and Snare 2 pads on the same engine) | done in code; not yet played on the rig |
+| The rounds after I3 (user asks, 2026-09-03): Note snap; the panel; the ghost snare on the second snare pad with LINK | done in code; not yet played on the rig |
 | I4 hat + clap engines, choke | pending |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
@@ -681,6 +682,23 @@ since DAWs disagree on octaves) that flash on a hit as bright as its velocity
 are gone. Tune knobs read as the note when Note snap is lit. Default window
 1000 × 720. Every display refreshes at 15 Hz and repaints only when an input
 moved.
+
+**The ghost snare** (2026-09-03, the user's ask: a ghost snare on its own key,
+linkable to the main snare's parameters "such as tone" or fully its own): the
+second snare pad (`PadIndex::snare2`, note property `snare2Note`, E1 by
+default) is the GHOST, with its own 24 parameters `g1*` at `kSchemaV5` plus
+`g1Link` (default on). `SnareIds` names one snare-engine pad's IDs so the
+snare page, its three pictures and `pullSnare` are written once and run for
+both; with LINK lit the pull copies the drum identity from Snare 1 — Tune,
+Follow key, Note snap, Spread, Tone, Snappy, Shape — into the ghost's
+settings and the page greys those controls, so the ghost is the same drum
+under a different stroke (Decay, Start, Drop, Body, Wires, Wires decay,
+Rattle, the crack, Level, Gate, velocity stay its own). The pictures read
+through the link too (`DrumDisplay::readLinked`), so the ghost's mode bars
+and wires curve show what will sound. Defaults are a ghost's: 110 ms decay,
+Body 50, Wires 80 over 80 ms, Rattle 20, Crack 20, Level 60. The pad strip
+names it GHOST and opens its page; the three kits carry a ghost each. No DSP
+changed: the engine already ran the pad on Snare 1's defaults.
 
 Break-checks at I3, each seen red then reverted: mode ratio 1.6 → 1.5
 (ratio test red), Spread ignored (spread-0 test red at all four rates), the
