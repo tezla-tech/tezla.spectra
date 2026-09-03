@@ -636,9 +636,10 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
 {
     // CLAUDE.md section 7: the control grid is the engine's and the render
     // loop is cut at its boundary, so 64-, 97- and 512-sample blocks produce
-    // the same bits -- with both kicks, the snare and the perc sounding, a
-    // retrigger, and every stage engaged (the snare's drop retuning its
-    // bank per chunk, the rattle, the wires, the crack).
+    // the same bits -- with every pad sounding, a retrigger, a hat choke, and
+    // every stage engaged (the snare's drop retuning its bank per chunk, the
+    // rattle, the wires, the crack, the hat's six pulses and the clap's
+    // burst pattern, which counts in samples and must not notice a block).
     constexpr double rate = 48000.0;
     constexpr int samples = 24000;
 
@@ -651,10 +652,18 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
     parameters.perc = tomSettings();
     parameters.perc.rattle = 0.5;
     parameters.perc.wires = 0.3;
+    parameters.hat = HatSettings {};
+    parameters.hat.spread = 0.5;
+    parameters.hat.air = 0.3;
+    parameters.hat.harmonics = 1.4;
+    parameters.clap = ClapSettings {};
     parameters.masterDb = -3.0;
 
     const std::vector<Hit> hits { { 0, 36, 0.9 }, { 1000, 38, 1.0 }, { 2500, 35, 0.7 },
-                                  { 3100, 37, 0.8 }, { 4000, 36, 1.0 }, { 4700, 38, 0.6 } };
+                                  { 3100, 37, 0.8 }, { 4000, 36, 1.0 }, { 4700, 38, 0.6 },
+                                  // the hats: open, then closed to choke it, then the clap
+                                  { 1500, 46, 0.8 }, { 2200, 42, 1.0 }, { 3600, 42, 0.5 },
+                                  { 5200, 39, 0.9 } };
 
     const auto small = render (parameters, rate, samples, hits, 64);
     const auto large = render (parameters, rate, samples, hits, 512);
@@ -675,7 +684,7 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
 // CPU
 // ---------------------------------------------------------------------------
 
-TEZLA_TEST (a_kit_of_two_kicks_and_three_snares_fits_its_budget_and_idles_for_nothing)
+TEZLA_TEST (a_kit_of_all_eight_pads_fits_its_budget_and_idles_for_nothing)
 {
     constexpr double rate = 48000.0;
     constexpr int block = 480;
@@ -688,6 +697,10 @@ TEZLA_TEST (a_kit_of_two_kicks_and_three_snares_fits_its_budget_and_idles_for_no
     parameters.snare2 = snareEverythingOn();
     parameters.snare2.tuneHz = 240.0;
     parameters.perc = tomSettings();
+    parameters.hat = HatSettings {};
+    parameters.hat.spread = 0.5;
+    parameters.hat.air = 0.4;
+    parameters.clap = ClapSettings {};
 
     auto engine = heapEngine();
     engine->prepare (rate, block);
@@ -723,6 +736,17 @@ TEZLA_TEST (a_kit_of_two_kicks_and_three_snares_fits_its_budget_and_idles_for_no
         if (b % 8 == 4)
             engine->noteOn (37, 0.7);
 
+        // Sixteenth-note hats -- the busiest pad in a break -- an open hat
+        // every bar, and a clap on the backbeat.
+        if (b % 3 == 0)
+            engine->noteOn (42, 0.8);
+
+        if (b % 24 == 18)
+            engine->noteOn (46, 0.9);
+
+        if (b % 12 == 3)
+            engine->noteOn (39, 0.85);
+
         engine->process (buffers, block);
         sink += left[0];
     }
@@ -747,10 +771,16 @@ TEZLA_TEST (a_kit_of_two_kicks_and_three_snares_fits_its_budget_and_idles_for_no
     const double idleSeconds = std::chrono::duration<double> (
         std::chrono::steady_clock::now() - start).count();
 
-    std::printf ("        [engine cpu] two kicks and three snares at 48 kHz x%d: %.2f%% of a core; idle %.3f%% (sink %g)\n",
+    std::printf ("        [engine cpu] all eight pads at 48 kHz x%d: %.2f%% of a core; idle %.3f%% (sink %g)\n",
                  engine->getOversamplingFactor(), 100.0 * activeSeconds, 100.0 * idleSeconds, sink);
 
-    CHECK_CPU_BUDGET (activeSeconds, 0.12, "two kicks and three snares, everything on, 48 kHz x4");
+    // Raised from 0.12 when the hats and the clap joined: the hats are six
+    // band-limited pulses through three filters and they play sixteenths, so
+    // they are the most expensive pad in the kit. Measured 2026-09-03 at
+    // 6.04 % of a core against the 4.8-5.2 % the five-pad kit cost, and the
+    // budget keeps the same two-and-a-half times' headroom the container's
+    // noise needs. The figure is printed above on every run.
+    CHECK_CPU_BUDGET (activeSeconds, 0.15, "all eight pads, everything on, 48 kHz x4");
     CHECK_CPU_BUDGET (idleSeconds, 0.01, "idle instrument");
 }
 
@@ -1446,4 +1476,759 @@ TEZLA_TEST (note_snap_lands_the_drums_on_the_nearest_degree_of_the_tuning)
         CHECK_NEAR (cents (kick, expected), 0.0, 0.5);
         CHECK (std::abs (cents (kick, 51.9131)) > 10.0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The hats and the clap (I4)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// A hat with everything doing something: spread, air and both velocity
+/// amounts live.
+HatSettings hatEverythingOn()
+{
+    HatSettings s;
+    s.tuneHz = 205.3;
+    s.harmonics = 0.0;
+    s.spread = 0.6;
+    s.colourHz = 3440.0;
+    s.air = 0.4;
+    s.level = 1.0;
+    return s;
+}
+
+/// The hat engine on its own at an internal rate, stepped on the engine's
+/// control grid: `seconds` of one hit.
+std::vector<double> renderHatEngine (HatEngine& engine, const HatSettings& s, double rate,
+                                     double seconds, bool open = false, double velocity = 1.0,
+                                     std::uint64_t seed = 99u)
+{
+    engine.prepare (rate);
+    engine.start (s, open, velocity, seed, 0);
+
+    const int total = static_cast<int> (seconds * rate);
+    std::vector<double> out (static_cast<std::size_t> (total));
+
+    for (int n = 0; n < total; ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            engine.advanceControl (Engine::kControlIntervalSamples);
+
+        out[static_cast<std::size_t> (n)] = engine.process();
+    }
+
+    return out;
+}
+
+std::vector<double> renderClapEngine (ClapEngine& engine, const ClapSettings& s, double rate,
+                                      double seconds, std::uint64_t seed = 99u)
+{
+    engine.prepare (rate);
+    engine.start (s, 1.0, seed, 0);
+
+    const int total = static_cast<int> (seconds * rate);
+    std::vector<double> out (static_cast<std::size_t> (total));
+
+    for (int n = 0; n < total; ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            engine.advanceControl (Engine::kControlIntervalSamples);
+
+        out[static_cast<std::size_t> (n)] = engine.process();
+    }
+
+    return out;
+}
+
+/// The first `seconds` of a signal, windowed over exactly that many samples
+/// and zero-padded to a power of two.
+///
+/// The window has to cover the signal and nothing else. Windowing a fixed
+/// 65536-sample buffer instead puts a 44.1 kHz hit in the taper's foot and a
+/// 192 kHz one across its crown, and the two then differ by the window rather
+/// than by the audio -- which is what made the first version of the
+/// rate-independence test below read a factor of 345.
+///
+/// Blackman-Harris rather than Hann, and that is the difference between a
+/// measurement and a decoration. A pulse bank puts a thousand strong
+/// harmonics in the band; Hann's first sidelobe is only 31 dB down, so the
+/// skirts of those harmonics pile up in every bin between them and the
+/// aliasing floor read -57 dB no matter how good the generator was. This
+/// window's sidelobes are 92 dB down, and the same bank then reads -95.
+struct WindowedSignal
+{
+    std::vector<double> samples;   ///< the padded, windowed buffer
+    std::size_t filled { 0 };      ///< how many of them carried signal
+};
+
+WindowedSignal windowFirst (const std::vector<double>& x, double rate, double seconds)
+{
+    const std::size_t n = std::min (x.size(), static_cast<std::size_t> (seconds * rate));
+
+    std::size_t size = 1;
+    while (size < n)
+        size <<= 1;
+
+    WindowedSignal out;
+    out.samples.assign (size, 0.0);
+    out.filled = n;
+
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const double phase = 2.0 * std::numbers::pi * static_cast<double> (i)
+                           / static_cast<double> (n - 1);
+
+        const double w = 0.35875 - 0.48829 * std::cos (phase)
+                       + 0.14128 * std::cos (2.0 * phase)
+                       - 0.01168 * std::cos (3.0 * phase);
+
+        out.samples[i] = x[i] * w;
+    }
+
+    return out;
+}
+
+/// The energy in bins that no partial's harmonic series can explain, in dB
+/// below the whole signal's, counting only up to `maxHz`.
+///
+/// The bank's six partials are incommensurate, so their harmonics are a
+/// sparse set even taken together -- a few thousand bins out of 32768 -- and
+/// what is left over is folded-back. Hann-windowed, because a rectangular
+/// window's leakage would be louder than the thing being measured.
+double inharmonicFloorDb (const std::vector<double>& x, double rate,
+                          const double* partials, int count, double maxHz)
+{
+    const auto windowed = windowFirst (x, rate, 1.2);
+    const auto spectrum = fftOfReal (windowed.samples);
+    const double binWidth = rate / static_cast<double> (windowed.samples.size());
+
+    // fftOfReal returns the whole transform, so the upper half is the mirror
+    // of the lower and counting it would put exactly half the energy in
+    // "unexplained" whatever the signal is -- a measurement that reads -3 dB
+    // for everything, which is what it did before this line existed.
+    const std::size_t bins = windowed.samples.size() / 2;
+    const auto last = std::min (static_cast<std::size_t> (maxHz / binWidth), bins);
+
+    std::vector<bool> expected (bins + 1, false);
+
+    // A Blackman-Harris main lobe is eight bins wide; +-8 covers it, so a
+    // partial's own leakage is never counted as aliasing.
+    for (int p = 0; p < count; ++p)
+    {
+        for (double hz = partials[p]; hz < rate * 0.5; hz += partials[p])
+        {
+            const auto centre = static_cast<long> (std::lround (hz / binWidth));
+
+            for (long bin = centre - 8; bin <= centre + 8; ++bin)
+                if (bin >= 0 && bin <= static_cast<long> (bins))
+                    expected[static_cast<std::size_t> (bin)] = true;
+        }
+    }
+
+    // DC and the first few bins are the window's own, not the signal's.
+    for (std::size_t bin = 0; bin < 8 && bin < expected.size(); ++bin)
+        expected[bin] = true;
+
+    double total = 0.0;
+    double inharmonic = 0.0;
+
+    for (std::size_t bin = 0; bin <= last; ++bin)
+    {
+        const double power = std::norm (spectrum[bin]);
+        total += power;
+
+        if (! expected[bin])
+            inharmonic += power;
+    }
+
+    return 10.0 * std::log10 (std::max (inharmonic, 1.0e-300) / std::max (total, 1.0e-300));
+}
+
+/// A bank of `HatEngine::kOscillators` pulses at `partials`, either
+/// band-limited (`dsp::Oscillator`, polyBLEP) or naive.
+std::vector<double> pulseBank (const double* partials, double rate, int samples, bool bandLimited)
+{
+    std::vector<double> out (static_cast<std::size_t> (samples), 0.0);
+
+    if (bandLimited)
+    {
+        Oscillator oscillators[HatEngine::kOscillators];
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+        {
+            oscillators[i].setShape (OscShape::pulse);
+            oscillators[i].setWidth (HatEngine::kDutyCycle);
+            oscillators[i].reset (0.0);
+            oscillators[i].setIncrement (partials[i] / rate);
+        }
+
+        for (int n = 0; n < samples; ++n)
+        {
+            double sum = 0.0;
+
+            for (auto& oscillator : oscillators)
+                sum += oscillator.advance();
+
+            out[static_cast<std::size_t> (n)] = sum / HatEngine::kOscillators;
+        }
+
+        return out;
+    }
+
+    double phase[HatEngine::kOscillators] {};
+
+    for (int n = 0; n < samples; ++n)
+    {
+        double sum = 0.0;
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+        {
+            sum += Oscillator::naiveShapeSample (OscShape::pulse, phase[i],
+                                                 HatEngine::kDutyCycle, 0.0);
+            phase[i] += partials[i] / rate;
+            phase[i] -= std::floor (phase[i]);
+        }
+
+        out[static_cast<std::size_t> (n)] = sum / HatEngine::kOscillators;
+    }
+
+    return out;
+}
+
+/// The spectral centroid of a signal, in Hz -- where its weight sits, which
+/// is what "the same metal at a different host rate" has to agree about.
+double centroidHz (const std::vector<double>& x, double rate, double seconds)
+{
+    const auto windowed = windowFirst (x, rate, seconds);
+    const auto spectrum = fftOfReal (windowed.samples);
+    const double binWidth = rate / static_cast<double> (windowed.samples.size());
+
+    double weighted = 0.0;
+    double total = 0.0;
+
+    // Only the audible band: above 20 kHz the four rates legitimately differ,
+    // since 44.1 k has no such band to put anything in.
+    const auto last = std::min (static_cast<std::size_t> (20000.0 / binWidth),
+                                windowed.samples.size() / 2);
+
+    for (std::size_t bin = 1; bin <= last; ++bin)
+    {
+        const double magnitude = std::abs (spectrum[bin]);
+        weighted += magnitude * static_cast<double> (bin) * binWidth;
+        total += magnitude;
+    }
+
+    return total > 0.0 ? weighted / total : 0.0;
+}
+
+/// The energy below 20 kHz, from the same windowed transform as the
+/// centroid. Compared across host rates rather than the time-domain energy,
+/// because 44.1 kHz has no band above 22 kHz to put anything in and counting
+/// what 192 kHz puts there would be comparing two different questions.
+double audibleEnergy (const std::vector<double>& x, double rate, double seconds)
+{
+    const auto windowed = windowFirst (x, rate, seconds);
+    const auto spectrum = fftOfReal (windowed.samples);
+
+    const double size = static_cast<double> (windowed.samples.size());
+    const double binWidth = rate / size;
+    const auto last = std::min (static_cast<std::size_t> (20000.0 / binWidth),
+                                windowed.samples.size() / 2);
+
+    double sum = 0.0;
+
+    for (std::size_t bin = 1; bin <= last; ++bin)
+        sum += std::norm (spectrum[bin]);
+
+    // Parseval, for the unnormalised transform this tree uses: the sum of
+    // |X|^2 over the whole transform is `size` times the sum of x^2. Halved
+    // spectrum, so doubled; then per signal sample, so the answer is a mean
+    // square and not a length.
+    return 2.0 * sum / (size * static_cast<double> (windowed.filled));
+}
+
+/// Where each burst landed, in the first `withinSeconds` of the signal.
+///
+/// A clap is noise, so the sample-by-sample magnitude is useless as an
+/// envelope -- a peak-hold on it found twenty-five "onsets" in four bursts,
+/// which is what the first version of this did. What is stable is a moving
+/// RMS: over a millisecond the noise averages out and the burst pattern is
+/// what is left. Each burst then falls 17 dB per millisecond, so between two
+/// bursts the level collapses completely and an upward threshold crossing
+/// with hysteresis is unambiguous.
+///
+/// The window is the burst pattern's own -- the caller passes a little more
+/// than the pattern's length. The tail that follows is a different question,
+/// asked by a different test: it is band-passed noise at Q 1, so a
+/// millisecond of it holds about one independent sample and its moving RMS
+/// swings by tens of per cent. No level or slope test tells that apart from
+/// a burst, and pretending otherwise would be a detector tuned until it
+/// agreed.
+std::vector<int> burstOnsets (const std::vector<double>& x, double rate, double withinSeconds)
+{
+    const auto window = static_cast<std::size_t> (0.001 * rate);
+    const auto count = std::min (x.size(), static_cast<std::size_t> (withinSeconds * rate));
+
+    std::vector<double> envelope (count, 0.0);
+    double sum = 0.0;
+
+    for (std::size_t n = 0; n < count; ++n)
+    {
+        sum += x[n] * x[n];
+
+        if (n >= window)
+            sum -= x[n - window] * x[n - window];
+
+        // Clamped, because adding and subtracting a hundred thousand squares
+        // leaves a residue that can be negative -- and sqrt of that is a NaN
+        // that compares false against every threshold, so every later sample
+        // reads as an onset. It did: 131 of them.
+        envelope[n] = std::sqrt (std::max (sum, 0.0) / static_cast<double> (std::min (n + 1, window)));
+    }
+
+    double peak = 0.0;
+
+    for (const double value : envelope)
+        peak = std::max (peak, value);
+
+    const double threshold = 0.15 * peak;
+    const double rearm = 0.5 * threshold;
+
+    std::vector<int> onsets;
+    bool above = false;
+
+    for (std::size_t n = 0; n < envelope.size(); ++n)
+    {
+        if (! above && envelope[n] >= threshold)
+        {
+            above = true;
+            onsets.push_back (static_cast<int> (n));
+        }
+        else if (above && envelope[n] < rearm)
+        {
+            above = false;
+        }
+    }
+
+    return onsets;
+}
+} // namespace
+
+TEZLA_TEST (the_hat_ratio_sets_morph_geometrically_and_are_exact_at_a_set)
+{
+    // A set's own numbers, bit for bit, at every integer position: the morph
+    // is branched out there rather than computed and rounded, so choosing a
+    // set is choosing exactly what the paper (or the design) says.
+    for (int set = 0; set < HatEngine::kSetCount; ++set)
+    {
+        double ratios[HatEngine::kOscillators] {};
+        HatEngine::ratiosAt (static_cast<double> (set), ratios);
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            CHECK (isExactly (ratios[i], HatEngine::kSets[set][i]));
+    }
+
+    // Halfway between two sets is the geometric mean, rank by rank: halfway
+    // between 1.5 and 3.0 is an octave's midpoint, 2.121, not 2.25.
+    double half[HatEngine::kOscillators] {};
+    HatEngine::ratiosAt (1.5, half);
+
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+    {
+        const double geometric = std::sqrt (HatEngine::kSets[1][i] * HatEngine::kSets[2][i]);
+        CHECK (std::abs (half[i] - geometric) < 1.0e-12);
+    }
+
+    // Continuity across a set boundary: a step of one part in a thousand
+    // moves no ratio by more than a thousandth of that rank's whole journey.
+    for (double position = 0.0; position < HatEngine::kSetCount - 1; position += 0.25)
+    {
+        double before[HatEngine::kOscillators] {};
+        double after[HatEngine::kOscillators] {};
+
+        HatEngine::ratiosAt (position, before);
+        HatEngine::ratiosAt (position + 0.001, after);
+
+        const int lower = std::min (static_cast<int> (position), HatEngine::kSetCount - 2);
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+        {
+            const double journey = std::abs (std::log2 (HatEngine::kSets[lower + 1][i]
+                                                        / HatEngine::kSets[lower][i]));
+            const double moved = std::abs (std::log2 (after[i] / before[i]));
+
+            CHECK (moved <= journey * 0.0011 + 1.0e-12);
+        }
+    }
+
+    // Past the last set the position clamps: every value from the last set
+    // to the control's top is that set, so appending a set later gives those
+    // positions a meaning without moving anything already saved.
+    for (double position : { 3.0, 4.0, 5.5, 7.0, 9.0 })
+    {
+        double ratios[HatEngine::kOscillators] {};
+        HatEngine::ratiosAt (position, ratios);
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            CHECK (isExactly (ratios[i], HatEngine::kSets[HatEngine::kSetCount - 1][i]));
+    }
+}
+
+TEZLA_TEST (the_hat_partials_sit_at_tune_times_the_sets_ratios)
+{
+    HatEngine engine;
+    engine.prepare (192000.0);
+
+    HatSettings s;
+    s.tuneHz = 300.0;
+    s.harmonics = 0.0;
+    s.spread = 0.0;
+    s.air = 0.0;
+
+    engine.start (s, false, 1.0, 1u, 0);
+
+    // Spread 0 is a branch, not a multiplication by exp2(0): the partials are
+    // exactly Tune times the ratio.
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+        CHECK (isExactly (engine.getPartialHz (i), 300.0 * HatEngine::kSets[0][i]));
+
+    // Spread pulls them apart along the fixed pattern, and the pattern sums
+    // to zero so the set's centre of gravity in log frequency does not move.
+    s.spread = 1.0;
+    engine.start (s, false, 1.0, 1u, 0);
+
+    double sumCents = 0.0;
+
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+    {
+        const double nominal = 300.0 * HatEngine::kSets[0][i];
+        const double cents = 1200.0 * std::log2 (engine.getPartialHz (i) / nominal);
+        const double wanted = 100.0 * HatEngine::kSpreadSemitones * HatEngine::kSpreadPattern[i];
+
+        CHECK (std::abs (cents - wanted) < 1.0e-9);
+        sumCents += cents;
+    }
+
+    CHECK (std::abs (sumCents) < 1.0e-9);
+}
+
+TEZLA_TEST (the_hats_pulse_bank_is_band_limited_where_a_naive_one_folds)
+{
+    // The measurement CLAUDE.md section 7 asks for: inharmonic energy in the
+    // AUDIBLE band, since that is where a fold-back is a defect. Two rates,
+    // because they answer two different questions:
+    //
+    //   192 kHz  the rate the instrument actually generates at (Auto lands
+    //            there from every host rate), and the number that has to
+    //            clear the -60 dB gate.
+    //   48 kHz   what choosing oversampling Off costs, and the contrast with
+    //            a naive pulse bank that says the polyBLEP is doing the work.
+    //
+    // Tune 900 Hz: high enough that every set's top partial has harmonics
+    // above Nyquist to fold at 48 kHz.
+    constexpr double tune = 900.0;
+    constexpr double seconds = 1.3;
+
+    static const char* names[HatEngine::kSetCount] { "Metal", "Bell", "Trash", "Wide" };
+
+    for (int set = 0; set < HatEngine::kSetCount; ++set)
+    {
+        double partials[HatEngine::kOscillators] {};
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            partials[i] = tune * HatEngine::kSets[set][i];
+
+        const auto internalRate = 192000.0;
+        const auto internal = pulseBank (partials, internalRate,
+                                         static_cast<int> (seconds * internalRate), true);
+        const double internalDb = inharmonicFloorDb (internal, internalRate, partials,
+                                                     HatEngine::kOscillators, 20000.0);
+
+        const auto hostRate = 48000.0;
+        const auto limited = pulseBank (partials, hostRate,
+                                        static_cast<int> (seconds * hostRate), true);
+        const auto naive = pulseBank (partials, hostRate,
+                                      static_cast<int> (seconds * hostRate), false);
+
+        const double limitedDb = inharmonicFloorDb (limited, hostRate, partials,
+                                                    HatEngine::kOscillators, 20000.0);
+        const double naiveDb = inharmonicFloorDb (naive, hostRate, partials,
+                                                  HatEngine::kOscillators, 20000.0);
+
+        std::printf ("        [hat alias] %-6s at %.0f Hz, audible band: 192k polyBLEP %.1f dB; 48k polyBLEP %.1f dB, naive %.1f dB (%.1f dB better)\n",
+                     names[set], tune, internalDb, limitedDb, naiveDb, naiveDb - limitedDb);
+
+        // Measured 2026-09-03. At the internal rate the four sets read
+        // -77.2, -77.4, -76.5 and -74.2 dB, so the hat clears section 7's
+        // -60 dB gate with 14 dB to spare. At 48 kHz with oversampling Off
+        // they read -35.5, -35.5, -33.7 and -35.5 against a naive bank's
+        // -15.9, -17.3, -14.6 and -12.3: the polyBLEP is worth 18 to 23 dB
+        // there, and the remaining 35 dB is what Off costs -- which is why
+        // Auto is the default and the tooltip says so.
+        CHECK (internalDb < -70.0);
+        CHECK (naiveDb - limitedDb > 15.0);
+    }
+}
+
+TEZLA_TEST (a_hat_is_the_same_metal_at_every_host_rate)
+{
+    // CLAUDE.md section 6: the instrument must sound the same at 44.1, 48, 96
+    // and 192 kHz. Through the WHOLE instrument with Auto oversampling, which
+    // is what the policy promises: Auto lands the internal rate near 176-192
+    // kHz from every host rate, so the two band-passes sit far below Fs/8 and
+    // the bilinear warping section 6 warns about never gets near them.
+    //
+    // Rendering the hat engine at the raw host rate instead -- which is what
+    // choosing oversampling Off does -- moves the upper band-pass at 7.1 kHz
+    // above 44100/8 and the hit gets 21 % louder, measured. That is the
+    // warping, not a bug, and it is why the hat lives inside the oversampled
+    // section.
+    EngineParameters parameters;
+    parameters.hat = hatEverythingOn();
+    parameters.hat.decayOpenSeconds = 0.35;
+    parameters.oversampling = OversamplingMode::Auto;
+
+    double centroids[4] {};
+    double energies[4] {};
+    int index = 0;
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        const auto out = render (parameters, rate, static_cast<int> (0.5 * rate),
+                                 { { 0, 46, 1.0 } });
+
+        centroids[index] = centroidHz (out, rate, 0.5);
+        energies[index] = audibleEnergy (out, rate, 0.5);
+        ++index;
+    }
+
+    std::printf ("        [hat rates] centroid %.0f / %.0f / %.0f / %.0f Hz; audible energy %.4g / %.4g / %.4g / %.4g\n",
+                 centroids[0], centroids[1], centroids[2], centroids[3],
+                 energies[0], energies[1], energies[2], energies[3]);
+
+    // Measured 2026-09-03 through the instrument at Auto (x4, x4, x2, x1).
+    // They cannot be bit-identical -- three different internal rates and
+    // three different decimators -- but the metal must not drift.
+    for (int i = 1; i < 4; ++i)
+    {
+        CHECK (std::abs (centroids[i] - centroids[0]) / centroids[0] < 0.05);
+        CHECK (std::abs (energies[i] - energies[0]) / energies[0] < 0.08);
+    }
+}
+
+TEZLA_TEST (a_hat_with_air_at_zero_is_the_same_hit_whatever_its_seed)
+{
+    // What this proves is reproducibility, and the distinction cost a
+    // break-check to find: skipping the noise draw at Air 0 is a COST branch,
+    // not an exactness one. `0.0 * bipolar()` is already exactly 0 for any
+    // finite draw, so removing the branch changes nothing in the output and
+    // the test stayed green when it was removed. What the test does catch is
+    // the metal itself becoming seed-dependent -- an oscillator started from
+    // a hashed phase, say -- which would make two hits of a hat with no noise
+    // in it different, and a drum machine's hats have to repeat.
+    HatSettings s = hatEverythingOn();
+    s.air = 0.0;
+
+    HatEngine a, b;
+    const auto first = renderHatEngine (a, s, 96000.0, 0.1, false, 1.0, 12345u);
+    const auto second = renderHatEngine (b, s, 96000.0, 0.1, false, 1.0, 98765u);
+
+    std::size_t mismatches = 0;
+
+    for (std::size_t n = 0; n < first.size(); ++n)
+        if (! isExactly (first[n], second[n]))
+            ++mismatches;
+
+    CHECK (mismatches == 0);
+
+    // And with Air up they differ, which is what says the branch above is
+    // the reason and not an accident of the two streams agreeing.
+    s.air = 0.5;
+
+    HatEngine c, d;
+    const auto third = renderHatEngine (c, s, 96000.0, 0.1, false, 1.0, 12345u);
+    const auto fourth = renderHatEngine (d, s, 96000.0, 0.1, false, 1.0, 98765u);
+
+    CHECK (rmsOfDifference (third, fourth, 0, third.size()) > 1.0e-3);
+}
+
+TEZLA_TEST (a_hat_hit_retires_exactly_and_leaves_exact_zeros)
+{
+    HatSettings s = hatEverythingOn();
+    s.decayOpenSeconds = 0.3;
+
+    HatEngine engine;
+    const auto out = renderHatEngine (engine, s, 96000.0, 1.2, true);
+
+    CHECK (! engine.isActive());
+
+    const int last = lastNonZeroSample (out);
+    const double seconds = static_cast<double> (last) / 96000.0;
+
+    std::printf ("        [hat retire] last non-zero at %.3f s (%.3g), active %d\n",
+                 seconds, out[static_cast<std::size_t> (last)], engine.isActive() ? 1 : 0);
+
+    // The envelope is killed the moment it reaches its zero sustain, so the
+    // tail is the decay's own length and not a filter's ring: everything
+    // after it is an exact zero, not a small number.
+    CHECK (seconds < 0.6);
+
+    for (std::size_t n = static_cast<std::size_t> (last) + 1; n < out.size(); ++n)
+        CHECK (isExactlyZero (out[n]));
+}
+
+TEZLA_TEST (a_closed_hat_chokes_the_open_one_and_the_fade_does_not_click)
+{
+    constexpr double rate = 96000.0;
+    constexpr int block = 64;
+
+    EngineParameters parameters;
+    parameters.hat = hatEverythingOn();
+    parameters.hat.decayOpenSeconds = 2.0;
+    parameters.hat.choke = true;
+    parameters.oversampling = OversamplingMode::Off;
+
+    // The open hat alone, then the same with a closed hit 100 ms in.
+    const int closedAt = static_cast<int> (0.1 * rate);
+
+    auto engine = heapEngine();
+    engine->prepare (rate, block);
+    engine->setParameters (parameters);
+
+    std::vector<double> left (block), right (block);
+    double* buffers[2] = { left.data(), right.data() };
+
+    engine->noteOn (46, 1.0);
+
+    std::vector<double> out;
+    out.reserve (static_cast<std::size_t> (0.3 * rate));
+
+    for (int n = 0; n < static_cast<int> (0.3 * rate); n += block)
+    {
+        if (n <= closedAt && closedAt < n + block)
+            engine->noteOn (42, 1.0);
+
+        engine->process (buffers, block);
+
+        for (int i = 0; i < block; ++i)
+            out.push_back (left[static_cast<std::size_t> (i)]);
+    }
+
+    // The open pad is silent within the choke fade -- 5 ms -- and not before
+    // it: a choke is a fade, not a cut.
+    CHECK (engine->hatOpen().activeHits() == 0);
+
+    const double step = maxStep (out);
+
+    std::printf ("        [hat choke] open hits after the choke %d, max step %.4f\n",
+                 engine->hatOpen().activeHits(), step);
+
+    // With the choke off the open hat is still ringing at the same instant,
+    // which is what says the assertion above is the choke's doing.
+    parameters.hat.choke = false;
+
+    auto unchoked = heapEngine();
+    unchoked->prepare (rate, block);
+    unchoked->setParameters (parameters);
+    unchoked->noteOn (46, 1.0);
+
+    for (int n = 0; n < static_cast<int> (0.3 * rate); n += block)
+    {
+        if (n <= closedAt && closedAt < n + block)
+            unchoked->noteOn (42, 1.0);
+
+        unchoked->process (buffers, block);
+    }
+
+    CHECK (unchoked->hatOpen().activeHits() == 1);
+}
+
+TEZLA_TEST (the_clap_fires_its_four_bursts_at_the_flam_spacing)
+{
+    // The scheduler first, exactly: counted in samples, so the spacing is
+    // the same instant at every host rate rather than merely a similar one.
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        const double flam = 0.011;
+        const auto spacing = static_cast<int> (std::lround (flam * rate));
+
+        BurstScheduler scheduler;
+        scheduler.start (BurstScheduler::kMaxBursts, flam * rate);
+
+        std::vector<int> fired;
+
+        for (int n = 0; n < static_cast<int> (0.2 * rate); ++n)
+            if (scheduler.advance() >= 0)
+                fired.push_back (n);
+
+        CHECK (fired.size() == static_cast<std::size_t> (BurstScheduler::kMaxBursts));
+
+        for (std::size_t b = 0; b < fired.size(); ++b)
+            CHECK (fired[b] == static_cast<int> (b) * spacing);
+
+        CHECK (! scheduler.isPending());
+    }
+
+    // And in the audio: four peaks in the envelope, at the spacing asked for.
+    constexpr double rate = 96000.0;
+
+    ClapSettings s;
+    s.flamSeconds = 0.012;
+    s.tailSeconds = 0.2;
+
+    ClapEngine engine;
+    const auto out = renderClapEngine (engine, s, rate, 0.6);
+    // A little more than the pattern's own length: four bursts three flams
+    // apart, so a late or missing one still fails.
+    const auto onsets = burstOnsets (out, rate, 4.5 * s.flamSeconds);
+
+    std::printf ("        [clap bursts] %zu onsets at", onsets.size());
+
+    for (const int onset : onsets)
+        std::printf (" %.1f", 1000.0 * static_cast<double> (onset) / rate);
+
+    std::printf (" ms (flam %.1f ms)\n", 1000.0 * s.flamSeconds);
+
+    CHECK (onsets.size() == 4);
+
+    for (std::size_t b = 1; b < onsets.size(); ++b)
+    {
+        const double gap = static_cast<double> (onsets[b] - onsets[b - 1]) / rate;
+        CHECK (std::abs (gap - s.flamSeconds) < 0.001);
+    }
+}
+
+TEZLA_TEST (a_clap_retires_exactly_and_leaves_exact_zeros)
+{
+    ClapSettings s;
+    s.tailSeconds = 0.25;
+
+    ClapEngine engine;
+    const auto out = renderClapEngine (engine, s, 96000.0, 1.5);
+
+    CHECK (! engine.isActive());
+
+    const int last = lastNonZeroSample (out);
+    const double seconds = static_cast<double> (last) / 96000.0;
+
+    // The tail starts at the fourth burst, so the hit is three flams plus
+    // the tail's own fall and no more.
+    std::printf ("        [clap retire] last non-zero at %.3f s (%.3g), active %d\n",
+                 seconds, out[static_cast<std::size_t> (last)], engine.isActive() ? 1 : 0);
+
+    CHECK (seconds < 0.5);
+
+    for (std::size_t n = static_cast<std::size_t> (last) + 1; n < out.size(); ++n)
+        CHECK (isExactlyZero (out[n]));
+
+    // A longer tail lasts longer, which is what says the number above is the
+    // Tail control's and not a floor somewhere.
+    s.tailSeconds = 0.6;
+
+    ClapEngine longer;
+    const auto out2 = renderClapEngine (longer, s, 96000.0, 2.0);
+    const double seconds2 = static_cast<double> (lastNonZeroSample (out2)) / 96000.0;
+
+    CHECK (seconds2 > seconds * 1.8);
 }

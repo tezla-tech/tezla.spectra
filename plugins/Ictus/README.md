@@ -18,18 +18,19 @@ humanise and velocity, a sample layer, and per-pad outputs for FL Studio's
 *Auto map outputs*. The plan, with every source and every measured number,
 is [`PLAN.md`](PLAN.md).
 
-**What ships today (phase I3 and the rounds after it): the kick, the snare
-and the ghost snare.** Kick 1 on General MIDI note 36 (C1), Snare 1 on 38
-(D1) and the **ghost snare** on 40 (E1), each with its page; the same snare
-engine also plays the Perc pad on 37 as a tom on its defaults until its page
-arrives; a pad strip that lights on every hit and opens a pad's page; a HIT
-button that strikes the selected pad so a drum can be auditioned without a
-keyboard; five presets; the shared header with output trim, oversampling and
-render quality; **Bass mode** (every key plays the kick at the key's pitch),
-**Note snap** (a drum's Tune lands on the tuning's nearest note, for tuning
-drums to a bass line), a **Gate** with a **Release** on every drum, and the
-shared **tuning page** behind them all. The hats, the clap, the punch chain,
-humanise, the sample layer and the per-pad outputs are declared in the
+**What ships today (phase I4): the kick, the snare, the ghost snare, both
+hats and the clap.** Kick 1 on General MIDI note 36 (C1), Snare 1 on 38
+(D1), the **ghost snare** on 40 (E1), the **closed hat** on 42 (F#1), the
+**open hat** on 46 (A#1) and the **clap** on 39 (D#1), each with its page;
+the same snare engine also plays the Perc pad on 37 as a tom on its defaults
+until its page arrives; a pad strip that lights on every hit and opens a
+pad's page; a HIT button that strikes the selected pad so a drum can be
+auditioned without a keyboard; five presets; the shared header with output
+trim, oversampling and render quality; **Bass mode** (every key plays the
+kick at the key's pitch), **Note snap** (a drum's Tune lands on the tuning's
+nearest note, for tuning drums to a bass line), a **Gate** with a **Release**
+on every drum, and the shared **tuning page** behind them all. The punch
+chain, humanise, the sample layer and the per-pad outputs are declared in the
 engine and arrive phase by phase; nothing already saved will move when they
 do (parameters are append-only, CLAUDE.md §8).
 
@@ -107,6 +108,70 @@ Wires decay, Rattle, the crack, Level, Gate and velocity. Its defaults are a
 ghost's: shorter, mostly wire, well under the main hit. Dark, it is any
 second snare you like. The three kits each carry a ghost.
 
+## The hats
+
+One pair of cymbals, struck two ways. The closed pad (F#1) and the open one
+(A#1) share every control but their decay, because they are the same metal.
+
+A cymbal has no harmonic series — its partials are set by the shape of a
+stiff, irregular plate — so the engine is **six band-limited pulses at
+deliberately incommensurate ratios**, summed and then filtered rather than
+tuned. **Tune** moves the whole set; **Harmonics** slides along a list of
+ratio tables and morphs *between* them, geometrically and rank by rank, so a
+partial glides from one table's place to the next rather than jumping:
+
+| set | what it is |
+|---|---|
+| **Metal** | the six oscillator frequencies of a classic analogue cymbal circuit, taken from the published analysis (attributed in `HatEngine.hpp` and `docs/DSP-REFERENCES.md`). Tight, dense, the ordinary closed hat. |
+| **Bell** | near-harmonic, so it rings with a pitch — a ride's bell. |
+| **Trash** | wider and deliberately incommensurate: a china, a lid. |
+| **Wide** | spread over three octaves. Thin, bright, glassy. |
+
+Four more positions on the knob are reserved, so a set can be added later
+without moving anything already saved. **Spread** pulls the six apart along a
+fixed pattern that sums to zero, up to a tone and a half either way, so the
+set loosens without moving; at 0 it is the set exactly. **Air** adds seeded
+noise *before* the filters, so it is coloured with the metal rather than laid
+over it.
+
+**Colour** is the lower of two band-passes; the upper follows at 2.06 times
+it — the spacing of the two bands in the analysed circuit — and a high-pass
+at half of Colour keeps the oscillators' own fundamentals out of an
+instrument that should have no body at all. What you hear is never a
+fundamental: it is those six series' upper harmonics, dozens of them,
+crossing in the band. The page's picture draws exactly that.
+
+**Choke**, lit by default, is the foot on the pedal: a closed hit fades
+whatever the open pad is ringing over 5 ms. It is skipped when both pads are
+mapped to the same key, where you have asked for both.
+
+Velocity moves the level, shortens the decay and darkens Colour — the last
+being most of what makes programmed sixteenths sound played.
+
+Measured: inharmonic energy in the audible band is **−74 to −77 dB** at the
+rate Auto runs (the four sets, Tune 900 Hz), against **−12 to −17 dB** for
+the same six pulses generated naively. Choosing oversampling *Off* at 48 kHz
+costs about 40 dB of that, and the tooltip says so. The engine costs **41.7 ns
+a sample** at 192 kHz, 0.8 % of a core.
+
+## The clap
+
+A hand clap is not one event: several people clap at almost the same time, so
+the ear hears three or four bursts a few milliseconds apart and then the room
+answering all of them at once. The engine is that structure — the recipe from
+the Nord Modular percussion chapter, read first-hand: **four noise bursts a
+`Flam` apart with their envelopes summed**, each falling 60 dB in 3.5 ms, and
+a **Tail** that starts with the fourth burst and is the room. One band-pass
+(**Colour**) puts the smack where you want it; a clap is a mid-band event,
+all crack and no weight.
+
+The bursts are counted in samples, converted once at note-on, so the pattern
+lands on the same instants at 44.1 and at 192 kHz — measured to the sample at
+all four rates. The engine costs **8.6 ns a sample** at 192 kHz.
+
+Humanising the spacing, which is what makes a real clap different every time,
+arrives with every other pad's humanise control at I6.
+
 ## The panel
 
 Each page is a set of plates, one per group, each with its own colour and a
@@ -155,10 +220,11 @@ step; a note-off after the hit has landed changes nothing, bit for bit.
 
 ## Presets
 
-*Init Kit* (the plain body), *DnB Tight*, *Sub Long*, *Jungle Snap* — each
-with its own snare since I3 — and *Bass Keys* (Bass mode, gated, a 40 ms
-release, no sigh so the pitch holds). A preset resets every parameter to its
-default first, so it is a complete kit, not a patch over the last one.
+*Init Kit* (the plain body), *DnB Tight*, *Sub Long*, *Jungle Snap* — each a
+kit now, with its own snare, ghost, hats and clap — and *Bass Keys* (Bass
+mode, gated, a 40 ms release, no sigh so the pitch holds). A preset resets
+every parameter to its default first, so it is a complete kit, not a patch
+over the last one.
 
 ## Building and installing
 
@@ -167,4 +233,5 @@ install) and FL Studio finds it on the next scan. The full guide is
 [`docs/BUILD.md`](../../docs/BUILD.md). The plugin builds and passes
 Steinberg's validator on Linux, and the I2 kick **has been built and played on
 the rig** — the first ear round is what Bass mode, Gate and Release came from.
-Neither that round's build nor the snare has been loaded there yet.
+Nothing since that round has been loaded there: not I2.1, not the snare, not
+the ghost, not the hats or the clap.

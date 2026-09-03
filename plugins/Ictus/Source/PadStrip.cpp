@@ -27,9 +27,9 @@ constexpr PadEntry kPads[kPadCount] {
     { PadIndex::snare2,    "GHOST",   true },
     { PadIndex::perc,      "PERC",    false },
     { PadIndex::kick2,     "KICK 2",  false },
-    { PadIndex::hatClosed, "HAT C",   false },
-    { PadIndex::hatOpen,   "HAT O",   false },
-    { PadIndex::clap,      "CLAP",    false },
+    { PadIndex::hatClosed, "HAT C",   true },
+    { PadIndex::hatOpen,   "HAT O",   true },
+    { PadIndex::clap,      "CLAP",    true },
 };
 
 /// The glow left after one 15 Hz tick: a hit is a quarter-second flash.

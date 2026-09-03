@@ -259,6 +259,23 @@ public:
 
     [[nodiscard]] double getResonance() const noexcept { return resonance_; }
 
+    /// The control setting that gives a particular Q -- the inverse of the
+    /// geometric mapping in `updateCoefficients`.
+    ///
+    /// It exists because the two are easy to confuse and the confusion is
+    /// silent. The control is geometric from Q 0.5 to Q 500, so a caller
+    /// that means "a gentle band-pass" and writes `setResonance (0.8)` gets
+    /// **Q 125**, a filter that rings for 33 ms at 1.2 kHz. That is what the
+    /// first Ictus clap did: its four bursts smeared into each other and the
+    /// burst-spacing test found twenty-five onsets in four bursts. Anything
+    /// designing a filter from a circuit or a texture rather than from a
+    /// knob should ask for its Q by name.
+    [[nodiscard]] static double resonanceForQ (double q) noexcept
+    {
+        const double clamped = std::clamp (q, kMinimumQ, kMaximumQ);
+        return std::log (clamped / kMinimumQ) / std::log (kMaximumQ / kMinimumQ);
+    }
+
     /// The Q the control currently maps to. `k = 1/Q`, and at the corner the
     /// lowpass and highpass both read exactly Q -- which is what the cutoff
     /// accuracy test measures against.

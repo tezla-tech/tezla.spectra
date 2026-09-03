@@ -39,6 +39,9 @@ void Engine::rebuildForRate() noexcept
     snare1_.prepare (internalRate_);
     snare2_.prepare (internalRate_);
     perc_.prepare (internalRate_);
+    hatClosed_.prepare (internalRate_);
+    hatOpen_.prepare (internalRate_);
+    clap_.prepare (internalRate_);
 
     masterGain_.prepare (internalRate_, 0.02);
     masterGain_.setCurrentAndTarget (dsp::dbToGain (parameters_.masterDb));
@@ -53,6 +56,9 @@ void Engine::reset() noexcept
     snare1_.reset();
     snare2_.reset();
     perc_.reset();
+    hatClosed_.reset();
+    hatOpen_.reset();
+    clap_.reset();
     oversampler_.reset();
 
     sinceControl_ = 0;
@@ -131,6 +137,31 @@ void Engine::startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSetti
     pad.start (note, settings, fundamentalHz, velocity, seed, toBoundary);
 }
 
+void Engine::startHat (Pad<HatEngine>& pad, PadIndex index, bool open,
+                       int note, double velocity) noexcept
+{
+    reconcileFactor();
+
+    const std::uint64_t seed = nextSeed (index);
+    padVelocity_[static_cast<int> (index)] = velocity;
+
+    const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
+
+    pad.start (note, parameters_.hat, open, velocity, seed, toBoundary);
+}
+
+void Engine::startClap (int note, double velocity) noexcept
+{
+    reconcileFactor();
+
+    const std::uint64_t seed = nextSeed (PadIndex::clap);
+    padVelocity_[static_cast<int> (PadIndex::clap)] = velocity;
+
+    const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
+
+    clap_.start (note, parameters_.clap, velocity, seed, toBoundary);
+}
+
 void Engine::noteOn (int note, double velocity) noexcept
 {
     // Bass mode: every key is Kick 1 at that key's pitch, nothing else
@@ -156,7 +187,24 @@ void Engine::noteOn (int note, double velocity) noexcept
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::perc)])
         startSnare (perc_, PadIndex::perc, parameters_.perc, note, velocity);
 
-    // The hats and the clap arrive with their engines (I4).
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::hatClosed)])
+    {
+        // The foot on the pedal: a closed hit silences whatever the open pad
+        // is ringing, before it strikes. Skipped when the two pads are on the
+        // same key, where the user has asked for both and choking one with
+        // the other would leave a hat that cannot sound.
+        if (parameters_.hat.choke
+            && parameters_.padNotes[static_cast<int> (PadIndex::hatOpen)] != note)
+            hatOpen_.choke();
+
+        startHat (hatClosed_, PadIndex::hatClosed, false, note, velocity);
+    }
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::hatOpen)])
+        startHat (hatOpen_, PadIndex::hatOpen, true, note, velocity);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::clap)])
+        startClap (note, velocity);
 }
 
 void Engine::noteOff (int note) noexcept
@@ -181,6 +229,9 @@ void Engine::noteOff (int note) noexcept
 
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::perc)])
         perc_.release (note);
+
+    // The hats and the clap are one-shots: their engines' release() does
+    // nothing, and a note-off on them is not an error, it is a no-op.
 }
 
 void Engine::allNotesOff() noexcept
@@ -190,6 +241,9 @@ void Engine::allNotesOff() noexcept
     snare1_.choke();
     snare2_.choke();
     perc_.choke();
+    hatClosed_.choke();
+    hatOpen_.choke();
+    clap_.choke();
 }
 
 void Engine::choke (PadIndex pad) noexcept
@@ -202,19 +256,21 @@ void Engine::choke (PadIndex pad) noexcept
         case PadIndex::snare2: snare2_.choke(); break;
         case PadIndex::perc:   perc_.choke();   break;
 
-        case PadIndex::hatClosed:
-        case PadIndex::hatOpen:
-        case PadIndex::clap:
+        case PadIndex::hatClosed: hatClosed_.choke(); break;
+        case PadIndex::hatOpen:   hatOpen_.choke();   break;
+        case PadIndex::clap:      clap_.choke();      break;
+
         case PadIndex::count:
         default:
-            break;   // arrives with I4
+            break;
     }
 }
 
 int Engine::activeHitCount() const noexcept
 {
     return kick1_.activeHits() + kick2_.activeHits()
-         + snare1_.activeHits() + snare2_.activeHits() + perc_.activeHits();
+         + snare1_.activeHits() + snare2_.activeHits() + perc_.activeHits()
+         + hatClosed_.activeHits() + hatOpen_.activeHits() + clap_.activeHits();
 }
 
 void Engine::controlTick() noexcept
@@ -224,6 +280,9 @@ void Engine::controlTick() noexcept
     snare1_.advanceControl (kControlIntervalSamples);
     snare2_.advanceControl (kControlIntervalSamples);
     perc_.advanceControl (kControlIntervalSamples);
+    hatClosed_.advanceControl (kControlIntervalSamples);
+    hatOpen_.advanceControl (kControlIntervalSamples);
+    clap_.advanceControl (kControlIntervalSamples);
 }
 
 void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
@@ -233,7 +292,8 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
     for (int i = 0; i < numSamples; ++i)
     {
         const double x = (kick1_.process() + kick2_.process()
-                          + snare1_.process() + snare2_.process() + perc_.process())
+                          + snare1_.process() + snare2_.process() + perc_.process()
+                          + hatClosed_.process() + hatOpen_.process() + clap_.process())
                        * masterGain_.next();
 
         // Mono into both channels until the chain and the pan arrive (I5).

@@ -526,7 +526,7 @@ CLAUDE.md.
 | I2.1 the rig's first ear round: Bass mode, Gate + Release, tuning page | done in code; not yet played on the rig |
 | I3 snare engine + SNARE page (and the Perc and Snare 2 pads on the same engine) | done in code; not yet played on the rig |
 | The rounds after I3 (user asks, 2026-09-03): Note snap; the panel; the ghost snare on the second snare pad with LINK | done in code; not yet played on the rig |
-| I4 hat + clap engines, choke | pending — **start here**; the "I4 handover" block below is the brief, written 2026-09-03 at a session change |
+| I4 hat + clap engines, choke | done in code; not yet played on the rig |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
 | I7 multi-out buses | pending |
@@ -715,9 +715,73 @@ red), no alignment delay (latency test red at ×2/×4/×8), the blocker placed
 in the neutral path (neutral test red), the envelope kill removed (retire
 test red, "active hits 1").
 
-**I4 handover** (2026-09-03, written at a session change so the hats and the
-clap start with nothing left in anyone's head; the "Hat engine" and "Clap
-engine" sections above are the spec, this is what makes them buildable).
+**I4 shipped** (2026-09-03): `plugins/Ictus/Dsp/HatEngine.hpp` -- six
+`dsp::Oscillator` pulses at a set's ratios times Tune, polyBLEP and at the
+paper's measured 47.98 % duty, summed into two `SvfFilter` band-passes
+(Colour, and the upper one at the paper's 7100/3440 spacing) under a
+high-pass at half of Colour, then an `Adsr` killed at its zero sustain. Four
+**ratio sets** -- *Metal* (the paper's six frequencies, the one table taken;
+named for what it is, never for the product), *Bell*, *Trash*, *Wide* -- with
+**Harmonics** a continuous 0..7 position that morphs geometrically by rank
+between adjacent sets, positions past the last clamping, so appending a set
+never repoints a saved value. **Spread** detunes the six along a pattern that
+sums to zero; **Air** adds seeded noise before the filters. The two hat pads
+share every control but their decay, and a closed hit chokes the open pad
+over 5 ms with `HatSettings::choke` arming it.
+`plugins/Ictus/Dsp/ClapEngine.hpp` -- a `BurstScheduler` counting in samples
+to four bursts a **Flam** apart, their exponential envelopes summed over one
+seeded noise, a **Tail** `Adsr` starting with the fourth, one band-pass
+(**Colour**). Both are one-shots: their `release()` does nothing and a
+note-off on them is a no-op. 17 parameters appended at `kSchemaV6`, the HATS
+page (one page, both pads) and the CLAP page, `PartialsView` and `BurstView`,
+the three hat and clap pads opened in the strip, and hat and clap settings in
+the three kit presets.
+
+Measured at I4 (`tezla-tests hat`, `clap`, `a_kit_of_all_eight_pads`;
+`tezla-measure ictus` table 3):
+
+| claim | figure |
+|---|---|
+| inharmonic energy below 20 kHz at the internal rate Auto runs, the four sets at Tune 900 Hz | **-77.2 / -77.4 / -76.5 / -74.2 dB** (section 7's gate is -60) |
+| the same at 48 kHz with oversampling Off, against a naive pulse bank | -35.5 / -35.5 / -33.7 / -35.5 against -15.9 / -17.3 / -14.6 / -12.3 -- the polyBLEP is worth **18 to 23 dB**, and Off costs the other 35 |
+| a hat at 44.1 / 48 / 96 / 192 kHz through the instrument at Auto | centroid **5544 / 5562 / 5562 / 5563 Hz**, audible energy within 2.7 % |
+| the ratio sets at an integer position | **bit-exact** the table; halfway between two, the geometric mean to 1e-12 |
+| Spread 0 partials | **exactly** Tune x ratio; at Spread 1 the six move by the pattern and their cents sum to 0 |
+| hat retirement, everything on, 0.3 s open decay | last non-zero at **0.300 s**, active 0, exact zeros after |
+| the closed hat's choke | open pad's hits **0** within the 5 ms fade; **1** with Choke dark |
+| the clap's bursts at 44.1 / 48 / 96 / 192 kHz | fired on **exactly** samples 0, S, 2S, 3S for S = round(Flam x rate); in the audio, 0.0 / 12.1 / 24.1 / 36.0 ms for a 12 ms Flam |
+| clap retirement, 0.25 s tail | last non-zero at **0.283 s**, active 0; a 0.6 s tail runs 1.8x longer |
+| hat / clap engines at 192 kHz | **41.7 / 8.6 ns per sample** (0.80 % / 0.16 % of a core) |
+| the kit -- all eight pads, everything on, 48 kHz x4 | **6.04 %** of a core against 4.8-5.2 % for five pads; idle 0.001 % |
+
+Two bugs the measurements found before any ear did, both worth keeping:
+
+1. **`SvfFilter::setResonance` takes the CONTROL, not Q**, and the control is
+   geometric from Q 0.5 to Q 500. The clap's band-pass was set to 0.8 meaning
+   "gentle" and got **Q 125**, which rings for 33 ms at 1.2 kHz: the four
+   bursts smeared into one another and the spacing test found twenty-five
+   onsets in four bursts. The hat's bands were 0.9, or Q 250 -- two whistles
+   rather than a band of metal. `SvfFilter::resonanceForQ` is the fix and the
+   engines now name their Q.
+2. **A Hann window cannot measure an alias floor under a thousand harmonics.**
+   Its first sidelobe is 31 dB down and the skirts pile up: the hat read
+   -57 dB however good the generator was. Blackman-Harris, 92 dB down, reads
+   -77. The measure also counted the transform's mirror half at first, which
+   reads -3 dB for every signal ever.
+
+Break-checks at I4, each seen red then reverted: the morph made linear rather
+than geometric (16 checks red), Spread ignored (6), the hat's envelope kill
+removed (retire test red), the closed hat's choke removed, the oscillators
+started from a seed-hashed phase (the reproducibility test red), the clap's
+burst floor removed so nothing reached exact zero (3), the scheduler spacing
+fixed at 512 samples rather than the Flam (15). One break-check FAILED to go
+red and changed a claim: removing the `airOn_` branch left every sample
+identical, because `0.0 * bipolar()` is already exact -- so that branch is a
+cost saving, the test's name now says what it really proves, and the engine's
+comment says which of its two branches is which.
+
+The notes below were the handover written before the phase, kept because
+they are still the map of how the pieces fit.
 
 *What already exists for the three pads, so it is not built twice:*
 
@@ -838,12 +902,13 @@ engine" sections above are the spec, this is what makes them buildable).
   "Both" output option once I7 lands; choke groups exposed with I4.
 
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
-file; take the first `pending` phase. The next is I4, and the user asked on
-2026-09-03 to go ahead with it *before* the rig's report on everything since
-I2 (I2.1, I3, Note snap, the panel, the ghost) — so that report's findings
-become an "I4.1" row when they arrive, exactly as I2's did. Read the I4
-handover block above before writing a line. The non-negotiables every phase
-here honours, in one place:
+file; take the first `pending` phase. The next is **I5, the punch chain**.
+The user asked on 2026-09-03 to go ahead through I4 *before* the rig's report
+on everything since I2 (I2.1, I3, Note snap, the panel, the ghost, and now
+the hats and the clap) — so that report's findings become an "I4.1" row when
+they arrive, exactly as I2's did. **Nothing since the I2 kick has been
+played on the rig**, and that is the biggest open item in this file. The
+non-negotiables every phase here honours, in one place:
 
 - One phase = one commit. Tests written and RUN in that commit; every
   mechanism seen red first or break-checked (edit → red → revert), with the
