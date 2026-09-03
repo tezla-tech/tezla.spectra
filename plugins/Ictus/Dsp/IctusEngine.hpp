@@ -30,18 +30,21 @@
 // block size cannot bend a sweep and a test holds 64-, 97- and 512-sample
 // blocks bit-identical.
 //
-// I1 shape: the two kick pads are live, the Main bus is the only bus, the
-// six other pads and four other buses are declared here so that I3-I7 add
-// engines and buses without restructuring.
+// I3 shape: the two kick pads and the three snare-engine pads (Snare 1,
+// Snare 2, Perc) are live, the Main bus is the only bus; the hats, the clap
+// and the four other buses are declared here so that I4-I7 add engines and
+// buses without restructuring.
 
 #include <cstdint>
 
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
+#include <tezla/dsp/Tuning.hpp>
 
 #include "KickEngine.hpp"
 #include "Pad.hpp"
+#include "SnareEngine.hpp"
 
 namespace tezla::ictus {
 
@@ -73,11 +76,22 @@ struct EngineParameters
     KickSettings kick1;
     KickSettings kick2;
 
+    SnareSettings snare1;
+    SnareSettings snare2;
+
+    /// The Perc pad: the snare engine with tom defaults and the wires off.
+    SnareSettings perc { tomSettings() };
+
     /// MIDI note per pad. Held here for the engine; the plugin stores them
     /// as state-tree properties, not parameters (plugins/Ictus/PLAN.md).
     int padNotes[kPadCount] { 36, 38, 42, 46, 39, 37, 35, 40 };
 
     double masterDb { 0.0 };
+
+    /// Bass mode: the whole keyboard plays Kick 1, tuned to the key through
+    /// the tuning (12-TET at A4 = 440 Hz unless a scale is loaded), and the
+    /// other pads are silent -- a tuned sub-bass instrument out of the kick.
+    bool bassMode { false };
 
     dsp::OversamplingMode oversampling { dsp::OversamplingMode::Auto };
     dsp::RenderOversampling renderOversampling { dsp::RenderOversampling::sameAsLive };
@@ -109,11 +123,13 @@ public:
     void setParameters (const EngineParameters& parameters) noexcept { parameters_ = parameters; }
     [[nodiscard]] const EngineParameters& getParameters() const noexcept { return parameters_; }
 
-    /// A note strikes every pad mapped to it. Velocity 0..1.
+    /// A note strikes every pad mapped to it -- or, in Bass mode, Kick 1 at
+    /// the key's pitch. Velocity 0..1.
     void noteOn (int note, double velocity) noexcept;
 
-    /// A drum ignores note-off.
-    void noteOff (int) noexcept {}
+    /// A note-off releases the gated hit that note started (Gate lit on the
+    /// pad); a one-shot pad ignores it.
+    void noteOff (int note) noexcept;
 
     /// Fades every sounding hit over the choke time.
     void allNotesOff() noexcept;
@@ -160,6 +176,15 @@ public:
 
     [[nodiscard]] const Pad<KickEngine>& kick1() const noexcept { return kick1_; }
     [[nodiscard]] const Pad<KickEngine>& kick2() const noexcept { return kick2_; }
+    [[nodiscard]] const Pad<SnareEngine>& snare1() const noexcept { return snare1_; }
+    [[nodiscard]] const Pad<SnareEngine>& snare2() const noexcept { return snare2_; }
+    [[nodiscard]] const Pad<SnareEngine>& perc() const noexcept { return perc_; }
+
+    /// The tuning Follow key and Bass mode read the landed pitch from. The
+    /// scale swap allocates nothing (the Malleus and Sonitus arrangement).
+    [[nodiscard]] dsp::Tuning& tuning() noexcept { return tuning_; }
+    [[nodiscard]] const dsp::Tuning& tuning() const noexcept { return tuning_; }
+    bool swapScale (dsp::Scale& other) noexcept { return tuning_.swapScale (other); }
 
 private:
     void reconcileFactor() noexcept;
@@ -168,7 +193,13 @@ private:
     void renderChunk (double* left, double* right, int numSamples) noexcept;
 
     void startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings& settings,
-                    int note, double velocity) noexcept;
+                    int note, double velocity, bool keyed) noexcept;
+    void startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSettings& settings,
+                     int note, double velocity) noexcept;
+
+    /// The seed rule shared by every pad: a base, a per-pad salt, and the hit
+    /// counter times a golden-ratio constant.
+    [[nodiscard]] std::uint64_t nextSeed (PadIndex index) noexcept;
 
     double sampleRate_ { 48000.0 };
     double internalRate_ { 48000.0 };
@@ -181,6 +212,11 @@ private:
 
     Pad<KickEngine> kick1_;
     Pad<KickEngine> kick2_;
+    Pad<SnareEngine> snare1_;
+    Pad<SnareEngine> snare2_;
+    Pad<SnareEngine> perc_;
+
+    dsp::Tuning tuning_;
 
     dsp::SmoothedValue<double> masterGain_;
 

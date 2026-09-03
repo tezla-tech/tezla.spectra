@@ -7,11 +7,12 @@
 
 #pragma once
 
-// The Ictus editor at I2: the shared header (output, oversampling, render
-// quality, A/B, tooltips), a pad strip with a HIT button so the kick can be
-// auditioned without a keyboard, and one page of Kick 1's controls in the
-// house look. The pad grid and the per-pad pages arrive with the other
-// engines (I9).
+// The Ictus editor at I3: the shared header (output, oversampling, render
+// quality, A/B, tooltips), a pad strip with a HIT button that strikes the
+// page's pad so a drum can be auditioned without a keyboard, a BASS lamp and
+// three page tabs -- Kick 1's page, Snare 1's page, and the shared tuning
+// panel. The pad grid and the other pads' pages arrive with the editor
+// close-out (I9).
 
 #include <array>
 #include <memory>
@@ -25,6 +26,7 @@
 #include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/TooltipHost.hpp>
+#include <tezla/ui/TuningPanel.hpp>
 
 #include "PluginProcessor.h"
 
@@ -49,6 +51,10 @@ public:
 
     void setNote (const juce::String& note);
     void setControlEnabled (const char* parameterId, bool enabled);
+
+    /// Replaces a control's tooltip and its label's -- for the ones that
+    /// read live state (which scale a key plays through).
+    void setTooltip (const char* parameterId, const juce::String& tooltip);
 
     [[nodiscard]] juce::Colour nameColour() const;
 
@@ -102,8 +108,14 @@ public:
 
 private:
     void timerCallback() override;
-    void buildPage();
+    void buildKickPage();
+    void buildSnarePage();
+    void buildTuningPage();
+    void showPage (int index);
+    void refreshPadStrip();
+    void styleTab (juce::TextButton& tab, bool active);
     void refreshHeaderTooltips();
+    void refreshKeyTooltips();
     void updateGreying();
 
     IctusProcessor& ictus_;
@@ -114,13 +126,26 @@ private:
 
     std::unique_ptr<ui::HeaderBar> header_;
 
-    // The pad strip: the pad's name and note, a HIT button, and how many hits
-    // are sounding.
+    // The pad strip: a HIT button, the pad's name and note, the BASS lamp
+    // (a global: every key plays Kick 1), the two page tabs, and how many
+    // hits are sounding.
     juce::Label padLabel_;
     juce::TextButton hitButton_ { "HIT" };
+    ui::LampButton bassButton_ { "Bass" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bassAttachment_;
+    juce::TextButton kickTab_ { "KICK" };
+    juce::TextButton snareTab_ { "SNARE" };
+    juce::TextButton tuningTab_ { "TUNING" };
     juce::Label hitsLabel_;
 
-    std::unique_ptr<ControlPage> page_;
+    std::unique_ptr<ControlPage> kickPage_;
+    std::unique_ptr<ControlPage> snarePage_;
+    std::unique_ptr<ui::TuningPanel> tuningPage_;
+    int currentPage_ { 0 };
+
+    /// The pad HIT strikes and the strip names: the page's drum, and the
+    /// last drum page's while the tuning page is up.
+    PadIndex currentPad_ { PadIndex::kick1 };
 
     int shownFactor_ { -1 };
     bool shownOffline_ { false };
@@ -130,6 +155,19 @@ private:
     bool shownToneOn_ { true };
     bool shownHarmonics_ { true };
     bool shownTail_ { true };
+    bool shownGate_ { true };
+    bool shownKeyed_ { true };
+
+    bool shownSnareWires_ { true };
+    bool shownSnareCrack_ { true };
+    bool shownSnareNoise_ { true };
+    bool shownSnareGate_ { true };
+    bool shownSnareKeyed_ { true };
+
+    // The live key tooltips are rebuilt only when what they describe moves.
+    juce::String shownScale_;
+    bool shownBass_ { false };
+    int shownPadNote_ { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IctusEditor)
 };

@@ -15,14 +15,6 @@
 
 namespace tezla::ictus {
 
-namespace
-{
-[[nodiscard]] double noteToHz (int note) noexcept
-{
-    return 440.0 * std::exp2 ((static_cast<double> (note) - 69.0) / 12.0);
-}
-} // namespace
-
 void Engine::prepare (double sampleRate, int maxBlockSize)
 {
     sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -44,6 +36,9 @@ void Engine::rebuildForRate() noexcept
 
     kick1_.prepare (internalRate_);
     kick2_.prepare (internalRate_);
+    snare1_.prepare (internalRate_);
+    snare2_.prepare (internalRate_);
+    perc_.prepare (internalRate_);
 
     masterGain_.prepare (internalRate_, 0.02);
     masterGain_.setCurrentAndTarget (dsp::dbToGain (parameters_.masterDb));
@@ -55,6 +50,9 @@ void Engine::reset() noexcept
 {
     kick1_.reset();
     kick2_.reset();
+    snare1_.reset();
+    snare2_.reset();
+    perc_.reset();
     oversampler_.reset();
 
     sinceControl_ = 0;
@@ -83,60 +81,142 @@ void Engine::reconcileFactor() noexcept
     }
 }
 
+std::uint64_t Engine::nextSeed (PadIndex index) noexcept
+{
+    ++hitCount_;
+
+    return (kSeedBase ^ (kPadSalt * static_cast<std::uint64_t> (static_cast<int> (index) + 1)))
+         + kHitGolden * hitCount_;
+}
+
 void Engine::startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings& settings,
-                        int note, double velocity) noexcept
+                        int note, double velocity, bool keyed) noexcept
 {
     reconcileFactor();
 
-    ++hitCount_;
+    const std::uint64_t seed = nextSeed (index);
 
-    const std::uint64_t seed = (kSeedBase ^ (kPadSalt * static_cast<std::uint64_t> (static_cast<int> (index) + 1)))
-                             + kHitGolden * hitCount_;
-
-    const double endHz = settings.followKey ? noteToHz (note) : settings.tuneHz;
+    // The landed pitch: from the key through the tuning in Bass mode or
+    // with Follow key lit, else the pad's own Tune.
+    const double endHz = (keyed || settings.followKey) ? tuning_.frequencyFor (note)
+                                                       : settings.tuneHz;
 
     // A note between two process() calls lands at whatever offset the
     // control grid is at; the hit gets that many samples as its first,
     // partial chunk. Zero means the tick is due and will serve it.
     const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
 
-    pad.start (settings, endHz, velocity, seed, toBoundary);
+    pad.start (note, settings, endHz, velocity, seed, toBoundary);
+}
+
+void Engine::startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSettings& settings,
+                         int note, double velocity) noexcept
+{
+    reconcileFactor();
+
+    const std::uint64_t seed = nextSeed (index);
+
+    const double fundamentalHz = settings.followKey ? tuning_.frequencyFor (note)
+                                                    : settings.tuneHz;
+
+    const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
+
+    pad.start (note, settings, fundamentalHz, velocity, seed, toBoundary);
 }
 
 void Engine::noteOn (int note, double velocity) noexcept
 {
+    // Bass mode: every key is Kick 1 at that key's pitch, nothing else
+    // sounds. A tuned sub-bass instrument made of the kick.
+    if (parameters_.bassMode)
+    {
+        startKick (kick1_, PadIndex::kick1, parameters_.kick1, note, velocity, true);
+        return;
+    }
+
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick1)])
-        startKick (kick1_, PadIndex::kick1, parameters_.kick1, note, velocity);
+        startKick (kick1_, PadIndex::kick1, parameters_.kick1, note, velocity, false);
 
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick2)])
-        startKick (kick2_, PadIndex::kick2, parameters_.kick2, note, velocity);
+        startKick (kick2_, PadIndex::kick2, parameters_.kick2, note, velocity, false);
 
-    // The other six pads arrive with their engines (I3, I4).
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::snare1)])
+        startSnare (snare1_, PadIndex::snare1, parameters_.snare1, note, velocity);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::snare2)])
+        startSnare (snare2_, PadIndex::snare2, parameters_.snare2, note, velocity);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::perc)])
+        startSnare (perc_, PadIndex::perc, parameters_.perc, note, velocity);
+
+    // The hats and the clap arrive with their engines (I4).
+}
+
+void Engine::noteOff (int note) noexcept
+{
+    if (parameters_.bassMode)
+    {
+        kick1_.release (note);
+        return;
+    }
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick1)])
+        kick1_.release (note);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::kick2)])
+        kick2_.release (note);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::snare1)])
+        snare1_.release (note);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::snare2)])
+        snare2_.release (note);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::perc)])
+        perc_.release (note);
 }
 
 void Engine::allNotesOff() noexcept
 {
     kick1_.choke();
     kick2_.choke();
+    snare1_.choke();
+    snare2_.choke();
+    perc_.choke();
 }
 
 void Engine::choke (PadIndex pad) noexcept
 {
-    if (pad == PadIndex::kick1)
-        kick1_.choke();
-    else if (pad == PadIndex::kick2)
-        kick2_.choke();
+    switch (pad)
+    {
+        case PadIndex::kick1:  kick1_.choke();  break;
+        case PadIndex::kick2:  kick2_.choke();  break;
+        case PadIndex::snare1: snare1_.choke(); break;
+        case PadIndex::snare2: snare2_.choke(); break;
+        case PadIndex::perc:   perc_.choke();   break;
+
+        case PadIndex::hatClosed:
+        case PadIndex::hatOpen:
+        case PadIndex::clap:
+        case PadIndex::count:
+        default:
+            break;   // arrives with I4
+    }
 }
 
 int Engine::activeHitCount() const noexcept
 {
-    return kick1_.activeHits() + kick2_.activeHits();
+    return kick1_.activeHits() + kick2_.activeHits()
+         + snare1_.activeHits() + snare2_.activeHits() + perc_.activeHits();
 }
 
 void Engine::controlTick() noexcept
 {
     kick1_.advanceControl (kControlIntervalSamples);
     kick2_.advanceControl (kControlIntervalSamples);
+    snare1_.advanceControl (kControlIntervalSamples);
+    snare2_.advanceControl (kControlIntervalSamples);
+    perc_.advanceControl (kControlIntervalSamples);
 }
 
 void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
@@ -145,7 +225,9 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
 
     for (int i = 0; i < numSamples; ++i)
     {
-        const double x = (kick1_.process() + kick2_.process()) * masterGain_.next();
+        const double x = (kick1_.process() + kick2_.process()
+                          + snare1_.process() + snare2_.process() + perc_.process())
+                       * masterGain_.next();
 
         // Mono into both channels until the chain and the pan arrive (I5).
         left[i] = x;

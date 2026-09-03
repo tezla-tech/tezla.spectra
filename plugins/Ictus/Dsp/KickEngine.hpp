@@ -30,7 +30,8 @@
 //     bright while the drop is high, pure once it has landed.
 //   * The click: one mode of a `ModalResonator` (the beater's short ring) and
 //     a seeded noise burst through a one-pole high-pass -- the 909's Attack
-//     knob, and the thing velocity is most about.
+//     knob, and the thing velocity is most about. Shared with the snare's
+//     crack as `ClickPair` (Click.hpp) since I3, bit-identically.
 //   * Amplitude: an AHD envelope (`Adsr` with sustain 0, killed the moment it
 //     lands, so the hit retires exactly) and a Tail -- a second, longer
 //     envelope on the same body, mixed in by a lerp that is exact at 0.
@@ -62,11 +63,11 @@
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/DcBlocker.hpp>
 #include <tezla/dsp/Exact.hpp>
-#include <tezla/dsp/ModalResonator.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/TensionDrop.hpp>
-#include <tezla/dsp/UnisonBank.hpp>
 #include <tezla/dsp/Waveshapers.hpp>
+
+#include "Click.hpp"
 
 namespace tezla::ictus {
 
@@ -107,6 +108,14 @@ struct KickSettings
     double tailSeconds { 1.0 };          ///< the tail's decay, 0.1..4
     double level { 0.8 };                ///< 0..1
 
+    // ---- gate -----------------------------------------------------------
+    /// Lit: a note-off RELEASES the hit from wherever its envelopes are,
+    /// over `releaseSeconds`; dark: a one-shot that ignores note-off. The
+    /// hold and decay are the hit's shape either way -- the gate only adds
+    /// the early exit a fill needs.
+    bool   gate { false };
+    double releaseSeconds { 0.0 };       ///< 0..2; 0 is a 1 ms cut, the shortest that does not click
+
     // ---- velocity amounts, all of the form x * ((1 - a) + a * v) --------
     double velocityLevel { 1.0 };
     double velocityClick { 0.6 };
@@ -117,21 +126,21 @@ struct KickSettings
 class KickEngine
 {
 public:
-    /// The click resonator's ring-down.
-    static constexpr double kClickT60Seconds = 0.003;
-
-    /// After four T60s (-240 dB) the resonator is cut exactly rather than
-    /// left ringing below anything a double can express.
-    static constexpr double kClickTailSeconds = 0.012;
-
-    /// Below this the noise burst is over, exactly.
-    static constexpr double kNoiseFloor = 1.0e-5;
+    /// The click pair's constants, kept under their old names.
+    static constexpr double kClickT60Seconds = ClickPair::kT60Seconds;
+    static constexpr double kClickTailSeconds = ClickPair::kTailSeconds;
+    static constexpr double kNoiseFloor = ClickPair::kNoiseFloor;
 
     static constexpr double kToneResonance = 0.15;
 
     /// Shaper gain at Harmonics = 1 (it is 1 + 3h, so a full-scale body sits
     /// well into both curves at the top of the knob).
     static constexpr double kShaperGainAtFull = 4.0;
+
+    /// The shortest release: a note-off with Release at 0 ramps out over
+    /// this rather than stepping to zero, which would click. Inaudible as a
+    /// tail, exact as a stop.
+    static constexpr double kMinimumReleaseSeconds = 0.001;
 
     static constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
@@ -149,10 +158,8 @@ public:
         tone_.setResonance (kToneResonance);
 
         click_.prepare (rate_);
-        click_.setModeCount (1);
 
         blocker_.prepare (rate_, 10.0);
-        noiseHighpass_.prepare (rate_, 3000.0);
 
         reset();
     }
@@ -171,7 +178,6 @@ public:
         tone_.reset();
         click_.reset();
         blocker_.reset();
-        noiseHighpass_.reset();
         adaaEven_.reset();
         adaaOdd_.reset();
 
@@ -179,10 +185,6 @@ public:
         inc_ = 0.0;
         incTarget_ = 0.0;
         incStep_ = 0.0;
-
-        clickSamplesLeft_ = 0;
-        noiseOn_ = false;
-        noiseEnv_ = 0.0;
     }
 
     /// Strikes. `endHz` is the landed pitch (the engine's caller resolves
@@ -225,7 +227,11 @@ public:
         amp_.setDecaySeconds (scaled (std::clamp (s.decaySeconds, 0.02, 2.0), s.velocityDecay));
         amp_.setDecayTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
         amp_.setSustain (0.0);
-        amp_.setReleaseSeconds (0.0);
+
+        gate_ = s.gate;
+        release_ = std::max (kMinimumReleaseSeconds, std::clamp (s.releaseSeconds, 0.0, 2.0));
+        amp_.setReleaseSeconds (release_);
+        amp_.setReleaseTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
         amp_.noteOn();
 
         tailMix_ = std::clamp (s.tailMix, 0.0, 1.0);
@@ -241,7 +247,8 @@ public:
             tail_.setDecaySeconds (std::clamp (s.tailSeconds, 0.1, 4.0));
             tail_.setDecayTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
             tail_.setSustain (0.0);
-            tail_.setReleaseSeconds (0.0);
+            tail_.setReleaseSeconds (release_);
+            tail_.setReleaseTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
             tail_.noteOn();
         }
 
@@ -276,27 +283,9 @@ public:
             tone_.setCutoffHz (toneRatio_ * currentHz());
 
         // ---- click ----
-        const double clickHz = std::clamp (s.clickToneHz, 200.0, std::min (8000.0, rate_ * 0.4));
-        const double clickLevel = scaled (std::clamp (s.click, 0.0, 1.0), s.velocityClick);
-
-        if (! dsp::isExactlyZero (clickLevel))
-        {
-            click_.setMode (0, clickHz, kClickT60Seconds, 1.0);
-            click_.excite (0, clickLevel);
-            clickSamplesLeft_ = static_cast<int> (std::ceil (kClickTailSeconds * rate_));
-        }
-
-        noiseLevel_ = scaled (std::clamp (s.clickNoise, 0.0, 1.0), s.velocityClick);
-
-        if (! dsp::isExactlyZero (noiseLevel_))
-        {
-            random_.seed (seed);
-            noiseEnv_ = 1.0;
-            noiseCoefficient_ = std::exp (-std::log (1000.0)
-                                          / (std::clamp (s.clickNoiseSeconds, 0.0005, 0.008) * rate_));
-            noiseHighpass_.retune (rate_, clickHz);
-            noiseOn_ = true;
-        }
+        click_.start (scaled (std::clamp (s.click, 0.0, 1.0), s.velocityClick), s.clickToneHz,
+                      scaled (std::clamp (s.clickNoise, 0.0, 1.0), s.velocityClick),
+                      s.clickNoiseSeconds, seed);
 
         gain_ = scaled (std::clamp (s.level, 0.0, 1.0), s.velocityLevel);
 
@@ -330,6 +319,24 @@ public:
         if (toneOn_)
             tone_.setCutoffHz (toneRatio_ * hz);   // guarded: nothing to do once landed
     }
+
+    /// Note-off. A gated hit releases both envelopes from wherever they are
+    /// over the release time -- an envelope that has already landed is
+    /// idle and unchanged, so a gate that opens late changes nothing. A
+    /// one-shot hit ignores this entirely, which is what a drum pad does.
+    void release() noexcept
+    {
+        if (! active_ || ! gate_)
+            return;
+
+        if (amp_.isActive())
+            amp_.noteOff();
+
+        if (tailOn_ && tail_.isActive())
+            tail_.noteOff();
+    }
+
+    [[nodiscard]] bool isGated() const noexcept { return gate_; }
 
     /// One internal sample. Exactly 0.0 when the hit is over.
     [[nodiscard]] double process() noexcept
@@ -391,28 +398,9 @@ public:
             x = tone_.process (x);
 
         // ---- click and noise ----
-        if (clickSamplesLeft_ > 0)
-        {
-            x += click_.process();
+        click_.addTo (x);
 
-            if (--clickSamplesLeft_ == 0)
-                click_.reset();
-        }
-
-        if (noiseOn_)
-        {
-            x += noiseLevel_ * noiseEnv_ * noiseHighpass_.process (random_.bipolar());
-            noiseEnv_ *= noiseCoefficient_;
-
-            if (noiseEnv_ < kNoiseFloor)
-            {
-                noiseEnv_ = 0.0;
-                noiseOn_ = false;
-            }
-        }
-
-        if (! amp_.isActive() && ! (tailOn_ && tail_.isActive())
-            && clickSamplesLeft_ == 0 && ! noiseOn_)
+        if (! amp_.isActive() && ! (tailOn_ && tail_.isActive()) && ! click_.isActive())
             active_ = false;
 
         return x * gain_;
@@ -449,6 +437,8 @@ private:
     bool tailOn_ { false };
     double tailMix_ { 0.0 };
     double gain_ { 1.0 };
+    bool gate_ { false };
+    double release_ { kMinimumReleaseSeconds };
 
     // harmonics
     bool harmonicsOn_ { false };
@@ -467,14 +457,7 @@ private:
     dsp::SvfFilter tone_;
 
     // click
-    dsp::ModalResonator click_;
-    int clickSamplesLeft_ { 0 };
-    bool noiseOn_ { false };
-    double noiseLevel_ { 0.0 };
-    double noiseEnv_ { 0.0 };
-    double noiseCoefficient_ { 0.0 };
-    dsp::SmallRandom random_;
-    dsp::DcBlocker<double> noiseHighpass_;
+    ClickPair click_;
 };
 
 } // namespace tezla::ictus

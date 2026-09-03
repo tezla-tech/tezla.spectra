@@ -57,10 +57,11 @@ public:
         fresh_ = 0;
     }
 
-    /// Starts a hit, fading whatever this pad was already playing. The
-    /// arguments are forwarded to `Engine::start`.
+    /// Starts a hit, fading whatever this pad was already playing. `note` is
+    /// remembered so that a note-off releases this hit and no other; the
+    /// remaining arguments are forwarded to `Engine::start`.
     template <typename... Args>
-    void start (Args&&... args) noexcept
+    void start (int note, Args&&... args) noexcept
     {
         Slot& old = slots_[static_cast<std::size_t> (fresh_)];
 
@@ -71,7 +72,18 @@ public:
 
         Slot& fresh = slots_[static_cast<std::size_t> (fresh_)];
         fresh.cut();
+        fresh.note = note;
         fresh.engine.start (std::forward<Args> (args)...);
+    }
+
+    /// A note-off for `note`: releases the hit that note started, if it is
+    /// still sounding and not already on its way out. A hit started by a
+    /// different key -- the next note of a bass line -- is untouched.
+    void release (int note) noexcept
+    {
+        for (auto& slot : slots_)
+            if (slot.engine.isActive() && ! slot.fading && slot.note == note)
+                slot.engine.release();
     }
 
     /// Fades every sounding hit over the choke time.
@@ -118,6 +130,7 @@ private:
     struct Slot
     {
         Engine engine;
+        int note { -1 };
         double fadeGain { 1.0 };
         double fadeStep { 0.0 };
         bool fading { false };
@@ -136,6 +149,7 @@ private:
         void cut() noexcept
         {
             engine.reset();
+            note = -1;
             fadeGain = 1.0;
             fadeStep = 0.0;
             fading = false;

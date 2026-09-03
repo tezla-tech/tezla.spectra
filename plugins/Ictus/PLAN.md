@@ -522,8 +522,9 @@ CLAUDE.md.
 |---|---|
 | I0 plan + registry + references + roadmap | done |
 | I1 kick engine + engine skeleton + TensionDrop promotion + SoftOdd | done |
-| I2 minimal JUCE layer, kick only, rig build + ear round | done in code; **the rig's ear round is the user's and has not happened** |
-| I3 snare engine | pending |
+| I2 minimal JUCE layer, kick only, rig build + ear round | done — **played on the rig 2026-09-02** ("wow that sounds great"); the round's asks are the I2.1 row |
+| I2.1 the rig's first ear round: Bass mode, Gate + Release, tuning page | done in code; not yet played on the rig |
+| I3 snare engine + SNARE page (and the Perc and Snare 2 pads on the same engine) | done in code; not yet played on the rig |
 | I4 hat + clap engines, choke | pending |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
@@ -562,7 +563,94 @@ shared header, a pad strip with HIT and the hit count, seven columns of
 knobs and two lamp switches, greying for Even / Tone / Tail time). Built and
 photographed through `tezla-render-Ictus editor`: a scripted press and
 release on HIT, 150 ms of audio and two timer ticks read "1 hit sounding".
-Steinberg's validator: 47 of 47. Nobody has loaded it in FL Studio yet.
+Steinberg's validator: 47 of 47. Loaded and played in FL Studio on the rig
+the same day.
+
+**I2.1 — the rig's first ear round** (2026-09-02). Two findings from the
+user, both about what happens between the keyboard and the pad:
+
+1. *Follow key* only ever sounded on the pad's own note, so it was a fixed
+   transposition rather than a keyboard. The engine's `startKick` now takes
+   the landed pitch from `dsp::Tuning::frequencyFor (note)` (the shared
+   tuning, 12-TET at A4 = 440 Hz until a scale is loaded) whenever the hit is
+   keyed, and **Bass mode** (`bassMode`, a global switch in the strip) makes
+   every key strike Kick 1 at the key's pitch with the other pads silent — a
+   tuned sub-bass instrument made of the kick. Microtuning came with it for
+   free: `IctusProcessor` is a `ui::TuningHost` exactly as Malleus is
+   (publish under a `SpinLock`, `swapScale` on the audio thread, scale and
+   map as text in the state), and the editor's second page is the shared
+   `ui::TuningPanel`. The Key and BASS tooltips are live (`describeKeying`,
+   `describeFollowKey`): which scale, and what C1, C2 and G2 play through it.
+2. A one-shot's tail piles up under a fast fill. **Gate** (`k1Gate`) makes a
+   note-off release the hit from wherever its envelopes are, over
+   **Release** (`k1Release`, 0–2 s, skewed to 100 ms); Release 0 is a 1 ms
+   cut — `KickEngine::kMinimumReleaseSeconds` — the shortest that does not
+   click. Both AHD envelopes (amp and tail) get the release with the decay's
+   tension. A note-off after the hit has landed changes nothing, bit for bit,
+   and the pad releases only the hit *that key* started (`Pad::release
+   (note)`, the slot remembers its note), so a legato bass line holds.
+
+   Parameters appended at `kSchemaV2`, all neutral by default; preset *Bass
+   Keys* on the end of the list. Measured (`tezla-tests bass`, `gated`,
+   `note_off`): notes 36 / 43 / 48 land on 65.406 / 97.999 / 130.813 Hz,
+   within 0.001 cents; note-off at 200 ms into a 2 s decay with a 50 ms
+   release → last non-zero at 251.3 ms, max step 0.0133 = the body's own;
+   Release 0 → gone 2.29 ms after the note-off (the 1 ms cut, half a host
+   sample of alignment and the decimator's tail), same step; the one-shot
+   plays on; the late note-off is a null. Break-checks, each seen red then
+   reverted: `noteOn` ignoring Bass mode (the bass test went silent — and
+   first crashed on an empty crossing list, so the test now fails on its
+   check instead), `release()` emptied (gate test red on activity and on the
+   last non-zero), `Pad::release` ignoring which key started the hit (legato
+   test red, D cut with C).
+
+**I3 shipped** (2026-09-02): `plugins/Ictus/Dsp/SnareEngine.hpp` — three
+modes of a `ModalResonator` at `1 + (r0 − 1)·spread`, r0 = {1, 1.6, 2.2}
+(Reid's measured snare, rounded; attributed at the point of use), T60s of
+Decay × {1, 0.7, 0.5}, Tone as the upper modes' strike amounts (0 runs one
+mode), one `TensionDrop` retuning the bank per control chunk while it moves
+and once more as it snaps, the shell cut exactly at −120 dB per chunk; the
+wires as seeded noise through an `SvfFilter` (Snappy the corner, Snap a
+morph from high-pass to band-pass, exact at both ends) under an AHD `Adsr`
+killed at zero; the **Rattle** as a second, *additive* drive on the wires
+following |shell| through a 1 ms one-pole, so with it up the wires buzz as
+long as the drum rings (the first draft scaled the wires' gain instead and
+could not outlive their own envelope: +24 % at full, which is not a knob);
+the crack as the kick's click pair, lifted into `Click.hpp` as `ClickPair`
+and proved bit-identical on a golden kick render; the gate as a release
+ramp on the whole hit, engaged only at note-off. Three pads run it: Snare 1
+(38) with its 24 parameters at `kSchemaV3`, Snare 2 (40) and Perc (37, the
+tom defaults of `tomSettings()`) on their defaults until I9. The editor
+gained the SNARE tab, a HIT button that strikes the page's pad, and greying
+for the wires', crack's and gate's dependents. Presets: the three kits got a
+snare each; nothing reordered.
+
+Measured at I3 (`tezla-tests snare`, `spread_zero`, `rattle`, `kit`;
+`tezla-measure ictus` table 2):
+
+| claim | figure |
+|---|---|
+| modes at Spread 1, 200 Hz fundamental, 0.18 Hz bins | **199.95 / 320.07 / 440.00 Hz — 1 : 1.601 : 2.201** |
+| Spread 0 shell at 44.1 / 48 / 96 / 192 kHz, cycles 2–100 | **200.0000 Hz at all four**, worst single cycle 0.000 cents |
+| retunes for a 12 st / 50 ms drop at 192 kHz (snap predicted at 702 chunks) | 121 by 20 ms (at 219.67 Hz), **704** by 600 ms, 704 by 1.1 s; landed on **exactly 200 Hz** |
+| Rattle 0: hit == shell + wires, bit for bit; follower | **0 mismatches** (a leak of one part in 10¹² is caught); follower exactly 0 |
+| Rattle 1: wires over the first 20 ms / at 100 ms where the plain burst has ended | **×1.789** / −28.7 dB re their start, plain wires exactly over |
+| rattle table (wires 0.3 s), rattle 0.25 / 0.5 / 1, first 20 ms | ×1.129 / 1.260 / 1.528; at 200 ms ×1.012 / 1.024 / 1.048 |
+| wires centroid, high-pass at 2 / 4 / 6 kHz; band-pass at 2 / 4 / 6 kHz | 7837 / 7805 / 8918 Hz; 2581 / 4721 / 6736 Hz |
+| retirement, everything on, 0.3 s shell | last non-zero at **0.601 s** (1.1e-17), active hits **0** |
+| gate, 50 ms release, note-off at 100 ms / Release 0 | silent at 151.3 ms / 2.29 ms after; max step = the strike's own |
+| snare engine at 192 kHz, everything on / bare tom | **15.0 / 7.3 ns per sample** (0.29 % / 0.14 %) |
+| the kit — two kicks and three snares, everything on, 48 kHz ×4 | **4.8–5.2 %** of a core; idle 0.001 % |
+| the kick through `ClickPair` against the I2 render (click 0.4, noise 0.3) | **bit-identical** |
+
+Break-checks at I3, each seen red then reverted: mode ratio 1.6 → 1.5
+(ratio test red), Spread ignored (spread-0 test red at all four rates), the
+drop retuning forever (drop test red, 3601 retunes), the follower run at
+Rattle 0 (exact-zero check red), the shell leaking into the wires by one
+part in 10¹² (sum check red — a first attempt at this break was overwritten
+by the envelope assignment and proved nothing, so it was redone), the
+shell's floor at −400 dB (retire test red, "active hits 1"), `release()`
+emptied (gate test red on both releases).
 
 Break-checks at I1, each seen red then reverted: a staircase increment
 (pitch test red), the control grid restarted per callback (block-size test
@@ -571,7 +659,9 @@ in the neutral path (neutral test red), the envelope kill removed (retire
 test red, "active hits 1").
 
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
-file; take the first `pending` phase. The non-negotiables every phase here
+file; take the first `pending` phase. The next is I4 — but the user's ears
+run this project: the rig has not yet heard I2.1 or I3, and that report comes
+before the hats. The non-negotiables every phase here
 honours, in one place:
 
 - One phase = one commit. Tests written and RUN in that commit; every
