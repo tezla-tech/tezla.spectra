@@ -10,28 +10,38 @@
 // The clap engine -- one hit, which is really several.
 //
 // A hand clap in a room is not one event. Several people clap at almost the
-// same time, so the ear hears three or four bursts a few milliseconds apart
+// same time, so the ear hears a handful of bursts a few milliseconds apart
 // and then the room's answer to all of them at once. That structure IS the
 // sound, and it is why a clap made from a single noise burst never convinces:
 // synthesise the burst pattern and the tail separately and the thing lands.
 //
 // The recipe is Clark's, from the Nord Modular percussion chapter (read
 // first-hand, docs/DSP-REFERENCES.md): "white noise amplitude-modulated by a
-// fast envelope fired by four pulses about 11 ms apart". Here:
+// fast envelope fired by four pulses about 11 ms apart". Everything past that
+// is what makes it a control panel rather than one sound:
 //
-//   * `BurstScheduler` counts down to each of the four pulses, in samples,
-//     so the spacing is in milliseconds and identical at every host rate.
-//   * The first three fire a short exponential burst each; the fourth fires
-//     one as well AND starts the TAIL, which is the room.
-//   * Their envelopes SUM -- overlapping claps add, they do not replace --
-//     and the sum amplitude-modulates one seeded noise source.
-//   * The result goes through one band-pass: COLOUR is where the clap sits,
-//     and a clap is a mid-band event, all smack and no weight.
+//   BURSTS   how many, two to six. Two is a pair of hands; six is a room.
+//   FLAM     how far apart, and SKEW whether they crowd together or spread
+//            out as they go. Real people do not clap on a grid, and an even
+//            pattern is the one thing that always sounds programmed.
+//   SNAP     how fast each burst falls. Short is a slap you can count; long
+//            smears them into one gesture.
+//   BODY     the part the first version had none of. A clap is not only
+//            noise: the cupped hands are a cavity, and it rings. Three modes
+//            of a `ModalResonator` struck by every burst give the hit a
+//            PITCH under the hiss -- PITCH sets it, RING how long it holds.
+//            At Body 0 the bank is not run at all.
+//   NOISE    the hiss, with its own high-pass (TONE) so it can be a dry slap
+//            or a bright spray independently of where the body sits.
+//   COLOUR   the band the whole thing is heard through, WIDTH how wide.
+//   TAIL     the room, starting with the last burst, with its own TONE as a
+//            ratio of Colour -- a room is duller than the hands that fill it.
+//   DRIVE    an antialiased soft clip over the sum, for a harder clap.
 //
 // EVERYTHING IS SNAPSHOTTED AT `start()`. The tail is a `dsp::Adsr` killed
-// the moment it reaches its zero sustain, and the bursts are cut to exactly
-// zero at a floor, so a finished clap is exact zeros and the pad's activity
-// count is honest (CLAUDE.md section 7).
+// the moment it reaches its zero sustain, the bursts are cut to exactly zero
+// at a floor, and the body is cut at an energy floor, so a finished clap is
+// exact zeros and the pad's activity count is honest (CLAUDE.md section 7).
 //
 // Humanising the spacing -- which is what makes a real clap different every
 // time -- waits for I6, where every pad's deviations are one knob.
@@ -40,10 +50,13 @@
 #include <cmath>
 #include <cstdint>
 
+#include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/Exact.hpp>
+#include <tezla/dsp/ModalResonator.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/UnisonBank.hpp>
+#include <tezla/dsp/Waveshapers.hpp>
 
 namespace tezla::ictus {
 
@@ -53,19 +66,24 @@ namespace tezla::ictus {
 /// milliseconds and converted once at note-on, so a clap fired at 44.1 kHz
 /// and at 192 kHz has its bursts at the same instants and not merely at
 /// similar ones.
+///
+/// `skewRatio` multiplies each gap by the last: below 1 the bursts crowd
+/// together as the hit goes on, above 1 they spread out. Exactly 1 is an even
+/// pattern, and the multiply is skipped there so the spacing stays whole.
 class BurstScheduler
 {
 public:
-    static constexpr int kMaxBursts = 4;
+    static constexpr int kMaxBursts = 6;
 
-    /// Arms `count` bursts, the first immediately and the rest `spacing`
-    /// samples apart.
-    void start (int count, double spacingSamples) noexcept
+    /// Arms `count` bursts: the first immediately, the next `spacingSamples`
+    /// later, and each gap after that `skewRatio` times the one before.
+    void start (int count, double spacingSamples, double skewRatio = 1.0) noexcept
     {
         count_ = std::clamp (count, 0, kMaxBursts);
         next_ = 0;
         countdown_ = 0;
-        spacing_ = std::max (1, static_cast<int> (std::lround (spacingSamples)));
+        gap_ = std::max (1.0, spacingSamples);
+        skew_ = std::clamp (skewRatio, 0.25, 4.0);
     }
 
     void reset() noexcept
@@ -89,7 +107,11 @@ public:
         }
 
         const int fired = next_++;
-        countdown_ = spacing_ - 1;
+
+        countdown_ = std::max (1, static_cast<int> (std::lround (gap_))) - 1;
+
+        if (! dsp::isExactly (skew_, 1.0))
+            gap_ = std::clamp (gap_ * skew_, 1.0, 1.0e7);
 
         return fired;
     }
@@ -101,43 +123,73 @@ private:
     int count_ { 0 };
     int next_ { 0 };
     int countdown_ { 0 };
-    int spacing_ { 1 };
+    double gap_ { 1.0 };
+    double skew_ { 1.0 };
 };
 
 /// Every clap control.
 struct ClapSettings
 {
-    double flamSeconds { 0.011 };   ///< between the bursts, 0.004..0.030; the chapter's 11 ms
-    double colourHz { 1200.0 };     ///< the band-pass's centre, 300..5000 Hz
-    double tailSeconds { 0.18 };    ///< the room's fall, 0.03..1
-    double level { 0.8 };           ///< 0..1
+    // ---- the burst pattern ----------------------------------------------
+    int    bursts { 4 };            ///< how many, 2..6; the chapter's four
+    double flamSeconds { 0.011 };   ///< the first gap, 0.004..0.030; the chapter's 11 ms
+    double skew { 0.0 };            ///< -1 crowding, 0 even, +1 spreading
+    double snapSeconds { 0.0035 };  ///< how fast each burst falls, 0.001..0.020
 
+    // ---- the two layers --------------------------------------------------
+    double noise { 1.0 };           ///< the hiss's level, 0..1
+    double noiseToneHz { 800.0 };   ///< the hiss's own high-pass, 200..8000 Hz
+    double body { 0.0 };            ///< the cavity's level, 0..1; 0 runs no bank
+    double bodyHz { 900.0 };        ///< the cavity's pitch, 200..2500 Hz
+    double bodyRingSeconds { 0.06 };///< how long it holds, 0.01..0.5
+
+    // ---- what it is heard through ---------------------------------------
+    double colourHz { 1200.0 };     ///< the band-pass's centre, 300..6000 Hz
+    double width { 0.5 };           ///< how wide it is, 0 (narrow) .. 1 (open)
+    double drive { 0.0 };           ///< soft clip over the sum, 0..1
+
+    // ---- the room --------------------------------------------------------
+    double tailSeconds { 0.18 };    ///< its fall, 0.03..1
+    double tailTone { 0.7 };        ///< its band as a ratio of Colour, 0.25..1.5
+
+    double level { 0.75 };          ///< 0..1
     double velocityLevel { 1.0 };   ///< x * ((1 - a) + a * v), as everywhere here
 };
 
 class ClapEngine
 {
 public:
-    /// Three quick bursts and the fourth that starts the tail: the chapter's
-    /// four pulses.
-    static constexpr int kBursts = BurstScheduler::kMaxBursts;
+    static constexpr int kMaxBursts = BurstScheduler::kMaxBursts;
 
-    /// How fast one burst falls. Short enough that the bursts read as
-    /// separate slaps at the shortest Flam, long enough not to click.
-    static constexpr double kBurstSeconds = 0.0035;
+    /// The cavity's three modes. A pair of cupped hands is not a tube with a
+    /// harmonic series -- these are inharmonic, so the body reads as a pitched
+    /// knock rather than as a note.
+    static constexpr int kBodyModes = 3;
+    /// Chosen to sit well away from the integers: 2.13 was only 6 % off a
+    /// harmonic 2 and the test that asks for inharmonicity refused it, which
+    /// is the test doing its job -- a body close to a harmonic series reads
+    /// as a pitched note rather than as a knock.
+    static constexpr double kBodyRatios[kBodyModes] { 1.0, 1.57, 2.41 };
+    static constexpr double kBodyDecays[kBodyModes] { 1.0, 0.6, 0.4 };
+    static constexpr double kBodyEnergyFloor = 1.0e-12;
+    static constexpr double kBodyGain = 0.7;
 
     /// A burst is cut to exactly zero once it is this far down, so a finished
     /// clap leaves exact zeros rather than a denormal trickle.
     static constexpr double kBurstFloor = 1.0e-6;
 
-    /// The band-pass's Q: a clap is a band, not a resonance.
-    ///
-    /// Named as Q for the reason `SvfFilter::resonanceForQ` gives: the first
-    /// draft set the CONTROL to 0.8, which is Q 125 and rings for 33 ms at
-    /// 1.2 kHz. The four bursts smeared into one another and the spacing test
-    /// found twenty-five onsets. Q 1 is a band an octave and a half wide,
-    /// which is a clap.
-    static constexpr double kColourQ = 1.0;
+    /// Width's two ends, as Q -- narrow enough to place the smack, open
+    /// enough to keep the bursts four separate slaps.
+    static constexpr double kNarrowQ = 3.5;
+    static constexpr double kOpenQ = 0.5;
+
+    static constexpr double kDriveRange = 10.0;
+    static constexpr double kDriveTrimExponent = 0.7;
+
+    /// Skew's range, as the ratio each gap is multiplied by: at -1 every gap
+    /// is two thirds of the one before, at +1 half again.
+    static constexpr double kSkewLow = 0.667;
+    static constexpr double kSkewHigh = 1.5;
 
     static constexpr std::uint64_t kNoiseSalt = 0x14057B7EF767814Full;
 
@@ -147,13 +199,18 @@ public:
 
         colour_.prepare (rate_);
         colour_.setMode (dsp::SvfMode::bandpass);
-        colour_.setResonance (dsp::SvfFilter::resonanceForQ (kColourQ));
+
+        tailBand_.prepare (rate_);
+        tailBand_.setMode (dsp::SvfMode::bandpass);
+
+        noiseTone_.prepare (rate_);
+        noiseTone_.setMode (dsp::SvfMode::highpass);
+        noiseTone_.setResonance (dsp::SvfFilter::resonanceForQ (0.707));
+
+        body_.prepare (rate_);
+        body_.setModeCount (kBodyModes);
 
         tail_.prepare (rate_);
-
-        // exp(-1 / (tau * fs)) with tau chosen so the burst falls 60 dB in
-        // kBurstSeconds: the same convention the rest of the kit uses.
-        burstCoefficient_ = std::exp (-6.907755278982137 / (kBurstSeconds * rate_));
 
         reset();
     }
@@ -161,13 +218,39 @@ public:
     void reset() noexcept
     {
         active_ = false;
+        bodyOn_ = false;
+        driveOn_ = false;
 
         scheduler_.reset();
         colour_.reset();
+        tailBand_.reset();
+        noiseTone_.reset();
+        body_.reset();
         tail_.kill();
+        shaper_.reset();
 
         for (auto& level : burstLevel_)
             level = 0.0;
+    }
+
+    /// Width's Q: geometric between the two ends, so the control is even.
+    [[nodiscard]] static double qForWidth (double width) noexcept
+    {
+        const double w = std::clamp (width, 0.0, 1.0);
+        return kNarrowQ * std::pow (kOpenQ / kNarrowQ, w);
+    }
+
+    /// Skew's gap ratio: exactly 1.0 at the centre, so an even pattern is
+    /// even by construction and not by rounding.
+    [[nodiscard]] static double ratioForSkew (double skew) noexcept
+    {
+        const double s = std::clamp (skew, -1.0, 1.0);
+
+        if (dsp::isExactlyZero (s))
+            return 1.0;
+
+        return s < 0.0 ? 1.0 + s * (1.0 - kSkewLow)
+                       : 1.0 + s * (kSkewHigh - 1.0);
     }
 
     /// Strikes. `velocity` 0..1; `seed` feeds the noise; `samplesToBoundary`
@@ -180,10 +263,46 @@ public:
         const double v = std::clamp (velocity, 0.0, 1.0);
         const double amount = std::clamp (s.velocityLevel, 0.0, 1.0);
 
+        bursts_ = std::clamp (s.bursts, 2, kMaxBursts);
         const double flam = std::clamp (s.flamSeconds, 0.004, 0.030);
-        scheduler_.start (kBursts, flam * rate_);
+        scheduler_.start (bursts_, flam * rate_, ratioForSkew (s.skew));
 
-        colour_.setCutoffHz (std::clamp (s.colourHz, 300.0, std::min (5000.0, rate_ * 0.4)));
+        burstCoefficient_ = std::exp (-6.907755278982137
+                                      / (std::clamp (s.snapSeconds, 0.001, 0.020) * rate_));
+
+        // ---- the two layers ----
+        noise_ = std::clamp (s.noise, 0.0, 1.0);
+        noiseTone_.setCutoffHz (std::clamp (s.noiseToneHz, 200.0, std::min (8000.0, rate_ * 0.4)));
+
+        bodyLevel_ = std::clamp (s.body, 0.0, 1.0);
+        bodyOn_ = ! dsp::isExactlyZero (bodyLevel_);
+
+        if (bodyOn_)
+        {
+            const double pitch = std::clamp (s.bodyHz, 200.0, std::min (2500.0, rate_ * 0.2));
+            const double ring = std::clamp (s.bodyRingSeconds, 0.01, 0.5);
+
+            body_.setModeCount (kBodyModes);
+
+            for (int mode = 0; mode < kBodyModes; ++mode)
+                body_.setMode (mode, pitch * kBodyRatios[mode], ring * kBodyDecays[mode], 1.0);
+        }
+
+        // ---- what it is heard through ----
+        const double colour = std::clamp (s.colourHz, 300.0, std::min (6000.0, rate_ * 0.4));
+        const double q = dsp::SvfFilter::resonanceForQ (qForWidth (s.width));
+
+        colour_.setResonance (q);
+        colour_.setCutoffHz (colour);
+
+        tailBand_.setResonance (q);
+        tailBand_.setCutoffHz (std::clamp (colour * std::clamp (s.tailTone, 0.25, 1.5),
+                                           100.0, rate_ * 0.4));
+
+        const double drive = std::clamp (s.drive, 0.0, 1.0);
+        driveOn_ = ! dsp::isExactlyZero (drive);
+        driveGain_ = 1.0 + (kDriveRange - 1.0) * drive;
+        driveTrim_ = std::pow (driveGain_, -kDriveTrimExponent);
 
         tailSeconds_ = std::clamp (s.tailSeconds, 0.03, 1.0);
 
@@ -197,16 +316,29 @@ public:
             advanceControl (samplesToBoundary);
     }
 
-    /// Nothing moves inside a clap hit that is not sample-accurate already:
-    /// the burst pattern is counted in samples and the tail is an envelope.
-    /// The tick exists because the pad calls it.
-    void advanceControl (int) noexcept {}
+    /// The control tick: the body's retirement check. The burst pattern is
+    /// counted in samples and the tail is an envelope, so neither needs one.
+    void advanceControl (int numSamples) noexcept
+    {
+        if (! active_ || numSamples <= 0)
+            return;
+
+        // Only once the pattern is finished. Checked before the first burst
+        // had struck it, the bank is silent by definition and the check
+        // retired the cavity before it had ever sounded -- which is exactly
+        // what happened, and left a body-only clap rendering pure zeros.
+        if (bodyOn_ && ! scheduler_.isPending() && body_.energy() < kBodyEnergyFloor)
+        {
+            body_.reset();
+            bodyOn_ = false;
+        }
+    }
 
     /// A clap is a one-shot; a note-off does not shorten it.
     void release() noexcept {}
 
-    /// One internal sample. Exactly 0.0 once the last burst and the tail
-    /// have landed.
+    /// One internal sample. Exactly 0.0 once every burst, the body and the
+    /// tail have landed.
     [[nodiscard]] double process() noexcept
     {
         if (! active_)
@@ -216,9 +348,14 @@ public:
         {
             burstLevel_[static_cast<std::size_t> (fired)] = 1.0;
 
+            // Every burst strikes the cavity as well as the air.
+            if (bodyOn_)
+                for (int mode = 0; mode < kBodyModes; ++mode)
+                    body_.excite (mode, mode == 0 ? 1.0 : 0.6);
+
             // The last pulse is also the room's: the tail starts with the
             // burst that ends the pattern, not with the note.
-            if (fired == kBursts - 1)
+            if (fired == bursts_ - 1)
             {
                 tail_.setAttackSeconds (0.0);
                 tail_.setAttackTension (0.0);
@@ -230,7 +367,7 @@ public:
             }
         }
 
-        double envelope = 0.0;
+        double burstEnvelope = 0.0;
         bool burstsSounding = false;
 
         for (auto& level : burstLevel_)
@@ -238,7 +375,7 @@ public:
             if (dsp::isExactlyZero (level))
                 continue;
 
-            envelope += level;
+            burstEnvelope += level;
             level *= burstCoefficient_;
 
             if (level < kBurstFloor)
@@ -247,26 +384,45 @@ public:
                 burstsSounding = true;
         }
 
+        double tailEnvelope = 0.0;
+
         if (tail_.isActive())
         {
-            envelope += tail_.process();
+            tailEnvelope = tail_.process();
 
             // Sustain is 0: arriving there IS the end.
             if (tail_.getStage() == dsp::AdsrStage::sustain)
                 tail_.kill();
         }
 
-        if (! burstsSounding && ! tail_.isActive() && ! scheduler_.isPending())
+        if (! burstsSounding && ! bodyOn_ && ! tail_.isActive() && ! scheduler_.isPending())
         {
-            // Everything has landed; the filter's own ring is not a hit.
+            // Everything has landed; the filters' own ring is not a hit.
             reset();
             return 0.0;
         }
 
-        return colour_.process (envelope * random_.bipolar()) * gain_;
+        // ---- the hiss, through its own tone, under the burst pattern ----
+        const double hiss = noise_ * noiseTone_.process (random_.bipolar());
+
+        // ---- the two bands: the hands, and the room behind them ----
+        double x = colour_.process (hiss * burstEnvelope)
+                 + tailBand_.process (hiss * tailEnvelope);
+
+        // ---- the cavity, which rings on its own ----
+        if (bodyOn_)
+            x += kBodyGain * bodyLevel_ * body_.process();
+
+        if (driveOn_)
+            x = shaper_.process (x * driveGain_, clip_) * driveTrim_;
+
+        return x * gain_;
     }
 
     [[nodiscard]] bool isActive() const noexcept { return active_; }
+
+    /// How many bursts this hit was armed with -- what a test counts.
+    [[nodiscard]] int getBurstCount() const noexcept { return bursts_; }
 
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
@@ -275,14 +431,26 @@ private:
     bool active_ { false };
 
     BurstScheduler scheduler_;
-    double burstLevel_[kBursts] {};
+    int bursts_ { 4 };
+    double burstLevel_[kMaxBursts] {};
     double burstCoefficient_ { 0.0 };
 
     dsp::Adsr tail_;
     double tailSeconds_ { 0.18 };
 
-    dsp::SvfFilter colour_;
+    dsp::SvfFilter colour_, tailBand_, noiseTone_;
     dsp::SmallRandom random_;
+    double noise_ { 1.0 };
+
+    dsp::ModalResonator body_;
+    bool bodyOn_ { false };
+    double bodyLevel_ { 0.0 };
+
+    dsp::Adaa1<dsp::SoftClipExcess> shaper_;
+    dsp::SoftClipExcess clip_;
+    bool driveOn_ { false };
+    double driveGain_ { 1.0 };
+    double driveTrim_ { 1.0 };
 
     double gain_ { 1.0 };
 };

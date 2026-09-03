@@ -527,6 +527,7 @@ CLAUDE.md.
 | I3 snare engine + SNARE page (and the Perc and Snare 2 pads on the same engine) | done in code; not yet played on the rig |
 | The rounds after I3 (user asks, 2026-09-03): Note snap; the panel; the ghost snare on the second snare pad with LINK | done in code; not yet played on the rig |
 | I4 hat + clap engines, choke | done in code; not yet played on the rig |
+| I4.1 the rig's verdict on the hats: depth, and the noise made part of the metal | done in code; not yet played on the rig |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
 | I7 multi-out buses | pending |
@@ -901,8 +902,73 @@ they are still the map of how the pieces fit.
   of the last hit and a level meter per pad; a pad grid with note-learn; a
   "Both" output option once I7 lands; choke groups exposed with I4.
 
+**I4.1 -- "the hats sound crap"** (2026-09-03, the user, within an hour of I4
+landing). Two asks: more controls for a wider range of sounds, "including
+more lush", and -- after a correction from the clap to the hats -- "the hats
+need whitenoise/other hiss working along with the harmonics". Then: a gate
+with a release, on both pads.
+
+The diagnosis, and it was not a bug: six pulses through a band-pass is a
+SPARSE COMB. It reads as a metallic chord rather than a cymbal, it has no
+transient, it decays at one brightness from the moment it starts, and the
+noise sat beside the metal rather than belonging to it. Five things fixed it,
+each a control:
+
+| control | what it does | measured |
+|---|---|---|
+| **Ring** | the low three oscillators times the high three: a ring modulator holds the sum AND difference of every pair of harmonics, so one multiply turns two sparse combs into a dense inharmonic wash | energy off the six harmonic series: **-77.2 dB bare, -6.5 / -2.6 / -0.7 dB at Ring 25 / 50 / 100** |
+| **Sizzle** | the hiss through a band-pass at each of the six partials, so the noise rings where the metal already does -- the plate speaking rather than a second instrument | share of the hiss within a semitone of a partial: **16.6 / 23.4 / 32.3 / 39.2 / 40.9 %** across the control |
+| **Damp** | a low-pass closing as the hit decays: on a real cymbal the high modes die first | corner **17.9 kHz at the strike to 2.2 kHz at 200 ms** at Damp 100; out of the path at 0 |
+| **Drive** | the overdrive the Nord chapter's cymbal patch ends with, antialiased | tail centroid moves from 5954 Hz undamped to 2091 Hz damped |
+| **Strike** | the stick, a short loud transient over the body | first 8 ms **1.455 -> 2.886**, the ring after it unchanged within 0.1 % |
+
+Also **Air tone** and **Air decay** (the noise layer's own colour and length,
+so a shimmer can outlive the metal or a chiff sit on the front of it),
+**Width** and **Highpass** as their own controls, **Hold** and **Shape** on
+the envelope, **Vel > Strike**, and **Gate + Release on both hat pads** -- a
+ramp on the output rather than a release on the envelopes, because the
+envelopes are before the filters here and releasing them would leave the
+bands ringing after the key came up. The clap gained **Bursts** (2 to 6),
+**Skew**, **Snap**, **Noise** and **Noise tone**, **Width**, **Tail tone**,
+**Drive**, and a **Body**: three inharmonic modes struck by every burst, so a
+clap has a pitch under the hiss. 25 parameters appended at `kSchemaV7`; both
+pages rebuilt; a *Lush Hats* preset on the end.
+
+Three bugs the measurements found before any ear could:
+
+1. **The ring modulator's band-limit was a FRACTION of the sample rate.** So
+   the products were built from a 24 kHz band at 192 kHz and a 6 kHz band at
+   48 kHz -- the same patch was a different instrument at a different host
+   rate, which is exactly what CLAUDE.md section 6 forbids. Measured before
+   the fix: the spectral centroid moved 6951 Hz to 4849 Hz, 30 %. It is an
+   absolute 20 kHz now, with a quarter-of-the-rate ceiling for rates too low
+   to give it that, and the four host rates agree within 0.6 %.
+2. **The clap's cavity was retired before it had ever sounded.** The energy
+   check ran at the first control tick, before the first burst had struck the
+   bank, so a body-only clap rendered pure zeros. It is gated on the burst
+   pattern being finished now.
+3. **The per-engine CPU figures were measuring denormals, not DSP.** A bare
+   engine loop has no `ScopedNoDenormals`, and the clap's filters spend most
+   of a second with near-zero input: it read **196.8 ns a sample** against
+   8.6 for the version before it. With the guard the plugin always has, it is
+   **16.3 ns**. The hat's real figure is 112.4 ns, 2.2 % of a core, and the
+   whole eight-pad kit is **7.62 %** at 48 kHz x4 against 6.04 % before.
+
+Break-checks at I4.1, each seen red then reverted: the ring product never
+added; Damp's corner frozen; the sizzle bank bypassed; the stick never added;
+the hat's gate ignoring note-off; the clap's skew ignored; the ring
+band-limit made a fraction again. One FAILED to go red and changed a test:
+the cavity's mode ratios set to a harmonic 1 : 2 : 3, which the test could
+not catch because it computed what it expected from the same table -- so it
+now asserts inharmonicity against the integers instead, and that assertion
+promptly rejected the third ratio (2.13, only 6 % off a harmonic 2), which
+moved to 2.41.
+
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
 file; take the first `pending` phase. The next is **I5, the punch chain**.
+I4.1 above is the shape of an ear round arriving mid-phase: the user's verdict
+is the acceptance test, and "sounds crap" is a diagnosis to make, not a defect
+to look up.
 The user asked on 2026-09-03 to go ahead through I4 *before* the rig's report
 on everything since I2 (I2.1, I3, Note snap, the panel, the ghost, and now
 the hats and the clap) — so that report's findings become an "I4.1" row when

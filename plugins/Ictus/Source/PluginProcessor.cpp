@@ -35,7 +35,10 @@ constexpr int kSchemaV5 = 5;
 
 /// Schema 6: the hats and the clap (I4).
 constexpr int kSchemaV6 = 6;
-constexpr int kStateSchemaVersion = kSchemaV6;
+
+/// Schema 7: the depth the first hats and clap did not have (I4.1).
+constexpr int kSchemaV7 = 7;
+constexpr int kStateSchemaVersion = kSchemaV7;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -156,10 +159,29 @@ const std::vector<Preset>& presets()
                 { ids::hcDecay, 38.0f },
                 { ids::hoDecay, 320.0f },
                 { ids::htLevel, 55.0f },
-                // The clap, layered under the snare: quick flam, mid colour.
+                { ids::htRing, 30.0f },
+                { ids::htDrive, 20.0f },
+                { ids::htSizzle, 55.0f },
+                { ids::htAir, 40.0f },
+                { ids::htAirTone, 6500.0f },
+                { ids::htAirDecay, 80.0f },
+                { ids::htWidth, 55.0f },
+                { ids::htHighpass, 1800.0f },
+                { ids::htDamp, 45.0f },
+                { ids::htStrike, 55.0f },
+                // The clap, layered under the snare: quick flam, mid colour,
+                // a little body so it has a pitch of its own under the snare.
                 { ids::cpFlam, 9.0f },
+                { ids::cpBursts, 4.0f },
+                { ids::cpSkew, -20.0f },
+                { ids::cpSnap, 3.0f },
                 { ids::cpColour, 1500.0f },
+                { ids::cpWidth, 55.0f },
+                { ids::cpBody, 25.0f },
+                { ids::cpBodyPitch, 1100.0f },
+                { ids::cpBodyRing, 45.0f },
                 { ids::cpTail, 120.0f },
+                { ids::cpTailTone, 65.0f },
                 { ids::cpLevel, 55.0f },
             }
         },
@@ -209,9 +231,28 @@ const std::vector<Preset>& presets()
                 { ids::hcDecay, 70.0f },
                 { ids::hoDecay, 700.0f },
                 { ids::htLevel, 50.0f },
+                { ids::htRing, 45.0f },
+                { ids::htDrive, 35.0f },
+                { ids::htSizzle, 75.0f },
+                { ids::htAir, 55.0f },
+                { ids::htAirTone, 3500.0f },
+                { ids::htAirDecay, 160.0f },
+                { ids::htWidth, 75.0f },
+                { ids::htHighpass, 900.0f },
+                { ids::htDamp, 65.0f },
+                { ids::htStrike, 30.0f },
+                { ids::htHold, 12.0f },
                 { ids::cpFlam, 14.0f },
+                { ids::cpBursts, 5.0f },
+                { ids::cpSnap, 6.0f },
                 { ids::cpColour, 900.0f },
+                { ids::cpWidth, 70.0f },
+                { ids::cpNoiseTone, 500.0f },
+                { ids::cpBody, 35.0f },
+                { ids::cpBodyPitch, 600.0f },
+                { ids::cpBodyRing, 90.0f },
                 { ids::cpTail, 260.0f },
+                { ids::cpTailTone, 55.0f },
                 { ids::cpLevel, 50.0f },
             }
         },
@@ -277,11 +318,76 @@ const std::vector<Preset>& presets()
                 { ids::hoDecay, 240.0f },
                 { ids::htLevel, 60.0f },
                 { ids::htVelColour, 70.0f },
-                // The clap: wide flam and a long tail, the break's hand-claps.
+                { ids::htRing, 65.0f },
+                { ids::htDrive, 55.0f },
+                { ids::htSizzle, 40.0f },
+                { ids::htAir, 35.0f },
+                { ids::htAirTone, 8000.0f },
+                { ids::htAirDecay, 60.0f },
+                { ids::htWidth, 35.0f },
+                { ids::htHighpass, 2600.0f },
+                { ids::htDamp, 25.0f },
+                { ids::htStrike, 75.0f },
+                { ids::htShape, 35.0f },
+                // The clap: six hands, spreading, and a long room.
                 { ids::cpFlam, 18.0f },
+                { ids::cpBursts, 6.0f },
+                { ids::cpSkew, 45.0f },
+                { ids::cpSnap, 2.0f },
                 { ids::cpColour, 1800.0f },
+                { ids::cpWidth, 40.0f },
+                { ids::cpNoiseTone, 1600.0f },
+                { ids::cpBody, 15.0f },
+                { ids::cpDrive, 30.0f },
                 { ids::cpTail, 300.0f },
+                { ids::cpTailTone, 85.0f },
                 { ids::cpLevel, 60.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The lush end of the hats, and the reason the ring modulator and
+            // the sizzle bank exist: a long open hat with the noise rung
+            // through the metal's own partials, damped so it falls from
+            // bright to dark, gated so a key lift ends it. Appended --
+            // presets are recalled by index.
+            "Lush Hats",
+            {
+                { ids::htTune, 320.0f },
+                { ids::htHarmonics, 0.8f },
+                { ids::htSpread, 55.0f },
+                { ids::htRing, 70.0f },
+                { ids::htDrive, 45.0f },
+                { ids::htAir, 70.0f },
+                { ids::htAirTone, 4000.0f },
+                { ids::htAirDecay, 200.0f },
+                { ids::htSizzle, 85.0f },
+                { ids::htColour, 4200.0f },
+                { ids::htWidth, 90.0f },
+                { ids::htHighpass, 700.0f },
+                { ids::htDamp, 70.0f },
+                { ids::htStrike, 45.0f },
+                { ids::htHold, 20.0f },
+                { ids::hcDecay, 110.0f },
+                { ids::hoDecay, 1400.0f },
+                { ids::htGate, 1.0f },
+                { ids::htRelease, 90.0f },
+                { ids::htLevel, 75.0f },
+                // A wide, soft clap under it, mostly body.
+                { ids::cpBursts, 5.0f },
+                { ids::cpFlam, 16.0f },
+                { ids::cpSkew, -35.0f },
+                { ids::cpSnap, 8.0f },
+                { ids::cpNoise, 70.0f },
+                { ids::cpNoiseTone, 400.0f },
+                { ids::cpBody, 55.0f },
+                { ids::cpBodyPitch, 700.0f },
+                { ids::cpBodyRing, 140.0f },
+                { ids::cpColour, 1000.0f },
+                { ids::cpWidth, 85.0f },
+                { ids::cpTail, 420.0f },
+                { ids::cpTailTone, 50.0f },
+                { ids::cpLevel, 65.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -735,7 +841,7 @@ IctusProcessor::createParameterLayout()
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::htAir, kSchemaV6 }, "Hats Air",
-        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+        Range (0.0f, 100.0f, 0.1f), 45.0f, attributes ("%")));
 
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::hcDecay, kSchemaV6 }, "Hat closed Decay",
@@ -783,6 +889,117 @@ IctusProcessor::createParameterLayout()
     parameters.push_back (std::make_unique<Parameter> (
         juce::ParameterID { ids::cpVelLevel, kSchemaV6 }, "Clap Velocity to level",
         Range (0.0f, 100.0f, 0.1f), 100.0f, attributes ("%")));
+
+    // ---- schema 7: what the first hats and clap were missing ---------------
+    //
+    // The hats read as a metallic chord rather than a cymbal, because six
+    // pulses through a band-pass is a sparse comb with no transient and one
+    // uniform decay. Ring and Drive make it dense, Damp makes it fall from
+    // bright to dark the way a plate does, Strike gives it a stick, and
+    // Sizzle rings the hiss through the metal's own partials so the noise
+    // and the harmonics are one instrument rather than two. The clap gains
+    // its burst pattern, a body that rings, and a room with its own tone.
+    //
+    // Appended, like everything else here. Nothing saved moves.
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htRing, kSchemaV7 }, "Hats Ring",
+        Range (0.0f, 100.0f, 0.1f), 35.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htDrive, kSchemaV7 }, "Hats Drive",
+        Range (0.0f, 100.0f, 0.1f), 25.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htSizzle, kSchemaV7 }, "Hats Sizzle",
+        Range (0.0f, 100.0f, 0.1f), 60.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htAirTone, kSchemaV7 }, "Hats Air tone",
+        skewed (200.0f, 12000.0f, 1.0f, 3000.0f), 5000.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htAirDecay, kSchemaV7 }, "Hats Air decay",
+        Range (10.0f, 300.0f, 1.0f), 100.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htWidth, kSchemaV7 }, "Hats Width",
+        Range (0.0f, 100.0f, 0.1f), 50.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htHighpass, kSchemaV7 }, "Hats Highpass",
+        skewed (200.0f, 8000.0f, 1.0f, 1500.0f), 1200.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htDamp, kSchemaV7 }, "Hats Damp",
+        Range (0.0f, 100.0f, 0.1f), 40.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htStrike, kSchemaV7 }, "Hats Strike",
+        Range (0.0f, 100.0f, 0.1f), 40.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htHold, kSchemaV7 }, "Hats Hold",
+        Range (0.0f, 200.0f, 0.1f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htShape, kSchemaV7 }, "Hats Shape",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htVelStrike, kSchemaV7 }, "Hats Velocity to strike",
+        Range (0.0f, 100.0f, 0.1f), 50.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::htGate, kSchemaV7 }, "Hats Gate", false));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htRelease, kSchemaV7 }, "Hats Release",
+        skewed (0.0f, 2000.0f, 1.0f, 100.0f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpBursts, kSchemaV7 }, "Clap Bursts",
+        Range (2.0f, 6.0f, 1.0f), 4.0f, attributes ("")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpSkew, kSchemaV7 }, "Clap Skew",
+        Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpSnap, kSchemaV7 }, "Clap Snap",
+        skewed (1.0f, 20.0f, 0.1f, 5.0f), 3.5f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpNoise, kSchemaV7 }, "Clap Noise",
+        Range (0.0f, 100.0f, 0.1f), 100.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpNoiseTone, kSchemaV7 }, "Clap Noise tone",
+        skewed (200.0f, 8000.0f, 1.0f, 1200.0f), 800.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpBody, kSchemaV7 }, "Clap Body",
+        Range (0.0f, 100.0f, 0.1f), 20.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpBodyPitch, kSchemaV7 }, "Clap Body pitch",
+        skewed (200.0f, 2500.0f, 1.0f, 900.0f), 900.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpBodyRing, kSchemaV7 }, "Clap Body ring",
+        skewed (10.0f, 500.0f, 0.1f, 80.0f), 60.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpWidth, kSchemaV7 }, "Clap Width",
+        Range (0.0f, 100.0f, 0.1f), 50.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpTailTone, kSchemaV7 }, "Clap Tail tone",
+        Range (25.0f, 150.0f, 0.1f), 70.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpDrive, kSchemaV7 }, "Clap Drive",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
 
     return { parameters.begin(), parameters.end() };
 }
@@ -888,7 +1105,21 @@ void IctusProcessor::pullParameters()
     h.harmonics = valueOf (state_, ids::htHarmonics);
     h.spread = valueOf (state_, ids::htSpread) * 0.01;
     h.colourHz = valueOf (state_, ids::htColour);
+    h.ring = valueOf (state_, ids::htRing) * 0.01;
+    h.drive = valueOf (state_, ids::htDrive) * 0.01;
     h.air = valueOf (state_, ids::htAir) * 0.01;
+    h.airToneHz = valueOf (state_, ids::htAirTone);
+    h.airDecay = valueOf (state_, ids::htAirDecay) * 0.01;
+    h.sizzle = valueOf (state_, ids::htSizzle) * 0.01;
+    h.width = valueOf (state_, ids::htWidth) * 0.01;
+    h.highpassHz = valueOf (state_, ids::htHighpass);
+    h.damp = valueOf (state_, ids::htDamp) * 0.01;
+    h.strike = valueOf (state_, ids::htStrike) * 0.01;
+    h.holdSeconds = valueOf (state_, ids::htHold) * 0.001;
+    h.shape = valueOf (state_, ids::htShape) * 0.01;
+    h.velocityStrike = valueOf (state_, ids::htVelStrike) * 0.01;
+    h.gate = valueOf (state_, ids::htGate) > 0.5f;
+    h.releaseSeconds = valueOf (state_, ids::htRelease) * 0.001;
     h.decayClosedSeconds = valueOf (state_, ids::hcDecay) * 0.001;
     h.decayOpenSeconds = valueOf (state_, ids::hoDecay) * 0.001;
     h.level = valueOf (state_, ids::htLevel) * 0.01;
@@ -900,9 +1131,20 @@ void IctusProcessor::pullParameters()
     // ---- the clap ----
     auto& c = parameters_.clap;
 
+    c.bursts = static_cast<int> (std::lround (valueOf (state_, ids::cpBursts)));
     c.flamSeconds = valueOf (state_, ids::cpFlam) * 0.001;
+    c.skew = valueOf (state_, ids::cpSkew) * 0.01;
+    c.snapSeconds = valueOf (state_, ids::cpSnap) * 0.001;
+    c.noise = valueOf (state_, ids::cpNoise) * 0.01;
+    c.noiseToneHz = valueOf (state_, ids::cpNoiseTone);
+    c.body = valueOf (state_, ids::cpBody) * 0.01;
+    c.bodyHz = valueOf (state_, ids::cpBodyPitch);
+    c.bodyRingSeconds = valueOf (state_, ids::cpBodyRing) * 0.001;
+    c.width = valueOf (state_, ids::cpWidth) * 0.01;
+    c.drive = valueOf (state_, ids::cpDrive) * 0.01;
     c.colourHz = valueOf (state_, ids::cpColour);
     c.tailSeconds = valueOf (state_, ids::cpTail) * 0.001;
+    c.tailTone = valueOf (state_, ids::cpTailTone) * 0.01;
     c.level = valueOf (state_, ids::cpLevel) * 0.01;
     c.velocityLevel = valueOf (state_, ids::cpVelLevel) * 0.01;
 

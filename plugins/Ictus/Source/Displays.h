@@ -177,6 +177,7 @@ private:
     double partials_[6] {};
     std::vector<float> responseDb_;
     double air_ { 0.0 };
+    double sizzle_ { 0.0 };
 };
 
 class BurstView final : public DrumDisplay
@@ -193,6 +194,9 @@ private:
     static constexpr int kPoints = 300;
 
     std::vector<float> envelope_;   ///< 0..1 over `seconds_`
+    std::vector<float> bodyTrace_;  ///< the cavity's ring, same axis
+    double onsets_[6] {};           ///< where each burst lands, in seconds
+    int bursts_ { 4 };
     double seconds_ { 0.3 };
     double flamSeconds_ { 0.011 };
 };

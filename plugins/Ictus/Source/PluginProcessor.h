@@ -191,6 +191,36 @@ inline constexpr auto cpColour    = "cpColour";
 inline constexpr auto cpTail      = "cpTail";
 inline constexpr auto cpLevel     = "cpLevel";
 inline constexpr auto cpVelLevel  = "cpVelLevel";
+
+// HATS, schema 7 -- the noise made a layer of its own and the metal given
+// something to do besides ring at one brightness for its whole life.
+inline constexpr auto htRing      = "htRing";
+inline constexpr auto htDrive     = "htDrive";
+inline constexpr auto htSizzle    = "htSizzle";
+inline constexpr auto htAirTone   = "htAirTone";
+inline constexpr auto htAirDecay  = "htAirDecay";
+inline constexpr auto htWidth     = "htWidth";
+inline constexpr auto htHighpass  = "htHighpass";
+inline constexpr auto htDamp      = "htDamp";
+inline constexpr auto htStrike    = "htStrike";
+inline constexpr auto htHold      = "htHold";
+inline constexpr auto htShape     = "htShape";
+inline constexpr auto htVelStrike = "htVelStrike";
+inline constexpr auto htGate      = "htGate";
+inline constexpr auto htRelease   = "htRelease";
+
+// CLAP, schema 7
+inline constexpr auto cpBursts    = "cpBursts";
+inline constexpr auto cpSkew      = "cpSkew";
+inline constexpr auto cpSnap      = "cpSnap";
+inline constexpr auto cpNoise     = "cpNoise";
+inline constexpr auto cpNoiseTone = "cpNoiseTone";
+inline constexpr auto cpBody      = "cpBody";
+inline constexpr auto cpBodyPitch = "cpBodyPitch";
+inline constexpr auto cpBodyRing  = "cpBodyRing";
+inline constexpr auto cpWidth     = "cpWidth";
+inline constexpr auto cpTailTone  = "cpTailTone";
+inline constexpr auto cpDrive     = "cpDrive";
 } // namespace ids
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and

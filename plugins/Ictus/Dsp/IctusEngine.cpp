@@ -230,8 +230,15 @@ void Engine::noteOff (int note) noexcept
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::perc)])
         perc_.release (note);
 
-    // The hats and the clap are one-shots: their engines' release() does
-    // nothing, and a note-off on them is not an error, it is a no-op.
+    // Both hat pads take a note-off when Gate is lit -- one control set, so
+    // the closed and open pads gate together. The clap stays a one-shot: its
+    // release() does nothing, and a note-off on it is a no-op rather than an
+    // error.
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::hatClosed)])
+        hatClosed_.release (note);
+
+    if (note == parameters_.padNotes[static_cast<int> (PadIndex::hatOpen)])
+        hatOpen_.release (note);
 }
 
 void Engine::allNotesOff() noexcept

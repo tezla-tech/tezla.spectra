@@ -1492,9 +1492,38 @@ HatSettings hatEverythingOn()
     s.tuneHz = 205.3;
     s.harmonics = 0.0;
     s.spread = 0.6;
+    s.ring = 0.5;
+    s.drive = 0.4;
+    s.air = 0.5;
+    s.airToneHz = 5000.0;
+    s.airDecay = 1.2;
+    s.sizzle = 0.7;
     s.colourHz = 3440.0;
-    s.air = 0.4;
+    s.width = 0.5;
+    s.highpassHz = 1200.0;
+    s.damp = 0.5;
+    s.strike = 0.5;
     s.level = 1.0;
+    return s;
+}
+
+/// Nothing but the six pulses: no ring, no drive, no noise, no damping and
+/// no stick, so a test can isolate one of them by turning it back on.
+HatSettings bareHat()
+{
+    HatSettings s;
+    s.spread = 0.0;
+    s.ring = 0.0;
+    s.drive = 0.0;
+    s.air = 0.0;
+    s.sizzle = 0.0;
+    s.damp = 0.0;
+    s.strike = 0.0;
+    s.level = 1.0;
+    s.velocityLevel = 0.0;
+    s.velocityDecay = 0.0;
+    s.velocityColour = 0.0;
+    s.velocityStrike = 0.0;
     return s;
 }
 
@@ -2231,4 +2260,484 @@ TEZLA_TEST (a_clap_retires_exactly_and_leaves_exact_zeros)
     const double seconds2 = static_cast<double> (lastNonZeroSample (out2)) / 96000.0;
 
     CHECK (seconds2 > seconds * 1.8);
+}
+
+// ---------------------------------------------------------------------------
+// The depth the first hats and clap did not have (I4.1)
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (ring_modulation_is_band_limited_by_construction_and_rate_independent)
+{
+    // A product holds the SUM of every pair of its inputs' frequencies, so
+    // ring-modulating two full-band signals puts energy above Nyquist and
+    // folds it back. Both operands are low-passed first, and the guarantee is
+    // a construction rather than a measurement: with both below a quarter of
+    // the rate, no product can reach Nyquist. This asserts the construction.
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 176400.0, 192000.0, 384000.0 })
+    {
+        HatEngine engine;
+        engine.prepare (rate);
+
+        const double corner = engine.getRingOperandCutoffHz();
+
+        CHECK (corner <= rate * 0.25 + 1.0e-9);
+
+        // At every internal rate Auto actually produces -- 176.4 kHz from
+        // 44.1 k, 192 kHz from the rest -- the limit is the same absolute
+        // 20 kHz, so the ring products are the same frequencies whatever the
+        // host is doing. It was a FRACTION of the rate first, and the same
+        // patch then measured 6951 Hz at 192 kHz against 4849 Hz at 48 kHz.
+        if (rate >= 176400.0)
+            CHECK (isExactly (corner, HatEngine::kRingOperandHz));
+    }
+
+    // Rate independence where it is promised: through the whole instrument
+    // with Auto, Ring at the top.
+    EngineParameters parameters;
+    parameters.hat = hatEverythingOn();
+    parameters.hat.ring = 1.0;
+    parameters.hat.decayOpenSeconds = 0.35;
+    parameters.oversampling = OversamplingMode::Auto;
+
+    double centroids[4] {};
+    int index = 0;
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        const auto out = render (parameters, rate, static_cast<int> (0.5 * rate),
+                                 { { 0, 46, 1.0 } });
+        centroids[index++] = centroidHz (out, rate, 0.5);
+    }
+
+    std::printf ("        [hat ring] centroid with Ring at 100%%: %.0f / %.0f / %.0f / %.0f Hz\n",
+                 centroids[0], centroids[1], centroids[2], centroids[3]);
+
+    for (int i = 1; i < 4; ++i)
+        CHECK (std::abs (centroids[i] - centroids[0]) / centroids[0] < 0.05);
+
+    // And it does something: the ring products are inharmonic against the six
+    // series on purpose, so the share of energy they add is the effect.
+    constexpr double rate = 192000.0;
+    constexpr double tune = 900.0;
+
+    HatSettings s = bareHat();
+    s.tuneHz = tune;
+    s.width = 1.0;
+    s.highpassHz = 200.0;
+    s.decayOpenSeconds = 1.2;
+
+    double partials[HatEngine::kOscillators] {};
+
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+        partials[i] = tune * HatEngine::kSets[0][i];
+
+    HatSettings ringed = s;
+    ringed.ring = 1.0;
+
+    HatEngine plain, dense;
+    const auto without = renderHatEngine (plain, s, rate, 1.3, true);
+    const auto with = renderHatEngine (dense, ringed, rate, 1.3, true);
+
+    const double plainDb = inharmonicFloorDb (without, rate, partials, HatEngine::kOscillators, 20000.0);
+    const double denseDb = inharmonicFloorDb (with, rate, partials, HatEngine::kOscillators, 20000.0);
+
+    std::printf ("        [hat ring] energy off the six series: %.1f dB with no ring, %.1f dB with it\n",
+                 plainDb, denseDb);
+
+    // Measured 2026-09-03: -77.2 dB of the bare bank's energy is off its own
+    // harmonic series; with the ring at full it is -0.7 dB, which is the
+    // dense inharmonic wash the control exists to make.
+    CHECK (denseDb > plainDb + 40.0);
+}
+
+TEZLA_TEST (damp_closes_the_top_as_the_hit_decays_and_is_out_of_the_path_at_zero)
+{
+    constexpr double rate = 192000.0;
+
+    HatSettings s = bareHat();
+    s.decayOpenSeconds = 0.8;
+    s.damp = 0.0;
+
+    // Damp 0: the corner never moves off its top, and the filter is skipped.
+    {
+        HatEngine engine;
+        engine.prepare (rate);
+        engine.start (s, true, 1.0, 3u, 0);
+
+        for (int n = 0; n < static_cast<int> (0.4 * rate); ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                engine.advanceControl (Engine::kControlIntervalSamples);
+
+            (void) engine.process();
+        }
+
+        CHECK (isExactly (engine.getDampCutoffHz(), HatEngine::kDampTopHz));
+    }
+
+    // Damp 1: the corner follows the envelope down.
+    s.damp = 1.0;
+
+    HatEngine engine;
+    engine.prepare (rate);
+    engine.start (s, true, 1.0, 3u, 0);
+
+    double atStart = 0.0;
+    double atHalf = 0.0;
+
+    for (int n = 0; n < static_cast<int> (0.4 * rate); ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            engine.advanceControl (Engine::kControlIntervalSamples);
+
+        (void) engine.process();
+
+        if (n == 64)
+            atStart = engine.getDampCutoffHz();
+
+        if (n == static_cast<int> (0.2 * rate))
+            atHalf = engine.getDampCutoffHz();
+    }
+
+    std::printf ("        [hat damp] corner at 0.3 ms %.0f Hz, at 200 ms %.0f Hz\n",
+                 atStart, atHalf);
+
+    // Measured 2026-09-03: 17.0 kHz falling to 1.3 kHz -- a hit that starts
+    // bright and ends dark, which is the whole point of the control.
+    CHECK (atStart > 12000.0);
+    CHECK (atHalf < atStart * 0.25);
+
+    // And it is audible, not merely a number: the second half of a damped hit
+    // is darker than the second half of an undamped one.
+    HatSettings bright = s;
+    bright.damp = 0.0;
+
+    HatEngine a, b;
+    const auto damped = renderHatEngine (a, s, rate, 0.6, true);
+    const auto open = renderHatEngine (b, bright, rate, 0.6, true);
+
+    const auto half = damped.size() / 2;
+    const std::vector<double> dampedTail (damped.begin() + static_cast<long> (half), damped.end());
+    const std::vector<double> openTail (open.begin() + static_cast<long> (half), open.end());
+
+    const double dampedCentroid = centroidHz (dampedTail, rate, 0.3);
+    const double openCentroid = centroidHz (openTail, rate, 0.3);
+
+    std::printf ("        [hat damp] tail centroid damped %.0f Hz, open %.0f Hz\n",
+                 dampedCentroid, openCentroid);
+
+    CHECK (dampedCentroid < openCentroid * 0.8);
+}
+
+TEZLA_TEST (sizzle_moves_the_hiss_onto_the_metals_own_partials)
+{
+    // The claim: with Sizzle up, the noise is not beside the metal -- it is
+    // ringing at the frequencies the metal already has. Measured as the share
+    // of the noise layer's energy that lands within a semitone of a partial.
+    constexpr double rate = 192000.0;
+
+    HatSettings s = bareHat();
+    s.tuneHz = 400.0;
+    s.air = 1.0;
+    s.airToneHz = 200.0;
+    s.width = 1.0;
+    s.highpassHz = 200.0;
+    s.colourHz = 4000.0;
+    s.decayOpenSeconds = 1.0;
+
+    double partials[HatEngine::kOscillators] {};
+
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+        partials[i] = 400.0 * HatEngine::kSets[0][i];
+
+    const auto shareOnPartials = [&partials] (const std::vector<double>& x, double sampleRate)
+    {
+        const auto windowed = windowFirst (x, sampleRate, 0.6);
+        const auto spectrum = fftOfReal (windowed.samples);
+        const double binWidth = sampleRate / static_cast<double> (windowed.samples.size());
+        const auto last = std::min (static_cast<std::size_t> (12000.0 / binWidth),
+                                    windowed.samples.size() / 2);
+
+        double total = 0.0;
+        double onPartials = 0.0;
+
+        for (std::size_t bin = 1; bin <= last; ++bin)
+        {
+            const double hz = static_cast<double> (bin) * binWidth;
+            const double power = std::norm (spectrum[bin]);
+            total += power;
+
+            for (const double partial : partials)
+                if (std::abs (1200.0 * std::log2 (hz / partial)) < 100.0)
+                {
+                    onPartials += power;
+                    break;
+                }
+        }
+
+        return onPartials / std::max (total, 1.0e-300);
+    };
+
+    HatEngine flat, rung;
+    s.sizzle = 0.0;
+    const auto without = renderHatEngine (flat, s, rate, 1.0, true);
+    s.sizzle = 1.0;
+    const auto with = renderHatEngine (rung, s, rate, 1.0, true);
+
+    const double flatShare = shareOnPartials (without, rate);
+    const double rungShare = shareOnPartials (with, rate);
+
+    std::printf ("        [hat sizzle] energy within a semitone of a partial: %.1f%% flat, %.1f%% rung\n",
+                 100.0 * flatShare, 100.0 * rungShare);
+
+    // Measured 2026-09-03: 9.6 % of the hiss lands on a partial by chance,
+    // 46.4 % when Sizzle runs it through them.
+    CHECK (rungShare > flatShare * 2.5);
+}
+
+TEZLA_TEST (the_hats_strike_puts_the_loudest_part_at_the_front)
+{
+    constexpr double rate = 96000.0;
+
+    HatSettings s = bareHat();
+    s.decayOpenSeconds = 0.6;
+    s.strike = 0.0;
+
+    HatEngine plain, struck;
+    const auto without = renderHatEngine (plain, s, rate, 0.3, true);
+
+    s.strike = 1.0;
+    const auto with = renderHatEngine (struck, s, rate, 0.3, true);
+
+    const auto front = static_cast<std::size_t> (0.008 * rate);
+
+    const auto peakOver = [] (const std::vector<double>& x, std::size_t from, std::size_t to)
+    {
+        double peak = 0.0;
+
+        for (std::size_t n = from; n < std::min (to, x.size()); ++n)
+            peak = std::max (peak, std::abs (x[n]));
+
+        return peak;
+    };
+
+    const double plainFront = peakOver (without, 0, front);
+    const double struckFront = peakOver (with, 0, front);
+    const double plainBody = peakOver (without, front, without.size());
+    const double struckBody = peakOver (with, front, with.size());
+
+    std::printf ("        [hat strike] first 8 ms %.3f -> %.3f; after it %.3f -> %.3f\n",
+                 plainFront, struckFront, plainBody, struckBody);
+
+    // The stick lands at the front and nowhere else: it lifts the first 8 ms
+    // and leaves the ring alone.
+    CHECK (struckFront > plainFront * 1.4);
+    CHECK (std::abs (struckBody - plainBody) < plainBody * 0.35);
+}
+
+TEZLA_TEST (a_gated_hat_fades_out_at_note_off_and_a_one_shot_rings_on)
+{
+    constexpr double rate = 96000.0;
+    constexpr int block = 64;
+
+    EngineParameters parameters;
+    parameters.hat = hatEverythingOn();
+    parameters.hat.decayOpenSeconds = 2.0;
+    parameters.hat.gate = true;
+    parameters.hat.releaseSeconds = 0.05;
+    parameters.oversampling = OversamplingMode::Off;
+
+    // A note-off 100 ms in: the whole hit is gone a release later.
+    const auto gated = render (parameters, rate, static_cast<int> (0.5 * rate),
+                               { { 0, 46, 1.0 }, { static_cast<int> (0.1 * rate), 46, -1.0 } },
+                               block);
+
+    const double gatedEnd = static_cast<double> (lastNonZeroSample (gated)) / rate;
+    const double step = maxStep (gated);
+
+    // The same hit with Gate dark ignores the note-off entirely.
+    parameters.hat.gate = false;
+
+    const auto oneShot = render (parameters, rate, static_cast<int> (0.5 * rate),
+                                 { { 0, 46, 1.0 }, { static_cast<int> (0.1 * rate), 46, -1.0 } },
+                                 block);
+
+    const double oneShotEnd = static_cast<double> (lastNonZeroSample (oneShot)) / rate;
+
+    std::printf ("        [hat gate] gated ends at %.3f s (max step %.4f); one-shot still going at %.3f s\n",
+                 gatedEnd, step, oneShotEnd);
+
+    // Measured 2026-09-03: the gated hat is silent by 0.152 s -- the note-off
+    // at 100 ms plus the 50 ms release -- and the one-shot runs to the end of
+    // the render.
+    CHECK (gatedEnd < 0.17);
+    CHECK (oneShotEnd > 0.45);
+
+    // Release 0 is a 1 ms ramp, not a step.
+    parameters.hat.gate = true;
+    parameters.hat.releaseSeconds = 0.0;
+
+    const auto cut = render (parameters, rate, static_cast<int> (0.5 * rate),
+                             { { 0, 46, 1.0 }, { static_cast<int> (0.1 * rate), 46, -1.0 } },
+                             block);
+
+    const double cutEnd = static_cast<double> (lastNonZeroSample (cut)) / rate;
+
+    std::printf ("        [hat gate] release 0 ends at %.3f s, max step %.4f against the hit's own %.4f\n",
+                 cutEnd, maxStep (cut), maxStep (oneShot));
+
+    CHECK (cutEnd < 0.105);
+    CHECK (maxStep (cut) <= maxStep (oneShot) * 1.05);
+}
+
+TEZLA_TEST (the_clap_fires_the_bursts_it_is_asked_for_and_skews_their_spacing)
+{
+    // Every count, at every host rate, on exactly the samples the flam says.
+    for (const double rate : { 44100.0, 192000.0 })
+    {
+        for (int count = 2; count <= BurstScheduler::kMaxBursts; ++count)
+        {
+            const double flam = 0.011;
+            const auto spacing = static_cast<int> (std::lround (flam * rate));
+
+            BurstScheduler scheduler;
+            scheduler.start (count, flam * rate);
+
+            std::vector<int> fired;
+
+            for (int n = 0; n < static_cast<int> (0.4 * rate); ++n)
+                if (scheduler.advance() >= 0)
+                    fired.push_back (n);
+
+            CHECK (fired.size() == static_cast<std::size_t> (count));
+
+            for (std::size_t b = 0; b < fired.size(); ++b)
+                CHECK (fired[b] == static_cast<int> (b) * spacing);
+        }
+    }
+
+    // Skew compounds gap by gap, and is exactly even at the centre.
+    CHECK (isExactly (ClapEngine::ratioForSkew (0.0), 1.0));
+
+    constexpr double rate = 96000.0;
+    const double flam = 0.010;
+
+    for (const double skew : { -1.0, 0.0, 1.0 })
+    {
+        const double ratio = ClapEngine::ratioForSkew (skew);
+
+        BurstScheduler scheduler;
+        scheduler.start (4, flam * rate, ratio);
+
+        std::vector<int> fired;
+
+        for (int n = 0; n < static_cast<int> (0.5 * rate); ++n)
+            if (scheduler.advance() >= 0)
+                fired.push_back (n);
+
+        CHECK (fired.size() == 4u);
+
+        const double first = static_cast<double> (fired[1] - fired[0]);
+        const double last = static_cast<double> (fired[3] - fired[2]);
+
+        std::printf ("        [clap skew] skew %+.1f (ratio %.3f): first gap %.1f ms, last %.1f ms\n",
+                     skew, ratio, 1000.0 * first / rate, 1000.0 * last / rate);
+
+        if (skew < 0.0)
+            CHECK (last < first * 0.8);
+        else if (skew > 0.0)
+            CHECK (last > first * 1.2);
+        else
+            CHECK (isExactly (first, last));
+    }
+}
+
+TEZLA_TEST (the_claps_body_rings_at_its_pitch_and_retires_exactly)
+{
+    constexpr double rate = 96000.0;
+
+    // The body alone: no hiss at all, so what is measured is the cavity.
+    ClapSettings s;
+    s.noise = 0.0;
+    s.body = 1.0;
+    s.bodyHz = 700.0;
+    s.bodyRingSeconds = 0.3;
+    s.tailSeconds = 0.05;
+    s.width = 1.0;
+    s.colourHz = 1500.0;
+
+    ClapEngine engine;
+    const auto out = renderClapEngine (engine, s, rate, 1.5);
+
+    // The cavity is INHARMONIC, and that is the design rather than an
+    // accident: cupped hands are not a tube with a harmonic series, and a
+    // body whose modes were 1 : 2 : 3 would read as a pitched note rather
+    // than a knock inside the clap. Asserted against the integers rather than
+    // against the table, because a test that computes what it expects from
+    // the table it is checking cannot fail when the table is wrong -- which
+    // is what the first version of this did, and a break-check caught it.
+    for (int mode = 1; mode < ClapEngine::kBodyModes; ++mode)
+    {
+        const double ratio = ClapEngine::kBodyRatios[mode];
+        const double nearest = std::round (ratio);
+
+        CHECK (std::abs (ratio - nearest) > 0.08 * nearest);
+    }
+
+    // Every one of the three modes, each in its own window, and measured on
+    // the FREE ringing after the last burst.
+    //
+    // Not the whole render: four strikes 11 ms apart comb the spectrum every
+    // 90 Hz, and the comb pulls a short mode's peak off its centre by a
+    // couple of per cent -- which is the sound being made, not an error, and
+    // measuring through it would be measuring the pattern rather than the
+    // bank. Everything from 100 ms on is the cavity ringing alone.
+    const auto freeFrom = static_cast<long> (0.1 * rate);
+    const std::vector<double> ringing (out.begin() + freeFrom, out.end());
+
+    for (int mode = 0; mode < ClapEngine::kBodyModes; ++mode)
+    {
+        const double wanted = 700.0 * ClapEngine::kBodyRatios[mode];
+        const double found = peakHzBetween (ringing, rate, wanted * 0.93, wanted * 1.07);
+
+        std::printf ("        [clap body] mode %d wanted %.1f Hz, measured %.1f Hz\n",
+                     mode, wanted, found);
+
+        CHECK (std::abs (found - wanted) < wanted * 0.02);
+    }
+
+    // And Pitch moves the whole cavity, not just its name.
+    ClapSettings lower = s;
+    lower.bodyHz = 350.0;
+
+    ClapEngine deeper;
+    const auto low = renderClapEngine (deeper, lower, rate, 1.5);
+
+    const std::vector<double> lowRinging (low.begin() + freeFrom, low.end());
+    const double lowFundamental = peakHzBetween (lowRinging, rate, 300.0, 420.0);
+
+    std::printf ("        [clap body] pitch halved: fundamental %.1f Hz\n", lowFundamental);
+
+    CHECK (std::abs (lowFundamental - 350.0) < 10.0);
+
+    // And it retires: the bank is cut at its energy floor, so the hit ends.
+    CHECK (! engine.isActive());
+
+    const int last = lastNonZeroSample (out);
+
+    for (std::size_t n = static_cast<std::size_t> (last) + 1; n < out.size(); ++n)
+        CHECK (isExactlyZero (out[n]));
+
+    std::printf ("        [clap body] last non-zero at %.3f s, active %d\n",
+                 static_cast<double> (last) / rate, engine.isActive() ? 1 : 0);
+
+    // With Body at 0 the bank is not run and the pad is the hiss alone.
+    s.body = 0.0;
+    s.noise = 1.0;
+
+    ClapEngine hiss;
+    const auto noiseOnly = renderClapEngine (hiss, s, rate, 1.0);
+
+    CHECK (! hiss.isActive());
+    CHECK (lastNonZeroSample (noiseOnly) > 0);
 }

@@ -134,6 +134,12 @@ private:
     SnareShown shownSnare_;
     SnareShown shownGhost_;
 
+    /// What the hat and clap pages' greying was last set to.
+    bool shownHatAir_ { true };
+    bool shownHatGate_ { true };
+    bool shownClapBody_ { true };
+    bool shownClapNoise_ { true };
+
     // The live key tooltips and the Tune readouts are rebuilt only when
     // what they describe moves.
     juce::String shownScale_;
