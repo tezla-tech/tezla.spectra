@@ -17,6 +17,9 @@ tezla_add_plugin(
     SOURCES
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/PlatePage.cpp
+        Source/Displays.cpp
+        Source/PadStrip.cpp
     DSP_SOURCES
         Dsp/IctusEngine.cpp
     INCLUDE_DIRS

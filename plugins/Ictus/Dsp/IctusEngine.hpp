@@ -174,6 +174,18 @@ public:
 
     [[nodiscard]] std::uint64_t getHitCount() const noexcept { return hitCount_; }
 
+    /// How many hits a pad has had since prepare(), and the velocity of the
+    /// last -- what the editor's pad lamps light from.
+    [[nodiscard]] std::uint32_t getPadHitCount (PadIndex pad) const noexcept
+    {
+        return padHits_[static_cast<int> (pad)];
+    }
+
+    [[nodiscard]] double getPadLastVelocity (PadIndex pad) const noexcept
+    {
+        return padVelocity_[static_cast<int> (pad)];
+    }
+
     [[nodiscard]] const Pad<KickEngine>& kick1() const noexcept { return kick1_; }
     [[nodiscard]] const Pad<KickEngine>& kick2() const noexcept { return kick2_; }
     [[nodiscard]] const Pad<SnareEngine>& snare1() const noexcept { return snare1_; }
@@ -223,6 +235,8 @@ private:
     int sinceControl_ { 0 };
     int idleSamples_ { 0 };
     std::uint64_t hitCount_ { 0 };
+    std::uint32_t padHits_[kPadCount] {};
+    double padVelocity_[kPadCount] {};
 
     /// The half-host-sample alignment delay: the last `factor / 2` internal
     /// samples of the previous block, per channel. At most 4 (x8).

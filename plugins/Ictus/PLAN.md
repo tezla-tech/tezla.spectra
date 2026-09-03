@@ -643,6 +643,45 @@ Measured at I3 (`tezla-tests snare`, `spread_zero`, `rattle`, `kit`;
 | the kit — two kicks and three snares, everything on, 48 kHz ×4 | **4.8–5.2 %** of a core; idle 0.001 % |
 | the kick through `ClickPair` against the I2 render (click 0.4, noise 0.3) | **bit-identical** |
 
+**Note snap** (2026-09-03, the user's ask after I3): `noteSnap` on
+`KickSettings` and `SnareSettings`; `Engine::startKick`/`startSnare` land an
+un-keyed Tune on `dsp::Tuning::nearestScaleHz` when it is lit — the tuning's
+nearest degree, 12-TET until a scale is loaded — so a drum can sit in the key
+of the bass line. `k1NoteSnap` / `s1NoteSnap` at `kSchemaV4`; NOTE lamps beside
+Key with live tooltips naming the note Tune lands on (`describeNoteSnap`,
+`noteNameFor`); the wires' `s1Snap` knob is displayed as *Shape* so the two
+cannot be confused (the ID is frozen). Measured: 52 Hz → 51.913 Hz (G#1),
+205 Hz → 207.652 Hz (G#3), and with 5-TET swapped in 52 Hz → 55.000 Hz, the
+scale's degree. Break-check: both snaps removed from the engine → the test
+red on all three.
+
+**The panel** (2026-09-03, the user's ask: "everything is the same size and
+colour"): the flat seven-column grid became `PlatePage` — control plates in
+the house look (`ui::paintPlate` / `paintPlateHeading`, lifted from the
+Sonitus editor into `shared/tezla-ui/include/tezla/ui/Plate.hpp` with the
+plate colour as the caller's), one plate per group with its hue from
+`design::tintFor` (pitch/shell on the accent, then colour/wires, click/strike,
+amplitude/out, velocity at 18° steps), a spine, a heading with an
+explanation, and the lead control of each group at 1.32× (Tune, Harmonics,
+Click, Decay, Level; Wires, Crack) with the set-and-forget ones at 0.74×
+(the times, the velocity amounts). Four pictures drawn from the knobs, not
+the audio, so they are right before the first hit (`Displays.h`): the kick's
+**pitch trajectory** on log time × log frequency with the tuning's notes as
+a ruler and the landed note named and its cents offset in the caption; the
+snare's **three modes** as bars on a log axis with the drop's start ghosted
+and the note ruler; an **envelope** per drum computed by running the
+engine's own `dsp::Adsr` at a display rate (the kick's AHD, its tail dashed,
+the mix filled; the snare's fundamental and upper modes on their T60s and
+the wires' burst with the rattle's drive on top); the **wires' filter
+response** from the engine's own `SvfFilter::magnitudeAt`. A **pad strip**
+(`PadStrip.h`) of eight lit plates naming pad and note (with the MIDI number,
+since DAWs disagree on octaves) that flash on a hit as bright as its velocity
+— per-pad hit counters and last velocity copied out of the engine each block
+— and open the pad's page; HIT strikes the selected pad; the KICK/SNARE tabs
+are gone. Tune knobs read as the note when Note snap is lit. Default window
+1000 × 720. Every display refreshes at 15 Hz and repaints only when an input
+moved.
+
 Break-checks at I3, each seen red then reverted: mode ratio 1.6 → 1.5
 (ratio test red), Spread ignored (spread-0 test red at all four rates), the
 drop retuning forever (drop test red, 3601 retunes), the follower run at

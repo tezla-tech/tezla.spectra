@@ -134,6 +134,10 @@ inline constexpr auto s1VelLevel   = "s1VelLevel";
 inline constexpr auto s1VelWires   = "s1VelWires";
 inline constexpr auto s1VelCrack   = "s1VelCrack";
 inline constexpr auto s1VelDrop    = "s1VelDrop";
+
+// ---- schema 4: note snap -- the drums in the key of the bass line ----------
+inline constexpr auto k1NoteSnap   = "k1NoteSnap";
+inline constexpr auto s1NoteSnap   = "s1NoteSnap";
 } // namespace ids
 
 /// Choice lists. **APPEND-ONLY**: a choice parameter stores an index.
@@ -228,6 +232,31 @@ public:
     [[nodiscard]] juce::String describeKeying() const;
     [[nodiscard]] juce::String describeFollowKey (PadIndex pad) const;
 
+    /// The NOTE lamp's live tooltip: what this pad's Tune snaps to right now.
+    [[nodiscard]] juce::String describeNoteSnap (PadIndex pad) const;
+
+    /// A frequency as the nearest note of the current tuning with its cents
+    /// offset, "G#1 +3c" -- the readout under a Tune knob.
+    [[nodiscard]] juce::String noteNameFor (double hz) const;
+
+    /// What Tune would snap to, from the message-thread twin of the tuning.
+    [[nodiscard]] double previewSnappedHz (double hz) const;
+
+    /// The message-thread twin itself, for the displays' note rulers.
+    [[nodiscard]] const dsp::Tuning& previewTuning() const noexcept { return previewTuning_; }
+
+    /// Per pad: hits since prepare and the last velocity, copied out of the
+    /// engine at the end of every block for the pad lamps.
+    [[nodiscard]] std::uint32_t getPadHitCount (PadIndex pad) const noexcept
+    {
+        return padHits_[static_cast<int> (pad)].load (std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] float getPadLastVelocity (PadIndex pad) const noexcept
+    {
+        return padVelocity_[static_cast<int> (pad)].load (std::memory_order_relaxed);
+    }
+
     // ---- what the editor reads ------------------------------------------
 
     [[nodiscard]] int getActiveHitCount() const noexcept { return activeHits_.load(); }
@@ -261,6 +290,8 @@ private:
 
     std::atomic<unsigned> pendingHits_ { 0 };
     std::atomic<int> padNotes_[kPadCount];
+    std::atomic<std::uint32_t> padHits_[kPadCount] {};
+    std::atomic<float> padVelocity_[kPadCount] {};
 
     bool tooltipsEnabled_ { true };
     int currentProgram_ { 0 };

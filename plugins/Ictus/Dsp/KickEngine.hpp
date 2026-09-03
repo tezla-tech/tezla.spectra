@@ -78,6 +78,7 @@ struct KickSettings
     // ---- pitch ----------------------------------------------------------
     double tuneHz { 50.0 };              ///< the landed pitch, 20..400 Hz
     bool   followKey { false };          ///< take the landed pitch from the MIDI note instead
+    bool   noteSnap { false };           ///< snap Tune to the nearest degree of the tuning
     double startSemitones { 30.0 };      ///< the drop starts this far above the landed pitch, 0..60
     double dropSeconds { 0.03 };         ///< landing time of the drop, 0.002..0.2
     double sighSemitones { 1.5 };        ///< signed; the slow second drop, -12..12

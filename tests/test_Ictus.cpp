@@ -19,6 +19,7 @@
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Fft.hpp>
+#include <tezla/dsp/Scales.hpp>
 
 #include <IctusEngine.hpp>
 
@@ -1362,5 +1363,87 @@ TEZLA_TEST (a_gated_snare_fades_out_at_note_off_and_a_one_shot_rings_on)
         CHECK (last > off);
         CHECK (last < off + static_cast<int> (0.002 * rate) + 100);
         CHECK (maxStep (out) <= bodyStep + 1.0 / (0.001 * rate) + 1.0e-3);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Note snap: the drums in the key of the bass line
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// The mean frequency over cycles 3..N from the zero crossings.
+double meanHzOfCycles (const std::vector<double>& out, double rate, std::size_t cycles)
+{
+    const auto times = crossings (out, rate);
+
+    if (times.size() < cycles + 3)
+        return 0.0;
+
+    return static_cast<double> (cycles - 2) / (times[cycles] - times[2]);
+}
+} // namespace
+
+TEZLA_TEST (note_snap_lands_the_drums_on_the_nearest_degree_of_the_tuning)
+{
+    // Tune 52 Hz with Note lit lands on G#1, 51.913 Hz -- the nearest note
+    // of 12-TET at A4 = 440 -- and the neutral snare at 205 Hz on G#3,
+    // 207.652 Hz; with Note dark they land where Tune says. With a five-tone
+    // scale swapped in, the kick lands on that scale's nearest degree
+    // instead, which is not a keyboard note at all: the snap is the
+    // tuning's, so a drum snapped in a microtuned project sits in it.
+    constexpr double rate = 48000.0;
+
+    EngineParameters parameters;
+    parameters.kick1 = neutralKick();
+    parameters.kick1.tuneHz = 52.0;
+    parameters.kick1.decaySeconds = 0.8;
+    parameters.snare1 = neutralSnare();
+    parameters.snare1.spread = 0.0;
+    parameters.snare1.tuneHz = 205.0;
+    parameters.snare1.decaySeconds = 2.0;
+
+    const auto cents = [] (double measured, double expected)
+    {
+        return 1200.0 * std::log2 (measured / expected);
+    };
+
+    // ---- dark: Tune as set ----
+    {
+        const double kick = meanHzOfCycles (render (parameters, rate, 24000, { { 0, 36, 1.0 } }), rate, 20);
+        const double snare = meanHzOfCycles (render (parameters, rate, 24000, { { 0, 38, 1.0 } }), rate, 60);
+
+        CHECK_NEAR (cents (kick, 52.0), 0.0, 0.5);
+        CHECK_NEAR (cents (snare, 205.0), 0.0, 0.5);
+    }
+
+    // ---- lit: the nearest 12-TET note ----
+    parameters.kick1.noteSnap = true;
+    parameters.snare1.noteSnap = true;
+
+    const double kickSnapped = meanHzOfCycles (render (parameters, rate, 24000, { { 0, 36, 1.0 } }), rate, 20);
+    const double snareSnapped = meanHzOfCycles (render (parameters, rate, 24000, { { 0, 38, 1.0 } }), rate, 60);
+
+    std::printf ("        [note snap] kick 52 Hz -> %.3f Hz (G#1 is 51.913), snare 205 Hz -> %.3f Hz (G#3 is 207.652)\n",
+                 kickSnapped, snareSnapped);
+
+    CHECK_NEAR (cents (kickSnapped, 51.9131), 0.0, 0.5);
+    CHECK_NEAR (cents (snareSnapped, 207.6523), 0.0, 0.5);
+
+    // ---- a five-tone scale: the snap follows the tuning ----
+    {
+        auto engine = heapEngine();
+        engine->prepare (rate, 512);
+
+        auto scale = scales::fiveToneEqual();
+        engine->swapScale (scale);
+
+        const double expected = engine->tuning().nearestScaleHz (52.0);
+        const double kick = meanHzOfCycles (render (parameters, rate, 24000, { { 0, 36, 1.0 } }, 256, {}, engine.get()), rate, 20);
+
+        std::printf ("        [note snap] 5-TET: kick 52 Hz -> %.3f Hz (the scale's nearest degree is %.3f)\n", kick, expected);
+
+        CHECK_NEAR (cents (kick, expected), 0.0, 0.5);
+        CHECK (std::abs (cents (kick, 51.9131)) > 10.0);
     }
 }

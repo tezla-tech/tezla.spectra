@@ -84,6 +84,7 @@ void Engine::reconcileFactor() noexcept
 std::uint64_t Engine::nextSeed (PadIndex index) noexcept
 {
     ++hitCount_;
+    ++padHits_[static_cast<int> (index)];
 
     return (kSeedBase ^ (kPadSalt * static_cast<std::uint64_t> (static_cast<int> (index) + 1)))
          + kHitGolden * hitCount_;
@@ -95,11 +96,15 @@ void Engine::startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings
     reconcileFactor();
 
     const std::uint64_t seed = nextSeed (index);
+    padVelocity_[static_cast<int> (index)] = velocity;
 
     // The landed pitch: from the key through the tuning in Bass mode or
-    // with Follow key lit, else the pad's own Tune.
+    // with Follow key lit, else the pad's own Tune -- snapped to the
+    // tuning's nearest degree with Note lit, so a drum can sit in the key
+    // of the bass line (12-TET until a scale is loaded; then that scale).
     const double endHz = (keyed || settings.followKey) ? tuning_.frequencyFor (note)
-                                                       : settings.tuneHz;
+                       : settings.noteSnap ? tuning_.nearestScaleHz (settings.tuneHz)
+                                           : settings.tuneHz;
 
     // A note between two process() calls lands at whatever offset the
     // control grid is at; the hit gets that many samples as its first,
@@ -115,9 +120,11 @@ void Engine::startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSetti
     reconcileFactor();
 
     const std::uint64_t seed = nextSeed (index);
+    padVelocity_[static_cast<int> (index)] = velocity;
 
     const double fundamentalHz = settings.followKey ? tuning_.frequencyFor (note)
-                                                    : settings.tuneHz;
+                               : settings.noteSnap ? tuning_.nearestScaleHz (settings.tuneHz)
+                                                   : settings.tuneHz;
 
     const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
 
