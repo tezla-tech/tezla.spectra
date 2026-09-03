@@ -7,94 +7,31 @@
 
 #pragma once
 
-// The Ictus editor at I3: the shared header (output, oversampling, render
-// quality, A/B, tooltips), a pad strip with a HIT button that strikes the
-// page's pad so a drum can be auditioned without a keyboard, a BASS lamp and
-// three page tabs -- Kick 1's page, Snare 1's page, and the shared tuning
-// panel. The pad grid and the other pads' pages arrive with the editor
-// close-out (I9).
+// The Ictus editor: the shared header (output, oversampling, render quality,
+// A/B, tooltips); a pad strip whose eight pads light when struck and open
+// their pages; a HIT button for the page's pad; the BASS lamp; the TUNING
+// tab; then the page -- Kick 1's or Snare 1's control plates in the house
+// look, each plate a group with its own colour, its lead control drawn
+// larger, its set-and-forget controls smaller, and a picture of what the
+// group does drawn from the knobs (Displays.h); or the shared tuning panel.
 
-#include <array>
 #include <memory>
-#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/ui/HeaderBar.hpp>
-#include <tezla/ui/HouseControls.hpp>
 #include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 #include <tezla/ui/TuningPanel.hpp>
 
+#include "Displays.h"
+#include "PadStrip.h"
+#include "PlatePage.h"
 #include "PluginProcessor.h"
 
 namespace tezla::ictus {
-
-/// A grid of house controls, each attached to a parameter: knobs, choices and
-/// lamp switches (never a tick box -- CLAUDE.md section 8).
-class ControlPage final : public juce::Component
-{
-public:
-    ControlPage (juce::AudioProcessorValueTreeState& state, ui::Palette palette,
-                 int columns)
-        : state_ (state), palette_ (palette), columns_ (columns) {}
-
-    void addKnob (const char* parameterId, const juce::String& name,
-                  const juce::String& tooltip);
-    /// `legend` is what the lamp itself says -- a word, since the cap is
-    /// 64 px wide -- under the full `name` above it.
-    void addSwitch (const char* parameterId, const juce::String& name,
-                    const juce::String& legend, const juce::String& tooltip);
-    void addGap();
-
-    void setNote (const juce::String& note);
-    void setControlEnabled (const char* parameterId, bool enabled);
-
-    /// Replaces a control's tooltip and its label's -- for the ones that
-    /// read live state (which scale a key plays through).
-    void setTooltip (const char* parameterId, const juce::String& tooltip);
-
-    [[nodiscard]] juce::Colour nameColour() const;
-
-    void paint (juce::Graphics&) override;
-    void resized() override;
-
-private:
-    struct Knob
-    {
-        juce::String id;
-        juce::Slider slider;
-        juce::Label label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
-    };
-
-    struct Switch
-    {
-        juce::String id;
-        std::unique_ptr<ui::LampButton> button;
-        juce::Label label;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
-    };
-
-    struct Cell
-    {
-        enum class Kind { knob, lamp, gap } kind {};
-        int index {};
-    };
-
-    juce::AudioProcessorValueTreeState& state_;
-    ui::Palette palette_;
-    int columns_;
-
-    std::vector<std::unique_ptr<Knob>> knobs_;
-    std::vector<std::unique_ptr<Switch>> switches_;
-    std::vector<Cell> cells_;
-
-    juce::String note_;
-    juce::Rectangle<int> noteArea_;
-};
 
 class IctusEditor final : public juce::AudioProcessorEditor,
                           private juce::Timer
@@ -112,10 +49,12 @@ private:
     void buildSnarePage();
     void buildTuningPage();
     void showPage (int index);
-    void refreshPadStrip();
+    void selectPad (PadIndex pad);
     void styleTab (juce::TextButton& tab, bool active);
     void refreshHeaderTooltips();
     void refreshKeyTooltips();
+    void refreshPadStrip();
+    void refreshDisplays();
     void updateGreying();
 
     IctusProcessor& ictus_;
@@ -126,25 +65,30 @@ private:
 
     std::unique_ptr<ui::HeaderBar> header_;
 
-    // The pad strip: a HIT button, the pad's name and note, the BASS lamp
-    // (a global: every key plays Kick 1), the two page tabs, and how many
-    // hits are sounding.
-    juce::Label padLabel_;
+    // The strip: HIT for the page's pad, the eight pads, BASS, TUNING, and
+    // how many hits are sounding.
     juce::TextButton hitButton_ { "HIT" };
+    std::unique_ptr<PadStrip> padStrip_;
     ui::LampButton bassButton_ { "Bass" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bassAttachment_;
-    juce::TextButton kickTab_ { "KICK" };
-    juce::TextButton snareTab_ { "SNARE" };
     juce::TextButton tuningTab_ { "TUNING" };
     juce::Label hitsLabel_;
 
-    std::unique_ptr<ControlPage> kickPage_;
-    std::unique_ptr<ControlPage> snarePage_;
+    std::unique_ptr<PlatePage> kickPage_;
+    std::unique_ptr<PlatePage> snarePage_;
     std::unique_ptr<ui::TuningPanel> tuningPage_;
+
+    // The pictures, owned by their pages; kept for the timer's refresh.
+    PitchView* pitchView_ { nullptr };
+    EnvelopeView* kickEnvelope_ { nullptr };
+    ModesView* modesView_ { nullptr };
+    WiresView* wiresView_ { nullptr };
+    EnvelopeView* snareEnvelope_ { nullptr };
+
     int currentPage_ { 0 };
 
-    /// The pad HIT strikes and the strip names: the page's drum, and the
-    /// last drum page's while the tuning page is up.
+    /// The pad HIT strikes and the strip highlights: the page's drum, and
+    /// the last drum page's while the tuning page is up.
     PadIndex currentPad_ { PadIndex::kick1 };
 
     int shownFactor_ { -1 };
@@ -152,6 +96,7 @@ private:
     int shownRender_ { -1 };
     int shownOversampling_ { -1 };
     int shownRateHz_ { 0 };
+
     bool shownToneOn_ { true };
     bool shownHarmonics_ { true };
     bool shownTail_ { true };
@@ -164,13 +109,11 @@ private:
     bool shownSnareGate_ { true };
     bool shownSnareKeyed_ { true };
 
-    // The live key tooltips are rebuilt only when what they describe moves.
+    // The live key tooltips and the Tune readouts are rebuilt only when
+    // what they describe moves.
     juce::String shownScale_;
     bool shownBass_ { false };
     int shownPadNote_ { -1 };
-
-    // The NOTE lamps' tooltips name what Tune snaps to: rebuilt when a Tune
-    // or a lamp moves (as tenths of a Hz and the two lamp bits, packed).
     juce::int64 shownSnapKey_ { -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IctusEditor)

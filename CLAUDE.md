@@ -521,8 +521,9 @@ Detail lives in `docs/PLUGIN-CONVENTIONS.md`; the short version:
 - UI is resizable and readable on a high-DPI display. Function before flourish;
   clear metering beats skeuomorphic decoration.
 - **The panel design is one thing, shared.** `shared/tezla-ui/.../PanelDesign.hpp`
-  holds the numbers, `HouseControls.hpp` the four functions that apply them, and
-  `LampButton.hpp` the switch. A new plugin gets the house look by installing
+  holds the numbers, `HouseControls.hpp` the four functions that apply them,
+  `LampButton.hpp` the switch, and `Plate.hpp` the control plate a group of
+  controls sits on (spine, heading, rule -- lifted from Sonitus for Ictus). A new plugin gets the house look by installing
   `ui::KnobLookAndFeel` and calling those; it does not restyle a knob by hand.
   **Never a tick box**, anywhere. Transpectus is the one exception to all of it,
   at the user's request: it is analysis windows rather than knobs on plates.

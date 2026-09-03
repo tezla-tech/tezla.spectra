@@ -748,6 +748,13 @@ void IctusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
 
     activeHits_.store (engine_.activeHitCount());
 
+    for (int pad = 0; pad < kPadCount; ++pad)
+    {
+        padHits_[pad].store (engine_.getPadHitCount (static_cast<PadIndex> (pad)), std::memory_order_relaxed);
+        padVelocity_[pad].store (static_cast<float> (engine_.getPadLastVelocity (static_cast<PadIndex> (pad))),
+                                 std::memory_order_relaxed);
+    }
+
     // Latency changes when the oversampling factor does, and a host that is
     // not told simply plays the drum late. CLAUDE.md section 2.2.
     const int latency = engine_.getLatencySamples();

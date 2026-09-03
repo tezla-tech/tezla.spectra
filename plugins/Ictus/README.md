@@ -91,6 +91,23 @@ with everything on retires at 0.60 s with **0 hits sounding**; the engine
 costs **15 ns a sample** with everything on at 192 kHz, and the whole kit —
 two kicks and three snares busy — **4.8–5.2 % of a core** at 48 kHz ×4.
 
+## The panel
+
+Each page is a set of plates, one per group, each with its own colour and a
+spine down its left edge: pitch or shell on the vermilion, then the wires or
+colour, the strike or click, the amplitude, and velocity. The control a group
+is about is drawn larger; the ones set once and left are drawn smaller.
+Four pictures are drawn from the knobs themselves, so they are right before
+the first hit: the kick's pitch trajectory on log axes with the tuning's
+notes as a ruler and the landed note named; the snare's three modes as bars
+with the drop's start ghosted; an envelope for each drum, computed with the
+engine's own envelope; and the wires' filter response from the engine's own
+filter. The strip along the top is the eight pads: each names its drum and
+its note (with the MIDI number, since DAWs disagree on octave names), lights
+when struck as bright as the hit was hard, and opens its page; HIT strikes
+whichever pad is selected. With Note snap lit, a Tune knob reads as the note
+it lands on.
+
 ## Bass mode and the tuning page
 
 **BASS**, in the strip, turns the instrument into a tuned sub-bass made of the
