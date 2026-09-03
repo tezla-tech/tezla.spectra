@@ -138,7 +138,91 @@ inline constexpr auto s1VelDrop    = "s1VelDrop";
 // ---- schema 4: note snap -- the drums in the key of the bass line ----------
 inline constexpr auto k1NoteSnap   = "k1NoteSnap";
 inline constexpr auto s1NoteSnap   = "s1NoteSnap";
+
+// ---- schema 5: the GHOST snare, on the second snare pad (E1) ---------------
+// The same 24 controls as Snare 1, plus LINK: lit, the ghost is the main
+// snare's drum -- Tune, Key, Note, Spread, Tone, Snappy and Shape follow it
+// -- and only the stroke is its own.
+inline constexpr auto g1Tune       = "g1Tune";
+inline constexpr auto g1FollowKey  = "g1FollowKey";
+inline constexpr auto g1NoteSnap   = "g1NoteSnap";
+inline constexpr auto g1Spread     = "g1Spread";
+inline constexpr auto g1Tone       = "g1Tone";
+inline constexpr auto g1Decay      = "g1Decay";
+inline constexpr auto g1Start      = "g1Start";
+inline constexpr auto g1Drop       = "g1Drop";
+inline constexpr auto g1Body       = "g1Body";
+inline constexpr auto g1Wires      = "g1Wires";
+inline constexpr auto g1Snappy     = "g1Snappy";
+inline constexpr auto g1Snap       = "g1Snap";
+inline constexpr auto g1WiresDecay = "g1WiresDecay";
+inline constexpr auto g1Rattle     = "g1Rattle";
+inline constexpr auto g1Crack      = "g1Crack";
+inline constexpr auto g1CrackTone  = "g1CrackTone";
+inline constexpr auto g1Noise      = "g1Noise";
+inline constexpr auto g1NoiseTime  = "g1NoiseTime";
+inline constexpr auto g1Level      = "g1Level";
+inline constexpr auto g1Gate       = "g1Gate";
+inline constexpr auto g1Release    = "g1Release";
+inline constexpr auto g1VelLevel   = "g1VelLevel";
+inline constexpr auto g1VelWires   = "g1VelWires";
+inline constexpr auto g1VelCrack   = "g1VelCrack";
+inline constexpr auto g1VelDrop    = "g1VelDrop";
+inline constexpr auto g1Link       = "g1Link";
 } // namespace ids
+
+/// One snare-engine pad's parameter IDs, so the snare page, its pictures and
+/// the parameter pull are written once and run for Snare 1 and the ghost
+/// alike. `link` is null for a pad that is nobody's ghost.
+struct SnareIds
+{
+    const char* tune;
+    const char* followKey;
+    const char* noteSnap;
+    const char* spread;
+    const char* tone;
+    const char* decay;
+    const char* start;
+    const char* drop;
+    const char* body;
+    const char* wires;
+    const char* snappy;
+    const char* snap;
+    const char* wiresDecay;
+    const char* rattle;
+    const char* crack;
+    const char* crackTone;
+    const char* noise;
+    const char* noiseTime;
+    const char* level;
+    const char* gate;
+    const char* release;
+    const char* velLevel;
+    const char* velWires;
+    const char* velCrack;
+    const char* velDrop;
+    const char* link;
+};
+
+inline constexpr SnareIds kSnare1Ids {
+    ids::s1Tune, ids::s1FollowKey, ids::s1NoteSnap, ids::s1Spread, ids::s1Tone,
+    ids::s1Decay, ids::s1Start, ids::s1Drop, ids::s1Body,
+    ids::s1Wires, ids::s1Snappy, ids::s1Snap, ids::s1WiresDecay, ids::s1Rattle,
+    ids::s1Crack, ids::s1CrackTone, ids::s1Noise, ids::s1NoiseTime,
+    ids::s1Level, ids::s1Gate, ids::s1Release,
+    ids::s1VelLevel, ids::s1VelWires, ids::s1VelCrack, ids::s1VelDrop,
+    nullptr
+};
+
+inline constexpr SnareIds kGhostIds {
+    ids::g1Tune, ids::g1FollowKey, ids::g1NoteSnap, ids::g1Spread, ids::g1Tone,
+    ids::g1Decay, ids::g1Start, ids::g1Drop, ids::g1Body,
+    ids::g1Wires, ids::g1Snappy, ids::g1Snap, ids::g1WiresDecay, ids::g1Rattle,
+    ids::g1Crack, ids::g1CrackTone, ids::g1Noise, ids::g1NoiseTime,
+    ids::g1Level, ids::g1Gate, ids::g1Release,
+    ids::g1VelLevel, ids::g1VelWires, ids::g1VelCrack, ids::g1VelDrop,
+    ids::g1Link
+};
 
 /// Choice lists. **APPEND-ONLY**: a choice parameter stores an index.
 namespace choices
@@ -156,6 +240,13 @@ static_assert (static_cast<int> (dsp::RenderOversampling::sameAsLive) == 0
             && static_cast<int> (dsp::RenderOversampling::Auto)       == 1
             && static_cast<int> (dsp::RenderOversampling::X8)         == 4,
                "the render option list is indexed straight into RenderOversampling");
+
+/// The snare-engine pad's IDs: the ghost's for the second snare pad, Snare
+/// 1's for anything else.
+[[nodiscard]] inline const SnareIds& snareIdsFor (PadIndex pad) noexcept
+{
+    return pad == PadIndex::snare2 ? kGhostIds : kSnare1Ids;
+}
 
 class IctusProcessor final : public juce::AudioProcessor,
                              public ui::TuningHost
@@ -235,6 +326,12 @@ public:
     /// The NOTE lamp's live tooltip: what this pad's Tune snaps to right now.
     [[nodiscard]] juce::String describeNoteSnap (PadIndex pad) const;
 
+    /// Whether the ghost is linked to the main snare's drum right now.
+    [[nodiscard]] bool isGhostLinked() const noexcept
+    {
+        return state_.getRawParameterValue (ids::g1Link)->load() > 0.5f;
+    }
+
     /// A frequency as the nearest note of the current tuning with its cents
     /// offset, "G#1 +3c" -- the readout under a Tune knob.
     [[nodiscard]] juce::String noteNameFor (double hz) const;
@@ -277,6 +374,7 @@ private:
     void processInternal (juce::AudioBuffer<FloatType>& buffer, juce::MidiBuffer& midi);
 
     void pullParameters();
+    void pullSnare (SnareSettings& settings, const SnareIds& ids);
     void handleMidi (const juce::MidiMessage& message);
 
     void publishTuning();

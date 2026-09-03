@@ -61,6 +61,14 @@ double DrumDisplay::read (const char* id) const
     return 0.0;
 }
 
+double DrumDisplay::readLinked (const SnareIds& ids, const char* own, const char* main) const
+{
+    if (ids.link != nullptr && read (ids.link) > 0.5)
+        return read (main);
+
+    return read (own);
+}
+
 void DrumDisplay::refresh()
 {
     scratch_.clear();
@@ -254,8 +262,9 @@ void PitchView::paint (juce::Graphics& g)
 // ModesView -- the snare's shell
 // ---------------------------------------------------------------------------
 
-ModesView::ModesView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint)
-    : DrumDisplay (processor, palette, tint)
+ModesView::ModesView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint,
+                      const SnareIds& ids, PadIndex pad)
+    : DrumDisplay (processor, palette, tint), ids_ (ids), pad_ (pad)
 {
     setTooltip ("The shell's three modes as bars on a log-frequency axis, their height "
                 "how hard each is struck (Tone), the faint bars to their right where the "
@@ -266,29 +275,34 @@ ModesView::ModesView (IctusProcessor& processor, ui::Palette palette, juce::Colo
 
 void ModesView::gather (std::vector<double>& inputs)
 {
-    inputs.push_back (read (ids::s1Tune));
-    inputs.push_back (read (ids::s1FollowKey));
-    inputs.push_back (read (ids::s1NoteSnap));
-    inputs.push_back (read (ids::s1Spread));
-    inputs.push_back (read (ids::s1Tone));
-    inputs.push_back (read (ids::s1Start));
+    inputs.push_back (readLinked (ids_, ids_.tune, kSnare1Ids.tune));
+    inputs.push_back (readLinked (ids_, ids_.followKey, kSnare1Ids.followKey));
+    inputs.push_back (readLinked (ids_, ids_.noteSnap, kSnare1Ids.noteSnap));
+    inputs.push_back (readLinked (ids_, ids_.spread, kSnare1Ids.spread));
+    inputs.push_back (readLinked (ids_, ids_.tone, kSnare1Ids.tone));
+    inputs.push_back (read (ids_.start));
     inputs.push_back (processor_.getConcertPitch());
     inputs.push_back (static_cast<double> (processor_.getScaleName().hashCode()));
-    inputs.push_back (processor_.getPadNote (PadIndex::snare1));
+    inputs.push_back (processor_.getPadNote (pad_));
+
+    // The link itself: a ghost whose own settings equal the main snare's
+    // would otherwise see no change when LINK moves, and keep saying whose
+    // drum it is.
+    inputs.push_back (ids_.link != nullptr ? read (ids_.link) : 0.0);
 }
 
 void ModesView::update()
 {
-    const double tune = read (ids::s1Tune);
-    keyed_ = read (ids::s1FollowKey) > 0.5;
-    const bool snapped = read (ids::s1NoteSnap) > 0.5;
+    const double tune = readLinked (ids_, ids_.tune, kSnare1Ids.tune);
+    keyed_ = readLinked (ids_, ids_.followKey, kSnare1Ids.followKey) > 0.5;
+    const bool snapped = readLinked (ids_, ids_.noteSnap, kSnare1Ids.noteSnap) > 0.5;
 
-    fundamental_ = keyed_ ? processor_.previewFrequencyFor (processor_.getPadNote (PadIndex::snare1))
+    fundamental_ = keyed_ ? processor_.previewFrequencyFor (processor_.getPadNote (pad_))
                  : snapped ? processor_.previewSnappedHz (tune)
                            : tune;
 
-    const double spread = 0.01 * read (ids::s1Spread);
-    const double tone = 0.01 * read (ids::s1Tone);
+    const double spread = 0.01 * readLinked (ids_, ids_.spread, kSnare1Ids.spread);
+    const double tone = 0.01 * readLinked (ids_, ids_.tone, kSnare1Ids.tone);
 
     for (int mode = 0; mode < 3; ++mode)
     {
@@ -296,13 +310,16 @@ void ModesView::update()
         amounts_[mode] = mode == 0 ? 1.0 : tone;
     }
 
-    startMultiplier_ = std::exp2 (read (ids::s1Start) / 12.0);
+    startMultiplier_ = std::exp2 (read (ids_.start) / 12.0);
 
     caption_ = hzText (fundamental_) + "  " + processor_.noteNameFor (fundamental_)
              + "  ·  " + juce::String (fundamental_ * ratios_[1], 0) + " / "
              + juce::String (fundamental_ * ratios_[2], 0) + " Hz";
-    captionRight_ = read (ids::s1Start) > 0.0 ? "from +" + juce::String (read (ids::s1Start), 1) + " st"
-                                              : juce::String ("no drop");
+    captionRight_ = read (ids_.start) > 0.0 ? "from +" + juce::String (read (ids_.start), 1) + " st"
+                                            : juce::String ("no drop");
+
+    if (ids_.link != nullptr && read (ids_.link) > 0.5)
+        caption_ = "SNARE's drum: " + caption_;
 }
 
 void ModesView::paint (juce::Graphics& g)
@@ -365,8 +382,9 @@ void ModesView::paint (juce::Graphics& g)
 // EnvelopeView -- the hit's amplitude against time
 // ---------------------------------------------------------------------------
 
-EnvelopeView::EnvelopeView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint, Drum drum)
-    : DrumDisplay (processor, palette, tint), drum_ (drum)
+EnvelopeView::EnvelopeView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint, Drum drum,
+                            const SnareIds& snare)
+    : DrumDisplay (processor, palette, tint), snare_ (snare), drum_ (drum)
 {
     setTooltip (drum == Drum::kick
         ? "The kick's amplitude against time: Attack, Hold and Decay under Shape, "
@@ -389,9 +407,12 @@ void EnvelopeView::gather (std::vector<double>& inputs)
     }
     else
     {
-        for (const char* id : { ids::s1Decay, ids::s1Tone, ids::s1Wires, ids::s1WiresDecay,
-                                ids::s1Rattle, ids::s1Body, ids::s1Gate, ids::s1Release })
+        for (const char* id : { snare_.decay, snare_.wires, snare_.wiresDecay, snare_.rattle,
+                                snare_.body, snare_.gate, snare_.release })
             inputs.push_back (read (id));
+
+        inputs.push_back (readLinked (snare_, snare_.tone, kSnare1Ids.tone));
+        inputs.push_back (snare_.link != nullptr ? read (snare_.link) : 0.0);
     }
 }
 
@@ -470,12 +491,12 @@ void EnvelopeView::update()
     }
     else
     {
-        const double decay = 0.001 * read (ids::s1Decay);
-        const double tone = 0.01 * read (ids::s1Tone);
-        const double wires = 0.01 * read (ids::s1Wires);
-        const double wiresDecay = 0.001 * read (ids::s1WiresDecay);
-        const double rattle = 0.01 * read (ids::s1Rattle);
-        const double body = 0.01 * read (ids::s1Body);
+        const double decay = 0.001 * read (snare_.decay);
+        const double tone = 0.01 * readLinked (snare_, snare_.tone, kSnare1Ids.tone);
+        const double wires = 0.01 * read (snare_.wires);
+        const double wiresDecay = 0.001 * read (snare_.wiresDecay);
+        const double rattle = 0.01 * read (snare_.rattle);
+        const double body = 0.01 * read (snare_.body);
 
         seconds_ = juce::jmax (0.05, 1.1 * juce::jmax (decay, wires > 0.0 ? wiresDecay : 0.0));
 
@@ -538,8 +559,8 @@ void EnvelopeView::update()
                  + (rattle > 0.0 ? ", rattle " + juce::String (juce::roundToInt (100.0 * rattle)) + "%" : juce::String());
     }
 
-    const bool gate = read (drum_ == Drum::kick ? ids::k1Gate : ids::s1Gate) > 0.5;
-    const double release = 0.001 * read (drum_ == Drum::kick ? ids::k1Release : ids::s1Release);
+    const bool gate = read (drum_ == Drum::kick ? ids::k1Gate : snare_.gate) > 0.5;
+    const double release = 0.001 * read (drum_ == Drum::kick ? ids::k1Release : snare_.release);
     captionRight_ = gate ? "gate, release " + (release > 0.0 ? msText (release) : juce::String ("1 ms"))
                          : juce::String ("one-shot");
 }
@@ -606,8 +627,8 @@ void EnvelopeView::paint (juce::Graphics& g)
 // WiresView -- the wires' filter
 // ---------------------------------------------------------------------------
 
-WiresView::WiresView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint)
-    : DrumDisplay (processor, palette, tint)
+WiresView::WiresView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint, const SnareIds& ids)
+    : DrumDisplay (processor, palette, tint), ids_ (ids)
 {
     setTooltip ("The wires' filter response, 200 Hz to 20 kHz: a high-pass above Snappy at "
                 "Shape 0, a band-pass at it at Shape 100, with the engine's own filter "
@@ -624,16 +645,17 @@ WiresView::WiresView (IctusProcessor& processor, ui::Palette palette, juce::Colo
 
 void WiresView::gather (std::vector<double>& inputs)
 {
-    inputs.push_back (read (ids::s1Snappy));
-    inputs.push_back (read (ids::s1Snap));
-    inputs.push_back (read (ids::s1Wires));
+    inputs.push_back (readLinked (ids_, ids_.snappy, kSnare1Ids.snappy));
+    inputs.push_back (readLinked (ids_, ids_.snap, kSnare1Ids.snap));
+    inputs.push_back (read (ids_.wires));
+    inputs.push_back (ids_.link != nullptr ? read (ids_.link) : 0.0);
 }
 
 void WiresView::update()
 {
-    const double snappy = read (ids::s1Snappy);
-    const double snap = 0.01 * read (ids::s1Snap);
-    wiresOn_ = read (ids::s1Wires) > 0.0;
+    const double snappy = readLinked (ids_, ids_.snappy, kSnare1Ids.snappy);
+    const double snap = 0.01 * readLinked (ids_, ids_.snap, kSnare1Ids.snap);
+    wiresOn_ = read (ids_.wires) > 0.0;
 
     filter_.setCutoffHz (snappy);
     filter_.setMorph (-0.5 * snap);

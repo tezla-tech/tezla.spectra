@@ -18,18 +18,20 @@ humanise and velocity, a sample layer, and per-pad outputs for FL Studio's
 *Auto map outputs*. The plan, with every source and every measured number,
 is [`PLAN.md`](PLAN.md).
 
-**What ships today (phase I3): the kick and the snare.** Kick 1 on General
-MIDI note 36 (C1) and Snare 1 on 38 (D1), each with its page; the same snare
-engine also plays the Perc pad on 37 as a tom and Snare 2 on 40, on their
-defaults until their pages arrive; a HIT button that strikes the page's pad
-so a drum can be auditioned without a keyboard; five presets; the shared
-header with output trim, oversampling and render quality; and, from the
-first round on the rig, **Bass mode** (every key plays the kick at the key's
-pitch), a **Gate** with a **Release** on both drums, and the shared **tuning
-page** behind them. The hats, the clap, the punch chain, humanise, the
-sample layer and the per-pad outputs are declared in the engine and arrive
-phase by phase; nothing already saved will move when they do (parameters
-are append-only, CLAUDE.md §8).
+**What ships today (phase I3 and the rounds after it): the kick, the snare
+and the ghost snare.** Kick 1 on General MIDI note 36 (C1), Snare 1 on 38
+(D1) and the **ghost snare** on 40 (E1), each with its page; the same snare
+engine also plays the Perc pad on 37 as a tom on its defaults until its page
+arrives; a pad strip that lights on every hit and opens a pad's page; a HIT
+button that strikes the selected pad so a drum can be auditioned without a
+keyboard; five presets; the shared header with output trim, oversampling and
+render quality; **Bass mode** (every key plays the kick at the key's pitch),
+**Note snap** (a drum's Tune lands on the tuning's nearest note, for tuning
+drums to a bass line), a **Gate** with a **Release** on every drum, and the
+shared **tuning page** behind them all. The hats, the clap, the punch chain,
+humanise, the sample layer and the per-pad outputs are declared in the
+engine and arrive phase by phase; nothing already saved will move when they
+do (parameters are append-only, CLAUDE.md §8).
 
 ## The kick
 
@@ -90,6 +92,20 @@ for bit** (a leak of one part in 10¹² is caught), at Rattle 1 the wires start
 with everything on retires at 0.60 s with **0 hits sounding**; the engine
 costs **15 ns a sample** with everything on at 192 kHz, and the whole kit —
 two kicks and three snares busy — **4.8–5.2 % of a core** at 48 kHz ×4.
+
+## The ghost snare
+
+In a break the ghost notes are the quiet hits between the backbeats, the
+drummer's left hand, and they are what gives a roller its shuffle. In
+programmed drum and bass they are usually a separate, quieter, shorter snare
+placed on the sixteenths around the main hit — so here the ghost is a pad of
+its own, on E1 by default, with the full snare engine and its own page.
+**LINK**, lit by default, makes it the main snare's drum: Tune, Follow key,
+Note snap, Spread, Tone, Snappy and Shape follow SNARE and grey on the ghost's
+page, and only the stroke is the ghost's — Decay, Start, Drop, Body, Wires,
+Wires decay, Rattle, the crack, Level, Gate and velocity. Its defaults are a
+ghost's: shorter, mostly wire, well under the main hit. Dark, it is any
+second snare you like. The three kits each carry a ghost.
 
 ## The panel
 

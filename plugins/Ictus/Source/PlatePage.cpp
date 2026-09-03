@@ -71,6 +71,7 @@ void PlatePage::addKnob (const char* parameterId, const juce::String& name,
     knob->tint = plates_.back().tint;
     knob->emphasis = emphasis;
 
+    knob->slider.setComponentID (parameterId);
     knob->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     ui::styleKnob (knob->slider, palette_, knob->tint, emphasis);
     ui::resetsToDefault (knob->slider, state_, parameterId);
@@ -100,6 +101,7 @@ void PlatePage::addLamp (const char* parameterId, const juce::String& name,
     lamp->tint = plates_.back().tint;
 
     lamp->button = std::make_unique<ui::LampButton> (legend);
+    lamp->button->setComponentID (parameterId);
     lamp->button->setClickingTogglesState (true);
     lamp->button->setTooltip (tooltip);
     addAndMakeVisible (*lamp->button);

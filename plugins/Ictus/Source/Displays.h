@@ -57,6 +57,11 @@ protected:
 
     [[nodiscard]] double read (const char* id) const;
 
+    /// A snare-engine pad's value for `own`, or the main snare's for the
+    /// same control when the pad is a ghost whose LINK is lit -- the drum
+    /// identity the ghost borrows, so the picture shows what will sound.
+    [[nodiscard]] double readLinked (const SnareIds& ids, const char* own, const char* main) const;
+
     /// The plot area inside the frame, and the caption's line under it.
     [[nodiscard]] juce::Rectangle<float> plotArea() const;
     void paintFrame (juce::Graphics& g);
@@ -98,7 +103,8 @@ private:
 class ModesView final : public DrumDisplay
 {
 public:
-    ModesView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint);
+    ModesView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint,
+               const SnareIds& ids, PadIndex pad);
 
     void paint (juce::Graphics&) override;
 
@@ -106,6 +112,8 @@ private:
     void gather (std::vector<double>& inputs) override;
     void update() override;
 
+    const SnareIds& ids_;
+    PadIndex pad_;
     double fundamental_ { 180.0 };
     double ratios_[3] { 1.0, 1.6, 2.2 };
     double amounts_[3] { 1.0, 0.6, 0.6 };
@@ -118,13 +126,17 @@ class EnvelopeView final : public DrumDisplay
 public:
     enum class Drum { kick, snare };
 
-    EnvelopeView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint, Drum drum);
+    /// `snare` names the snare-engine pad's IDs; ignored for the kick.
+    EnvelopeView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint, Drum drum,
+                  const SnareIds& snare = kSnare1Ids);
 
     void paint (juce::Graphics&) override;
 
 private:
     void gather (std::vector<double>& inputs) override;
     void update() override;
+
+    const SnareIds& snare_;
 
     struct Trace
     {
@@ -145,13 +157,15 @@ private:
 class WiresView final : public DrumDisplay
 {
 public:
-    WiresView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint);
+    WiresView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint, const SnareIds& ids);
 
     void paint (juce::Graphics&) override;
 
 private:
     void gather (std::vector<double>& inputs) override;
     void update() override;
+
+    const SnareIds& ids_;
 
     static constexpr double kLowHz = 200.0;
     static constexpr double kHighHz = 20000.0;
