@@ -463,6 +463,9 @@ rate. Manual override is always available if you want to spend or save CPU.
 
 ## Documentation
 
+- [`docs/WHATS-NEW.md`](docs/WHATS-NEW.md) — a player's guide to the recently
+  added controls: what each is for, how to get a sound out of it, and the
+  technique and era it comes from
 - [`docs/BUILD.md`](docs/BUILD.md) — toolchain setup and build guide (Windows)
 - [`docs/BUILD-MACOS.md`](docs/BUILD-MACOS.md) — the same for macOS, plus AU and Gatekeeper
 - [`docs/CI.md`](docs/CI.md) — what continuous integration builds and where to get it

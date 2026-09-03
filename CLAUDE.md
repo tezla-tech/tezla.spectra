@@ -184,6 +184,7 @@ tezla.spectra/
     ├── BUILD.md              # toolchain setup + build guide (Windows)
     ├── BUILD-MACOS.md        # the same for macOS, plus AU and Gatekeeper
     ├── CI.md                 # what CI builds and where the binaries are
+    ├── WHATS-NEW.md          # player's guide to new controls: use, and the era
     ├── DSP-REFERENCES.md     # sources, papers, licences
     └── PLUGIN-CONVENTIONS.md # parameters, presets, UI, versioning
 ```
@@ -283,7 +284,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **1089 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **1104 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -829,6 +830,11 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   works** — the user's patch was a slow pitch-down envelope on oscillator A
   under the glide, long release, slow amplitude attack: "sounds real horror
   80s". Stack's other modes, Tract and Sag are still unheard.
+  **Phase 6 is complete** and has no plan file of its own — it is four controls
+  asked for directly on 2026-09-03: the three Stack items phase 5 deferred
+  (Origin, Shear, Phase pan, all now struck through in `docs/ROADMAP.md` §11)
+  and the filter's Sing. Five presets appended, *Slow Descent* being the user's
+  own patch written down. **None of the four has been heard on the rig.**
   Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
   positions); **Membrana is complete through MB7** — the microphone stage

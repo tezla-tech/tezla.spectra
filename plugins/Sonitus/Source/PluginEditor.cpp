@@ -3558,6 +3558,7 @@ void SonitusEditor::buildPages()
                                    const char* levelId, const char* unisonId, const char* detuneId,
                                    const char* spreadId, const char* driftId,
                                    const char* stackId, const char* stackStepId,
+                                   const char* stackOriginId, const char* shepardPanId,
                                    const juce::String& which)
     {
         page.addChoice (shapeId, "Shape",
@@ -3654,17 +3655,49 @@ void SonitusEditor::buildPages()
             "with nothing to resolve to.\n\n"
             "A copy whose key falls off the end of the keyboard goes silent rather than being "
             "clamped onto a pitch another copy is already playing.");
+
+        page.addChoice (stackOriginId, "Origin",
+            "**Which side of the played note the stack builds on.** Centre is what it has always "
+            "done: with five copies at Octaves you get two below, the note, and two above. Up "
+            "puts all four above it, Down all four below.\n\n"
+            "The played note is never one of the things that moves -- exactly one copy sits on "
+            "it at every count and every origin -- so this changes the *weight* of the stack "
+            "rather than its tuning. Up is a chord that opens above the bass and keeps the low "
+            "end clean for a sub; Down is the same chord thickened underneath, which on a lead "
+            "is the difference between bright and enormous.\n\n"
+            "Costs nothing: the copies are placed once when something changes and then sit "
+            "still, exactly as they did before.");
+
+        page.addToggle (shepardPanId, "Phase pan",
+            "**Shepard mode only**, and greyed elsewhere. Pans each copy by *where it is in its "
+            "climb* rather than by its rank -- a copy fades in at one edge, crosses the image as "
+            "it rises, and fades out at the other.\n\n"
+            "**What you hear is the opposite of what that sounds like**, and it is the reason to "
+            "turn it on. Off, a copy's position is fixed while its pitch climbs through it, so "
+            "the two are out of step and the picture churns: measured, the 60-130 Hz band swings "
+            "from -0.16 to -0.52 to +0.50 across five seconds of a slow rise. On, position and "
+            "pitch move together, and because the copies are evenly spread around the cycle one "
+            "always arrives where another leaves -- so the *image* stops moving and becomes a "
+            "**fixed fan across the field, low at one side and high at the other**. The same "
+            "measurement reads -0.182, -0.182, -0.182.\n\n"
+            "So: off is a rise that wanders about the stereo field; on is a rise that climbs "
+            "through a stationary picture, which is much easier to sit under a mix and much more "
+            "like the illusion the pitch is already doing.\n\n"
+            "**Spread still sets how wide the fan is**, so at Spread 0 this does nothing "
+            "audible. It costs nothing beyond the Shepard mode's own cost.");
     };
 
-    osc->addHeading ("OSCILLATOR A -- the sync master", 6);
+    osc->addHeading ("OSCILLATOR A -- the sync master", 8);
     addOscillator (*osc, ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
                    ids::morphA, ids::levelA, ids::unisonA, ids::detuneA, ids::spreadA,
-                   ids::driftA, ids::stackA, ids::stackStepA, "A");
+                   ids::driftA, ids::stackA, ids::stackStepA,
+                   ids::stackOriginA, ids::shepardPanA, "A");
 
-    osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target", 6);
+    osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target", 8);
     addOscillator (*osc, ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::morphB, ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB,
-                   ids::driftB, ids::stackB, ids::stackStepB, "B");
+                   ids::driftB, ids::stackB, ids::stackStepB,
+                   ids::stackOriginB, ids::shepardPanB, "B");
 
     osc->addHeading ("SUB, RING AND FOLD", 5);
 
@@ -3692,7 +3725,7 @@ void SonitusEditor::buildPages()
         "out. Antialiased, and at full fold it is the widest-band thing in the instrument: this "
         "is the one control that genuinely wants x8 oversampling.");
 
-    osc->addHeading ("SHEPARD -- the endless rise", 3, true);
+    osc->addHeading ("SHEPARD -- the endless rise", 4, true);
 
     osc->addKnob (ids::shepardRate, "Speed",
         "How fast the glissando climbs, in **octaves per second**, and the sign is the "
@@ -3712,6 +3745,19 @@ void SonitusEditor::buildPages()
 
     osc->addChoice (ids::shepardDiv, "Division",
         "How long one octave of climb takes, in note values. Greyed unless Sync is on.");
+
+    osc->addKnob (ids::shepardShear, "Shear",
+        "**How far oscillator B's climb runs against A's.** At 0 the two share one phase "
+        "exactly, which is what they have always done -- both stacks rise together and stay "
+        "locked. At 100% B falls at exactly the rate A rises. Halfway, B stands still while A "
+        "climbs.\n\n"
+        "What you hear is the two stacks passing *through* each other. Because both are endless, "
+        "they never finish passing: partials converge, beat, cross and separate, and the beat "
+        "rate is set by how far apart the two speeds are rather than by any tuning. It is the "
+        "one way to get a rise that is unmistakably two things rather than one thick one.\n\n"
+        "Needs both oscillators set to Shepard and both audible; with one stack silent it does "
+        "nothing. Costs nothing -- it is a second accumulator advanced by an arithmetic "
+        "fraction of the first.");
 
     osc->addHeading ("SYNC AND PM", 2, true);
 
@@ -3762,7 +3808,7 @@ void SonitusEditor::buildPages()
 
     auto filter = std::make_unique<ControlPage> (state, paletteForPage (kFilterPage));
 
-    filter->addHeading ("FILTER -- zero-delay state variable, drive inside the loop", 4);
+    filter->addHeading ("FILTER -- zero-delay state variable, drive inside the loop", 5);
 
     filter->addChoice (ids::filterMode, "Mode",
         "Lowpass is the reese's shape. Bandpass throws the fundamental away and leaves the growl. "
@@ -3799,6 +3845,28 @@ void SonitusEditor::buildPages()
         "**Notch is not on this axis and ignores it.** Notch is the sum of the two ends rather "
         "than a point between them, and putting it on a slider between lowpass and highpass would "
         "be inventing a shape nothing makes.");
+
+    filter->addKnob (ids::filterSing, "Sing",
+        "**Drives the filter past its own damping until it oscillates on its own** -- the thing "
+        "a real analogue filter does when you turn the resonance past the end, made a control of "
+        "its own so the resonance still means what it meant.\n\n"
+        "Above the point where it cancels the damping, the filter is a sine oscillator at the "
+        "Cutoff frequency, and everything that points at Cutoff now points at a pitch: key "
+        "track makes it playable, an envelope makes it howl up out of a note and settle back, "
+        "the FM knob makes it scream. The oscillators do not have to be doing anything at all -- "
+        "with both levels at zero the filter is the only sound, which is a whole second "
+        "instrument hiding in this one.\n\n"
+        "**Where it bites depends on Resonance**, because it has to cancel that damping before "
+        "it can go past it. At full Resonance it sings in the first percent of the travel; at "
+        "Resonance 0 it takes almost all of it. Turn Resonance up first, then use this for how "
+        "*fast* the tone arrives -- nearly a second at the bottom, a twentieth at the top.\n\n"
+        "**The level is fixed and the pitch is the cutoff**, at every session rate: the loop "
+        "settles at -1.9 dBFS to six figures and lands on the corner frequency to 0.0000%, "
+        "measured at 44.1, 48, 96 and 192 kHz. It is not a stuck note -- the filter sits before "
+        "the amplifier, so the envelope silences it and the voice retires like any other. "
+        "0 is bit-exactly the filter you already have.\n\n"
+        "Costs one square root a sample **only while it is singing**; a patch that leaves it at "
+        "zero pays a single comparison.");
 
     filter->addKnob (ids::filterTrack, "Key track",
         "How far the cutoff follows the played note. At 100% a note two octaves up gets a cutoff "
@@ -4323,6 +4391,22 @@ void SonitusEditor::updateForSwitches()
         osc->setControlEnabled (ids::shepardRate, sliding);
         osc->setControlEnabled (ids::shepardSync, sliding);
         osc->setControlEnabled (ids::shepardDiv, sliding && synced);
+
+        // Shear needs *both* stacks sliding to mean anything -- it is the
+        // distance between two climbs, and one climb has no distance from
+        // itself.
+        osc->setControlEnabled (ids::shepardShear,
+                                modeA == StackMode::shepard && modeB == StackMode::shepard);
+
+        // Phase panning is per oscillator and reads that oscillator's own mode.
+        osc->setControlEnabled (ids::shepardPanA, modeA == StackMode::shepard);
+        osc->setControlEnabled (ids::shepardPanB, modeB == StackMode::shepard);
+
+        // Origin is the one new stack control that means something in every
+        // mode *except* the one that shipped: Detune is symmetric by
+        // definition, so there is no side to build on.
+        osc->setControlEnabled (ids::stackOriginA, modeA != StackMode::detune);
+        osc->setControlEnabled (ids::stackOriginB, modeB != StackMode::detune);
     }
 
     if (combChanged && mangle != nullptr)

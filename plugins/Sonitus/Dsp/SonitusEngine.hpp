@@ -368,6 +368,15 @@ struct EngineParameters
     bool shepardSync { false };
     int shepardDivision { dsp::defaultDivision };
 
+    /// **Shear** -- oscillator B's glide rate as a share of A's, 0 to 1.
+    ///
+    /// 0 locks them together and is what phase 5 shipped. The multiplier is
+    /// `1 - 2 * shear`, so half travel holds B still while A climbs and full
+    /// travel has B falling at A's speed -- two glides passing through each
+    /// other, which is the effect this exists for. Neutral at 0: the
+    /// multiplier is exactly 1.0 and B's accumulator tracks A's bit for bit.
+    double shepardShear { 0.0 };
+
     /// **Sag** -- how deep the machine's one shared instability runs, 0 to 1.
     ///
     /// The complement of the two drifts already here, both of which are
@@ -475,6 +484,10 @@ public:
     /// The Shepard glissando's accumulator, in octaves travelled. For the test
     /// that pins the wrap, and for a display.
     [[nodiscard]] double getShepardOctaves() const noexcept { return shepardOctaves_; }
+
+    /// Oscillator B's, which the shear separates from A's. For the test that
+    /// pins them together at the default.
+    [[nodiscard]] double getShepardOctavesB() const noexcept { return shepardOctavesB_; }
 
     /// Where the machine's temperature has got to, in [-1, 1]. For the panel
     /// and for the tests that pin it.
@@ -706,6 +719,11 @@ private:
     /// divisible by every copy count the bank allows, which makes the wrap an
     /// exact whole number of turns at any count rather than a small jump.
     double shepardOctaves_ { 0.0 };
+
+    /// B's, advanced at A's rate times the shear multiplier. Its own
+    /// accumulator rather than A's scaled at read time, so moving the shear
+    /// bends B's glide from where it is instead of jumping it.
+    double shepardOctavesB_ { 0.0 };
 
     /// **The machine's temperature.** One walk for the whole instrument, on the
     /// control grid, never restarted by a note -- a key going down does not

@@ -91,6 +91,23 @@ enum class StackMode
     count
 };
 
+/// Which way the ranks run from the played note. **Append-only**, like every
+/// choice list here.
+///
+/// `centre` is what phase 5 shipped and is the default. The other two exist
+/// because a symmetric octave stack puts a copy three octaves *below* the note
+/// -- at A2 that is 13.75 Hz, a rattle rather than a pitch -- and because an
+/// organ registration is normally upward. Every origin keeps **exactly one
+/// copy at rank 0**, so none of them detunes the instrument.
+enum class StackOrigin
+{
+    centre = 0,   ///< -(N-1)/2 .. +(N-1)/2, the symmetric spread
+    up,           ///< 0 .. N-1, everything above the played note
+    down,         ///< -(N-1) .. 0, everything below it
+
+    count
+};
+
 /// The maximum copies any stack can have -- the bank's own ceiling.
 inline constexpr int kMaxStackCopies = dsp::UnisonBank::kMaxVoices;
 
@@ -133,22 +150,35 @@ inline constexpr double kShepardWrapOctaves = 420.0;
         || mode == StackMode::diminished;
 }
 
-/// Copy `index`'s rank in a stack of `count`. Symmetric, and 0 for exactly one
-/// copy at every count -- see the header.
-[[nodiscard]] constexpr int stackRank (int index, int count) noexcept
+/// Copy `index`'s rank in a stack of `count`, from `origin`.
+///
+/// Exactly one copy lands on 0 whichever origin is chosen, which is the rule
+/// that keeps Stack from ever detuning the instrument -- see the header.
+[[nodiscard]] constexpr int stackRank (int index, int count,
+                                       StackOrigin origin = StackOrigin::centre) noexcept
 {
-    return index - (std::max (count, 1) - 1) / 2;
+    const int last = std::max (count, 1) - 1;
+
+    switch (origin)
+    {
+        case StackOrigin::up:     return index;
+        case StackOrigin::down:   return index - last;
+
+        case StackOrigin::centre:
+        case StackOrigin::count:
+        default:                  return index - last / 2;
+    }
 }
 
 /// Fills a fixed-interval mode's offsets. Every copy sounds, so every gain is 1.
-inline void fixedIntervalRanks (StackMode mode, int count,
+inline void fixedIntervalRanks (StackMode mode, int count, StackOrigin origin,
                                 double* cents, double* gains) noexcept
 {
     const double interval = stackIntervalCents (mode);
 
     for (int i = 0; i < count; ++i)
     {
-        cents[i] = interval * static_cast<double> (stackRank (i, count));
+        cents[i] = interval * static_cast<double> (stackRank (i, count, origin));
         gains[i] = 1.0;
     }
 }
@@ -159,7 +189,7 @@ inline void fixedIntervalRanks (StackMode mode, int count,
 /// gets gain 0 -- `Tuning::frequencyFor` returns 0 Hz for both and there is no
 /// honest pitch to give that copy.
 inline void scaleRanks (const dsp::Tuning& tuning, int note, int step, int count,
-                        double* cents, double* gains) noexcept
+                        StackOrigin origin, double* cents, double* gains) noexcept
 {
     const double rootHz = tuning.frequencyFor (note);
 
@@ -168,7 +198,7 @@ inline void scaleRanks (const dsp::Tuning& tuning, int note, int step, int count
         cents[i] = 0.0;
         gains[i] = 1.0;
 
-        const int rank = stackRank (i, count);
+        const int rank = stackRank (i, count, origin);
 
         if (rank == 0 || rootHz <= 0.0)
             continue;
@@ -191,7 +221,7 @@ inline void scaleRanks (const dsp::Tuning& tuning, int note, int step, int count
 /// `shepardOctaves` is the engine's accumulator in octaves travelled; see the
 /// header for why it is divided by the copy count here and not there.
 inline void stackRanks (StackMode mode, int count, int step, double shepardOctaves,
-                        const dsp::Tuning& tuning, int note,
+                        StackOrigin origin, const dsp::Tuning& tuning, int note,
                         double* cents, double* gains) noexcept
 {
     const int copies = std::clamp (count, 1, kMaxStackCopies);
@@ -199,7 +229,7 @@ inline void stackRanks (StackMode mode, int count, int step, double shepardOctav
     switch (mode)
     {
         case StackMode::scale:
-            scaleRanks (tuning, note, step, copies, cents, gains);
+            scaleRanks (tuning, note, step, copies, origin, cents, gains);
             break;
 
         case StackMode::shepard:
@@ -212,7 +242,7 @@ inline void stackRanks (StackMode mode, int count, int step, double shepardOctav
         case StackMode::tritones:
         case StackMode::cluster:
         case StackMode::diminished:
-            fixedIntervalRanks (mode, copies, cents, gains);
+            fixedIntervalRanks (mode, copies, origin, cents, gains);
             break;
 
         // Named rather than defaulted, so a mode appended to the enum and
@@ -222,6 +252,48 @@ inline void stackRanks (StackMode mode, int count, int step, double shepardOctav
         case StackMode::count:
         default:
             break;
+    }
+}
+
+/// Where a sliding stack's copies sit across the field, from their place on the
+/// ramp rather than from their rank.
+///
+/// A Shepard copy's rank says nothing about where it currently *is*: rank is
+/// fixed while pitch climbs through it, so panning by rank puts a copy's
+/// position and its pitch out of step, and the picture churns at the glide
+/// rate. Panning by phase ties the two together, and the ensemble result is
+/// the interesting one -- **a stationary spectral fan**. Measured, five copies
+/// at Spread 1, five seconds of 0.5 octaves per second:
+///
+///     band Hz       by rank: 1 s / 3 s / 5 s      by phase: 1 s / 3 s / 5 s
+///      60-130        -0.159  -0.524  +0.497        -0.182  -0.182  -0.182
+///     260-520        +0.000  -0.253  -0.961        +0.013  +0.013  +0.013
+///     1040-2080      +1.000  +0.236  +0.001        +0.747  +0.746  +0.747
+///
+/// -- so by phase, *where a frequency comes from* does not move at all, and it
+/// spreads monotonically from low on one side to high on the other. Each copy
+/// still crosses the field once per turn; it is only the ensemble that stands
+/// still, because phase sets a copy's pitch, its window gain and its position
+/// together, so one copy always arrives where another is leaving.
+///
+/// The jump at the wrap is inaudible for the same reason the frequency jump
+/// is: the window is exactly zero there.
+inline void shepardPans (double shepardOctaves, int count, double* pans) noexcept
+{
+    const int copies = std::clamp (count, 1, kMaxStackCopies);
+    const double span = static_cast<double> (copies);
+    const double phase = shepardOctaves / span;
+
+    for (int k = 0; k < copies; ++k)
+    {
+        const double raw = phase + static_cast<double> (k) / span;
+
+        double u = raw - std::floor (raw);
+
+        if (! (u < 1.0))
+            u = 0.0;
+
+        pans[k] = 2.0 * u - 1.0;
     }
 }
 
