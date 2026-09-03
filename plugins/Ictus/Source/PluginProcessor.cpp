@@ -32,7 +32,10 @@ constexpr int kSchemaV3 = 3;
 constexpr int kSchemaV4 = 4;
 /// Schema 5: the ghost snare on the second snare pad, with its LINK.
 constexpr int kSchemaV5 = 5;
-constexpr int kStateSchemaVersion = kSchemaV5;
+
+/// Schema 6: the hats and the clap (I4).
+constexpr int kSchemaV6 = 6;
+constexpr int kStateSchemaVersion = kSchemaV6;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -143,6 +146,21 @@ const std::vector<Preset>& presets()
                 { ids::g1Rattle, 20.0f },
                 { ids::g1Crack, 30.0f },
                 { ids::g1Level, 55.0f },
+                // The hats: tight and bright, a short closed and a medium open,
+                // a little air so the sixteenths breathe.
+                { ids::htTune, 240.0f },
+                { ids::htHarmonics, 0.0f },
+                { ids::htSpread, 20.0f },
+                { ids::htColour, 5200.0f },
+                { ids::htAir, 25.0f },
+                { ids::hcDecay, 38.0f },
+                { ids::hoDecay, 320.0f },
+                { ids::htLevel, 55.0f },
+                // The clap, layered under the snare: quick flam, mid colour.
+                { ids::cpFlam, 9.0f },
+                { ids::cpColour, 1500.0f },
+                { ids::cpTail, 120.0f },
+                { ids::cpLevel, 55.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -182,6 +200,19 @@ const std::vector<Preset>& presets()
                 { ids::g1WiresDecay, 110.0f },
                 { ids::g1Rattle, 40.0f },
                 { ids::g1Level, 50.0f },
+                // The hats: darker and looser, out of the sub's way.
+                { ids::htTune, 180.0f },
+                { ids::htHarmonics, 1.0f },
+                { ids::htSpread, 45.0f },
+                { ids::htColour, 3200.0f },
+                { ids::htAir, 40.0f },
+                { ids::hcDecay, 70.0f },
+                { ids::hoDecay, 700.0f },
+                { ids::htLevel, 50.0f },
+                { ids::cpFlam, 14.0f },
+                { ids::cpColour, 900.0f },
+                { ids::cpTail, 260.0f },
+                { ids::cpLevel, 50.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -235,6 +266,22 @@ const std::vector<Preset>& presets()
                 { ids::g1Crack, 40.0f },
                 { ids::g1Noise, 30.0f },
                 { ids::g1Level, 60.0f },
+                // The hats: trashy and wide, the ratio set morphed past Bell
+                // towards Trash, so the sixteenths have some grit in them.
+                { ids::htTune, 300.0f },
+                { ids::htHarmonics, 1.7f },
+                { ids::htSpread, 70.0f },
+                { ids::htColour, 6800.0f },
+                { ids::htAir, 15.0f },
+                { ids::hcDecay, 30.0f },
+                { ids::hoDecay, 240.0f },
+                { ids::htLevel, 60.0f },
+                { ids::htVelColour, 70.0f },
+                // The clap: wide flam and a long tail, the break's hand-claps.
+                { ids::cpFlam, 18.0f },
+                { ids::cpColour, 1800.0f },
+                { ids::cpTail, 300.0f },
+                { ids::cpLevel, 60.0f },
             }
         },
         // -------------------------------------------------------------------
@@ -662,6 +709,81 @@ IctusProcessor::createParameterLayout()
     parameters.push_back (std::make_unique<Switch> (
         juce::ParameterID { ids::g1Link, kSchemaV5 }, "Ghost Link", true));
 
+    // ---- schema 6: the HATS and the CLAP -- APPENDED ------------------------
+    //
+    // Unlike every earlier addition these do NOT default to neutral, and they
+    // do not have to: no project has ever had a hat or a clap from this
+    // plugin, so there is nothing saved for a neutral default to protect.
+    // They default to a sound.
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htTune, kSchemaV6 }, "Hats Tune",
+        skewed (60.0f, 1200.0f, 0.1f, 300.0f), 205.3f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htHarmonics, kSchemaV6 }, "Hats Harmonics",
+        Range (0.0f, static_cast<float> (HatEngine::kMaxHarmonicsPosition), 0.01f), 0.0f,
+        attributes ("")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htSpread, kSchemaV6 }, "Hats Spread",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htColour, kSchemaV6 }, "Hats Colour",
+        skewed (800.0f, 12000.0f, 1.0f, 3500.0f), 3440.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htAir, kSchemaV6 }, "Hats Air",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::hcDecay, kSchemaV6 }, "Hat closed Decay",
+        skewed (10.0f, 300.0f, 0.1f, 60.0f), 55.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::hoDecay, kSchemaV6 }, "Hat open Decay",
+        skewed (100.0f, 2000.0f, 1.0f, 500.0f), 450.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htLevel, kSchemaV6 }, "Hats Level",
+        Range (0.0f, 100.0f, 0.1f), 70.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::htChoke, kSchemaV6 }, "Hats Choke", true));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htVelLevel, kSchemaV6 }, "Hats Velocity to level",
+        Range (0.0f, 100.0f, 0.1f), 100.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htVelDecay, kSchemaV6 }, "Hats Velocity to decay",
+        Range (0.0f, 100.0f, 0.1f), 30.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htVelColour, kSchemaV6 }, "Hats Velocity to colour",
+        Range (0.0f, 100.0f, 0.1f), 40.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpFlam, kSchemaV6 }, "Clap Flam",
+        Range (4.0f, 30.0f, 0.1f), 11.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpColour, kSchemaV6 }, "Clap Colour",
+        skewed (300.0f, 5000.0f, 1.0f, 1400.0f), 1200.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpTail, kSchemaV6 }, "Clap Tail",
+        skewed (30.0f, 1000.0f, 1.0f, 200.0f), 180.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpLevel, kSchemaV6 }, "Clap Level",
+        Range (0.0f, 100.0f, 0.1f), 75.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpVelLevel, kSchemaV6 }, "Clap Velocity to level",
+        Range (0.0f, 100.0f, 0.1f), 100.0f, attributes ("%")));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -758,6 +880,31 @@ void IctusProcessor::pullParameters()
         ghost.snappyHz = main.snappyHz;
         ghost.snap = main.snap;
     }
+
+    // ---- the hats: one instrument, two pads ----
+    auto& h = parameters_.hat;
+
+    h.tuneHz = valueOf (state_, ids::htTune);
+    h.harmonics = valueOf (state_, ids::htHarmonics);
+    h.spread = valueOf (state_, ids::htSpread) * 0.01;
+    h.colourHz = valueOf (state_, ids::htColour);
+    h.air = valueOf (state_, ids::htAir) * 0.01;
+    h.decayClosedSeconds = valueOf (state_, ids::hcDecay) * 0.001;
+    h.decayOpenSeconds = valueOf (state_, ids::hoDecay) * 0.001;
+    h.level = valueOf (state_, ids::htLevel) * 0.01;
+    h.choke = valueOf (state_, ids::htChoke) > 0.5f;
+    h.velocityLevel = valueOf (state_, ids::htVelLevel) * 0.01;
+    h.velocityDecay = valueOf (state_, ids::htVelDecay) * 0.01;
+    h.velocityColour = valueOf (state_, ids::htVelColour) * 0.01;
+
+    // ---- the clap ----
+    auto& c = parameters_.clap;
+
+    c.flamSeconds = valueOf (state_, ids::cpFlam) * 0.001;
+    c.colourHz = valueOf (state_, ids::cpColour);
+    c.tailSeconds = valueOf (state_, ids::cpTail) * 0.001;
+    c.level = valueOf (state_, ids::cpLevel) * 0.01;
+    c.velocityLevel = valueOf (state_, ids::cpVelLevel) * 0.01;
 
     for (int pad = 0; pad < kPadCount; ++pad)
         parameters_.padNotes[pad] = padNotes_[pad].load();

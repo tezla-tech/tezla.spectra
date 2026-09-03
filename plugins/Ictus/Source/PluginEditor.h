@@ -15,7 +15,12 @@
 // drawn larger, its set-and-forget controls smaller, and a picture of what
 // the group does drawn from the knobs (Displays.h); or the shared tuning
 // panel. The snare page is built once, for either snare-engine pad; the
-// ghost's adds LINK, and greys what LINK borrows from the main snare.
+// ghost's adds LINK, and greys what LINK borrows from the main snare. The
+// hats have ONE page for both pads -- they are one pair of cymbals struck two
+// ways -- and the clap has its own.
+//
+// The pages, in order: 0 kick, 1 snare, 2 ghost, 3 tuning, 4 hats, 5 clap.
+// The order is the editor's own and nothing saves it, so it can grow.
 
 #include <memory>
 
@@ -63,6 +68,8 @@ private:
     void timerCallback() override;
     void buildKickPage();
     SnareViews buildSnarePage (PlatePage& page, const SnareIds& ids, PadIndex pad);
+    void buildHatPage();
+    void buildClapPage();
     void buildTuningPage();
     void updateSnareGreying (PlatePage& page, const SnareIds& ids, SnareShown& shown);
     void showPage (int index);
@@ -94,6 +101,8 @@ private:
     std::unique_ptr<PlatePage> kickPage_;
     std::unique_ptr<PlatePage> snarePage_;
     std::unique_ptr<PlatePage> ghostPage_;
+    std::unique_ptr<PlatePage> hatPage_;
+    std::unique_ptr<PlatePage> clapPage_;
     std::unique_ptr<ui::TuningPanel> tuningPage_;
 
     // The pictures, owned by their pages; kept for the timer's refresh.
@@ -101,6 +110,8 @@ private:
     EnvelopeView* kickEnvelope_ { nullptr };
     SnareViews snareViews_;
     SnareViews ghostViews_;
+    PartialsView* partialsView_ { nullptr };
+    BurstView* burstView_ { nullptr };
 
     int currentPage_ { 0 };
 

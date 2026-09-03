@@ -139,6 +139,8 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
     ghostPage_ = std::make_unique<PlatePage> (ictus_.getState(), palette_);
     ghostViews_ = buildSnarePage (*ghostPage_, kGhostIds, PadIndex::snare2);
 
+    buildHatPage();
+    buildClapPage();
     buildTuningPage();
     showPage (0);
 
@@ -565,6 +567,160 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
     return views;
 }
 
+void IctusEditor::buildHatPage()
+{
+    hatPage_ = std::make_unique<PlatePage> (ictus_.getState(), palette_);
+    auto& page = *hatPage_;
+
+    // ---- metal ----
+    page.beginPlate ("Metal", "six oscillators that do not agree", kTintPitch);
+
+    page.addKnob (ids::htTune, "Tune",
+        "Where the lowest of the six partials sits, 60 Hz to 1.2 kHz, and the "
+        "whole set moves with it. A cymbal has no pitch, so this is a size "
+        "control rather than a note: low is a big, dark lid, high is a small "
+        "tight one.", Emphasis::lead);
+
+    page.addKnob (ids::htHarmonics, "Harmonics",
+        "Which set of six ratios, and everything between them. Metal is the "
+        "published measurement of a classic analogue cymbal circuit; Bell is "
+        "near-harmonic and rings with a pitch; Trash is wider and deliberately "
+        "incommensurate; Wide spreads the six over three octaves. The morph is "
+        "geometric and rank by rank, so a partial glides from one set's place to "
+        "the next rather than jumping. Four more positions are reserved, so a set "
+        "can be added later without moving anything you have saved.", Emphasis::lead);
+
+    page.addKnob (ids::htSpread, "Spread",
+        "Pulls the six apart against each other, up to a tone and a half either "
+        "way along a fixed pattern that sums to zero -- so the set loosens "
+        "without moving. 0 is the set exactly and runs no arithmetic at all.");
+
+    page.addKnob (ids::htAir, "Air",
+        "Seeded noise added to the six BEFORE the filters, so it is coloured with "
+        "them and belongs to the instrument rather than sitting on top as hiss. A "
+        "new stream every hit. 0 draws none.");
+
+    partialsView_ = static_cast<PartialsView*> (
+        page.addDisplay (std::make_unique<PartialsView> (ictus_, palette_, page.tintOf (kTintPitch)), 3));
+
+    // ---- colour ----
+    page.beginPlate ("Colour", "the band the metal is heard through", kTintColour);
+
+    page.addKnob (ids::htColour, "Colour",
+        "The lower band-pass's centre, 800 Hz to 12 kHz; the upper one follows at "
+        "2.06 times it -- the spacing of the two bands in the circuit the set was "
+        "measured from -- and a high-pass sits at half of it, keeping the "
+        "oscillators' own fundamentals out of an instrument that should have no "
+        "body. 3.4 kHz is the classic place; higher is thinner and more modern. "
+        "Measured: Colour at 3.44 kHz puts the hit's centre of gravity at 4.5 kHz.",
+        Emphasis::lead);
+
+    page.addKnob (ids::hcDecay, "Closed decay",
+        "How long the CLOSED pad rings, 10 to 300 ms. This is the pad on F#1 by "
+        "default. The envelope is killed the moment it lands, so a 55 ms hat "
+        "costs nothing after 55 ms.", Emphasis::lead);
+
+    page.addKnob (ids::hoDecay, "Open decay",
+        "How long the OPEN pad rings, 100 ms to 2 s -- A#1 by default. Same "
+        "cymbals, longer stroke.", Emphasis::lead);
+
+    page.addLamp (ids::htChoke, "Choke", "Choke",
+        "Lit: a closed-hat hit silences whatever the open pad is ringing, fading "
+        "it over 5 ms -- the foot coming down on the pedal, which is how a hi-hat "
+        "works and how a break sounds. Dark: the two ring past each other. "
+        "Skipped when both pads are on the same key, where you have asked for "
+        "both.");
+
+    // ---- out, beside the colour plate so the page fills ----
+    page.beginPlate ("Out", "level and what velocity does", kTintAmplitude, true);
+
+    page.addKnob (ids::htLevel, "Level",
+        "Both hat pads' level before the output trim, 0 to 100%.", Emphasis::lead);
+
+    page.addKnob (ids::htVelLevel, "Vel > Level",
+        "How much velocity moves the level, 0 to 100%.", Emphasis::trim);
+
+    page.addKnob (ids::htVelDecay, "Vel > Decay",
+        "How much velocity shortens a soft hit, 0 to 100%: a light tap on a hat "
+        "does not ring as long as a hard one.", Emphasis::trim);
+
+    page.addKnob (ids::htVelColour, "Vel > Colour",
+        "How much velocity moves Colour, 0 to 100%: a soft hit is darker as well "
+        "as quieter, which is most of what makes programmed sixteenths sound "
+        "played.", Emphasis::trim);
+
+    page.setNote ("One pair of cymbals, struck two ways: the closed pad (F#1) and the open one "
+                  "(A#1) share every control but their decay. Six band-limited pulses through "
+                  "two band-passes and a high-pass, everything inside the oversampled section: "
+                  "measured, inharmonic energy in the audible band sits at -74 to -77 dB at the "
+                  "rate Auto runs, against -12 to -17 dB for the same six pulses generated "
+                  "naively. Oversampling Off at 48 kHz costs about 40 dB of that.");
+
+    page.setValueText (ids::htHarmonics, [] (double position)
+    {
+        const double clamped = juce::jlimit (0.0, HatEngine::kMaxHarmonicsPosition, position);
+        const int lower = std::min (static_cast<int> (clamped), HatEngine::kSetCount - 1);
+        const double fraction = lower >= HatEngine::kSetCount - 1 ? 0.0 : clamped - lower;
+
+        if (fraction <= 0.005)
+            return juce::String (HatEngine::kSetNames[lower]);
+
+        return juce::String (HatEngine::kSetNames[lower]) + " "
+             + juce::String (100.0 * fraction, 0) + "%";
+    });
+
+    addChildComponent (page);
+}
+
+void IctusEditor::buildClapPage()
+{
+    clapPage_ = std::make_unique<PlatePage> (ictus_.getState(), palette_);
+    auto& page = *clapPage_;
+
+    // ---- bursts ----
+    page.beginPlate ("Bursts", "several people, not quite together", kTintClick);
+
+    page.addKnob (ids::cpFlam, "Flam",
+        "How far apart the four bursts land, 4 to 30 ms. About 11 ms is a room "
+        "full of people clapping at a signal; tighter reads as one pair of hands, "
+        "wider as a crowd. Counted in samples from this, so the pattern is the "
+        "same at 44.1 and 192 kHz -- measured to the sample.", Emphasis::lead);
+
+    page.addKnob (ids::cpTail, "Tail",
+        "The room's own answer, starting with the fourth burst and falling over "
+        "30 ms to 1 s. This is what makes a clap a clap rather than four noise "
+        "bursts.", Emphasis::lead);
+
+    burstView_ = static_cast<BurstView*> (
+        page.addDisplay (std::make_unique<BurstView> (ictus_, palette_, page.tintOf (kTintClick)), 3));
+
+    // ---- colour and out ----
+    page.beginPlate ("Colour", "where the smack sits", kTintColour);
+
+    page.addKnob (ids::cpColour, "Colour",
+        "The band-pass's centre, 300 Hz to 5 kHz. A clap is a mid-band event, all "
+        "smack and no weight: 1 to 2 kHz is a hand, lower is a thump, higher is a "
+        "snap. One band an octave and a half wide -- narrow enough to shape it, "
+        "wide enough that the bursts stay four separate slaps.", Emphasis::lead);
+
+    page.beginPlate ("Out", "level and velocity", kTintAmplitude, true);
+
+    page.addKnob (ids::cpLevel, "Level",
+        "The clap's level before the output trim, 0 to 100%. Under a snare rather "
+        "than instead of one is where this usually sits.", Emphasis::lead);
+
+    page.addKnob (ids::cpVelLevel, "Vel > Level",
+        "How much velocity moves the level, 0 to 100%.", Emphasis::trim);
+
+    page.setNote ("The clap is on D#1 by default. Four noise bursts a Flam apart with their "
+                  "envelopes summed, then the room: the recipe from the Nord Modular percussion "
+                  "chapter, which is where the four pulses about 11 ms apart come from. "
+                  "Humanising the spacing -- what makes a real clap different every time -- "
+                  "arrives with every other pad's humanise control.");
+
+    addChildComponent (page);
+}
+
 void IctusEditor::buildTuningPage()
 {
     // The shared microtuning panel: the processor is its TuningHost, exactly
@@ -594,12 +750,14 @@ void IctusEditor::styleTab (juce::TextButton& tab, bool active)
 
 void IctusEditor::showPage (int index)
 {
-    currentPage_ = juce::jlimit (0, 3, index);
+    currentPage_ = juce::jlimit (0, 5, index);
 
     kickPage_->setVisible (currentPage_ == 0);
     snarePage_->setVisible (currentPage_ == 1);
     ghostPage_->setVisible (currentPage_ == 2);
     tuningPage_->setVisible (currentPage_ == 3);
+    hatPage_->setVisible (currentPage_ == 4);
+    clapPage_->setVisible (currentPage_ == 5);
 
     if (currentPage_ == 0)
         currentPad_ = PadIndex::kick1;
@@ -607,6 +765,13 @@ void IctusEditor::showPage (int index)
         currentPad_ = PadIndex::snare1;
     else if (currentPage_ == 2)
         currentPad_ = PadIndex::snare2;
+    else if (currentPage_ == 5)
+        currentPad_ = PadIndex::clap;
+    else if (currentPage_ == 4
+             && currentPad_ != PadIndex::hatClosed && currentPad_ != PadIndex::hatOpen)
+        // One page, two pads: opening it from anywhere else lands on the
+        // closed hat, but selecting the open pad keeps HIT on the open pad.
+        currentPad_ = PadIndex::hatClosed;
 
     styleTab (tuningTab_, currentPage_ == 3);
     padStrip_->setSelected (currentPad_);
@@ -626,14 +791,35 @@ void IctusEditor::selectPad (PadIndex pad)
         showPage (1);
     else if (pad == PadIndex::snare2)
         showPage (2);
+    else if (pad == PadIndex::hatClosed || pad == PadIndex::hatOpen)
+    {
+        currentPad_ = pad;
+        showPage (4);
+    }
+    else if (pad == PadIndex::clap)
+        showPage (5);
 }
 
 void IctusEditor::refreshPadStrip()
 {
-    const bool kick = currentPad_ == PadIndex::kick1;
-    const bool ghost = currentPad_ == PadIndex::snare2;
+    const auto drumName = [this]
+    {
+        switch (currentPad_)
+        {
+            case PadIndex::kick1:     return "the kick";
+            case PadIndex::snare1:    return "the snare";
+            case PadIndex::snare2:    return "the ghost snare";
+            case PadIndex::hatClosed: return "the closed hat";
+            case PadIndex::hatOpen:   return "the open hat";
+            case PadIndex::clap:      return "the clap";
+            case PadIndex::perc:      return "the perc";
+            case PadIndex::kick2:     return "the second kick";
+            case PadIndex::count:
+            default:                  return "the pad";
+        }
+    };
 
-    hitButton_.setTooltip (juce::String ("Strikes ") + (kick ? "the kick" : ghost ? "the ghost snare" : "the snare") + " -- "
+    hitButton_.setTooltip (juce::String ("Strikes ") + drumName() + " -- "
                            + noteName (ictus_.getPadNote (currentPad_))
                            + " -- at full velocity, at the top of the next audio block, so a patch can "
                              "be auditioned without a keyboard. A hit while one is still sounding "
@@ -669,7 +855,9 @@ void IctusEditor::refreshDisplays()
                            static_cast<DrumDisplay*> (snareViews_.modes), static_cast<DrumDisplay*> (snareViews_.wires),
                            static_cast<DrumDisplay*> (snareViews_.envelope),
                            static_cast<DrumDisplay*> (ghostViews_.modes), static_cast<DrumDisplay*> (ghostViews_.wires),
-                           static_cast<DrumDisplay*> (ghostViews_.envelope) })
+                           static_cast<DrumDisplay*> (ghostViews_.envelope),
+                           static_cast<DrumDisplay*> (partialsView_),
+                           static_cast<DrumDisplay*> (burstView_) })
         if (display != nullptr)
             display->refresh();
 }
@@ -856,6 +1044,8 @@ void IctusEditor::resized()
     kickPage_->setBounds (bounds);
     snarePage_->setBounds (bounds);
     ghostPage_->setBounds (bounds);
+    hatPage_->setBounds (bounds);
+    clapPage_->setBounds (bounds);
     tuningPage_->setBounds (bounds);
 }
 

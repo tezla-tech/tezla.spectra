@@ -30,10 +30,11 @@
 // block size cannot bend a sweep and a test holds 64-, 97- and 512-sample
 // blocks bit-identical.
 //
-// I3 shape: the two kick pads and the three snare-engine pads (Snare 1,
-// Snare 2, Perc) are live, the Main bus is the only bus; the hats, the clap
-// and the four other buses are declared here so that I4-I7 add engines and
-// buses without restructuring.
+// I4 shape: every one of the eight pads has an engine -- two kicks, three on
+// the snare engine (Snare 1, the ghost, Perc), the two hats sharing one set
+// of controls with a decay each, and the clap. The Main bus is still the only
+// bus; the four others are declared so that I7 adds them without
+// restructuring.
 
 #include <cstdint>
 
@@ -42,6 +43,8 @@
 #include <tezla/dsp/SmoothedValue.hpp>
 #include <tezla/dsp/Tuning.hpp>
 
+#include "ClapEngine.hpp"
+#include "HatEngine.hpp"
 #include "KickEngine.hpp"
 #include "Pad.hpp"
 #include "SnareEngine.hpp"
@@ -81,6 +84,12 @@ struct EngineParameters
 
     /// The Perc pad: the snare engine with tom defaults and the wires off.
     SnareSettings perc { tomSettings() };
+
+    /// One pair of cymbals struck two ways: the closed and open pads share
+    /// every control but their decay, which `HatSettings` carries both of.
+    HatSettings hat;
+
+    ClapSettings clap;
 
     /// MIDI note per pad. Held here for the engine; the plugin stores them
     /// as state-tree properties, not parameters (plugins/Ictus/PLAN.md).
@@ -134,7 +143,10 @@ public:
     /// Fades every sounding hit over the choke time.
     void allNotesOff() noexcept;
 
-    /// Chokes one pad (the group logic arrives with the hats in I4).
+    /// Chokes one pad: every hit it is playing fades over
+    /// `Pad::kChokeFadeSeconds`. The one group that fires by itself is the
+    /// hats -- a closed hit silences the open pad, which is a foot on the
+    /// pedal -- and `HatSettings::choke` is what arms it.
     void choke (PadIndex pad) noexcept;
 
     void process (double* const* output, int numSamples) noexcept;
@@ -191,6 +203,9 @@ public:
     [[nodiscard]] const Pad<SnareEngine>& snare1() const noexcept { return snare1_; }
     [[nodiscard]] const Pad<SnareEngine>& snare2() const noexcept { return snare2_; }
     [[nodiscard]] const Pad<SnareEngine>& perc() const noexcept { return perc_; }
+    [[nodiscard]] const Pad<HatEngine>& hatClosed() const noexcept { return hatClosed_; }
+    [[nodiscard]] const Pad<HatEngine>& hatOpen() const noexcept { return hatOpen_; }
+    [[nodiscard]] const Pad<ClapEngine>& clap() const noexcept { return clap_; }
 
     /// The tuning Follow key and Bass mode read the landed pitch from. The
     /// scale swap allocates nothing (the Malleus and Sonitus arrangement).
@@ -208,6 +223,9 @@ private:
                     int note, double velocity, bool keyed) noexcept;
     void startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSettings& settings,
                      int note, double velocity) noexcept;
+    void startHat (Pad<HatEngine>& pad, PadIndex index, bool open,
+                   int note, double velocity) noexcept;
+    void startClap (int note, double velocity) noexcept;
 
     /// The seed rule shared by every pad: a base, a per-pad salt, and the hit
     /// counter times a golden-ratio constant.
@@ -227,6 +245,9 @@ private:
     Pad<SnareEngine> snare1_;
     Pad<SnareEngine> snare2_;
     Pad<SnareEngine> perc_;
+    Pad<HatEngine> hatClosed_;
+    Pad<HatEngine> hatOpen_;
+    Pad<ClapEngine> clap_;
 
     dsp::Tuning tuning_;
 

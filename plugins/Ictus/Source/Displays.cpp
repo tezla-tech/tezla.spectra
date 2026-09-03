@@ -718,4 +718,310 @@ void WiresView::paint (juce::Graphics& g)
     g.strokePath (path, juce::PathStrokeType (1.6f));
 }
 
+// ---------------------------------------------------------------------------
+// PartialsView -- the hat's six partials, and what Colour lets through
+// ---------------------------------------------------------------------------
+
+PartialsView::PartialsView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint)
+    : DrumDisplay (processor, palette, tint)
+{
+    setTooltip ("The hat's six partials on a log-frequency axis, drawn as tall as the "
+                "filters let them through, with the two band-passes and the high-pass "
+                "over them. Harmonics slides the whole set from one ratio table to the "
+                "next; Spread pulls the six apart; Colour moves the bands. The curve is "
+                "the engine's own filters, evaluated at 192 kHz.");
+
+    lowBand_.prepare (192000.0);
+    lowBand_.setMode (dsp::SvfMode::bandpass);
+    lowBand_.setResonance (dsp::SvfFilter::resonanceForQ (HatEngine::kBandQ));
+
+    highBand_.prepare (192000.0);
+    highBand_.setMode (dsp::SvfMode::bandpass);
+    highBand_.setResonance (dsp::SvfFilter::resonanceForQ (HatEngine::kBandQ));
+
+    highpass_.prepare (192000.0);
+    highpass_.setMode (dsp::SvfMode::highpass);
+    highpass_.setResonance (dsp::SvfFilter::resonanceForQ (HatEngine::kHighpassQ));
+
+    responseDb_.assign (kPoints, 0.0f);
+}
+
+void PartialsView::gather (std::vector<double>& inputs)
+{
+    inputs.push_back (read (ids::htTune));
+    inputs.push_back (read (ids::htHarmonics));
+    inputs.push_back (read (ids::htSpread));
+    inputs.push_back (read (ids::htColour));
+    inputs.push_back (read (ids::htAir));
+}
+
+void PartialsView::update()
+{
+    const double tune = read (ids::htTune);
+    const double position = read (ids::htHarmonics);
+    const double spread = 0.01 * read (ids::htSpread);
+    const double colour = read (ids::htColour);
+    air_ = 0.01 * read (ids::htAir);
+
+    double ratios[HatEngine::kOscillators] {};
+    HatEngine::ratiosAt (position, ratios);
+
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+    {
+        double hz = tune * ratios[i];
+
+        if (spread > 0.0)
+            hz *= std::exp2 (spread * HatEngine::kSpreadSemitones * HatEngine::kSpreadPattern[i] / 12.0);
+
+        partials_[i] = hz;
+    }
+
+    lowBand_.setCutoffHz (colour);
+    highBand_.setCutoffHz (colour * HatEngine::kUpperBandRatio);
+    highpass_.setCutoffHz (colour * HatEngine::kHighpassFraction);
+
+    // Magnitudes summed rather than the complex responses: the two bands are
+    // an octave apart, so where one is loud the other is well down, and the
+    // difference never shows at this size. Said here rather than implied.
+    const auto magnitudeAt = [this] (double hz)
+    {
+        return (lowBand_.magnitudeAt (hz) + highBand_.magnitudeAt (hz)) * highpass_.magnitudeAt (hz);
+    };
+
+    for (int i = 0; i < kPoints; ++i)
+    {
+        const double hz = kLowHz * std::pow (kHighHz / kLowHz,
+                                             static_cast<double> (i) / (kPoints - 1));
+
+        responseDb_[static_cast<std::size_t> (i)] =
+            static_cast<float> (20.0 * std::log10 (std::max (magnitudeAt (hz), 1.0e-6)));
+    }
+
+    // Which set, or how far between two of them.
+    const double clamped = juce::jlimit (0.0, HatEngine::kMaxHarmonicsPosition, position);
+    const int lower = std::min (static_cast<int> (clamped), HatEngine::kSetCount - 1);
+    const double fraction = lower >= HatEngine::kSetCount - 1 ? 0.0 : clamped - lower;
+
+    caption_ = fraction <= 0.0005
+        ? juce::String (HatEngine::kSetNames[lower])
+        : juce::String (HatEngine::kSetNames[lower]) + " to "
+          + HatEngine::kSetNames[lower + 1] + " " + juce::String (100.0 * fraction, 0) + "%";
+
+    // Appended rather than concatenated onto the literal, and that is not a
+    // style choice: juce::String's `const char*` CONSTRUCTOR reads ASCII and
+    // mangles anything above it, while `operator+=` reads UTF-8. Starting a
+    // sum with "  ·  " builds the String through the constructor, and the
+    // separator came out as "Â·" on this page while the identical character
+    // on the clap's -- appended to a String -- was right.
+    caption_ += "  ·  ";
+    caption_ += juce::String (partials_[0], 0);
+    caption_ += " to ";
+    caption_ += juce::String (partials_[HatEngine::kOscillators - 1], 0);
+    caption_ += " Hz";
+
+    captionRight_ = "bands " + juce::String (colour / 1000.0, 2) + " / "
+                  + juce::String (colour * HatEngine::kUpperBandRatio / 1000.0, 2) + " kHz";
+}
+
+void PartialsView::paint (juce::Graphics& g)
+{
+    paintFrame (g);
+
+    const auto plot = plotArea();
+
+    const auto xOf = [&] (double hz)
+    {
+        return along (hz, kLowHz, kHighHz, plot.getX(), plot.getRight(), true);
+    };
+
+    const auto yOf = [&] (double db)
+    {
+        return along (db, -42.0, 12.0, plot.getBottom(), plot.getY(), false);
+    };
+
+    // Decade gridlines.
+    g.setColour (palette_.panel.brighter (0.30f));
+
+    for (double hz = 1000.0; hz < kHighHz; hz *= 10.0)
+        g.drawVerticalLine (juce::roundToInt (xOf (hz)), plot.getY(), plot.getBottom());
+
+    // Air: the noise the same filters colour, drawn as a wash under the curve.
+    if (air_ > 0.0)
+    {
+        juce::Path wash;
+        wash.startNewSubPath (plot.getX(), plot.getBottom());
+
+        for (int i = 0; i < kPoints; ++i)
+        {
+            const double hz = kLowHz * std::pow (kHighHz / kLowHz,
+                                                 static_cast<double> (i) / (kPoints - 1));
+            wash.lineTo (xOf (hz), yOf (responseDb_[static_cast<std::size_t> (i)] - 6.0));
+        }
+
+        wash.lineTo (plot.getRight(), plot.getBottom());
+        wash.closeSubPath();
+
+        g.setColour (palette_.secondary.withAlpha (static_cast<float> (0.06 + 0.18 * air_)));
+        g.fillPath (wash);
+    }
+
+    // Each partial's WHOLE harmonic series, not just where it starts.
+    //
+    // The six oscillators sit at a few hundred Hz and the bands are at three
+    // and seven kilohertz, so nothing you hear is a fundamental: what reaches
+    // the band is the pulses' upper harmonics, dozens of them, from six
+    // series that do not line up. Drawing the six fundamentals alone showed
+    // six stubs in a corner and nothing where the sound is.
+    const auto gainAt = [this] (double hz)
+    {
+        const double position = std::log (hz / kLowHz) / std::log (kHighHz / kLowHz);
+        const auto index = juce::jlimit (0, kPoints - 1,
+                                         static_cast<int> (std::lround (position * (kPoints - 1))));
+        return responseDb_[static_cast<std::size_t> (index)];
+    };
+
+    for (int partial = 0; partial < HatEngine::kOscillators; ++partial)
+    {
+        const double fundamental = partials_[partial];
+
+        if (fundamental <= 0.0)
+            continue;
+
+        for (int harmonic = 1; harmonic * fundamental < kHighHz; ++harmonic)
+        {
+            const double hz = harmonic * fundamental;
+
+            if (hz < kLowHz)
+                continue;
+
+            // A pulse's harmonics fall as 1/n; the filters take it from there.
+            const double db = gainAt (hz) + 20.0 * std::log10 (1.0 / harmonic);
+            const double level = (db + 42.0) / 54.0;
+
+            if (level <= 0.02)
+                continue;
+
+            const float height = plot.getHeight() * static_cast<float> (juce::jlimit (0.0, 1.0, level));
+            const float x = xOf (hz);
+
+            g.setColour (harmonic == 1 ? palette_.accentBright.withAlpha (0.9f)
+                                       : tint_.withAlpha (0.55f));
+            g.fillRect (juce::Rectangle<float> (x - 0.6f, plot.getBottom() - height, 1.2f, height));
+        }
+    }
+
+    // The filters over the top.
+    juce::Path path;
+
+    for (int i = 0; i < kPoints; ++i)
+    {
+        const double hz = kLowHz * std::pow (kHighHz / kLowHz,
+                                             static_cast<double> (i) / (kPoints - 1));
+        const float x = xOf (hz);
+        const float y = yOf (responseDb_[static_cast<std::size_t> (i)]);
+
+        if (i == 0)
+            path.startNewSubPath (x, y);
+        else
+            path.lineTo (x, y);
+    }
+
+    g.setColour (tint_);
+    g.strokePath (path, juce::PathStrokeType (1.6f));
+}
+
+// ---------------------------------------------------------------------------
+// BurstView -- the clap's four bursts and the room after them
+// ---------------------------------------------------------------------------
+
+BurstView::BurstView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint)
+    : DrumDisplay (processor, palette, tint)
+{
+    setTooltip ("The clap's envelope against time: four bursts a Flam apart, each falling "
+                "60 dB in 3.5 ms, and the Tail that starts with the fourth -- the room "
+                "answering all of them at once. Drawn from the same numbers the engine "
+                "uses, so it is right before the first hit.");
+
+    envelope_.assign (kPoints, 0.0f);
+}
+
+void BurstView::gather (std::vector<double>& inputs)
+{
+    inputs.push_back (read (ids::cpFlam));
+    inputs.push_back (read (ids::cpTail));
+    inputs.push_back (read (ids::cpColour));
+}
+
+void BurstView::update()
+{
+    flamSeconds_ = 0.001 * read (ids::cpFlam);
+    const double tail = 0.001 * read (ids::cpTail);
+
+    // The whole hit: three flams to the last burst, then the tail.
+    seconds_ = 3.0 * flamSeconds_ + tail;
+
+    for (int i = 0; i < kPoints; ++i)
+    {
+        const double t = seconds_ * static_cast<double> (i) / (kPoints - 1);
+        double sum = 0.0;
+
+        for (int burst = 0; burst < ClapEngine::kBursts; ++burst)
+        {
+            const double since = t - burst * flamSeconds_;
+
+            if (since >= 0.0)
+                sum += std::exp (-6.907755278982137 * since / ClapEngine::kBurstSeconds);
+        }
+
+        // The tail starts with the last burst, and falls to nothing at its
+        // own time -- the engine's Adsr decay to a zero sustain.
+        const double sinceTail = t - (ClapEngine::kBursts - 1) * flamSeconds_;
+
+        if (sinceTail >= 0.0 && sinceTail < tail)
+            sum += std::exp (-6.907755278982137 * sinceTail / tail);
+
+        envelope_[static_cast<std::size_t> (i)] = static_cast<float> (std::min (sum, 2.0) * 0.5);
+    }
+
+    caption_ = juce::String (1000.0 * flamSeconds_, 1) + " ms apart  ·  tail "
+             + juce::String (1000.0 * tail, 0) + " ms";
+    captionRight_ = juce::String (1000.0 * seconds_, 0) + " ms in all";
+}
+
+void BurstView::paint (juce::Graphics& g)
+{
+    paintFrame (g);
+
+    const auto plot = plotArea();
+
+    // Where each burst lands.
+    g.setColour (palette_.panel.brighter (0.30f));
+
+    for (int burst = 0; burst < ClapEngine::kBursts; ++burst)
+    {
+        const float x = plot.getX() + plot.getWidth()
+                      * static_cast<float> (burst * flamSeconds_ / seconds_);
+        g.drawVerticalLine (juce::roundToInt (x), plot.getY(), plot.getBottom());
+    }
+
+    juce::Path path;
+    path.startNewSubPath (plot.getX(), plot.getBottom());
+
+    for (int i = 0; i < kPoints; ++i)
+    {
+        const float x = plot.getX() + plot.getWidth() * static_cast<float> (i) / (kPoints - 1);
+        const float y = plot.getBottom() - plot.getHeight() * envelope_[static_cast<std::size_t> (i)];
+        path.lineTo (x, y);
+    }
+
+    juce::Path filled (path);
+    filled.lineTo (plot.getRight(), plot.getBottom());
+    filled.closeSubPath();
+
+    g.setColour (tint_.withAlpha (0.22f));
+    g.fillPath (filled);
+    g.setColour (tint_);
+    g.strokePath (path, juce::PathStrokeType (1.6f));
+}
+
 } // namespace tezla::ictus

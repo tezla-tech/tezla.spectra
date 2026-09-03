@@ -169,6 +169,28 @@ inline constexpr auto g1VelWires   = "g1VelWires";
 inline constexpr auto g1VelCrack   = "g1VelCrack";
 inline constexpr auto g1VelDrop    = "g1VelDrop";
 inline constexpr auto g1Link       = "g1Link";
+
+// HATS -- one pair of cymbals, struck two ways: every control is shared by
+// the closed and open pads except the decay, which each has its own of.
+inline constexpr auto htTune      = "htTune";
+inline constexpr auto htHarmonics = "htHarmonics";
+inline constexpr auto htSpread    = "htSpread";
+inline constexpr auto htColour    = "htColour";
+inline constexpr auto htAir       = "htAir";
+inline constexpr auto hcDecay     = "hcDecay";
+inline constexpr auto hoDecay     = "hoDecay";
+inline constexpr auto htLevel     = "htLevel";
+inline constexpr auto htChoke     = "htChoke";
+inline constexpr auto htVelLevel  = "htVelLevel";
+inline constexpr auto htVelDecay  = "htVelDecay";
+inline constexpr auto htVelColour = "htVelColour";
+
+// CLAP
+inline constexpr auto cpFlam      = "cpFlam";
+inline constexpr auto cpColour    = "cpColour";
+inline constexpr auto cpTail      = "cpTail";
+inline constexpr auto cpLevel     = "cpLevel";
+inline constexpr auto cpVelLevel  = "cpVelLevel";
 } // namespace ids
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and

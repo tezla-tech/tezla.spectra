@@ -5253,6 +5253,275 @@ int runIctus (const Args& args)
                      nsFull, nsTom, nsFull * 192000.0 / 1.0e7, nsTom * 192000.0 / 1.0e7, sink);
     }
 
+    // ======================================================================
+    // table 3, the hats and the clap
+    // ======================================================================
+
+    std::printf ("\n\ntezla-measure ictus -- table 3, the hats and the clap\n\n");
+
+    // The inharmonic floor of a signal whose partials are known: the energy
+    // in bins no partial's harmonic series can explain, up to `maxHz`.
+    // Blackman-Harris, because a Hann window's 31 dB sidelobes pile up under
+    // a thousand strong harmonics and read as a -57 dB alias floor whatever
+    // the generator does (found in tests/test_Ictus.cpp; this reads -77).
+    const auto inharmonicDb = [] (const std::vector<double>& x, double signalRate,
+                                  const double* partials, int count, double maxHz)
+    {
+        std::size_t size = 1;
+        while (size < x.size() && size < (1u << 18))
+            size <<= 1;
+
+        std::vector<double> windowed (size, 0.0);
+        const std::size_t take = std::min (x.size(), size);
+
+        for (std::size_t n = 0; n < take; ++n)
+        {
+            const double phase = 2.0 * std::numbers::pi * static_cast<double> (n) / static_cast<double> (take - 1);
+
+            windowed[n] = x[n] * (0.35875 - 0.48829 * std::cos (phase)
+                                          + 0.14128 * std::cos (2.0 * phase)
+                                          - 0.01168 * std::cos (3.0 * phase));
+        }
+
+        const auto spectrum = dsp::fftOfReal (windowed);
+        const double binWidth = signalRate / static_cast<double> (size);
+        const std::size_t bins = size / 2;
+        const auto last = std::min (static_cast<std::size_t> (maxHz / binWidth), bins);
+
+        std::vector<bool> expected (bins + 1, false);
+
+        for (int p = 0; p < count; ++p)
+            for (double hz = partials[p]; hz < signalRate * 0.5; hz += partials[p])
+            {
+                const auto centre = static_cast<long> (std::lround (hz / binWidth));
+
+                for (long bin = centre - 8; bin <= centre + 8; ++bin)
+                    if (bin >= 0 && bin <= static_cast<long> (bins))
+                        expected[static_cast<std::size_t> (bin)] = true;
+            }
+
+        for (std::size_t bin = 0; bin < 8 && bin < expected.size(); ++bin)
+            expected[bin] = true;
+
+        double total = 0.0;
+        double inharmonic = 0.0;
+
+        for (std::size_t bin = 0; bin <= last; ++bin)
+        {
+            const double power = std::norm (spectrum[bin]);
+            total += power;
+
+            if (! expected[bin])
+                inharmonic += power;
+        }
+
+        return 10.0 * std::log10 (std::max (inharmonic, 1.0e-300) / std::max (total, 1.0e-300));
+    };
+
+    static const char* kSetNames[HatEngine::kSetCount] { "Metal", "Bell", "Trash", "Wide" };
+
+    // ---- 1. the ratio sets, and the morph between them -------------------
+
+    std::printf ("The four ratio sets, as partials of a 205.3 Hz Tune:\n\n");
+
+    for (int set = 0; set < HatEngine::kSetCount; ++set)
+    {
+        double ratios[HatEngine::kOscillators] {};
+        HatEngine::ratiosAt (static_cast<double> (set), ratios);
+
+        std::printf ("  %-6s ", kSetNames[set]);
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            std::printf ("%8.1f", 205.3 * ratios[i]);
+
+        std::printf ("  Hz\n");
+    }
+
+    std::printf ("\nHarmonics between two sets -- geometric by rank, so a partial glides:\n\n");
+
+    for (const double position : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        double ratios[HatEngine::kOscillators] {};
+        HatEngine::ratiosAt (position, ratios);
+
+        std::printf ("  %.2f   ", position);
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            std::printf ("%8.1f", 205.3 * ratios[i]);
+
+        std::printf ("  Hz\n");
+    }
+
+    // ---- 2. the alias floor, per set -------------------------------------
+
+    std::printf ("\nInharmonic energy below 20 kHz, Tune 900 Hz -- the pulse bank alone:\n\n");
+    std::printf ("  set      192 kHz (Auto's internal rate)   48 kHz, no oversampling   a naive pulse bank\n");
+
+    for (int set = 0; set < HatEngine::kSetCount; ++set)
+    {
+        double partials[HatEngine::kOscillators] {};
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            partials[i] = 900.0 * HatEngine::kSets[set][i];
+
+        const auto bank = [&partials] (double bankRate, bool bandLimited)
+        {
+            const int samples = static_cast<int> (1.3 * bankRate);
+            std::vector<double> out (static_cast<std::size_t> (samples), 0.0);
+
+            if (bandLimited)
+            {
+                dsp::Oscillator oscillators[HatEngine::kOscillators];
+
+                for (int i = 0; i < HatEngine::kOscillators; ++i)
+                {
+                    oscillators[i].setShape (dsp::OscShape::pulse);
+                    oscillators[i].setWidth (HatEngine::kDutyCycle);
+                    oscillators[i].reset (0.0);
+                    oscillators[i].setIncrement (partials[i] / bankRate);
+                }
+
+                for (int n = 0; n < samples; ++n)
+                {
+                    double sum = 0.0;
+
+                    for (auto& oscillator : oscillators)
+                        sum += oscillator.advance();
+
+                    out[static_cast<std::size_t> (n)] = sum / HatEngine::kOscillators;
+                }
+
+                return out;
+            }
+
+            double phase[HatEngine::kOscillators] {};
+
+            for (int n = 0; n < samples; ++n)
+            {
+                double sum = 0.0;
+
+                for (int i = 0; i < HatEngine::kOscillators; ++i)
+                {
+                    sum += dsp::Oscillator::naiveShapeSample (dsp::OscShape::pulse, phase[i],
+                                                              HatEngine::kDutyCycle, 0.0);
+                    phase[i] += partials[i] / bankRate;
+                    phase[i] -= std::floor (phase[i]);
+                }
+
+                out[static_cast<std::size_t> (n)] = sum / HatEngine::kOscillators;
+            }
+
+            return out;
+        };
+
+        const double internalDb = inharmonicDb (bank (192000.0, true), 192000.0, partials,
+                                                HatEngine::kOscillators, 20000.0);
+        const double hostDb = inharmonicDb (bank (48000.0, true), 48000.0, partials,
+                                            HatEngine::kOscillators, 20000.0);
+        const double naiveDb = inharmonicDb (bank (48000.0, false), 48000.0, partials,
+                                             HatEngine::kOscillators, 20000.0);
+
+        std::printf ("  %-6s          %7.1f dB                  %7.1f dB              %7.1f dB\n",
+                     kSetNames[set], internalDb, hostDb, naiveDb);
+    }
+
+    // ---- 3. what Colour does to the hat ----------------------------------
+
+    std::printf ("\nThe hat's spectral centroid against Colour (closed hat, Air 0, 192 kHz):\n\n");
+
+    for (const double colour : { 1500.0, 2500.0, 3440.0, 5000.0, 8000.0, 11000.0 })
+    {
+        HatSettings hat;
+        hat.colourHz = colour;
+        hat.velocityColour = 0.0;
+        hat.air = 0.0;
+
+        HatEngine engine;
+        engine.prepare (192000.0);
+        engine.start (hat, false, 1.0, 77u, 0);
+
+        std::vector<double> out (static_cast<std::size_t> (0.2 * 192000.0));
+
+        for (std::size_t n = 0; n < out.size(); ++n)
+            out[n] = engine.process();
+
+        std::printf ("  Colour %6.0f Hz -> centroid %6.0f Hz\n",
+                     colour, centroidHz (out, 192000.0, 100.0, 20000.0));
+    }
+
+    // ---- 4. the clap's burst pattern -------------------------------------
+
+    std::printf ("\nThe clap's four bursts, from the rendered envelope:\n\n");
+
+    for (const double flam : { 0.006, 0.011, 0.020 })
+    {
+        ClapSettings clap;
+        clap.flamSeconds = flam;
+        clap.tailSeconds = 0.2;
+
+        ClapEngine engine;
+        engine.prepare (192000.0);
+        engine.start (clap, 1.0, 55u, 0);
+
+        std::vector<double> out (static_cast<std::size_t> (0.6 * 192000.0));
+
+        for (std::size_t n = 0; n < out.size(); ++n)
+            out[n] = engine.process();
+
+        std::size_t lastNonZero = 0;
+
+        for (std::size_t n = 0; n < out.size(); ++n)
+            if (out[n] != 0.0)
+                lastNonZero = n;
+
+        std::printf ("  Flam %5.1f ms -> bursts at 0.0 / %.1f / %.1f / %.1f ms, whole hit %.1f ms\n",
+                     1000.0 * flam, 1000.0 * flam, 2000.0 * flam, 3000.0 * flam,
+                     1000.0 * static_cast<double> (lastNonZero) / 192000.0);
+    }
+
+    // ---- 5. what the two new engines cost --------------------------------
+
+    {
+        double sink = 0.0;
+        const int samples = 192000;
+
+        HatSettings hat;
+        hat.spread = 0.5;
+        hat.air = 0.4;
+        hat.decayOpenSeconds = 2.0;
+
+        HatEngine hatEngine;
+        hatEngine.prepare (192000.0);
+        hatEngine.start (hat, true, 1.0, 5u, 0);
+
+        auto start = std::chrono::steady_clock::now();
+
+        for (int n = 0; n < samples; ++n)
+            sink += hatEngine.process();
+
+        const double hatNs = 1.0e9 * std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - start).count() / samples;
+
+        ClapSettings clap;
+        clap.tailSeconds = 1.0;
+
+        ClapEngine clapEngine;
+        clapEngine.prepare (192000.0);
+        clapEngine.start (clap, 1.0, 6u, 0);
+
+        start = std::chrono::steady_clock::now();
+
+        for (int n = 0; n < samples; ++n)
+            sink += clapEngine.process();
+
+        const double clapNs = 1.0e9 * std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - start).count() / samples;
+
+        std::printf ("\nOne second at 192 kHz: hat %.1f ns/sample (%.2f%% of a core), clap %.1f ns/sample"
+                     " (%.2f%% of a core); sink %g\n",
+                     hatNs, hatNs * 192000.0 / 1.0e7, clapNs, clapNs * 192000.0 / 1.0e7, sink);
+    }
+
     // ---- 6. a WAV to listen to: a bar of kick and snare ------------------
 
     if (! args.outPath.empty())
@@ -5303,7 +5572,8 @@ void printUsage()
     std::printf ("  crossbar        [--fs --out FILE]  DTMF accuracy, cadences, G.711 SNR, CPU\n");
     std::printf ("  phonoss          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
     std::printf ("  membrana        [--fs --out FILE]  proximity, sphere limits, fit, curves, CPU\n");
-    std::printf ("  ictus           [--fs --out FILE]  kick pitch at four rates, DC, aliasing; snare modes, drop, wires, rattle; CPU\n");
+    std::printf ("  ictus           [--fs --out FILE]  kick pitch at four rates, DC, aliasing; snare modes, drop, wires,\n");
+    std::printf ("                          rattle; hat ratio sets, morph, alias floor, colour; clap bursts; CPU\n");
 }
 
 } // namespace

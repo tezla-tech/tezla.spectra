@@ -20,6 +20,10 @@
 //   EnvelopeView  the amplitude of the hit against time: the kick's AHD and
 //                 tail, or the snare's shell modes and wires.
 //   WiresView     the wires' filter response.
+//   PartialsView  the hat's six partials on a log-frequency axis with the two
+//                 band-passes drawn over them, so Harmonics, Spread and
+//                 Colour are one picture.
+//   BurstView     the clap's four bursts and its tail against time.
 //
 // Every view refreshes from the timer at 15 Hz and repaints only when an
 // input has moved.
@@ -152,6 +156,45 @@ private:
     Drum drum_;
     double seconds_ { 0.5 };
     std::vector<Trace> traces_;
+};
+
+class PartialsView final : public DrumDisplay
+{
+public:
+    PartialsView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint);
+
+    void paint (juce::Graphics&) override;
+
+private:
+    void gather (std::vector<double>& inputs) override;
+    void update() override;
+
+    static constexpr double kLowHz = 100.0;
+    static constexpr double kHighHz = 20000.0;
+    static constexpr int kPoints = 180;
+
+    dsp::SvfFilter lowBand_, highBand_, highpass_;
+    double partials_[6] {};
+    std::vector<float> responseDb_;
+    double air_ { 0.0 };
+};
+
+class BurstView final : public DrumDisplay
+{
+public:
+    BurstView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint);
+
+    void paint (juce::Graphics&) override;
+
+private:
+    void gather (std::vector<double>& inputs) override;
+    void update() override;
+
+    static constexpr int kPoints = 300;
+
+    std::vector<float> envelope_;   ///< 0..1 over `seconds_`
+    double seconds_ { 0.3 };
+    double flamSeconds_ { 0.011 };
 };
 
 class WiresView final : public DrumDisplay
