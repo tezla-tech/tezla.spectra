@@ -733,11 +733,9 @@ PartialsView::PartialsView (IctusProcessor& processor, ui::Palette palette, juce
 
     lowBand_.prepare (192000.0);
     lowBand_.setMode (dsp::SvfMode::bandpass);
-    lowBand_.setResonance (dsp::SvfFilter::resonanceForQ (HatEngine::kBandQ));
 
     highBand_.prepare (192000.0);
     highBand_.setMode (dsp::SvfMode::bandpass);
-    highBand_.setResonance (dsp::SvfFilter::resonanceForQ (HatEngine::kBandQ));
 
     highpass_.prepare (192000.0);
     highpass_.setMode (dsp::SvfMode::highpass);
@@ -752,7 +750,10 @@ void PartialsView::gather (std::vector<double>& inputs)
     inputs.push_back (read (ids::htHarmonics));
     inputs.push_back (read (ids::htSpread));
     inputs.push_back (read (ids::htColour));
+    inputs.push_back (read (ids::htWidth));
+    inputs.push_back (read (ids::htHighpass));
     inputs.push_back (read (ids::htAir));
+    inputs.push_back (read (ids::htSizzle));
 }
 
 void PartialsView::update()
@@ -776,9 +777,13 @@ void PartialsView::update()
         partials_[i] = hz;
     }
 
+    const double q = dsp::SvfFilter::resonanceForQ (HatEngine::qForWidth (0.01 * read (ids::htWidth)));
+
+    lowBand_.setResonance (q);
+    highBand_.setResonance (q);
     lowBand_.setCutoffHz (colour);
     highBand_.setCutoffHz (colour * HatEngine::kUpperBandRatio);
-    highpass_.setCutoffHz (colour * HatEngine::kHighpassFraction);
+    highpass_.setCutoffHz (read (ids::htHighpass));
 
     // Magnitudes summed rather than the complex responses: the two bands are
     // an octave apart, so where one is loud the other is well down, and the
@@ -818,6 +823,8 @@ void PartialsView::update()
     caption_ += " to ";
     caption_ += juce::String (partials_[HatEngine::kOscillators - 1], 0);
     caption_ += " Hz";
+
+    sizzle_ = 0.01 * read (ids::htSizzle);
 
     captionRight_ = "bands " + juce::String (colour / 1000.0, 2) + " / "
                   + juce::String (colour * HatEngine::kUpperBandRatio / 1000.0, 2) + " kHz";
@@ -863,6 +870,23 @@ void PartialsView::paint (juce::Graphics& g)
 
         g.setColour (palette_.secondary.withAlpha (static_cast<float> (0.06 + 0.18 * air_)));
         g.fillPath (wash);
+
+        // Sizzle: the hiss rings at the partials rather than lying flat, so
+        // the wash grows a spike on each of them.
+        if (sizzle_ > 0.0)
+        {
+            g.setColour (palette_.secondary.withAlpha (static_cast<float> (0.25 + 0.5 * sizzle_ * air_)));
+
+            for (const double hz : partials_)
+            {
+                if (hz < kLowHz || hz > kHighHz)
+                    continue;
+
+                const float x = xOf (hz);
+                const float top = yOf (responseDb_[0] * 0.0 + 6.0 * sizzle_ - 8.0);
+                g.drawLine (x, plot.getBottom(), x, std::max (top, plot.getY()), 1.0f);
+            }
+        }
     }
 
     // Each partial's WHOLE harmonic series, not just where it starts.
@@ -943,48 +967,94 @@ BurstView::BurstView (IctusProcessor& processor, ui::Palette palette, juce::Colo
                 "uses, so it is right before the first hit.");
 
     envelope_.assign (kPoints, 0.0f);
+    bodyTrace_.assign (kPoints, 0.0f);
 }
 
 void BurstView::gather (std::vector<double>& inputs)
 {
+    inputs.push_back (read (ids::cpBursts));
     inputs.push_back (read (ids::cpFlam));
+    inputs.push_back (read (ids::cpSkew));
+    inputs.push_back (read (ids::cpSnap));
     inputs.push_back (read (ids::cpTail));
-    inputs.push_back (read (ids::cpColour));
+    inputs.push_back (read (ids::cpBody));
+    inputs.push_back (read (ids::cpBodyRing));
 }
 
 void BurstView::update()
 {
+    bursts_ = juce::jlimit (2, ClapEngine::kMaxBursts,
+                            static_cast<int> (std::lround (read (ids::cpBursts))));
     flamSeconds_ = 0.001 * read (ids::cpFlam);
-    const double tail = 0.001 * read (ids::cpTail);
 
-    // The whole hit: three flams to the last burst, then the tail.
-    seconds_ = 3.0 * flamSeconds_ + tail;
+    const double skewRatio = ClapEngine::ratioForSkew (0.01 * read (ids::cpSkew));
+    const double snap = 0.001 * read (ids::cpSnap);
+    const double tail = 0.001 * read (ids::cpTail);
+    const double bodyLevel = 0.01 * read (ids::cpBody);
+    const double bodyRing = 0.001 * read (ids::cpBodyRing);
+
+    // Where each burst lands, with the skew compounding gap by gap.
+    double when = 0.0;
+    double gap = flamSeconds_;
+
+    for (int burst = 0; burst < bursts_; ++burst)
+    {
+        onsets_[static_cast<std::size_t> (burst)] = when;
+        when += gap;
+        gap *= skewRatio;
+    }
+
+    const double last = onsets_[static_cast<std::size_t> (bursts_ - 1)];
+    seconds_ = last + std::max (tail, bodyRing) + 0.01;
 
     for (int i = 0; i < kPoints; ++i)
     {
         const double t = seconds_ * static_cast<double> (i) / (kPoints - 1);
         double sum = 0.0;
 
-        for (int burst = 0; burst < ClapEngine::kBursts; ++burst)
+        for (int burst = 0; burst < bursts_; ++burst)
         {
-            const double since = t - burst * flamSeconds_;
+            const double since = t - onsets_[static_cast<std::size_t> (burst)];
 
             if (since >= 0.0)
-                sum += std::exp (-6.907755278982137 * since / ClapEngine::kBurstSeconds);
+                sum += std::exp (-6.907755278982137 * since / snap);
         }
 
         // The tail starts with the last burst, and falls to nothing at its
         // own time -- the engine's Adsr decay to a zero sustain.
-        const double sinceTail = t - (ClapEngine::kBursts - 1) * flamSeconds_;
+        const double sinceTail = t - last;
 
         if (sinceTail >= 0.0 && sinceTail < tail)
             sum += std::exp (-6.907755278982137 * sinceTail / tail);
 
+        // The body rings from the FIRST burst, struck again by every one
+        // after it, and it is the part that has a pitch.
+        double body = 0.0;
+
+        if (bodyLevel > 0.0)
+            for (int burst = 0; burst < bursts_; ++burst)
+            {
+                const double since = t - onsets_[static_cast<std::size_t> (burst)];
+
+                if (since >= 0.0)
+                    body += std::exp (-6.907755278982137 * since / bodyRing);
+            }
+
         envelope_[static_cast<std::size_t> (i)] = static_cast<float> (std::min (sum, 2.0) * 0.5);
+        bodyTrace_[static_cast<std::size_t> (i)] =
+            static_cast<float> (std::min (bodyLevel * body, 2.0) * 0.5);
     }
 
-    caption_ = juce::String (1000.0 * flamSeconds_, 1) + " ms apart  ·  tail "
-             + juce::String (1000.0 * tail, 0) + " ms";
+    caption_ = juce::String (bursts_) + " bursts, " + juce::String (1000.0 * flamSeconds_, 1)
+             + " ms apart";
+
+    if (! dsp::isExactly (skewRatio, 1.0))
+        caption_ += skewRatio < 1.0 ? " and crowding" : " and spreading";
+
+    caption_ += "  ·  tail ";
+    caption_ += juce::String (1000.0 * tail, 0);
+    caption_ += " ms";
+
     captionRight_ = juce::String (1000.0 * seconds_, 0) + " ms in all";
 }
 
@@ -997,10 +1067,10 @@ void BurstView::paint (juce::Graphics& g)
     // Where each burst lands.
     g.setColour (palette_.panel.brighter (0.30f));
 
-    for (int burst = 0; burst < ClapEngine::kBursts; ++burst)
+    for (int burst = 0; burst < bursts_; ++burst)
     {
         const float x = plot.getX() + plot.getWidth()
-                      * static_cast<float> (burst * flamSeconds_ / seconds_);
+                      * static_cast<float> (onsets_[static_cast<std::size_t> (burst)] / seconds_);
         g.drawVerticalLine (juce::roundToInt (x), plot.getY(), plot.getBottom());
     }
 
@@ -1020,6 +1090,32 @@ void BurstView::paint (juce::Graphics& g)
 
     g.setColour (tint_.withAlpha (0.22f));
     g.fillPath (filled);
+
+    // The cavity's ring, which has a pitch where the hiss has none.
+    bool bodySounding = false;
+
+    for (const float value : bodyTrace_)
+        bodySounding = bodySounding || value > 0.001f;
+
+    if (bodySounding)
+    {
+        juce::Path body;
+
+        for (int i = 0; i < kPoints; ++i)
+        {
+            const float x = plot.getX() + plot.getWidth() * static_cast<float> (i) / (kPoints - 1);
+            const float y = plot.getBottom() - plot.getHeight() * bodyTrace_[static_cast<std::size_t> (i)];
+
+            if (i == 0)
+                body.startNewSubPath (x, y);
+            else
+                body.lineTo (x, y);
+        }
+
+        g.setColour (palette_.accentBright.withAlpha (0.75f));
+        g.strokePath (body, juce::PathStrokeType (1.2f));
+    }
+
     g.setColour (tint_);
     g.strokePath (path, juce::PathStrokeType (1.6f));
 }

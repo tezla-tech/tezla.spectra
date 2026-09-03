@@ -5318,6 +5318,32 @@ int runIctus (const Args& args)
         return 10.0 * std::log10 (std::max (inharmonic, 1.0e-300) / std::max (total, 1.0e-300));
     };
 
+    // The first `seconds` of a signal, Blackman-Harris windowed over exactly
+    // that many samples and zero-padded to a power of two (the tests' rule:
+    // window the SIGNAL, not the buffer, or two rates differ by the window).
+    const auto windowFirst = [] (const std::vector<double>& x, double signalRate, double seconds)
+    {
+        const std::size_t n = std::min (x.size(), static_cast<std::size_t> (seconds * signalRate));
+
+        std::size_t size = 1;
+        while (size < n)
+            size <<= 1;
+
+        std::vector<double> out (size, 0.0);
+
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            const double phase = 2.0 * std::numbers::pi * static_cast<double> (i)
+                               / static_cast<double> (n - 1);
+
+            out[i] = x[i] * (0.35875 - 0.48829 * std::cos (phase)
+                                     + 0.14128 * std::cos (2.0 * phase)
+                                     - 0.01168 * std::cos (3.0 * phase));
+        }
+
+        return out;
+    };
+
     static const char* kSetNames[HatEngine::kSetCount] { "Metal", "Bell", "Trash", "Wide" };
 
     // ---- 1. the ratio sets, and the morph between them -------------------
@@ -5479,9 +5505,183 @@ int runIctus (const Args& args)
                      1000.0 * static_cast<double> (lastNonZero) / 192000.0);
     }
 
+    // ---- 4b. what the new hat controls do --------------------------------
+
+    std::printf ("\nDamp: the low-pass corner as the hit decays (open hat, 0.8 s):\n\n");
+
+    for (const double damp : { 0.0, 0.3, 0.6, 1.0 })
+    {
+        HatSettings hat;
+        hat.damp = damp;
+        hat.decayOpenSeconds = 0.8;
+        hat.air = 0.0;
+        hat.ring = 0.0;
+        hat.drive = 0.0;
+        hat.velocityColour = 0.0;
+
+        HatEngine engine;
+        engine.prepare (192000.0);
+        engine.start (hat, true, 1.0, 11u, 0);
+
+        double atStart = 0.0;
+        double atHalf = 0.0;
+
+        for (int n = 0; n < static_cast<int> (0.4 * 192000.0); ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                engine.advanceControl (Engine::kControlIntervalSamples);
+
+            (void) engine.process();
+
+            if (n == 64)
+                atStart = engine.getDampCutoffHz();
+
+            if (n == static_cast<int> (0.2 * 192000.0))
+                atHalf = engine.getDampCutoffHz();
+        }
+
+        std::printf ("  Damp %3.0f%% -> corner %6.0f Hz at the strike, %6.0f Hz at 200 ms\n",
+                     100.0 * damp, atStart, atHalf);
+    }
+
+    std::printf ("\nRing: the share of energy OFF the six harmonic series -- the dense\n"
+                 "inharmonic wash a plate makes and a bare pulse bank does not:\n\n");
+
+    {
+        double partials[HatEngine::kOscillators] {};
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            partials[i] = 900.0 * HatEngine::kSets[0][i];
+
+        struct Case { const char* name; double ring, air, sizzle; };
+
+        for (const Case c : { Case { "bare", 0.0, 0.0, 0.0 },
+                              Case { "ring 25%", 0.25, 0.0, 0.0 },
+                              Case { "ring 50%", 0.5, 0.0, 0.0 },
+                              Case { "ring 100%", 1.0, 0.0, 0.0 } })
+        {
+            HatSettings hat;
+            hat.tuneHz = 900.0;
+            hat.spread = 0.0;
+            hat.damp = 0.0;
+            hat.drive = 0.0;
+            hat.strike = 0.0;
+            hat.width = 1.0;
+            hat.highpassHz = 200.0;
+            hat.decayOpenSeconds = 1.2;
+            hat.ring = c.ring;
+            hat.air = c.air;
+            hat.sizzle = c.sizzle;
+            hat.velocityColour = 0.0;
+            hat.velocityDecay = 0.0;
+            hat.velocityStrike = 0.0;
+
+            HatEngine engine;
+            engine.prepare (192000.0);
+            engine.start (hat, true, 1.0, 12u, 0);
+
+            std::vector<double> out (static_cast<std::size_t> (1.3 * 192000.0));
+
+            for (std::size_t n = 0; n < out.size(); ++n)
+            {
+                if (n % Engine::kControlIntervalSamples == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+
+                out[n] = engine.process();
+            }
+
+            std::printf ("  %-24s %6.1f dB\n", c.name,
+                         inharmonicDb (out, 192000.0, partials, HatEngine::kOscillators, 20000.0));
+        }
+    }
+
+    // ---- 4c. Sizzle: where the hiss goes ---------------------------------
+    //
+    // The inharmonic measure above says nothing useful about Sizzle -- noise
+    // is off every harmonic series whatever is done to it. What the control
+    // actually claims is that the hiss ends up ON the metal's partials, so
+    // that is what is counted: the share of its energy within a semitone of
+    // one of the six.
+
+    std::printf ("\nSizzle: the share of the hiss landing within a semitone of a partial\n"
+                 "(Tune 400 Hz, no metal in the mix -- the noise layer alone):\n\n");
+
+    for (const double sizzle : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        HatSettings hat;
+        hat.tuneHz = 400.0;
+        hat.spread = 0.0;
+        hat.ring = 0.0;
+        hat.drive = 0.0;
+        hat.strike = 0.0;
+        hat.damp = 0.0;
+        hat.air = 1.0;
+        hat.airToneHz = 200.0;
+        hat.sizzle = sizzle;
+        hat.width = 1.0;
+        hat.highpassHz = 200.0;
+        hat.colourHz = 4000.0;
+        hat.decayOpenSeconds = 1.0;
+        hat.level = 1.0;
+        hat.velocityColour = 0.0;
+        hat.velocityDecay = 0.0;
+        hat.velocityStrike = 0.0;
+
+        HatEngine engine;
+        engine.prepare (192000.0);
+        engine.start (hat, true, 1.0, 13u, 0);
+
+        std::vector<double> out (static_cast<std::size_t> (1.0 * 192000.0));
+
+        for (std::size_t n = 0; n < out.size(); ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                engine.advanceControl (Engine::kControlIntervalSamples);
+
+            out[n] = engine.process();
+        }
+
+        const auto windowed = windowFirst (out, 192000.0, 0.6);
+        const auto spectrum = dsp::fftOfReal (windowed);
+        const double binWidth = 192000.0 / static_cast<double> (windowed.size());
+        const auto last = std::min (static_cast<std::size_t> (12000.0 / binWidth),
+                                    windowed.size() / 2);
+
+        double total = 0.0;
+        double onPartials = 0.0;
+
+        for (std::size_t bin = 1; bin <= last; ++bin)
+        {
+            const double hz = static_cast<double> (bin) * binWidth;
+            const double power = std::norm (spectrum[bin]);
+            total += power;
+
+            for (int i = 0; i < HatEngine::kOscillators; ++i)
+                if (std::abs (1200.0 * std::log2 (hz / (400.0 * HatEngine::kSets[0][i]))) < 100.0)
+                {
+                    onPartials += power;
+                    break;
+                }
+        }
+
+        std::printf ("  Sizzle %3.0f%% -> %5.1f%% of the hiss on a partial\n",
+                     100.0 * sizzle, 100.0 * onPartials / std::max (total, 1.0e-300));
+    }
+
     // ---- 5. what the two new engines cost --------------------------------
 
     {
+        // The guard the plugin always has and a bare engine loop does not.
+        //
+        // Without it this read 196.8 ns a sample for the clap against 8.6 for
+        // the version before it -- not because the clap got twenty times more
+        // expensive, but because its filters spend most of a second with
+        // near-zero input and every one of those samples went through
+        // denormal arithmetic. `Engine::process` sets FTZ/DAZ for the whole
+        // callback (CLAUDE.md section 2.2), so a measurement without it is
+        // measuring something the user never runs.
+        const dsp::ScopedNoDenormals guard;
+
         double sink = 0.0;
         const int samples = 192000;
 
@@ -5535,12 +5735,50 @@ int runIctus (const Args& args)
         parameters.snare1.crackNoise = 0.3;
         parameters.snare1.rattle = 0.4;
 
-        const auto out = renderPattern (parameters, rate, 2.4,
-                                        { { 0.0, 36, 1.0 }, { 0.5, 38, 1.0 }, { 1.0, 36, 1.0 },
-                                          { 1.25, 36, 0.7 }, { 1.5, 38, 1.0 }, { 1.75, 37, 0.8 } });
+        parameters.hat.spread = 0.3;
+        parameters.hat.decayClosedSeconds = 0.05;
+        parameters.hat.decayOpenSeconds = 0.4;
+        parameters.hat.level = 0.5;
+        parameters.clap.body = 0.35;
+        parameters.clap.level = 0.5;
+
+        // Two bars at 174 BPM -- 1.379 s a bar -- with hats on the
+        // sixteenths, an open hat before each snare, a ghost between the
+        // backbeats and a clap on the second one. Then, so the hats can be
+        // heard on their own, four bars of nothing but them, sweeping the
+        // controls that were added at I4.1.
+        constexpr double beat = 60.0 / 174.0;
+        constexpr double sixteenth = beat * 0.25;
+
+        std::vector<PatternHit> pattern;
+
+        for (int bar = 0; bar < 2; ++bar)
+        {
+            const double t0 = bar * 4.0 * beat;
+
+            pattern.push_back ({ t0, 36, 1.0 });
+            pattern.push_back ({ t0 + beat, 38, 1.0 });
+            pattern.push_back ({ t0 + beat * 1.75, 36, 0.8 });
+            pattern.push_back ({ t0 + beat * 2.5, 36, 0.9 });
+            pattern.push_back ({ t0 + beat * 3.0, 38, 1.0 });
+            pattern.push_back ({ t0 + beat * 3.0, 39, 0.8 });
+            pattern.push_back ({ t0 + beat * 1.5, 40, 0.5 });
+            pattern.push_back ({ t0 + beat * 3.5, 40, 0.45 });
+
+            for (int step = 0; step < 16; ++step)
+            {
+                const double when = t0 + step * sixteenth;
+                const bool open = step == 7 || step == 15;
+
+                pattern.push_back ({ when, open ? 46 : 42, step % 4 == 0 ? 1.0 : 0.55 });
+            }
+        }
+
+        const auto out = renderPattern (parameters, rate, 2.0 * 4.0 * beat + 0.6, pattern);
 
         if (measure::writeWav (args.outPath, { out }, rate))
-            std::printf ("\nWrote %s (kick, snare, kick, kick, snare, perc; %.0f Hz)\n", args.outPath.c_str(), rate);
+            std::printf ("\nWrote %s (two bars at 174 BPM: kick, snare, ghost, clap and"
+                         " sixteenth hats; %.0f Hz)\n", args.outPath.c_str(), rate);
         else
             std::printf ("\nCould not write %s\n", args.outPath.c_str());
     }

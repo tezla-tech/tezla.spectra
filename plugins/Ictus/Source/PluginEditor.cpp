@@ -572,14 +572,14 @@ void IctusEditor::buildHatPage()
     hatPage_ = std::make_unique<PlatePage> (ictus_.getState(), palette_);
     auto& page = *hatPage_;
 
-    // ---- metal ----
+    // ---- the metal ----
     page.beginPlate ("Metal", "six oscillators that do not agree", kTintPitch);
 
     page.addKnob (ids::htTune, "Tune",
         "Where the lowest of the six partials sits, 60 Hz to 1.2 kHz, and the "
         "whole set moves with it. A cymbal has no pitch, so this is a size "
-        "control rather than a note: low is a big, dark lid, high is a small "
-        "tight one.", Emphasis::lead);
+        "control rather than a note: low is a big dark lid, high a small tight "
+        "one.", Emphasis::lead);
 
     page.addKnob (ids::htHarmonics, "Harmonics",
         "Which set of six ratios, and everything between them. Metal is the "
@@ -595,34 +595,103 @@ void IctusEditor::buildHatPage()
         "way along a fixed pattern that sums to zero -- so the set loosens "
         "without moving. 0 is the set exactly and runs no arithmetic at all.");
 
-    page.addKnob (ids::htAir, "Air",
-        "Seeded noise added to the six BEFORE the filters, so it is coloured with "
-        "them and belongs to the instrument rather than sitting on top as hiss. A "
-        "new stream every hit. 0 draws none.");
+    page.addKnob (ids::htRing, "Ring",
+        "The low three oscillators multiplied by the high three. A ring "
+        "modulator's output holds the SUM AND DIFFERENCE of every pair of "
+        "harmonics in its inputs, so this one multiply turns two sparse combs "
+        "into a dense inharmonic wash -- which is what a plate of metal actually "
+        "sounds like, and the single biggest difference between a thin hat and a "
+        "lush one. Both sides are band-limited first, so it cannot alias at any "
+        "setting. 0 runs none of it.", Emphasis::lead);
+
+    page.addKnob (ids::htDrive, "Drive",
+        "An antialiased soft clip over the metal and the hiss together -- the "
+        "overdrive the cymbal patch in the Nord Modular chapter ends with. It "
+        "fills the gaps between partials with intermodulation and glues the two "
+        "layers into one instrument. 0 is exact.");
 
     partialsView_ = static_cast<PartialsView*> (
         page.addDisplay (std::make_unique<PartialsView> (ictus_, palette_, page.tintOf (kTintPitch)), 3));
 
-    // ---- colour ----
-    page.beginPlate ("Colour", "the band the metal is heard through", kTintColour);
+    // ---- the hiss ----
+    page.beginPlate ("Hiss", "the plate rung by noise rather than struck", kTintColour);
+
+    page.addKnob (ids::htAir, "Air",
+        "The noise layer's level. On a real cymbal the sizzle is not something "
+        "added to the metal -- it IS the metal, its own modes excited chaotically "
+        "rather than struck cleanly. That is why a sampled hat sounds like one "
+        "object. 0 draws no noise at all.", Emphasis::lead);
+
+    page.addKnob (ids::htSizzle, "Sizzle",
+        "How much of the hiss is rung through the six partials rather than left "
+        "flat. At 0 it is raw filtered noise beside the metal -- two things at "
+        "once. At 100 every bit of it rings at the frequencies the metal already "
+        "has, so the noise and the harmonics are one instrument. Costs six "
+        "band-passes while it is up, and none at 0.", Emphasis::lead);
+
+    page.addKnob (ids::htAirTone, "Air tone",
+        "The hiss's own high-pass, 200 Hz to 12 kHz, before it meets the metal. "
+        "Low is a broad spray, high a thin sizzle sitting over the top.");
+
+    page.addKnob (ids::htAirDecay, "Air decay",
+        "How long the hiss lasts as a percentage of the pad's own decay. Under "
+        "100 is a fast chiff on the front of a longer metal ring; over 100 is a "
+        "shimmer that outlives it, which is most of what a long open hat is.");
+
+    // ---- the band ----
+    page.beginPlate ("Colour", "the band it is heard through", kTintClick, true);
 
     page.addKnob (ids::htColour, "Colour",
-        "The lower band-pass's centre, 800 Hz to 12 kHz; the upper one follows at "
-        "2.06 times it -- the spacing of the two bands in the circuit the set was "
-        "measured from -- and a high-pass sits at half of it, keeping the "
-        "oscillators' own fundamentals out of an instrument that should have no "
-        "body. 3.4 kHz is the classic place; higher is thinner and more modern. "
-        "Measured: Colour at 3.44 kHz puts the hit's centre of gravity at 4.5 kHz.",
-        Emphasis::lead);
+        "The lower band-pass's centre, 800 Hz to 12 kHz; the upper follows at "
+        "2.06 times it -- the spacing of the two bands in the circuit the Metal "
+        "set was measured from. 3.4 kHz is the classic place; higher is thinner "
+        "and more modern.", Emphasis::lead);
+
+    page.addKnob (ids::htWidth, "Width",
+        "How wide those two bands are, from a narrow whistle you can pick one "
+        "partial out of to a band open enough to hear the whole plate at once. "
+        "Wide is where a lush hat lives.");
+
+    page.addKnob (ids::htHighpass, "Highpass",
+        "What is taken off underneath, 200 Hz to 8 kHz. A hat should have no "
+        "body: this is what keeps the oscillators' own low fundamentals out of "
+        "it. Raise it for a thin tick, lower it to let some clank through.");
+
+    page.addKnob (ids::htDamp, "Damp",
+        "How far the top closes as the hit decays. On a real cymbal the high "
+        "modes die first, and that fall from bright to dark over the ring is "
+        "most of what makes a hat sound played rather than triggered. Retuned "
+        "once every 32 samples, so it costs nothing per sample. 0 leaves the "
+        "filter out of the path entirely.", Emphasis::lead);
+
+    // ---- the envelope ----
+    page.beginPlate ("Envelope", "the stick and the ring", kTintAmplitude);
+
+    page.addKnob (ids::htStrike, "Strike",
+        "The stick: a short loud transient over the body envelope, falling in "
+        "6 ms. With Damp up it is automatically the brightest part of the hit, "
+        "because Damp is still wide open when it lands. This is what a hat "
+        "without an attack was missing.", Emphasis::lead);
 
     page.addKnob (ids::hcDecay, "Closed decay",
-        "How long the CLOSED pad rings, 10 to 300 ms. This is the pad on F#1 by "
-        "default. The envelope is killed the moment it lands, so a 55 ms hat "
-        "costs nothing after 55 ms.", Emphasis::lead);
+        "How long the CLOSED pad rings, 10 to 400 ms -- F#1 by default.",
+        Emphasis::lead);
 
     page.addKnob (ids::hoDecay, "Open decay",
-        "How long the OPEN pad rings, 100 ms to 2 s -- A#1 by default. Same "
+        "How long the OPEN pad rings, 100 ms to 3 s -- A#1 by default. Same "
         "cymbals, longer stroke.", Emphasis::lead);
+
+    page.addKnob (ids::htHold, "Hold",
+        "A plateau before the decay starts, 0 to 200 ms: the hit stays at full "
+        "level for this long first. A little of it is the difference between a "
+        "tick and a chick.", Emphasis::trim);
+
+    page.addKnob (ids::htShape, "Shape",
+        "The decay's curve: 0 exponential, the way a struck thing falls; 100 "
+        "linear, which reads as gated and deliberate.", Emphasis::trim);
+
+    // ---- stopping it ----
+    page.beginPlate ("Stop", "how a hat is silenced", kTintAmplitude, true);
 
     page.addLamp (ids::htChoke, "Choke", "Choke",
         "Lit: a closed-hat hit silences whatever the open pad is ringing, fading "
@@ -631,8 +700,20 @@ void IctusEditor::buildHatPage()
         "Skipped when both pads are on the same key, where you have asked for "
         "both.");
 
-    // ---- out, beside the colour plate so the page fills ----
-    page.beginPlate ("Out", "level and what velocity does", kTintAmplitude, true);
+    page.addLamp (ids::htGate, "Gate", "Gate",
+        "Lit: a note-off fades the WHOLE hit out over Release -- metal, hiss and "
+        "the filters' ring alike -- from wherever it is, on BOTH pads. That is "
+        "how you play a long open hat and stop it by lifting the key rather than "
+        "waiting for a closed hit to choke it. Dark: a one-shot that ignores "
+        "note-off, and the HIT button always plays the whole hit either way.");
+
+    page.addKnob (ids::htRelease, "Release",
+        "How long a gated hat takes to fade after the key lifts, 0 to 2 s. 0 is "
+        "a 1 ms ramp, the shortest that does not click. Does nothing with Gate "
+        "dark.");
+
+    // ---- out ----
+    page.beginPlate ("Out", "level and what velocity does", kTintVelocity);
 
     page.addKnob (ids::htLevel, "Level",
         "Both hat pads' level before the output trim, 0 to 100%.", Emphasis::lead);
@@ -641,20 +722,25 @@ void IctusEditor::buildHatPage()
         "How much velocity moves the level, 0 to 100%.", Emphasis::trim);
 
     page.addKnob (ids::htVelDecay, "Vel > Decay",
-        "How much velocity shortens a soft hit, 0 to 100%: a light tap on a hat "
-        "does not ring as long as a hard one.", Emphasis::trim);
+        "How much velocity shortens a soft hit, 0 to 100%: a light tap does not "
+        "ring as long as a hard one.", Emphasis::trim);
 
     page.addKnob (ids::htVelColour, "Vel > Colour",
         "How much velocity moves Colour, 0 to 100%: a soft hit is darker as well "
         "as quieter, which is most of what makes programmed sixteenths sound "
         "played.", Emphasis::trim);
 
+    page.addKnob (ids::htVelStrike, "Vel > Strike",
+        "How much velocity moves the stick, 0 to 100%: harder hits get more "
+        "attack, softer ones almost none.", Emphasis::trim);
+
     page.setNote ("One pair of cymbals, struck two ways: the closed pad (F#1) and the open one "
-                  "(A#1) share every control but their decay. Six band-limited pulses through "
-                  "two band-passes and a high-pass, everything inside the oversampled section: "
-                  "measured, inharmonic energy in the audible band sits at -74 to -77 dB at the "
-                  "rate Auto runs, against -12 to -17 dB for the same six pulses generated "
-                  "naively. Oversampling Off at 48 kHz costs about 40 dB of that.");
+                  "(A#1) share every control but their decay. Six band-limited pulses, a ring "
+                  "modulator, an overdrive and a noise layer rung through the same six partials, "
+                  "all inside the oversampled section. Measured: inharmonic energy in the audible "
+                  "band at -74 to -77 dB at the rate Auto runs, against -12 to -17 dB for the "
+                  "same six pulses generated naively; oversampling Off at 48 kHz costs about "
+                  "40 dB of that.");
 
     page.setValueText (ids::htHarmonics, [] (double position)
     {
@@ -677,46 +763,107 @@ void IctusEditor::buildClapPage()
     clapPage_ = std::make_unique<PlatePage> (ictus_.getState(), palette_);
     auto& page = *clapPage_;
 
-    // ---- bursts ----
+    // ---- the pattern ----
     page.beginPlate ("Bursts", "several people, not quite together", kTintClick);
 
-    page.addKnob (ids::cpFlam, "Flam",
-        "How far apart the four bursts land, 4 to 30 ms. About 11 ms is a room "
-        "full of people clapping at a signal; tighter reads as one pair of hands, "
-        "wider as a crowd. Counted in samples from this, so the pattern is the "
-        "same at 44.1 and 192 kHz -- measured to the sample.", Emphasis::lead);
+    page.addKnob (ids::cpBursts, "Bursts",
+        "How many bursts the hit is made of, two to six. Two is a pair of hands; "
+        "six is a room. The last one is also where the tail starts.",
+        Emphasis::lead);
 
-    page.addKnob (ids::cpTail, "Tail",
-        "The room's own answer, starting with the fourth burst and falling over "
-        "30 ms to 1 s. This is what makes a clap a clap rather than four noise "
-        "bursts.", Emphasis::lead);
+    page.addKnob (ids::cpFlam, "Flam",
+        "The first gap between bursts, 4 to 30 ms. About 11 ms is a room full of "
+        "people clapping at a signal; tighter reads as one pair of hands, wider "
+        "as a crowd. Counted in samples from this, so the pattern lands on the "
+        "same instants at 44.1 and at 192 kHz.", Emphasis::lead);
+
+    page.addKnob (ids::cpSkew, "Skew",
+        "Whether the bursts crowd together or spread out as the hit goes on: "
+        "each gap is a fixed fraction of the one before it. 0 is an even pattern "
+        "and is even exactly, which is the one thing real people never do -- a "
+        "little either way is most of what stops a clap sounding programmed.");
+
+    page.addKnob (ids::cpSnap, "Snap",
+        "How fast each burst falls, 1 to 20 ms. Short is a slap you can count; "
+        "long smears them into one gesture.");
 
     burstView_ = static_cast<BurstView*> (
         page.addDisplay (std::make_unique<BurstView> (ictus_, palette_, page.tintOf (kTintClick)), 3));
 
-    // ---- colour and out ----
-    page.beginPlate ("Colour", "where the smack sits", kTintColour);
+    // ---- the hiss ----
+    page.beginPlate ("Hiss", "the air between the hands", kTintColour);
+
+    page.addKnob (ids::cpNoise, "Noise",
+        "The noise layer's level, 0 to 100%. Turn it down and what is left is "
+        "the body alone -- a pitched knock rather than a clap.", Emphasis::lead);
+
+    page.addKnob (ids::cpNoiseTone, "Noise tone",
+        "The hiss's own high-pass, 200 Hz to 8 kHz, before the band. Low is a "
+        "full smack, high a dry papery snap.");
+
+    // ---- the body ----
+    page.beginPlate ("Body", "cupped hands are a cavity, and it rings", kTintPitch, true);
+
+    page.addKnob (ids::cpBody, "Body",
+        "The cavity's level. A clap is not only noise: the hands enclose air and "
+        "it resonates, which is what gives a real one a pitch under the hiss. "
+        "Three inharmonic modes, struck by every burst. 0 runs no bank at all.",
+        Emphasis::lead);
+
+    page.addKnob (ids::cpBodyPitch, "Pitch",
+        "Where the cavity sits, 200 Hz to 2.5 kHz. Around 900 is a pair of hands; "
+        "lower is cupped and hollow, higher is flat-palmed and sharp.");
+
+    page.addKnob (ids::cpBodyRing, "Ring",
+        "How long the cavity holds, 10 to 500 ms. Short is a knock inside the "
+        "clap; long turns the pad into something closer to a rim or a block.");
+
+    // ---- what it is heard through ----
+    page.beginPlate ("Colour", "where the smack sits", kTintAmplitude);
 
     page.addKnob (ids::cpColour, "Colour",
-        "The band-pass's centre, 300 Hz to 5 kHz. A clap is a mid-band event, all "
-        "smack and no weight: 1 to 2 kHz is a hand, lower is a thump, higher is a "
-        "snap. One band an octave and a half wide -- narrow enough to shape it, "
-        "wide enough that the bursts stay four separate slaps.", Emphasis::lead);
+        "The band-pass's centre, 300 Hz to 6 kHz. A clap is a mid-band event, "
+        "all smack and no weight: 1 to 2 kHz is a hand, lower is a thump, higher "
+        "is a snap.", Emphasis::lead);
 
-    page.beginPlate ("Out", "level and velocity", kTintAmplitude, true);
+    page.addKnob (ids::cpWidth, "Width",
+        "How wide that band is: narrow enough to place the smack precisely, or "
+        "open enough to keep every burst a separate slap.");
+
+    page.addKnob (ids::cpTail, "Tail",
+        "The room's answer, starting with the last burst and falling over 30 ms "
+        "to 1 s. This is what makes a clap a clap rather than a row of noise "
+        "bursts.", Emphasis::lead);
+
+    page.addKnob (ids::cpTailTone, "Tail tone",
+        "Where the room sits as a percentage of Colour. A room is duller than "
+        "the hands that fill it, so under 100 is the honest direction.");
+
+    page.addKnob (ids::cpDrive, "Drive",
+        "An antialiased soft clip over the whole clap, for a harder, flatter "
+        "one that sits in front of a mix. 0 is exact.");
+
+    // ---- out ----
+    page.beginPlate ("Out", "level and velocity", kTintVelocity, true);
 
     page.addKnob (ids::cpLevel, "Level",
-        "The clap's level before the output trim, 0 to 100%. Under a snare rather "
-        "than instead of one is where this usually sits.", Emphasis::lead);
+        "The clap's level before the output trim, 0 to 100%. Under a snare "
+        "rather than instead of one is where this usually sits.", Emphasis::lead);
 
     page.addKnob (ids::cpVelLevel, "Vel > Level",
         "How much velocity moves the level, 0 to 100%.", Emphasis::trim);
 
-    page.setNote ("The clap is on D#1 by default. Four noise bursts a Flam apart with their "
-                  "envelopes summed, then the room: the recipe from the Nord Modular percussion "
-                  "chapter, which is where the four pulses about 11 ms apart come from. "
-                  "Humanising the spacing -- what makes a real clap different every time -- "
-                  "arrives with every other pad's humanise control.");
+    page.setNote ("The clap is on D#1 by default. Bursts of noise a Flam apart with their "
+                  "envelopes summed, a cavity struck by each of them, and then the room: the "
+                  "pattern is the recipe from the Nord Modular percussion chapter, which is "
+                  "where the four pulses about 11 ms apart come from; the body and the skew are "
+                  "what make it more than one sound. Humanising the spacing arrives with every "
+                  "other pad's humanise control.");
+
+    page.setValueText (ids::cpBursts, [] (double count)
+    {
+        return juce::String (juce::roundToInt (count));
+    });
 
     addChildComponent (page);
 }
@@ -941,6 +1088,48 @@ void IctusEditor::updateGreying()
 
     updateSnareGreying (*snarePage_, kSnare1Ids, shownSnare_);
     updateSnareGreying (*ghostPage_, kGhostIds, shownGhost_);
+
+    // The hats: what the noise layer's controls and the gate's release do
+    // nothing without.
+    {
+        const auto value = [this] (const char* id)
+        {
+            return static_cast<double> (ictus_.getState().getRawParameterValue (id)->load());
+        };
+
+        const bool air = value (ids::htAir) > 0.0;
+        const bool hatGate = value (ids::htGate) > 0.5;
+
+        if (air != shownHatAir_)
+        {
+            shownHatAir_ = air;
+            hatPage_->setControlEnabled (ids::htSizzle, air);
+            hatPage_->setControlEnabled (ids::htAirTone, air);
+            hatPage_->setControlEnabled (ids::htAirDecay, air);
+        }
+
+        if (hatGate != shownHatGate_)
+        {
+            shownHatGate_ = hatGate;
+            hatPage_->setControlEnabled (ids::htRelease, hatGate);
+        }
+
+        const bool body = value (ids::cpBody) > 0.0;
+        const bool noise = value (ids::cpNoise) > 0.0;
+
+        if (body != shownClapBody_)
+        {
+            shownClapBody_ = body;
+            clapPage_->setControlEnabled (ids::cpBodyPitch, body);
+            clapPage_->setControlEnabled (ids::cpBodyRing, body);
+        }
+
+        if (noise != shownClapNoise_)
+        {
+            shownClapNoise_ = noise;
+            clapPage_->setControlEnabled (ids::cpNoiseTone, noise);
+        }
+    }
 }
 
 void IctusEditor::timerCallback()
