@@ -163,6 +163,17 @@ enum class GlobalSource
     macro3,
     macro4,
 
+    /// **Sag** -- the machine's temperature, in [-1, 1]. Appended, like every
+    /// entry here (CLAUDE.md section 8).
+    ///
+    /// Global rather than per note, like the LFOs and the sequencer already in
+    /// this list, and it reads the same number here as in the global matrix --
+    /// there is one walk for the whole instrument, which is the point of it.
+    /// It reads the walk even when the Sag depth is 0: the depth knob is how
+    /// much reaches the voice *directly*, not whether the machine has a
+    /// temperature.
+    sag,
+
     count
 };
 
@@ -196,6 +207,14 @@ enum class GlobalDestination
 
     /// Where the anti-formant sits, in octaves.
     formantNotch,
+
+    /// **Phase 5, all appended** -- a stored slot is an index (CLAUDE.md §8).
+    ///
+    /// The size of the throat, in octaves of formant scaling; the depth of the
+    /// machine's instability; and how fast the Shepard glissando climbs.
+    tract,
+    sagDepth,
+    shepardRate,
 
     count
 };
@@ -333,6 +352,21 @@ struct EngineParameters
     /// matrices read the same number. Zero contributes nothing anywhere.
     std::array<double, 4> macros {};
 
+    /// **Shepard.** How fast the glissando climbs, in octaves per second,
+    /// signed -- negative falls. Zero is a legitimate setting and is a *held*
+    /// windowed octave stack, which is its own sound; the panel reads it as
+    /// "held" the way LFO rate 0 already does.
+    ///
+    /// One rate for the whole instrument, because the phase is one accumulator
+    /// for the whole instrument -- see `GlobalSources::shepardOctaves`. It
+    /// means nothing unless an oscillator's Stack is set to Shepard.
+    double shepardRate { 0.0 };
+
+    /// Tempo sync for it: one octave per division, taking its direction from
+    /// `shepardRate`'s sign. The same pattern the LFOs use.
+    bool shepardSync { false };
+    int shepardDivision { dsp::defaultDivision };
+
     double phaseFrequencyHz { 800.0 };
     int phaseStages { 4 };
 
@@ -417,6 +451,10 @@ public:
     void setSustain (bool down) { voices_.setSustain (down); }
     void setBendSemitones (double semitones) noexcept { voices_.setBendSemitones (semitones); }
     void allNotesOff() noexcept { voices_.allNotesOff(); }
+
+    /// The Shepard glissando's accumulator, in octaves travelled. For the test
+    /// that pins the wrap, and for a display.
+    [[nodiscard]] double getShepardOctaves() const noexcept { return shepardOctaves_; }
 
     dsp::Tuning& tuning() noexcept { return voices_.tuning(); }
     [[nodiscard]] const dsp::Tuning& tuning() const noexcept { return voices_.tuning(); }
@@ -628,6 +666,13 @@ private:
     double ppq_ { -1.0 };
     double bpm_ { 120.0 };
     double beatsIntoBlock_ { 0.0 };
+
+    /// Where the Shepard glissando has got to, in octaves travelled. One for
+    /// the whole instrument -- both oscillators of every voice read it, so a
+    /// held chord glides as one thing. Wrapped into [0, 420) because 420 is
+    /// divisible by every copy count the bank allows, which makes the wrap an
+    /// exact whole number of turns at any count rather than a small jump.
+    double shepardOctaves_ { 0.0 };
     bool transportRunning_ { false };
     int sinceControl_ { 0 };
 

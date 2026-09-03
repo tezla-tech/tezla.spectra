@@ -116,8 +116,16 @@ public:
         // Each voice gets its own seed, so the note-random source and the
         // unison phase scatter differ between them -- see Voice::prepare.
         for (int index = 0; index < kMaxVoices; ++index)
-            voices_[static_cast<std::size_t> (index)]
-              .prepare (sampleRate_, static_cast<std::uint64_t> (index + 1));
+        {
+            auto& voice = voices_[static_cast<std::size_t> (index)];
+
+            voice.prepare (sampleRate_, static_cast<std::uint64_t> (index + 1));
+
+            // Stack's Scale mode reads the loaded tuning. The manager owns it
+            // and outlives every voice, so a pointer rather than a copy: a
+            // scale loaded later has to be the scale the copies land on.
+            voice.setTuning (&tuning_);
+        }
 
         reset();
     }

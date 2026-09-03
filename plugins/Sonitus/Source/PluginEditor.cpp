@@ -3553,7 +3553,9 @@ void SonitusEditor::buildPages()
                                    const char* semitoneId, const char* centsId, const char* widthId,
                                    const char* morphId,
                                    const char* levelId, const char* unisonId, const char* detuneId,
-                                   const char* spreadId, const char* driftId, const juce::String& which)
+                                   const char* spreadId, const char* driftId,
+                                   const char* stackId, const char* stackStepId,
+                                   const juce::String& which)
     {
         page.addChoice (shapeId, "Shape",
             "Saw is the dense one and where a reese starts -- every harmonic present, which is "
@@ -3616,17 +3618,71 @@ void SonitusEditor::buildPages()
             "between notes: a key restarts the unison's phases exactly as it always has, never "
             "the drift, so two presses of the same key are two different notes. A little is "
             "life; a lot is a broken machine, which is occasionally what you want.");
+
+        page.addChoice (stackId, "Stack",
+            "**Where the copies go.** Detune is what the Detune knob above has always done -- "
+            "cents, symmetric -- and it is bit-exact, so nothing you have already made changes.\n\n"
+            "The rest place the copies at intervals instead, and the detune still rides on top, "
+            "so a stacked chord can still churn. Exactly one copy always sits on the played "
+            "pitch, so turning Unison up adds notes *around* the note rather than moving it. "
+            "Octaves is an organ registration; Fifths is hollow and wide; Tritones and "
+            "Diminished are symmetric, so they have no root to resolve to; Cluster is minor "
+            "seconds.\n\n"
+            "**Scale** places them on the loaded tuning's keys instead -- see Step. **Shepard** "
+            "is the endless rise: copies an octave apart, all sliding, fading in at the bottom "
+            "as they fade out at the top, so the pitch climbs forever and never arrives. It "
+            "wants at least three copies (below that the level beats at the glide rate) and its "
+            "speed is the Shepard control below.\n\n"
+            "**Shepard is the only mode that costs anything while it runs.** The others work out "
+            "where the copies go once and then sit still; Shepard recomputes seven pitches and "
+            "seven gains per oscillator every control chunk. Measured on the worst case -- "
+            "sixteen voices, seven copies on *both* oscillators, x4 oversampling -- that is "
+            "**about a quarter more CPU than the same patch in any other mode** (1.23x and 1.26x "
+            "on two runs). Three copies instead of seven is most of the sound for less than half "
+            "the cost.");
+
+        page.addKnob (stackStepId, "Step",
+            "**Scale mode only**, and greyed everywhere else. How many keys apart the copies "
+            "sit, played through the loaded tuning -- so what a step *means* is whatever that "
+            "tuning says a key means. In twelve-tone equal temperament a step of 1 is a "
+            "chromatic cluster, 4 is stacked major thirds and 7 is stacked fifths. Under a "
+            "keyboard map it is a scale degree, so 2 is stacked thirds *in that scale*. In "
+            "Bohlen-Pierce, which repeats at 3/1 and has no octave, it is a degree of a scale "
+            "with nothing to resolve to.\n\n"
+            "A copy whose key falls off the end of the keyboard goes silent rather than being "
+            "clamped onto a pitch another copy is already playing.");
     };
 
     osc->addHeading ("OSCILLATOR A -- the sync master", 6);
     addOscillator (*osc, ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
                    ids::morphA, ids::levelA, ids::unisonA, ids::detuneA, ids::spreadA,
-                   ids::driftA, "A");
+                   ids::driftA, ids::stackA, ids::stackStepA, "A");
 
     osc->addHeading ("OSCILLATOR B -- the sync slave and the PM target", 6);
     addOscillator (*osc, ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::morphB, ids::levelB, ids::unisonB, ids::detuneB, ids::spreadB,
-                   ids::driftB, "B");
+                   ids::driftB, ids::stackB, ids::stackStepB, "B");
+
+    osc->addHeading ("SHEPARD -- the endless rise", 3);
+
+    osc->addKnob (ids::shepardRate, "Speed",
+        "How fast the glissando climbs, in **octaves per second**, and the sign is the "
+        "direction: positive rises, negative falls. The illusion repeats once per octave, so "
+        "0.02 is a fifty-second riser and 4 is a siren.\n\n"
+        "**Zero is a setting, not the bottom of a range** -- it reads *held*, and what you get "
+        "is a static octave stack with its ends rolled off, which is an organ registration of "
+        "its own.\n\n"
+        "One speed for the whole instrument, because the glide is one accumulator for the whole "
+        "instrument: a held chord has to climb as one thing, and voices with their own phases "
+        "would smear a rise into a wash. It does nothing unless an oscillator's Stack is set to "
+        "Shepard.");
+
+    osc->addToggle (ids::shepardSync, "Sync",
+        "Locks the climb to the host tempo: **one octave per division**, taking its direction "
+        "from Speed's sign. One octave per bar at 174 BPM is 0.73 octaves a second.");
+
+    osc->addChoice (ids::shepardDiv, "Division",
+        "How long one octave of climb takes, in note values. Greyed unless Sync is on.");
 
     osc->addHeading ("SUB, RING AND FOLD", 5);
 
@@ -4149,6 +4205,15 @@ void SonitusEditor::updateForSwitches()
     const int lfoSync = index (ids::lfo1Sync) + 2 * index (ids::lfo2Sync);
     const int latency = sonitus_.isPrepared() ? sonitus_.getLatencySamples() : -1;
 
+    // Stack decides three things about the page: whether Step means anything
+    // (Scale only), and whether the Shepard group does (either oscillator on
+    // Shepard). Packed into one integer so the early-out below stays one
+    // comparison per switch rather than a growing list.
+    const int stackState = index (ids::stackA)
+                         + static_cast<int> (StackMode::count) * index (ids::stackB)
+                         + static_cast<int> (StackMode::count) * static_cast<int> (StackMode::count)
+                             * index (ids::shepardSync);
+
     // The notch moves continuously, so it is rounded before being compared --
     // otherwise the note is rebuilt thirty times a second while anything sweeps
     // and the page repaints for nothing.
@@ -4159,7 +4224,8 @@ void SonitusEditor::updateForSwitches()
     if (combMode == shownCombMode_ && keyMode == shownKeyMode_ && oversample == shownOversample_
         && latency == shownLatency_ && syncB == shownSyncB_ && shapeA == shownShapeA_
         && shapeB == shownShapeB_ && notch == shownNotch_ && scale == shownScale_
-        && lfoSync == shownLfoSync_ && render == shownRender_ && offline == shownOffline_)
+        && lfoSync == shownLfoSync_ && render == shownRender_ && offline == shownOffline_
+        && stackState == shownStackState_)
         return;
 
     const bool combChanged = combMode != shownCombMode_;
@@ -4180,6 +4246,9 @@ void SonitusEditor::updateForSwitches()
     shownRender_ = render;
     shownOffline_ = offline;
 
+    const bool stackChanged = stackState != shownStackState_;
+    shownStackState_ = stackState;
+
     // A synced LFO's Rate knob is inert and its Division is live; free, the
     // other way round. Greyed rather than hidden, because a control that
     // vanishes reads as a bug and one that moves without doing anything reads
@@ -4195,6 +4264,24 @@ void SonitusEditor::updateForSwitches()
     auto* osc = controlPage (kOscPage);
     auto* filter = controlPage (kFilterPage);
     auto* mangle = controlPage (kManglePage);
+
+    if (stackChanged && osc != nullptr)
+    {
+        const auto modeA = static_cast<StackMode> (index (ids::stackA));
+        const auto modeB = static_cast<StackMode> (index (ids::stackB));
+
+        // Step is a Scale-mode control and nothing else reads it.
+        osc->setControlEnabled (ids::stackStepA, modeA == StackMode::scale);
+        osc->setControlEnabled (ids::stackStepB, modeB == StackMode::scale);
+
+        // The glide's controls mean nothing until something is sliding.
+        const bool sliding = modeA == StackMode::shepard || modeB == StackMode::shepard;
+        const bool synced = index (ids::shepardSync) != 0;
+
+        osc->setControlEnabled (ids::shepardRate, sliding);
+        osc->setControlEnabled (ids::shepardSync, sliding);
+        osc->setControlEnabled (ids::shepardDiv, sliding && synced);
+    }
 
     if (combChanged && mangle != nullptr)
     {

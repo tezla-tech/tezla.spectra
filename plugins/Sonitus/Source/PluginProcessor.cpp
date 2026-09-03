@@ -54,7 +54,12 @@ constexpr int kSchemaV6 = 6;
 /// Voice drift -- the voice card's temperature. Its own version, as ever.
 constexpr int kSchemaV7 = 7;
 
-constexpr int kStateSchemaVersion = kSchemaV7;
+/// **Phase 5 -- the horror phase.** Stack, Tract and Sag, all appended here and
+/// all neutral at their defaults. Its own version, as ever: the hint feeds the
+/// VST3 parameter ID, so one version means one piece of work forever.
+constexpr int kSchemaV8 = 8;
+
+constexpr int kStateSchemaVersion = kSchemaV8;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -124,6 +129,49 @@ juce::NormalisableRange<float> skewedRange (float minimum, float maximum, float 
     juce::NormalisableRange<float> range { minimum, maximum };
     range.setSkewForCentre (centre);
     return range;
+}
+
+/// A bipolar range whose law is `sign(u) * u^2` about the centre.
+///
+/// The same shape the modulation matrix's depth uses, and for the same reason:
+/// a tenth of the travel from the middle is a hundredth of the range, so fine
+/// control survives at the bottom while the ends stay enormous. **Exactly zero
+/// is reachable**, at exactly half travel, which matters when zero is a
+/// setting in its own right rather than "very slow".
+juce::NormalisableRange<float> bipolarSquaredRange (float maximum)
+{
+    return { -maximum, maximum,
+             [maximum] (float, float, float t)
+             {
+                 const float u = 2.0f * t - 1.0f;
+                 return maximum * std::copysign (u * u, u);
+             },
+             [maximum] (float, float, float value)
+             {
+                 const float u = std::copysign (std::sqrt (std::abs (value) / maximum), value);
+                 return 0.5f * (u + 1.0f);
+             },
+             [] (float low, float high, float value)
+             {
+                 return juce::jlimit (low, high, value);
+             } };
+}
+
+/// Octaves per second, signed, with zero shown as "held" rather than 0.00 --
+/// the same reading LFO rate 0 already gets, and for the same reason: it is a
+/// deliberate setting, not the bottom of a range.
+juce::AudioParameterFloatAttributes octavesPerSecondAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            if (std::abs (value) < 0.0005f)
+                return juce::String ("held");
+
+            return (value > 0.0f ? juce::String ("+") : juce::String ("-"))
+                     + juce::String (std::abs (value), 2) + " oct/s";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
 }
 
 juce::AudioParameterFloatAttributes decibelAttributes (int decimals = 1)
@@ -273,6 +321,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                                           const char* unisonId,
                                           const char* detuneId, const char* spreadId,
                                           const char* driftId, const char* levelId,
+                                          const char* stackId, const char* stackStepId,
                                           const juce::String& prefix, float defaultLevel)
     {
         layout.add (std::make_unique<Choice> (
@@ -321,15 +370,44 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { levelId, kSchemaV1 }, prefix + " level",
             juce::NormalisableRange<float> { 0.0f, 1.0f }, defaultLevel, percentAttributes()));
+
+        // **Stack** -- where the unison copies go. Index 0 is Detune, which is
+        // what shipped and is bit-exact, so a project saved before phase 5
+        // reopens with the stack it always had.
+        layout.add (std::make_unique<Choice> (
+            juce::ParameterID { stackId, kSchemaV8 }, prefix + " stack",
+            choices::stack, 0));
+
+        // Keys per copy, and it means something only in Scale mode -- which is
+        // why the page greys it everywhere else rather than leaving a control
+        // that silently does nothing.
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { stackStepId, kSchemaV8 }, prefix + " stack step",
+            kMinimumStackStep, kMaximumStackStep, 1));
     };
 
     addOscillator (ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
                    ids::morphA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
-                   "Osc A", 1.0f);
+                   ids::stackA, ids::stackStepA, "Osc A", 1.0f);
 
     addOscillator (ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::morphB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
-                   "Osc B", 0.0f);
+                   ids::stackB, ids::stackStepB, "Osc B", 0.0f);
+
+    // **The Shepard glissando's speed**, in octaves per second, signed --
+    // negative falls. One control for the instrument, because the phase is one
+    // accumulator for the instrument: a held chord has to glide as one thing.
+    // Zero is a legitimate setting and is a *held* windowed octave stack.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::shepardRate, kSchemaV8 }, "Shepard rate",
+        bipolarSquaredRange (4.0f), 0.0f, octavesPerSecondAttributes()));
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::shepardSync, kSchemaV8 }, "Shepard sync", false));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::shepardDiv, kSchemaV8 }, "Shepard division",
+        choices::lfoDivision, dsp::defaultDivision));
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::syncB, kSchemaV1 }, "Sync B to A", false));
@@ -1124,6 +1202,18 @@ void SonitusProcessor::pullParameters()
     v.spreadB = valueOf (state_, ids::spreadB);
     v.driftB = valueOf (state_, ids::driftB);
     v.levelB = valueOf (state_, ids::levelB);
+
+    // **Stack.** Where each bank's copies go, and how many keys apart Scale
+    // mode puts them. Index 0 is Detune, which is what shipped.
+    v.stackA = static_cast<StackMode> (juce::jlimit (0, static_cast<int> (StackMode::count) - 1,
+                                                     indexOf (state_, ids::stackA)));
+    v.stackB = static_cast<StackMode> (juce::jlimit (0, static_cast<int> (StackMode::count) - 1,
+                                                     indexOf (state_, ids::stackB)));
+
+    v.stackStepA = juce::jlimit (kMinimumStackStep, kMaximumStackStep,
+                                 static_cast<int> (valueOf (state_, ids::stackStepA)));
+    v.stackStepB = juce::jlimit (kMinimumStackStep, kMaximumStackStep,
+                                 static_cast<int> (valueOf (state_, ids::stackStepB)));
     v.syncB = valueOf (state_, ids::syncB) > 0.5f;
     v.pmIndex = valueOf (state_, ids::pmIndex);
 
@@ -1335,6 +1425,12 @@ void SonitusProcessor::pullParameters()
     p.combMix = valueOf (state_, ids::combMix);
     p.combInverted = valueOf (state_, ids::combInvert) > 0.5f;
     p.combScaleLock = valueOf (state_, ids::combScale) > 0.5f;
+
+    // The Shepard glissando, which is one control for the instrument because
+    // its phase is one accumulator for the instrument.
+    p.shepardRate = valueOf (state_, ids::shepardRate);
+    p.shepardSync = valueOf (state_, ids::shepardSync) > 0.5f;
+    p.shepardDivision = indexOf (state_, ids::shepardDiv);
 
     for (int macro = 0; macro < 4; ++macro)
         p.macros[static_cast<std::size_t> (macro)] = valueOf (state_, ids::macro (macro));

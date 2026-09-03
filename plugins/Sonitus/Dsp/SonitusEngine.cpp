@@ -96,6 +96,12 @@ void Engine::reset() noexcept
     lfo2_.reset();
     sequencer_.reset();
 
+    // The glissando goes back to the bottom of its span with everything else.
+    // It is not a note property -- nothing about a key restarts it -- but a
+    // graph rebuild is exactly when it should start over.
+    shepardOctaves_ = 0.0;
+    sources_.shepardOctaves = 0.0;
+
     oversampler_.reset();
 
     for (int channel = 0; channel < 2; ++channel)
@@ -206,6 +212,8 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::macro3:    value = sources_.macros[2]; break;
             case GlobalSource::macro4:    value = sources_.macros[3]; break;
 
+            case GlobalSource::sag:       value = sources_.sag; break;
+
             // The tracked note -- the same one the comb and the formant
             // follow, so the whole mangle moves with one note rather than three
             // stages each picking their own. Nothing sounding reads zero, which
@@ -245,6 +253,7 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
                     case GlobalSource::macro2:
                     case GlobalSource::macro3:
                     case GlobalSource::macro4:
+                    case GlobalSource::sag:
                     case GlobalSource::count:
                     default: break;
                 }
@@ -580,6 +589,35 @@ void Engine::advanceGlobalSources (int samples) noexcept
     // copying them here rather than reading `active_` at each use is what makes
     // both matrices see the same four numbers on the same control chunk.
     sources_.macros = active_.macros;
+
+    // **The Shepard glissando**, in octaves travelled, advanced once for the
+    // whole instrument. Synced, the magnitude is one octave per division and
+    // only the sign comes from the knob -- the LFOs' pattern exactly.
+    //
+    // The matrix reaches it here rather than in `applyGlobalModulation`,
+    // because that runs after this and a rate read there would be one control
+    // chunk stale -- 0.67 ms at 48 kHz x4, which is nothing on a filter cutoff
+    // and is a wobble on a phase accumulator. Every source it can read is
+    // already in `sources_` at this point.
+    static constexpr double kShepardOctavesPerSecond = 4.0;   // the control's own maximum
+
+    const double shepardKnob = active_.shepardRate
+                             + kShepardOctavesPerSecond
+                                 * globalModulationFor (GlobalDestination::shepardRate);
+
+    const double shepardRate = active_.shepardSync
+        ? std::copysign (dsp::divisionRateHz (active_.shepardDivision, bpm_), shepardKnob)
+        : shepardKnob;
+
+    shepardOctaves_ += shepardRate * static_cast<double> (samples) / internalRate_;
+
+    // Wrapped rather than left to grow, so a session left open all day has the
+    // same precision as one just started. 420 octaves is a whole number of
+    // turns for every copy count from 1 to 7, so this costs no jump.
+    shepardOctaves_ -= kShepardWrapOctaves
+                         * std::floor (shepardOctaves_ / kShepardWrapOctaves);
+
+    sources_.shepardOctaves = shepardOctaves_;
 }
 
 void Engine::mangle (double& left, double& right) noexcept

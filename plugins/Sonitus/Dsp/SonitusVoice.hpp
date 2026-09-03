@@ -60,6 +60,8 @@
 #include <tezla/dsp/UnisonBank.hpp>
 #include <tezla/dsp/Waveshapers.hpp>
 
+#include "StackShapes.hpp"
+
 namespace tezla::sonitus {
 
 using dsp::Adsr;
@@ -128,6 +130,17 @@ enum class ModSource
     macro2,
     macro3,
     macro4,
+
+    /// **Sag** -- the machine's temperature, in [-1, 1]. Appended, like every
+    /// entry here (CLAUDE.md section 8).
+    ///
+    /// Global rather than per note, like the LFOs and the sequencer already in
+    /// this list, and it reads the same number here as in the global matrix --
+    /// there is one walk for the whole instrument, which is the point of it.
+    /// It reads the walk even when the Sag depth is 0: the depth knob is how
+    /// much reaches the voice *directly*, not whether the machine has a
+    /// temperature.
+    sag,
 
     count
 };
@@ -233,6 +246,21 @@ struct GlobalSources
     /// in `VoiceParameters` so the voice and the mangle read the identical
     /// figure rather than two copies that could drift by a control chunk.
     std::array<double, 4> macros {};
+
+    /// **Sag** -- the machine's temperature, in [-1, 1], from one slow walk in
+    /// the engine. Common-mode across every voice, which is what makes it read
+    /// as one machine failing rather than as thirty-two.
+    double sag { 0.0 };
+
+    /// The Shepard glissando's position, in **octaves travelled**, from one
+    /// accumulator in the engine.
+    ///
+    /// One accumulator and not one per voice, and that is the design rather
+    /// than a saving: a held chord has to glide as one thing, and voices with
+    /// independent phases would smear a rise into a wash. Both oscillators
+    /// share it too. Carried here for the same reason the macros are -- so
+    /// every voice reads the identical figure on the identical chunk.
+    double shepardOctaves { 0.0 };
 };
 
 /// Everything a voice is told, all of it shared across voices and set from the
@@ -257,6 +285,12 @@ struct VoiceParameters
     double driftA { 0.0 };             ///< cents of analogue wander
     double levelA { 1.0 };
 
+    /// **Stack** -- where the unison copies go. `detune` is what shipped and is
+    /// bit-exact; `stackStepA` is keys per copy and means something only in
+    /// Scale mode. See `StackShapes.hpp`.
+    StackMode stackA { StackMode::detune };
+    int stackStepA { 1 };
+
     // ---- oscillator B --------------------------------------------------------
 
     OscShape shapeB { OscShape::saw };
@@ -270,6 +304,9 @@ struct VoiceParameters
     double spreadB { 0.0 };
     double driftB { 0.0 };
     double levelB { 0.0 };
+
+    StackMode stackB { StackMode::detune };
+    int stackStepB { 1 };
 
     /// B is hard-synced to A. The Pro-53 trick: B's own pitch stops setting the
     /// note and starts setting the *timbre*, so sweeping it is a formant sweep
@@ -763,6 +800,10 @@ public:
         return filterScale (modulator);
     }
 
+    /// The instrument's tuning, for Stack's Scale mode. Set once, by the voice
+    /// manager that owns it; nothing here keeps a copy.
+    void setTuning (const dsp::Tuning* tuning) noexcept { tuning_ = tuning; }
+
     /// Moves the pitch without restarting anything -- glide, and pitch bend.
     void setFrequency (double frequency) noexcept
     {
@@ -839,18 +880,19 @@ public:
                                   * ratioFor (parameters.octaveA, parameters.semitonesA,
                                               parameters.centsA);
 
-        configureBank (bankA_, parameters.shapeA,
+        configureBank (bankA_, stackCacheA_, parameters.shapeA,
                        parameters.widthA + amount (ModDestination::pulseWidthA),
                        parameters.morphA + amount (ModDestination::morphA),
                        parameters.unisonA,
                        parameters.detuneA + amount (ModDestination::detuneA),
-                       parameters.spreadA, parameters.driftA, nominalA);
+                       parameters.spreadA, parameters.driftA, nominalA,
+                       parameters.stackA, parameters.stackStepA, global.shepardOctaves);
 
         // A's nominal pitch, not any one of its detuned oscillators -- see
         // propagateSync().
         syncIncrement_ = nominalA > 0.0 ? nominalA / sampleRate_ : 0.0;
 
-        configureBank (bankB_, parameters.shapeB,
+        configureBank (bankB_, stackCacheB_, parameters.shapeB,
                        parameters.widthB + amount (ModDestination::pulseWidthB),
                        parameters.morphB + amount (ModDestination::morphB),
                        parameters.unisonB,
@@ -858,7 +900,8 @@ public:
                        parameters.spreadB, parameters.driftB,
                        frequency_ * pitchRatio
                          * ratioFor (parameters.octaveB, parameters.semitonesB,
-                                     parameters.centsB + amount (ModDestination::pitchB)));
+                                     parameters.centsB + amount (ModDestination::pitchB)),
+                       parameters.stackB, parameters.stackStepB, global.shepardOctaves);
 
         // The mix destination is a crossfade between the two banks rather than
         // a level on each, so sweeping it holds the loudness.
@@ -1115,6 +1158,8 @@ private:
             case ModSource::macro3:       return global.macros[2];
             case ModSource::macro4:       return global.macros[3];
 
+            case ModSource::sag:          return global.sag;
+
             case ModSource::none:
             case ModSource::count:
             default:                      return 0.0;
@@ -1146,9 +1191,93 @@ private:
         return std::pow (2.0, octaves + semitones / 12.0 + cents / 1200.0);
     }
 
-    void configureBank (UnisonBank& bank, OscShape shape, double width, double morph,
-                        int unison,
-                        double detune, double spread, double drift, double frequency) noexcept
+    /// Where a bank's rank offsets came from last time, so they are not
+    /// recomputed for a stack that has not moved.
+    ///
+    /// Only Shepard changes every chunk; a fixed interval or a scale degree
+    /// depends on the mode, the copy count, the step and the played note, and
+    /// none of those move inside a held note. Scale mode is the one that would
+    /// hurt without this -- `Tuning::frequencyFor` is two `pow` calls, so seven
+    /// copies on two banks at thirty-two voices would be five million of them a
+    /// second for an answer that never changes.
+    ///
+    /// The key deliberately does not include the tuning. Loading a scale
+    /// mid-note does not re-pitch a held note either -- the manager reads
+    /// `frequencyFor` at note-on -- so caching against the note matches what
+    /// the rest of the instrument already does.
+    struct StackCache
+    {
+        StackMode mode { StackMode::count };   ///< count = nothing cached yet
+        int copies { 0 };
+        int step { 0 };
+        int note { -2 };
+
+        std::array<double, kMaxStackCopies> cents {};
+        std::array<double, kMaxStackCopies> gains {};
+    };
+
+    /// Pushes `mode`'s rank offsets at `bank`, through the cache above.
+    ///
+    /// **The early return is not the guard CLAUDE.md section 7 warns about.**
+    /// That rule is about a *caller* deciding whether a value change matters,
+    /// which desynchronises the moment a second caller disagrees. This bank has
+    /// exactly one owner, nothing else writes its rank offsets, and neither
+    /// `reset` nor `restartNote` clears them -- so when the cache is fresh the
+    /// bank already holds precisely these numbers and the call would be a
+    /// no-op. `setRankOffsets` keeps its own guard regardless, and the
+    /// measurement is why this exists: comparing fourteen doubles per bank per
+    /// voice per chunk cost **3.9% of a core** at sixteen voices, which is more
+    /// than the interval arithmetic it was protecting.
+    void applyStack (UnisonBank& bank, StackCache& cache, StackMode mode,
+                     int copies, int step, double shepardOctaves) noexcept
+    {
+        if (mode == StackMode::detune)
+        {
+            // Neutral, which is what a bank that was never told looks like --
+            // and the bank's own guard makes this free once it has landed.
+            bank.setRankOffsets (nullptr, nullptr, 0);
+            cache.mode = StackMode::detune;
+            return;
+        }
+
+        const bool sliding = mode == StackMode::shepard;
+
+        const bool stale = sliding
+                        || cache.mode != mode
+                        || cache.copies != copies
+                        || cache.step != step
+                        || cache.note != note_;
+
+        if (! stale)
+            return;
+
+        const dsp::Tuning& tuning = tuning_ != nullptr ? *tuning_ : fallbackTuning();
+
+        stackRanks (mode, copies, step, shepardOctaves, tuning, note_,
+                    cache.cents.data(), cache.gains.data());
+
+        cache.mode = mode;
+        cache.copies = copies;
+        cache.step = step;
+        cache.note = note_;
+
+        bank.setRankOffsets (cache.cents.data(), cache.gains.data(), copies);
+    }
+
+    /// Twelve-tone equal temperament, for a voice that was never handed the
+    /// instrument's tuning. Never reached in the plugin -- the manager sets the
+    /// pointer at `prepare` -- and it exists so a unit test can drive a bare
+    /// `Voice` without one.
+    [[nodiscard]] static const dsp::Tuning& fallbackTuning() noexcept
+    {
+        static const dsp::Tuning defaultTuning {};
+        return defaultTuning;
+    }
+
+    void configureBank (UnisonBank& bank, StackCache& cache, OscShape shape,
+                        double width, double morph, int unison,
+                        double detune, double spread, double drift, double frequency,
+                        StackMode stack, int step, double shepardOctaves) noexcept
     {
         bank.setShape (shape);
         bank.setWidth (width);
@@ -1157,6 +1286,11 @@ private:
         bank.setDetuneCents (detune);
         bank.setSpread (spread);
         bank.setDrift (drift);
+
+        // After the count, because the offsets are pushed for that many copies.
+        applyStack (bank, cache, stack, std::clamp (unison, 1, kMaxStackCopies),
+                    step, shepardOctaves);
+
         bank.setFrequency (frequency);
     }
 
@@ -1425,6 +1559,13 @@ private:
     dsp::SmoothedValue<double> gain_;
 
     int note_ { -1 };
+
+    /// The instrument's tuning, for Scale mode. Set once by the voice manager,
+    /// which owns it; null only in a bare unit test -- see `fallbackTuning`.
+    const dsp::Tuning* tuning_ { nullptr };
+
+    StackCache stackCacheA_ {};
+    StackCache stackCacheB_ {};
     double velocity_ { 0.0 };
     double frequency_ { 0.0 };
     bool held_ { false };
