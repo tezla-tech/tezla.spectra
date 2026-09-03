@@ -2117,6 +2117,21 @@ struct Setting
 struct Preset
 {
     const char* name;
+
+    /// What the NOTES page shows for this preset: what it is, how to play it,
+    /// what is worth automating, and where the sound comes from.
+    ///
+    /// A tiny markup, read by `NotesPage`: a line beginning `# ` is a
+    /// subheading, a blank line separates paragraphs, `**text**` is bold and
+    /// `*text*` is italic. Deliberately not full markdown -- there is one
+    /// reader and it is fifty lines long.
+    ///
+    /// **A preset without notes does not compile**, which is the gate: the
+    /// settings list cannot initialise a `const char*`, so omitting this field
+    /// is an error at the preset's own line rather than a blank page found
+    /// later. That is worth more than a runtime check nobody runs.
+    const char* notes;
+
     std::vector<Setting> settings;
 };
 
@@ -2156,6 +2171,13 @@ const std::vector<Preset>& presets()
             // section 7 asks every plugin for. One saw, the filter open, no
             // mangle, nothing in the path that is not a straight line.
             "Init -- one clean saw",
+                "One saw, one lowpass, nothing else on. The reference point: if a patch sounds wrong, come back here and add one thing at a time.\n"
+                "\n"
+                "# Play with\n"
+                "Cutoff and Resonance first. Then Unison and Detune -- three copies at 15 cents is already most of what a big sound is.\n"
+                "\n"
+                "# Automate\n"
+                "Cutoff. It is the oldest automation in electronic music and it still works.\n",
             {}
         },
         // -------------------------------------------------------------------
@@ -2164,6 +2186,16 @@ const std::vector<Preset>& presets()
             // sweep at the beat frequency; the flanger is the same comb with a
             // handle on it, and the two together are what a reese is.
             "Reese -- the classic",
+                "Two detuned saws through a lowpass, which is the sound drum and bass was built on. The movement is the two oscillators beating against each other, not an LFO.\n"
+                "\n"
+                "# Play with\n"
+                "Detune sets the beat rate -- slower is wider and more menacing, faster is more aggressive. Cutoff decides how much of the growl you hear.\n"
+                "\n"
+                "# Automate\n"
+                "Cutoff over eight bars. Detune between sections rather than within one; it changes the identity of the sound.\n"
+                "\n"
+                "# Lore\n"
+                "Named after a bassline on a 1988 Detroit techno record. The technique predates the name -- massed detuned oscillators is as old as the polysynth -- but the *reese* is specifically this: two saws close enough to beat, filtered dark, played low and long.\n",
             {
                 { ids::levelB, 1.0f },
                 { ids::centsB, 9.0f },
@@ -2203,6 +2235,13 @@ const std::vector<Preset>& presets()
             // harmonics of the played note, so the growl comes out in key
             // instead of churning against itself.
             "Growl -- tuned comb",
+                "A comb filter tuned to the played note, so its notches land on harmonics instead of between them. That is what makes it growl rather than flange.\n"
+                "\n"
+                "# Play with\n"
+                "Comb feedback for how resonant, Comb mix for how much. The comb is key-tracked, so it follows what you play.\n"
+                "\n"
+                "# Automate\n"
+                "Comb time from the global matrix -- that is the flanger-at-rate-zero trick with something better than an automation lane behind it.\n",
             {
                 { ids::levelB, 0.85f }, { ids::semitonesB, -12.0f }, { ids::centsB, 6.0f },
                 { ids::unisonA, 3.0f }, { ids::detuneA, 11.0f }, { ids::spreadA, 0.4f },
@@ -2247,6 +2286,13 @@ const std::vector<Preset>& presets()
             // master's period, so its own pitch becomes a formant rather than a
             // note. Sweeping it is the sound.
             "Sync scream",
+                "Oscillator B hard-synced to A, so B's pitch stops being a pitch and becomes a formant -- a moving peak in the spectrum.\n"
+                "\n"
+                "# Play with\n"
+                "B's semitones. That is the scream: it sweeps the formant, not the note.\n"
+                "\n"
+                "# Automate\n"
+                "B semitones, or point an envelope at Pitch B. Fast is a laser, slow is a siren.\n",
             {
                 { ids::levelA, 0.25f },
                 { ids::levelB, 1.0f }, { ids::syncB, 1.0f }, { ids::semitonesB, 7.0f },
@@ -2276,6 +2322,13 @@ const std::vector<Preset>& presets()
             // Nothing above the split, everything below it. A sub that is one
             // sine and a little weight, mono by construction.
             "Sub -- clean weight",
+                "A sine an octave down and almost nothing else. The point is what is *not* here: no drive, no comb, no fold, so nothing smears the bottom.\n"
+                "\n"
+                "# Play with\n"
+                "Sub level and Sub octave, and nothing else. If you want it dirtier, layer a second instance rather than adding drive to this one.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing. A sub that moves is a sub that disappears on a small speaker.\n",
             {
                 { ids::shapeA, 3.0f },          // sine
                 { ids::octaveA, -1.0f },
@@ -2297,6 +2350,13 @@ const std::vector<Preset>& presets()
             // The vowel filter is the same comb shaped like a mouth. Morphing
             // it under the sequencer is the talking bass.
             "Talkbox",
+                "The formant filter, which is three resonant peaks placed where a mouth puts them. It does not need a mouthpiece and a tube.\n"
+                "\n"
+                "# Play with\n"
+                "Vowel, which morphs between the vowel shapes, and Tract, which changes the size of the throat doing the talking.\n"
+                "\n"
+                "# Automate\n"
+                "Vowel. That is the word being said.\n",
             {
                 { ids::levelB, 0.7f }, { ids::centsB, -7.0f },
                 { ids::unisonA, 3.0f }, { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
@@ -2329,6 +2389,13 @@ const std::vector<Preset>& presets()
             // spaced, so it smears rather than rings -- which is what you want
             // under a pad and never under a reese.
             "Phase wash",
+                "An allpass chain sweeping through the sound -- notches that move without the delay-line character of a flanger.\n"
+                "\n"
+                "# Play with\n"
+                "Phase centre and stages. More stages is more notches and a thicker sweep.\n"
+                "\n"
+                "# Automate\n"
+                "Phase centre from an LFO, slowly. This is a texture, not a rhythm.\n",
             {
                 { ids::levelB, 0.9f }, { ids::centsB, 11.0f }, { ids::octaveB, -1.0f },
                 { ids::unisonA, 5.0f }, { ids::detuneA, 22.0f }, { ids::spreadA, 0.9f },
@@ -2358,6 +2425,13 @@ const std::vector<Preset>& presets()
             // The destruction section on its own: ring modulation and the
             // folder, with the tube behind them. Inharmonic on purpose.
             "Metal fold",
+                "A sine wavefolder past full scale, so the transfer curve turns round and comes back. The harder you push, the *more* harmonics appear -- the opposite of a clipper, which runs out.\n"
+                "\n"
+                "# Play with\n"
+                "Fold. It is geometric, so the whole character lives in the last third of the travel.\n"
+                "\n"
+                "# Automate\n"
+                "Fold, and turn oversampling up while you do. This is the widest-band thing in the instrument.\n",
             {
                 { ids::levelB, 1.0f }, { ids::semitonesB, 7.0f }, { ids::centsB, 3.0f },
                 { ids::ringAmount, 0.7f }, { ids::foldAmount, 0.55f },
@@ -2390,6 +2464,13 @@ const std::vector<Preset>& presets()
             // rate the comb is combing at. Load a scale on the TUNING page --
             // the preset cannot, because a scale is not a parameter.
             "Just growl -- for a pure scale",
+                "The comb locked to a just-intonation scale, so its notches land on *exact* harmonic ratios. A tempered fifth is two cents off and the comb hears it.\n"
+                "\n"
+                "# Play with\n"
+                "Load different scales on the TUNING page and hold one note. The patch does not change; the lock does.\n"
+                "\n"
+                "# Lore\n"
+                "Just intonation tunes intervals as small whole-number ratios -- 3:2 for a fifth, 5:4 for a major third. Equal temperament fudges all of them so every key works equally badly. A comb filter is one of the few things that can hear the difference.\n",
             {
                 { ids::levelB, 0.9f }, { ids::centsB, 4.0f },
                 { ids::unisonA, 3.0f }, { ids::detuneA, 6.0f }, { ids::spreadA, 0.45f },
@@ -2415,6 +2496,13 @@ const std::vector<Preset>& presets()
             // starts from the top every time, which is what setting the sustain
             // to 1 and playing short notes cannot give you.
             "Gate stab -- the hold, doing its job",
+                "An amplitude envelope with a hold stage, so the note sits at full level for a fixed time and then stops. That flat top is what makes a stab a stab.\n"
+                "\n"
+                "# Play with\n"
+                "Amp Hold. Short is a stab, longer is a chord shot.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing -- play it. This one is about rhythm.\n",
             {
                 { ids::levelA, 1.0f }, { ids::levelB, 0.8f }, { ids::semitonesB, -12.0f },
                 { ids::unisonA, 3.0f }, { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
@@ -2438,6 +2526,13 @@ const std::vector<Preset>& presets()
             // the attack so it starts slowly and arrives rather than jumping,
             // and an LFO fading in behind it.
             "Slow bloom -- a pad, the long way up",
+                "A pad that takes several seconds to arrive. The attack is long enough that there is no onset to locate, so it is already there by the time you notice it.\n"
+                "\n"
+                "# Play with\n"
+                "Amp attack, and the attack tension beside it -- tension is the *curve*, and a slow attack with the wrong curve arrives all at once at the end.\n"
+                "\n"
+                "# Automate\n"
+                "Cutoff underneath, very slowly.\n",
             {
                 { ids::levelA, 0.9f }, { ids::levelB, 0.9f }, { ids::centsB, 7.0f },
                 { ids::unisonA, 4.0f }, { ids::detuneA, 14.0f }, { ids::spreadA, 0.7f },
@@ -2472,6 +2567,13 @@ const std::vector<Preset>& presets()
             // sidebands rather than movement, and key tracking keeps the
             // relationship constant up the keyboard.
             "Sideband growl -- the LFO as an oscillator",
+                "The LFO run past 20 Hz, where it stops being movement and starts being modulation: it makes sidebands of its own and the filter becomes part of the oscillator.\n"
+                "\n"
+                "# Play with\n"
+                "LFO 1 rate through the 20 Hz boundary. Below it is a wobble, above it is a timbre.\n"
+                "\n"
+                "# Automate\n"
+                "LFO rate, straight through the boundary. The transition is the sound.\n",
             {
                 { ids::levelA, 1.0f }, { ids::levelB, 0.6f }, { ids::semitonesB, 7.0f },
                 { ids::unisonA, 2.0f }, { ids::detuneA, 9.0f },
@@ -2506,6 +2608,13 @@ const std::vector<Preset>& presets()
             // gaps runs through a single envelope and the growl carries across
             // the notes rather than restarting on each.
             "Kargyraa -- the doubled voice",
+                "Period doubling: the waveform repeats every *second* cycle, so a note an octave below appears without an oscillator playing it.\n"
+                "\n"
+                "# Play with\n"
+                "Kargyraa depth, and Rasp for how rough the doubling is. The Divisor chooses /2, /3 or /4 -- only /2 is the real thing.\n"
+                "\n"
+                "# Lore\n"
+                "Kargyraa is a style of Tuvan and Mongolian throat singing in which the ventricular folds vibrate at half the rate of the vocal folds, producing a note an octave below the sung one and a stack of overtones above it. The mechanism here is the same arithmetic, not a model of a throat.\n",
             {
                 { ids::levelA, 1.0f }, { ids::levelB, 0.35f }, { ids::centsB, 6.0f },
                 { ids::unisonA, 2.0f }, { ids::detuneA, 5.0f }, { ids::spreadA, 0.3f },
@@ -2551,6 +2660,13 @@ const std::vector<Preset>& presets()
             // because the legs have independent times and tensions, the down
             // is a snap and the up is a swell, which no symmetric LFO does.
             "Clockwork wobble -- ADV loop, snapped",
+                "An ADV envelope looping in sync with the host, used as an LFO with a shape you drew rather than one from a list.\n"
+                "\n"
+                "# Play with\n"
+                "Drag the breakpoints on the ENV page. Snap keeps the loop locked to the bar however you redraw it.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing -- the shape *is* the automation, and it travels with the preset.\n",
             {
                 { ids::levelB, 1.0f }, { ids::centsB, 8.0f },
                 { ids::unisonA, 3.0f }, { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
@@ -2589,6 +2705,13 @@ const std::vector<Preset>& presets()
             // synced with retrigger off, the same bar of the song gets the
             // same sweep on every pass. Print it and it stays printed.
             "Twin ramp -- the flanger inside the wave",
+                "Two saw ramps per cycle with an adjustable offset between them, which is a comb filter built into the waveform itself -- no delay line involved.\n"
+                "\n"
+                "# Play with\n"
+                "Morph on oscillator A. It slides the second ramp against the first.\n"
+                "\n"
+                "# Automate\n"
+                "Morph. It sweeps like a flanger and costs nothing.\n",
             {
                 { ids::shapeA, 6.0f },           // double saw
                 { ids::unisonA, 3.0f }, { ids::detuneA, 10.0f }, { ids::spreadA, 0.6f },
@@ -2619,6 +2742,13 @@ const std::vector<Preset>& presets()
             // never has a partial above k times the note. ADV 1 breathes the
             // pressing slowly; velocity adds bite per note.
             "Dome bloom -- harmonics from a pure tone",
+                "The Dome shape, which has no harmonics of its own at all, opened up by the filter and the fold instead.\n"
+                "\n"
+                "# Play with\n"
+                "Fold and Cutoff. Everything you hear above the fundamental was made downstream of the oscillator.\n"
+                "\n"
+                "# Lore\n"
+                "Dome cannot alias, because there is nothing above the fundamental to fold back. It is the one shape in the instrument that is antialiased by construction rather than by effort.\n",
             {
                 { ids::shapeA, 5.0f },           // dome
                 { ids::unisonA, 2.0f }, { ids::detuneA, 6.0f }, { ids::spreadA, 0.35f },
@@ -2656,6 +2786,13 @@ const std::vector<Preset>& presets()
             // growl. The classic jungle riser lives at the top of this patch's
             // mod wheel... or its LFO, here, fading in per note.
             "Steam pipe -- noise made pitched",
+                "Noise through a resonant filter, which is how you get a pitch out of something that has none.\n"
+                "\n"
+                "# Play with\n"
+                "Resonance and Cutoff. High resonance narrows the noise into a note.\n"
+                "\n"
+                "# Automate\n"
+                "Cutoff. With resonance up it plays like an instrument.\n",
             {
                 { ids::shapeA, 8.0f },           // noise
                 { ids::morphA, 0.25f },          // just off white
@@ -2690,6 +2827,13 @@ const std::vector<Preset>& presets()
             // index rides a fast-decay envelope. The brightness *is* the
             // envelope, which is the whole FM bass trick.
             "FM punch -- the index is the envelope",
+                "Phase modulation with an envelope on the index, so the note starts bright and hard and settles into something simple.\n"
+                "\n"
+                "# Play with\n"
+                "PM index and the mod envelope's decay. Short decay is percussive; long is a swell.\n"
+                "\n"
+                "# Lore\n"
+                "Phase modulation and frequency modulation sound identical for a sine carrier -- PM is used because it is stable and its index does not drift with pitch. The famous 1980s FM synthesisers were all doing PM.\n",
             {
                 { ids::shapeA, 3.0f },           // sine carrier... but see below:
                 // PM in this instrument runs A -> B, so the *carrier* is B and
@@ -2732,6 +2876,13 @@ const std::vector<Preset>& presets()
             // the index a strike, a shimmer-back, and a slow fade that no
             // ADSR draws. Poly, long release: chords ring like a gamelan.
             "Bell foundry -- inharmonic FM, ADV-shaped",
+                "An FM ratio that is not a whole number, so the sidebands are inharmonic -- the definition of a bell rather than a note.\n"
+                "\n"
+                "# Play with\n"
+                "B's semitones and fine tune. Whole-number ratios go back to being tonal; the interesting settings are between them.\n"
+                "\n"
+                "# Automate\n"
+                "The ADV envelope's shape does the work here. Redraw it.\n",
             {
                 { ids::levelA, 0.0f },
                 { ids::octaveA, 2.0f }, { ids::semitonesA, 11.0f },  // 4.756:1 -- inharmonic
@@ -2769,6 +2920,13 @@ const std::vector<Preset>& presets()
             // envelopes are snapped so the swell always lands on the grid.
             // Slow bar-locked movement on the vowel from a synced LFO 2.
             "Vintage swell -- the analogue curve, on the grid",
+                "The Vintage shape -- a saw with the corner rounded, the way a real oscillator's reset is not instant -- under a tempo-snapped envelope.\n"
+                "\n"
+                "# Play with\n"
+                "Morph, which is the amount of rounding.\n"
+                "\n"
+                "# Lore\n"
+                "An analogue sawtooth is a capacitor charging and a transistor dumping it. The dump takes time, so the fall is not vertical and the corner is not sharp. That rounding is most of what people mean by 'analogue warmth' in an oscillator.\n",
             {
                 { ids::shapeA, 4.0f },           // vintage
                 { ids::morphA, 0.45f },
@@ -2816,6 +2974,13 @@ const std::vector<Preset>& presets()
             // Env 1 opens the feedback as the note sustains, so the bite
             // arrives after the transient rather than fighting it.
             "FM reese -- teeth without unison",
+                "A reese made from FM rather than from detuning, so the movement is sideband structure instead of beating. Costs a fraction of a unison stack.\n"
+                "\n"
+                "# Play with\n"
+                "PM index and B's tuning.\n"
+                "\n"
+                "# Automate\n"
+                "PM index. It is the reese's cutoff sweep, at a different layer.\n",
             {
                 { ids::levelB, 1.0f }, { ids::centsB, 7.0f },
                 { ids::unisonA, 2.0f }, { ids::detuneA, 11.0f }, { ids::spreadA, 0.5f },
@@ -2859,6 +3024,13 @@ const std::vector<Preset>& presets()
             // counter-argument to every other preset in the list: the cleanest
             // way to get a hard bass is often not to mangle a saw.
             "Operator bass -- two sines, all index",
+                "Two sine operators and nothing else -- no filter character, no unison. Every harmonic you hear was made by the index.\n"
+                "\n"
+                "# Play with\n"
+                "PM index, and the feedback on operator A.\n"
+                "\n"
+                "# Automate\n"
+                "Index from velocity, so playing harder is playing brighter.\n",
             {
                 { ids::shapeA, 3.0f },            // sine
                 { ids::shapeB, 3.0f },            // sine
@@ -2897,6 +3069,13 @@ const std::vector<Preset>& presets()
             // The reverse path is a sample late, so the two directions do not
             // sound alike at the same depth -- worth hearing by soloing each.
             "Cross-bite -- the loop, on a leash",
+                "Both operators modulating each other, which is a feedback loop around a nonlinearity -- bounded here so it cannot run away.\n"
+                "\n"
+                "# Play with\n"
+                "PM index and PM reverse together. The interesting region is where they are close.\n"
+                "\n"
+                "# Automate\n"
+                "PM reverse. It changes which operator is in charge.\n",
             {
                 { ids::shapeA, 0.0f },            // saw
                 { ids::shapeB, 3.0f },            // sine
@@ -2945,6 +3124,13 @@ const std::vector<Preset>& presets()
             //
             // Mono and glided, because a chord of this would be a wall.
             "SCREAMFACE -- every guard at once",
+                "Every safety in the instrument working simultaneously: feedback, fold, drive and the filter rail. It is loud and it is meant to be.\n"
+                "\n"
+                "# Play with\n"
+                "All of it. This preset exists to be abused.\n"
+                "\n"
+                "# Automate\n"
+                "Anything. It is bounded by construction, so you cannot break it -- the feedback has a soft clip inside the loop and the amount is capped below unity.\n",
             {
                 { ids::shapeA, 0.0f }, { ids::shapeB, 6.0f },   // saw + double saw
                 { ids::morphB, 0.4f },
@@ -2989,6 +3175,13 @@ const std::vector<Preset>& presets()
             // Deterministic, not random: the same bar gives the same collapse
             // every pass, so it prints.
             "Neural collapse -- the loop, re-decided per step",
+                "The sequencer re-deciding the feedback amount every step, so the loop's character changes in rhythm.\n"
+                "\n"
+                "# Play with\n"
+                "The step values on the MOD page.\n"
+                "\n"
+                "# Automate\n"
+                "Sequencer rate against the host tempo.\n",
             {
                 { ids::shapeA, 7.0f }, { ids::morphA, 0.3f },   // harmonic
                 { ids::shapeB, 3.0f },                          // sine
@@ -3039,6 +3232,13 @@ const std::vector<Preset>& presets()
             // every bar. Hold a low note and it screams; hold a high one and
             // it whistles.
             "Tearout larynx -- a throat that screams",
+                "The formant filter driven hard, which is a vowel with a distortion behind it rather than a distortion with a vowel on top.\n"
+                "\n"
+                "# Play with\n"
+                "Vowel and Tube drive together.\n"
+                "\n"
+                "# Automate\n"
+                "Vowel, fast. That is the word.\n",
             {
                 { ids::shapeA, 0.0f }, { ids::shapeB, 0.0f },
                 { ids::levelB, 0.75f }, { ids::centsB, 5.0f },
@@ -3081,6 +3281,13 @@ const std::vector<Preset>& presets()
             // The nastiest texture the instrument makes, and the one most
             // likely to need Capstone after it.
             "Gravel storm -- noise with a pitch bolted on",
+                "Noise and a tuned oscillator mixed, then filtered as one. The pitch is real and so is the grit.\n"
+                "\n"
+                "# Play with\n"
+                "Osc mix, between the noise and the tone.\n"
+                "\n"
+                "# Automate\n"
+                "Osc mix. It goes from a note to a texture and back.\n",
             {
                 { ids::shapeA, 8.0f }, { ids::morphA, 0.25f },   // noise
                 { ids::shapeB, 3.0f },                            // sine
@@ -3123,6 +3330,13 @@ const std::vector<Preset>& presets()
             // Start it at zero and it is a dull, close reese. Take it to full
             // and it is a screaming one. Nothing else needs to move.
             "One knob reese -- MACRO 1 does all of it",
+                "A reese wired so a single macro moves cutoff, feedback, drive and filter morph together -- one control that changes everything the way a performer would.\n"
+                "\n"
+                "# Play with\n"
+                "Macro 1. That is the whole preset.\n"
+                "\n"
+                "# Automate\n"
+                "**Macro 1.** This is what macros are for: draw one lane, move six things in a relationship somebody chose.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::shapeB, 1.0f },
                 { ids::levelB, 1.0f }, { ids::centsB, -9.0f },
@@ -3184,6 +3398,13 @@ const std::vector<Preset>& presets()
             // ADV 2 drives it, so the shape of the change is drawn rather than
             // dialled -- fast up, hold, slow back down.
             "Morphing pluck -- the filter changes type, not just cutoff",
+                "Filter Morph under an envelope, so the filter slides lowpass to bandpass to highpass during the note. A cutoff sweep cannot do this.\n"
+                "\n"
+                "# Play with\n"
+                "Filter Morph, and the envelope depth pointed at it.\n"
+                "\n"
+                "# Lore\n"
+                "The filter Mode is a *choice*, and a choice cannot be modulated -- so until Morph existed the filter's character was the one thing in a voice that no envelope could sweep. Morph is bipolar and centred on whatever Mode says, so 0 is exactly the mode you picked.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::morphA, 0.2f },
                 { ids::unisonA, 2.0f }, { ids::detuneA, 5.0f },
@@ -3225,6 +3446,13 @@ const std::vector<Preset>& presets()
             // the lock catches whatever the tracking and the Time knob leave
             // between degrees.
             "Scale drone -- the comb belongs to the tuning",
+                "A held drone with the comb snapped to the loaded scale's degrees rather than to an arbitrary delay time.\n"
+                "\n"
+                "# Play with\n"
+                "Load scales on the TUNING page while it drones.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing. Change the scale instead.\n",
             {
                 { ids::shapeA, 5.0f },           // dome
                 { ids::morphA, 0.4f },
@@ -3257,6 +3485,13 @@ const std::vector<Preset>& presets()
             // every leg reads "1/16", which is how you know it is locked and
             // not merely fast.
             "Sixteen-step gate -- one bar, drawn",
+                "The step sequencer chopping the level into sixteenths, locked to the host.\n"
+                "\n"
+                "# Play with\n"
+                "The steps. Hold one note and let the pattern do the rhythm.\n"
+                "\n"
+                "# Automate\n"
+                "Sequencer rate, for half-time and double-time.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::shapeB, 1.0f },
                 { ids::levelB, 0.85f }, { ids::centsB, -7.0f },
@@ -3321,6 +3556,13 @@ const std::vector<Preset>& presets()
             // Two destinations from one envelope: the cutoff and the filter's
             // *type*, so the riser gets thinner as well as brighter.
             "Bar riser -- sixteen legs of climb",
+                "A riser built from sixteen sequencer steps rather than from one long ramp, so it climbs in rhythm with the track.\n"
+                "\n"
+                "# Play with\n"
+                "Step values and sequencer glide -- glide smooths the staircase.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing; it is already locked to the bar.\n",
             {
                 { ids::shapeA, 0.0f }, { ids::morphA, 0.3f },
                 { ids::shapeB, 6.0f },           // shark
@@ -3398,6 +3640,13 @@ const std::vector<Preset>& presets()
             //
             // Both start low. Play with one hand on each.
             "Two-hand macro -- aggression and size",
+                "Two macros: one for aggression (cutoff, feedback, drive, morph) and one for size (detune, comb time, comb mix). Two hands, two dimensions.\n"
+                "\n"
+                "# Play with\n"
+                "Both macros, together, on a controller.\n"
+                "\n"
+                "# Automate\n"
+                "Both. This is the preset for a performance take.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::shapeB, 0.0f },
                 { ids::levelB, 0.9f }, { ids::centsB, 11.0f },
@@ -3451,6 +3700,13 @@ const std::vector<Preset>& presets()
             // cutoff barely moves; what moves is what kind of filter it is,
             // which is a sound no cutoff sweep makes.
             "Morph wah -- the filter type is the LFO",
+                "A synced LFO on the filter *morph* rather than the cutoff, so the filter swings lowpass to bandpass and back once a bar. The cutoff barely moves.\n"
+                "\n"
+                "# Play with\n"
+                "LFO division. One bar is the classic; half a bar is urgent.\n"
+                "\n"
+                "# Automate\n"
+                "LFO smooth, for how square the wah is.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::morphA, 0.25f },
                 { ids::levelB, 0.7f }, { ids::shapeB, 1.0f }, { ids::centsB, -6.0f },
@@ -3489,6 +3745,13 @@ const std::vector<Preset>& presets()
             // needs the sustain up, because a decay would end the descent that
             // is the entire point.
             "Descent -- the fall that never lands",
+                "Seven copies an octave apart under a window, sliding down one octave every four seconds. Nothing arrives and nothing resolves.\n"
+                "\n"
+                "# Play with\n"
+                "Shepard speed. Negative falls; positive rises.\n"
+                "\n"
+                "# Lore\n"
+                "Roger Shepard described this tone in 1964 as a demonstration that pitch has a circular component -- the *chroma* of a note is separable from its *height*. Jean-Claude Risset made the discrete version continuous in 1969. It became the sound of dread that never resolves in 1970s and 80s film scoring, and it works as a drum and bass build for the same reason: the drop lands as release from a tension with no other exit.\n",
             {
                 { ids::shapeA, 0.0f },                            // saw
                 { ids::stackA, 7.0f },                            // Shepard
@@ -3520,6 +3783,13 @@ const std::vector<Preset>& presets()
             // resonant filter that an envelope opens -- the stinger, rather
             // than the drone. Short release, so it can be played as stabs.
             "Ascent -- the riser that never arrives",
+                "The same illusion climbing. Under a drop it is the most effective build there is, because the ear keeps waiting for a peak that never comes.\n"
+                "\n"
+                "# Play with\n"
+                "Shepard speed, and Sync to lock one octave of climb to a bar.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing. Turn Sync on and let the host do it.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::widthA, 0.35f },     // pulse
                 { ids::stackA, 7.0f },
@@ -3554,6 +3824,13 @@ const std::vector<Preset>& presets()
             // Slow attack, long release, and the drift up, so the cluster
             // breathes rather than sitting still.
             "Cloister -- a cluster in whatever tuning is loaded",
+                "Copies on the loaded tuning's *keys* rather than at fixed intervals, so what a step means is whatever that scale says a key means.\n"
+                "\n"
+                "# Play with\n"
+                "Stack Step, and the scale on the TUNING page. In Bohlen-Pierce, which repeats at 3/1 and has no octave, a step is a degree of a scale with nothing to resolve to.\n"
+                "\n"
+                "# Lore\n"
+                "Bohlen-Pierce was devised in the 1970s around the *tritave* -- a 3:1 ratio -- instead of the octave. Everything you know about consonance is slightly wrong in it, which is the point.\n",
             {
                 { ids::shapeA, 4.0f }, { ids::morphA, 0.45f },     // vintage saw
                 { ids::stackA, 6.0f },                            // Scale
@@ -3584,6 +3861,13 @@ const std::vector<Preset>& presets()
             // noise rather than an oscillator. The anti-formant is in, because
             // a nasal is what makes it read as a mouth rather than as a filter.
             "Long Room -- a throat thirty centimetres too big",
+                "The vowel filter with its tract length scaled up, so every formant drops together. The vowel is the same vowel; the head saying it is not.\n"
+                "\n"
+                "# Play with\n"
+                "Tract. Below 1 is a bigger throat, above 1 a smaller one.\n"
+                "\n"
+                "# Lore\n"
+                "A uniform tube closed at one end resonates at odd multiples of c/4L, so every formant scales with 1 over the length. A 17.5 cm adult tract puts the first resonance near 500 Hz. Halve the tract and every formant doubles -- which is why this reads as a creature rather than as a different vowel.\n",
             {
                 { ids::shapeA, 8.0f }, { ids::morphA, 0.35f },     // noise
                 { ids::unisonA, 5.0f }, { ids::spreadA, 0.9f },
@@ -3625,6 +3909,13 @@ const std::vector<Preset>& presets()
             //
             // The one to leave running while something else happens over it.
             "Cellar -- fifths on a failing machine",
+                "Stacked fifths -- hollow and rootless -- on a machine whose power supply is not keeping up.\n"
+                "\n"
+                "# Play with\n"
+                "Sag depth and Sag rate. Slow reads as instability; fast reads as vibrato.\n"
+                "\n"
+                "# Lore\n"
+                "Sag is what an analogue polysynth does when a loud chord pulls its supply rails down: pitch, cutoff and level all move together, because they all run off the same rail. That common-mode movement is why it sounds like one machine rather than like chorus.\n",
             {
                 { ids::shapeA, 0.0f },
                 { ids::stackA, 2.0f },                            // Fifths
@@ -3659,6 +3950,13 @@ const std::vector<Preset>& presets()
             //
             // Play it as one held note and let the sequencer do the rhythm.
             "Tritone Engine -- the pulse that will not resolve",
+                "Stacked tritones, symmetric and rootless, with PM for teeth and the sequencer chopping the level into sixteenths.\n"
+                "\n"
+                "# Play with\n"
+                "Hold one note and let the sequencer do the rhythm.\n"
+                "\n"
+                "# Lore\n"
+                "The tritone divides the octave exactly in half, so it has no root to resolve to -- stack it and every note has equal claim to being the bottom. Composers have used symmetric intervals for exactly that instability since the late nineteenth century, and film scoring took it straight over.\n",
             {
                 { ids::shapeA, 1.0f }, { ids::widthA, 0.3f },
                 { ids::stackA, 3.0f },                            // Tritones
@@ -3708,6 +4006,15 @@ const std::vector<Preset>& presets()
             // Hold a low chord. It wants three or four seconds before it means
             // anything.
             "Slow Descent -- a rise that is losing",
+                "The player's own patch, written down. A Shepard stack with a slow envelope pulling the pitch down underneath it, long release, amplitude slow at both ends.\n"
+                "\n"
+                "The two motions disagree: Shepard climbs and never arrives, the envelope falls and does. So the ear hears a rise that is losing -- which is a different feeling from either one alone. The slow amplitude attack is the other half: nothing has an onset, so there is no moment to locate the sound at.\n"
+                "\n"
+                "# Play with\n"
+                "Mod env 1's attack, which is how long the fall takes, and Shepard speed, which is how hard the rise argues with it.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing. Hold a low chord and give it three or four seconds before it means anything.\n",
             {
                 { ids::shapeA, 0.0f },                             // saw
                 { ids::stackA, 7.0f },                             // Shepard
@@ -3757,6 +4064,13 @@ const std::vector<Preset>& presets()
             // Play it low. Centre origin at this width would put two copies
             // under the note and the bass would be a chord.
             "Overhead -- the stack that opens above the note",
+                "Five copies at fifths, all of them *above* the played note, so the low end stays exactly one note wide and everything the stack adds happens over the top of it.\n"
+                "\n"
+                "# Play with\n"
+                "Origin. Centre puts two copies under the note; Up keeps the bass clean for a sub. Play it low -- that is where the difference is.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing. This is a voicing decision, not a gesture.\n",
             {
                 { ids::shapeA, 0.0f },
                 { ids::stackA, 2.0f },                             // Fifths
@@ -3790,6 +4104,13 @@ const std::vector<Preset>& presets()
             // Origin Down on B puts its weight underneath, so the falling half
             // is the one you feel and the rising half is the one you hear.
             "Two Ways at Once -- one stack rising through another falling",
+                "Both oscillators on Shepard, B falling exactly as fast as A rises, so the two stacks pass through each other forever. Because both are endless, they never finish passing.\n"
+                "\n"
+                "# Play with\n"
+                "Shear. At 0 the two are locked; at half B stands still while A climbs; at full they run opposite. The beat rate comes from the distance between the two speeds, not from any tuning.\n"
+                "\n"
+                "# Automate\n"
+                "Shear, very slowly, across a whole section.\n",
             {
                 { ids::shapeA, 3.0f },                             // sine
                 { ids::stackA, 7.0f }, { ids::unisonA, 5.0f },
@@ -3829,6 +4150,16 @@ const std::vector<Preset>& presets()
             // before it can go past it, so a high resonance is what puts the
             // interesting part of Sing's travel where a knob can find it.
             "The Filter Sings -- no oscillators at all",
+                "Both oscillator levels at zero. The only sound in the patch is the filter oscillating on its own at the cutoff frequency -- a second instrument hiding inside this one.\n"
+                "\n"
+                "# Play with\n"
+                "Resonance first, then Sing. Sing has to cancel the damping the resonance left before it can go past it, so at full Resonance it sings in the first percent of the travel and at Resonance 0 it takes almost all of it.\n"
+                "\n"
+                "# Automate\n"
+                "Cutoff -- with Key track up it is a playable pitch. Or point an envelope at Sing and it howls up out of a note and settles back.\n"
+                "\n"
+                "# Lore\n"
+                "Any filter with enough positive feedback becomes an oscillator, and players found this the moment resonance knobs went past about 90%. It became a technique rather than an accident in the 1960s and 70s: a self-oscillating filter is a free sine oscillator that tracks the keyboard, which mattered when all your VCOs were already busy. It is also the laser and wind sound of that era's effects work.\n",
             {
                 { ids::levelA, 0.0f }, { ids::levelB, 0.0f },
                 { ids::subLevel, 0.0f },
@@ -3878,6 +4209,13 @@ const std::vector<Preset>& presets()
             // against the played note as you move up the keyboard, so the
             // interval between them is different in every register.
             "Overtone -- a filter just over the edge",
+                "Sing used gently *under* the oscillators rather than instead of them, so the resonant peak is a note of its own sitting inside the chord.\n"
+                "\n"
+                "# Play with\n"
+                "Key track. It is deliberately part-way here, so the singing peak drifts against the played note as you move up the keyboard and the interval between them is different in every register.\n"
+                "\n"
+                "# Automate\n"
+                "Cutoff, slowly. The inner note moves against the outer one.\n",
             {
                 { ids::shapeA, 0.0f }, { ids::unisonA, 3.0f },
                 { ids::detuneA, 12.0f }, { ids::spreadA, 0.5f },
@@ -3951,6 +4289,20 @@ const std::vector<Preset>& presets()
             //
             // Play a wide chord and **hold it**. It takes about twelve seconds.
             "Conflux -- many pitches arriving as one",
+                "The converging riser that opened films in the eighties. A note begins as a genuine unison -- one pitch, fourteen copies of it -- then opens out over about twelve seconds and arrives on an enormous chord that simply sits there.\n"
+                "\n"
+                "Play a **wide** chord, three or four octaves, and **hold it**. The arrival is the whole point, so give it the time.\n"
+                "\n"
+                "# Play with\n"
+                "Mod env 1 and 2 attack times, which are how long the opening takes. They are deliberately different -- eleven and thirteen seconds -- so the two banks do not land in lockstep.\n"
+                "\n"
+                "# Automate\n"
+                "Nothing. This preset is a gesture, not a lane.\n"
+                "\n"
+                "# Lore\n"
+                "The method was published by its author as a sketch: thirty voices at random pitches between 200 and 400 Hz, each moving slowly and randomly, then all proceeding direct to their target note -- three slightly detuned voices per note, two per note in the bass. It is narrow-to-wide, and what reads as convergence is that every voice stops moving at the same instant.\n"
+                "\n"
+                "One instance cannot do the whole thing: in the original a voice's *starting* pitch is unrelated to its target, which needs key tracking multiplied by an envelope, and this matrix adds sources rather than multiplying them. Several instances, one per register, each with its own envelope depth on Pitch, reproduces it exactly -- the recipe is in docs/WHATS-NEW.md.\n",
             {
                 { ids::shapeA, 0.0f },                             // saw
                 { ids::unisonA, 7.0f }, { ids::detuneA, 0.0f },
@@ -4027,6 +4379,14 @@ const juce::String SonitusProcessor::getProgramName (int index)
 
     return list[static_cast<std::size_t> (
         juce::jlimit (0, static_cast<int> (list.size()) - 1, index))].name;
+}
+
+juce::String SonitusProcessor::getProgramNotes (int index) const
+{
+    const auto& list = presets();
+
+    return list[static_cast<std::size_t> (
+        juce::jlimit (0, static_cast<int> (list.size()) - 1, index))].notes;
 }
 
 void SonitusProcessor::setCurrentProgram (int index)

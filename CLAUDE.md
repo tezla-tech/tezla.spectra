@@ -284,7 +284,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **1110 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **1111 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -517,6 +517,13 @@ Detail lives in `docs/PLUGIN-CONVENTIONS.md`; the short version:
   where they think in ms, skewed so the useful range sits mid-travel.
 - **Every control has a tooltip** that says what it does *and* what it costs.
   Tooltips are how this workshop documents itself.
+- **A preset carries its own notes where the plugin has a NOTES page.** A
+  tooltip answers "what does this knob do"; a preset needs "what is this patch
+  for, what should I hold down, what is worth automating, and where did the
+  sound come from", which is a paragraph and sometimes a century of history.
+  Sonitus is the worked example: `Preset::notes` sits beside the settings it
+  describes so the two cannot drift, and the field is not defaultable, so a
+  preset added without notes fails to compile rather than showing a blank page.
 - Ship a small, opinionated preset set aimed at the actual use cases: drum bus,
   sub bass, reese, mix glue, and a genuinely clean setting.
 - UI is resizable and readable on a high-DPI display. Function before flourish;
@@ -841,7 +848,10 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   because `DiceSections.hpp` documented a `tezla-render dice` gate that had
   never been written; the gate exists now and exits non-zero on an unclassified
   parameter. **Run it after adding parameters to any plugin that has a
-  classifier.**
+  classifier.** Sonitus then gained a **NOTES page** -- per-preset notes (what
+  it is, how to play it, what to automate, where the sound came from) plus a
+  glossary of the terms the panel uses. The notes live in the preset table, and
+  a preset without them does not compile.
   Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
   positions); **Membrana is complete through MB7** — the microphone stage

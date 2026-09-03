@@ -531,6 +531,13 @@ public:
     int getCurrentProgram() override { return currentProgram_; }
     void setCurrentProgram (int index) override;
     const juce::String getProgramName (int index) override;
+
+    /// What the NOTES page shows for a preset: what it is, how to play it, what
+    /// is worth automating, and where the sound comes from.
+    ///
+    /// Not a host-facing method -- the VST3 and AU interfaces have no notion of
+    /// a preset description -- so this is ours, read by the editor.
+    [[nodiscard]] juce::String getProgramNotes (int index) const;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
