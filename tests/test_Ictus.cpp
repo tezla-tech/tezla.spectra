@@ -2928,7 +2928,7 @@ TEZLA_TEST (the_wires_hold_at_full_level_before_they_start_to_fall)
     s.velocityWires = 0.0;
 
     // A short-window RMS follows the noise's envelope; the raw samples do not.
-    const auto envelopeAt = [rate] (const std::vector<double>& x, double seconds)
+    const auto envelopeAt = [] (const std::vector<double>& x, double seconds)
     {
         const auto centre = static_cast<std::size_t> (seconds * rate);
         const auto half = static_cast<std::size_t> (0.004 * rate);

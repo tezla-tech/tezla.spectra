@@ -522,12 +522,42 @@ this file and CLAUDE.md.
 
 | phase | status |
 |---|---|
-| H0 plan | pending |
-| H1 shared DSP — `setRankOffsets`, `SlowWalk` | pending |
+| H0 plan | done |
+| H1 shared DSP — `setRankOffsets`, `Shepard`, `SlowWalk` | done |
 | H2 Stack | pending |
 | H3 Tract | pending |
 | H4 Sag | pending |
 | H5 close-out | pending |
+
+**What H1 actually landed, where it differs from the row above.** Three
+headers rather than two, and one small move:
+
+- `UnisonBank::setRankOffsets (cents, gains, count)` exactly as designed, plus
+  `rankCentsOf` / `rankGainOf` for tests and a display. The normalisation is now
+  `1/sqrt(sum of g^2)`.
+- **`Shepard.hpp` came forward from H2 into the shared library.** The plan had
+  every mode computed by the caller in `plugins/Sonitus/Dsp/StackShapes.hpp`,
+  which is still right for the intervals and for Scale — those need the tuning.
+  The Shepard arithmetic needs nothing but a phase and a count, and it is the
+  piece carrying the theorem, so it belongs where it can be tested on its own.
+  `shepardRanks` and `shepardWindowPower` are the API; H2 calls them.
+- `SlowWalk.hpp` as designed, with the lurch in the target distribution.
+- **`SmallRandom` moved to `SmallRandom.hpp`**, unchanged, because `SlowWalk`
+  wanted it and "include the oscillator bank to get a random number" is not a
+  dependency worth explaining. `UnisonBank.hpp` includes it, so every existing
+  includer is untouched.
+
+**H1's measured figures**, so H2 does not re-derive them:
+
+| claim | figure |
+|---|---|
+| Shepard summed power, N = 3..7 | exactly 0.375 N, ripple 1.8e-15 .. 3.6e-15 |
+| ...at N = 2 | ripple 5.0e-01 — the tremolo, and the break-check |
+| Windowed stack against a flat one, through the bank | +0.003 dB (−4.263 dB without the generalised normalisation) |
+| Level flatness sliding at 1 oct/s, 7 sines | 0.569 dB swing |
+| Bit-exactness against the pre-change bank | 48 384 000 samples, identical FNV-1a; one ulp of frequency moves it |
+| `SlowWalk` mean over 100 simulated minutes, six seeds | −0.0018 .. +0.0031 |
+| ...with the lurch in the coefficients instead | −0.063, biased flat — why it is in the targets |
 
 **Where this sits against the rest of the repository.** Sonitus phases 3 and 4
 are complete (`PLAN-PHASE3.md`, `PLAN-PHASE4.md`); `PLAN-CPU.md` holds the
