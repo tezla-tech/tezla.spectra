@@ -822,7 +822,10 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   it is now **complete through V7**. `plugins/Malleus/PLAN.md`,
   `plugins/Crossbar/PLAN.md`, `plugins/Phonoss/PLAN.md` and
   `plugins/Malleus/PLAN-PHASE2.md` are complete and stay as the worked examples
-  of the shape. Sonitus **phase 4 is complete**; Malleus **phase 2 is complete**
+  of the shape. Sonitus **phase 4 is complete**, and **phase 5 is planned but
+  not started** — `plugins/Sonitus/PLAN-PHASE5.md`, the horror phase (Stack,
+  Tract, Sag), asked for on 2026-09-03 with the plan written first at the user's
+  request; every one of its H rows is `pending`. Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
   positions); **Membrana is complete through MB7** — the microphone stage
   (`Tzmb`, before Phonoss in the vocal chain), `plugins/Membrana/PLAN.md` is
