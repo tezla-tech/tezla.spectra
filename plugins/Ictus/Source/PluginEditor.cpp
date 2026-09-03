@@ -453,6 +453,15 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
         "100 a band-pass at it -- a pitched, focused buzz. A crossfade that is "
         "exact at both ends.");
 
+    page.addKnob (ids.wiresHold, "Wires hold",
+        "How long the wires stay at FULL level before they start to fall, 0 to "
+        "300 ms. A snare's wires do not begin dying the instant the stick "
+        "lands -- they are thrown against a head that is still moving and stay "
+        "there for a moment. Without this the only way to get a long buzz is a "
+        "long decay, which washes; with it the buzz has a length of its own "
+        "and then falls at whatever Wires decay says. 0 is the old behaviour "
+        "exactly.");
+
     page.addKnob (ids.wiresDecay, "Wires decay",
         "How long the stick's burst on the wires takes to land, 50 to 400 ms. With "
         "Rattle up the wires also follow the shell, past this.");
@@ -1053,6 +1062,7 @@ void IctusEditor::updateSnareGreying (PlatePage& page, const SnareIds& ids, Snar
     // Key -- and on the ghost, everything LINK borrows from the main snare.
     page.setControlEnabled (ids.snappy, now.wires && ! now.linked);
     page.setControlEnabled (ids.snap, now.wires && ! now.linked);
+    page.setControlEnabled (ids.wiresHold, now.wires);
     page.setControlEnabled (ids.wiresDecay, now.wires);
     page.setControlEnabled (ids.rattle, now.wires);
     page.setControlEnabled (ids.crackTone, now.crack || now.noise);

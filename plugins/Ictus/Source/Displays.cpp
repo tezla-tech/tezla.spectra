@@ -407,7 +407,7 @@ void EnvelopeView::gather (std::vector<double>& inputs)
     }
     else
     {
-        for (const char* id : { snare_.decay, snare_.wires, snare_.wiresDecay, snare_.rattle,
+        for (const char* id : { snare_.decay, snare_.wires, snare_.wiresHold, snare_.wiresDecay, snare_.rattle,
                                 snare_.body, snare_.gate, snare_.release })
             inputs.push_back (read (id));
 
@@ -494,11 +494,12 @@ void EnvelopeView::update()
         const double decay = 0.001 * read (snare_.decay);
         const double tone = 0.01 * readLinked (snare_, snare_.tone, kSnare1Ids.tone);
         const double wires = 0.01 * read (snare_.wires);
+        const double wiresHold = 0.001 * read (snare_.wiresHold);
         const double wiresDecay = 0.001 * read (snare_.wiresDecay);
         const double rattle = 0.01 * read (snare_.rattle);
         const double body = 0.01 * read (snare_.body);
 
-        seconds_ = juce::jmax (0.05, 1.1 * juce::jmax (decay, wires > 0.0 ? wiresDecay : 0.0));
+        seconds_ = juce::jmax (0.05, 1.1 * juce::jmax (decay, wires > 0.0 ? wiresHold + wiresDecay : 0.0));
 
         // The shell: the fundamental at Body, the upper modes at Tone x Body
         // on their shorter T60s.
@@ -528,6 +529,7 @@ void EnvelopeView::update()
             env.prepare (rate);
             env.setAttackSeconds (0.0);
             env.setHoldSeconds (0.0);
+            env.setHoldSeconds (wiresHold);
             env.setDecaySeconds (wiresDecay);
             env.setDecayTension (1.0);
             env.setSustain (0.0);
@@ -555,7 +557,10 @@ void EnvelopeView::update()
             traces_.push_back (wire);
         }
 
-        caption_ = "shell " + msText (decay) + (wires > 0.0 ? ", wires " + msText (wiresDecay) : juce::String (", wires off"))
+        caption_ = "shell " + msText (decay)
+                 + (wires > 0.0 ? (wiresHold > 0.0 ? ", wires hold " + msText (wiresHold) + " then " + msText (wiresDecay)
+                                                   : ", wires " + msText (wiresDecay))
+                                : juce::String (", wires off"))
                  + (rattle > 0.0 ? ", rattle " + juce::String (juce::roundToInt (100.0 * rattle)) + "%" : juce::String());
     }
 

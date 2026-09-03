@@ -1004,6 +1004,27 @@ Break-checks at I4.2, each seen red then reverted: the drive taking the
 clipper's residue alone (the original bug, 4 checks red across both engines);
 the clap's gate ignoring note-off.
 
+**I4.3 -- a hold on the snares' wires** (2026-09-03, the user). The wires had
+a decay and nothing else, so the only way to get a long buzz was a long
+decay, which washes rather than sits. `s1WiresHold` and `g1WiresHold` at
+`kSchemaV9`, both **neutral at 0** so every saved project reopens unchanged:
+the wires stay at full level for up to 300 ms and then fall at whatever Wires
+decay says. It is `Adsr`'s hold stage, which the envelope already had and the
+engine was passing 0 to.
+
+Measured (`tezla-tests wires_hold`, the wires alone at 96 kHz, decay 100 ms):
+at 100 ms into a 120 ms hold the wires read **0.6464 against 0.0016** without
+it, and the level at the end of the hold is within **1.2 %** of the level at
+the strike -- which is the definition of a hold and what the test asserts.
+The hit runs 0.100 s to 0.220 s and still retires exactly.
+
+The test failed twice on its own expectations before it failed on anything
+real, and both are worth keeping: "the strike is unchanged" cannot be asked
+of a four-millisecond window at 10 ms, because an exponential decay is
+already a third down by then; and a snare with Body at 0 still runs its shell
+(Rattle follows it), so `isActive()` stays true until the SHELL retires, not
+until the audio stops. Break-check: the hold never applied, 4 checks red.
+
 **To resume** (a fix, or a later phase): read CLAUDE.md in full, then this
 file; take the first `pending` phase. The next is **I5, the punch chain**.
 I4.1 above is the shape of an ear round arriving mid-phase: the user's verdict

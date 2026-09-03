@@ -94,6 +94,14 @@ with everything on retires at 0.60 s with **0 hits sounding**; the engine
 costs **15 ns a sample** with everything on at 192 kHz, and the whole kit —
 two kicks and three snares busy — **4.8–5.2 % of a core** at 48 kHz ×4.
 
+**Wires hold** keeps the wires at full level before the decay starts, 0 to
+300 ms. A snare's wires do not begin dying at the instant the stick lands:
+they are thrown against a head that is still moving and stay there for a
+moment. Without it the only way to get a long buzz is a long decay, which
+washes; with it the buzz has a length of its own and then falls at whatever
+**Wires decay** says. 0 is exactly the behaviour before it existed, so no
+saved project moves.
+
 ## The ghost snare
 
 In a break the ghost notes are the quiet hits between the backbeats, the
