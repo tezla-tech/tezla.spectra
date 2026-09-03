@@ -453,6 +453,15 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
         "100 a band-pass at it -- a pitched, focused buzz. A crossfade that is "
         "exact at both ends.");
 
+    page.addKnob (ids.wiresHold, "Wires hold",
+        "How long the wires stay at FULL level before they start to fall, 0 to "
+        "300 ms. A snare's wires do not begin dying the instant the stick "
+        "lands -- they are thrown against a head that is still moving and stay "
+        "there for a moment. Without this the only way to get a long buzz is a "
+        "long decay, which washes; with it the buzz has a length of its own "
+        "and then falls at whatever Wires decay says. 0 is the old behaviour "
+        "exactly.");
+
     page.addKnob (ids.wiresDecay, "Wires decay",
         "How long the stick's burst on the wires takes to land, 50 to 400 ms. With "
         "Rattle up the wires also follow the shell, past this.");
@@ -841,7 +850,10 @@ void IctusEditor::buildClapPage()
 
     page.addKnob (ids::cpDrive, "Drive",
         "An antialiased soft clip over the whole clap, for a harder, flatter "
-        "one that sits in front of a mix. 0 is exact.");
+        "one that sits in front of a mix. Trimmed by the gain it adds, so it "
+        "buys harmonics and not loudness: measured across the whole range the "
+        "clap's RMS moves 1.7 dB while its peak falls by more than half, which "
+        "is the clipping doing its job. 0 is exact.");
 
     // ---- out ----
     page.beginPlate ("Out", "level and velocity", kTintVelocity, true);
@@ -852,6 +864,18 @@ void IctusEditor::buildClapPage()
 
     page.addKnob (ids::cpVelLevel, "Vel > Level",
         "How much velocity moves the level, 0 to 100%.", Emphasis::trim);
+
+    page.addLamp (ids::cpGate, "Gate", "Gate",
+        "Lit: a note-off fades the WHOLE clap out over Release from wherever "
+        "it is -- the bursts still to come, the cavity's ring and the room "
+        "alike. That is how you stop a long clap by lifting the key rather "
+        "than waiting for the room to finish. Dark: a one-shot that ignores "
+        "note-off, and the HIT button always plays the whole hit either way.");
+
+    page.addKnob (ids::cpRelease, "Release",
+        "How long a gated clap takes to fade after the key lifts, 0 to 2 s. 0 "
+        "is a 1 ms ramp, the shortest that does not click. Does nothing with "
+        "Gate dark.");
 
     page.setNote ("The clap is on D#1 by default. Bursts of noise a Flam apart with their "
                   "envelopes summed, a cavity struck by each of them, and then the room: the "
@@ -1038,6 +1062,7 @@ void IctusEditor::updateSnareGreying (PlatePage& page, const SnareIds& ids, Snar
     // Key -- and on the ghost, everything LINK borrows from the main snare.
     page.setControlEnabled (ids.snappy, now.wires && ! now.linked);
     page.setControlEnabled (ids.snap, now.wires && ! now.linked);
+    page.setControlEnabled (ids.wiresHold, now.wires);
     page.setControlEnabled (ids.wiresDecay, now.wires);
     page.setControlEnabled (ids.rattle, now.wires);
     page.setControlEnabled (ids.crackTone, now.crack || now.noise);
@@ -1128,6 +1153,14 @@ void IctusEditor::updateGreying()
         {
             shownClapNoise_ = noise;
             clapPage_->setControlEnabled (ids::cpNoiseTone, noise);
+        }
+
+        const bool clapGate = value (ids::cpGate) > 0.5;
+
+        if (clapGate != shownClapGate_)
+        {
+            shownClapGate_ = clapGate;
+            clapPage_->setControlEnabled (ids::cpRelease, clapGate);
         }
     }
 }

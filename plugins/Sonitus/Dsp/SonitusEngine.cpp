@@ -64,6 +64,12 @@ void Engine::rebuildForRate() noexcept
     lfo2_.prepare (internalRate_);
     sequencer_.prepare (internalRate_);
 
+    // The machine's temperature, on the same control grid everything else here
+    // runs on -- counted in samples, so the host's buffer size cannot reach it.
+    // Here rather than in `prepare` because `internalRate_` is only known once
+    // the factor is, and because a factor change has to re-derive it too.
+    sagWalk_.prepare (internalRate_, Voice::kControlIntervalSamples);
+
     for (int channel = 0; channel < 2; ++channel)
     {
         split_[channel].prepare (internalRate_);
@@ -95,6 +101,17 @@ void Engine::reset() noexcept
     lfo1_.reset();
     lfo2_.reset();
     sequencer_.reset();
+
+    // The glissando goes back to the bottom of its span with everything else.
+    // It is not a note property -- nothing about a key restarts it -- but a
+    // graph rebuild is exactly when it should start over.
+    shepardOctaves_ = 0.0;
+    sources_.shepardOctaves = 0.0;
+
+    // A graph rebuild starts the machine cold. A *note* never does -- see
+    // `SlowWalk::reset`.
+    sagWalk_.reset();
+    sources_.sag = 0.0;
 
     oversampler_.reset();
 
@@ -206,6 +223,8 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
             case GlobalSource::macro3:    value = sources_.macros[2]; break;
             case GlobalSource::macro4:    value = sources_.macros[3]; break;
 
+            case GlobalSource::sag:       value = sources_.sag; break;
+
             // The tracked note -- the same one the comb and the formant
             // follow, so the whole mangle moves with one note rather than three
             // stages each picking their own. Nothing sounding reads zero, which
@@ -245,6 +264,7 @@ double Engine::globalModulationFor (GlobalDestination destination) const noexcep
                     case GlobalSource::macro2:
                     case GlobalSource::macro3:
                     case GlobalSource::macro4:
+                    case GlobalSource::sag:
                     case GlobalSource::count:
                     default: break;
                 }
@@ -311,6 +331,15 @@ void Engine::applyGlobalModulation() noexcept
 
     formant_.setMorph (std::clamp (
         active_.formantMorph + globalModulationFor (GlobalDestination::formantMorph), 0.0, 1.0));
+
+    // The size of the throat, modulated in **octaves** like every other
+    // frequency here -- it is a ratio on three frequencies, so an additive
+    // sweep would crawl at one end and leap at the other. Two octaves is the
+    // whole 0.5..2.0 range reachable from anywhere in it.
+    static constexpr double kTractOctaves = 2.0;
+
+    formant_.setTract (active_.formantTract
+        * std::pow (2.0, kTractOctaves * globalModulationFor (GlobalDestination::tract)));
 
     // Which partial the lock selects. Additive in *harmonic number* rather than
     // in octaves, because the harmonic series is what it walks: a depth of 1
@@ -580,6 +609,50 @@ void Engine::advanceGlobalSources (int samples) noexcept
     // copying them here rather than reading `active_` at each use is what makes
     // both matrices see the same four numbers on the same control chunk.
     sources_.macros = active_.macros;
+
+    // **The Shepard glissando**, in octaves travelled, advanced once for the
+    // whole instrument. Synced, the magnitude is one octave per division and
+    // only the sign comes from the knob -- the LFOs' pattern exactly.
+    //
+    // The matrix reaches it here rather than in `applyGlobalModulation`,
+    // because that runs after this and a rate read there would be one control
+    // chunk stale -- 0.67 ms at 48 kHz x4, which is nothing on a filter cutoff
+    // and is a wobble on a phase accumulator. Every source it can read is
+    // already in `sources_` at this point.
+    static constexpr double kShepardOctavesPerSecond = 4.0;   // the control's own maximum
+
+    const double shepardKnob = active_.shepardRate
+                             + kShepardOctavesPerSecond
+                                 * globalModulationFor (GlobalDestination::shepardRate);
+
+    const double shepardRate = active_.shepardSync
+        ? std::copysign (dsp::divisionRateHz (active_.shepardDivision, bpm_), shepardKnob)
+        : shepardKnob;
+
+    shepardOctaves_ += shepardRate * static_cast<double> (samples) / internalRate_;
+
+    // Wrapped rather than left to grow, so a session left open all day has the
+    // same precision as one just started. 420 octaves is a whole number of
+    // turns for every copy count from 1 to 7, so this costs no jump.
+    shepardOctaves_ -= kShepardWrapOctaves
+                         * std::floor (shepardOctaves_ / kShepardWrapOctaves);
+
+    sources_.shepardOctaves = shepardOctaves_;
+
+    // **Sag.** One walk, stepped once for the whole instrument, published like
+    // the macros so the voices and the mangle read the identical figure on the
+    // identical chunk rather than two copies a chunk apart.
+    sagWalk_.setPeriodSeconds (active_.sagPeriodSeconds);
+    sagWalk_.advance();
+
+    sources_.sag = sagWalk_.value();
+
+    // The depth is a destination too, so an envelope can make the machine fail
+    // on cue. Resolved here rather than in `applyGlobalModulation` for the same
+    // reason the glide's rate is: the voices read it on this chunk.
+    active_.voice.sagDepth = std::clamp (active_.sagDepth
+                                           + globalModulationFor (GlobalDestination::sagDepth),
+                                         0.0, 1.0);
 }
 
 void Engine::mangle (double& left, double& right) noexcept

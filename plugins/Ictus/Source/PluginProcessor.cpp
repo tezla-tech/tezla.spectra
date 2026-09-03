@@ -38,7 +38,13 @@ constexpr int kSchemaV6 = 6;
 
 /// Schema 7: the depth the first hats and clap did not have (I4.1).
 constexpr int kSchemaV7 = 7;
-constexpr int kStateSchemaVersion = kSchemaV7;
+
+/// Schema 8: the clap's gate, which every other pad already had.
+constexpr int kSchemaV8 = 8;
+
+/// Schema 9: a hold on the snares' wires.
+constexpr int kSchemaV9 = 9;
+constexpr int kStateSchemaVersion = kSchemaV9;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -1001,6 +1007,28 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::cpDrive, kSchemaV7 }, "Clap Drive",
         Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
 
+    // ---- schema 8: the clap's gate -----------------------------------------
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::cpGate, kSchemaV8 }, "Clap Gate", false));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpRelease, kSchemaV8 }, "Clap Release",
+        skewed (0.0f, 2000.0f, 1.0f, 100.0f), 0.0f, attributes ("ms")));
+
+    // ---- schema 9: a hold on the wires -------------------------------------
+    //
+    // Neutral at 0, so every project saved before it existed reopens
+    // sounding exactly as it did (CLAUDE.md section 8).
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::s1WiresHold, kSchemaV9 }, "Snare 1 Wires hold",
+        skewed (0.0f, 300.0f, 0.1f, 40.0f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::g1WiresHold, kSchemaV9 }, "Ghost Wires hold",
+        skewed (0.0f, 300.0f, 0.1f, 40.0f), 0.0f, attributes ("ms")));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -1145,6 +1173,8 @@ void IctusProcessor::pullParameters()
     c.colourHz = valueOf (state_, ids::cpColour);
     c.tailSeconds = valueOf (state_, ids::cpTail) * 0.001;
     c.tailTone = valueOf (state_, ids::cpTailTone) * 0.01;
+    c.gate = valueOf (state_, ids::cpGate) > 0.5f;
+    c.releaseSeconds = valueOf (state_, ids::cpRelease) * 0.001;
     c.level = valueOf (state_, ids::cpLevel) * 0.01;
     c.velocityLevel = valueOf (state_, ids::cpVelLevel) * 0.01;
 
@@ -1178,6 +1208,7 @@ void IctusProcessor::pullSnare (SnareSettings& n, const SnareIds& p)
     n.wires = valueOf (state_, p.wires) * 0.01;
     n.snappyHz = valueOf (state_, p.snappy);
     n.snap = valueOf (state_, p.snap) * 0.01;
+    n.wiresHoldSeconds = valueOf (state_, p.wiresHold) * 0.001;
     n.wiresDecaySeconds = valueOf (state_, p.wiresDecay) * 0.001;
     n.rattle = valueOf (state_, p.rattle) * 0.01;
 

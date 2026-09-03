@@ -115,6 +115,65 @@ slave and PM target.
 | Spread | Across the stereo field. The centre copy stays centred, so the mono sum keeps its fundamental |
 | Drift | Slow random pitch wander, in cents, per copy. What an analogue oscillator bank does — and it carries on between notes: a key restarts the unison scatter exactly as before, never the drift |
 
+**Stack** — *where* the copies go, which is the one thing the unison bank could
+not do before. `Detune` is what shipped: symmetric, in cents, and bit-exact. The
+rest place the copies at intervals instead, with the detune still riding on top
+so a stacked chord can still churn.
+
+| mode | what it is |
+|---|---|
+| Octaves | organ registration; the doubled pulse |
+| Fifths | quintal — hollow, wide, no third to say major or minor |
+| Tritones | symmetric, so it has no root to resolve to |
+| Cluster | minor seconds |
+| Diminished | rootless by construction |
+| **Scale** | the copies play the *keys* `note ± r × Step`, **through the loaded tuning** |
+| **Shepard** | the endless rise |
+
+**Exactly one copy always sits on the played pitch**, at every count, so turning
+Unison up adds notes *around* the note rather than moving it. Stack never
+detunes the instrument.
+
+**Scale is the one only this instrument can do**, because of the TUNING page.
+The copies go through `Tuning::frequencyFor`, so what a Step *means* is whatever
+the loaded tuning says a key means: a semitone in twelve-tone equal temperament,
+a scale degree under a keyboard map, and in Bohlen–Pierce — which repeats at 3/1
+and has no octave at all — a measured **146.30 cents**, a degree of a scale with
+nothing to resolve to. A copy whose key falls off the keyboard goes silent
+rather than being clamped onto a pitch another copy is already playing.
+
+**Shepard** is a chord of octaves whose loudness is a function of *pitch* rather
+than of which copy it is. Slide them all up together and each one walks through
+that fixed curve — fading in at the bottom, swelling, fading out at the top —
+and the instant it vanishes it reappears seven octaves lower where the curve is
+silent again. Nothing ever stops rising and nothing ever gets higher.
+
+Two things make it work rather than merely sweep:
+
+- **The seam is silent by construction.** A copy's frequency jumps the whole
+  span exactly where the window is 0.0, and its oscillator phase is never
+  touched — so there is no discontinuity anywhere in the mechanism rather than
+  one small enough to get away with.
+- **The summed power is exactly flat for three copies or more** — `0.375 N`,
+  measured at a ripple of 1.8e-15 to 3.6e-15 — so the rise has no tremolo in it.
+  At *two* copies the ripple is 5.0e-01 and it does, which is a hard edge rather
+  than a gradual improvement and is why the control asks for at least three.
+
+Measured through the whole instrument at one octave per second: a tracked
+partial climbs 288.8 → 331.8 → 381.2 → 437.9 → 503.0 Hz, exactly ×1.149 per
+200 ms, while the spectral centroid swings 2.7 % and returns to within 0.77 %
+after a full octave. Everything climbs; the spectrum stands still.
+
+**Speed** is one control for the whole instrument, in octaves per second and
+signed, because the glide is one accumulator for the whole instrument: a held
+chord has to climb as one thing. Zero reads *held* and is a static windowed
+octave stack, which is its own sound. Tempo sync gives one octave per division.
+
+**Shepard is the only stack mode that costs anything while it runs** — measured
+at **1.23× and 1.26×** the same patch in any other mode, on a worst case of
+sixteen voices with seven copies on both oscillators at ×4. Three copies instead
+of seven is most of the sound for less than half the cost.
+
 **Sync B** — hard sync. B's phase resets on the played note's period, so B's own
 pitch stops being a pitch and becomes a formant. This is the Pro-53 sound, and
 it is worth nothing standing still: put a mod envelope on **Pitch B**.
@@ -312,6 +371,39 @@ an envelope is a hazard, not a sound.
 The sequencer is drawn as sixteen faders rather than sixteen knobs, because the
 *shape* of the pattern is the thing being edited. The playing step is lit.
 
+#### Sag — the machine going wrong, all of it together
+
+Sonitus already has two random walks, and both are **uncorrelated on purpose**:
+the unison bank's per-copy drift, which is what makes a stack thick, and the
+voice card's temperature, which is what makes eight voices sound like eight
+cards. Sag is the opposite — **one walk, common-mode across every voice** — so
+the instrument goes wrong *together* the way a tape machine or a failing supply
+does. That is a different sound from a thicker one, and an LFO cannot make it:
+an LFO repeats, and the ear locks onto a repeat inside a bar.
+
+From the one walk and all in the same direction, at full depth it moves the
+**pitch** by 40 cents (the capstan slipping), the **cutoff** by 0.4 octaves (the
+sound dulling) and the **level** by 1.5 dB (the amplifier drooping). Three things
+from one cause is what reads as one machine; three knobs would read as three
+effects.
+
+It mostly sits still and occasionally lurches, and the lurch is in the *target
+distribution* rather than in the coefficients — a walk that falls faster than it
+recovers spends more of its life below zero, so the whole instrument would end
+up permanently flat by an amount nobody could predict. Over a hundred simulated
+minutes at six seeds the mean lands between −0.0018 and +0.0031.
+
+**At 0 it is bit-exactly out of the path**, and the walk keeps walking: Sag is a
+modulation source in both matrices whatever the depth is, because the depth is
+how much reaches the voice *directly*, not whether the machine has a
+temperature.
+
+It reaches the sub as well as the top — measured at **+4.9 cents against +5.1
+expected** on the sub alone — which is not automatic: the sub reads the voice's
+pitch ratio and ignores the oscillators' fine tune, so the obvious placement
+beside the pitch bend would have left it perfectly in tune underneath a sagging
+instrument.
+
 ### KARGYRAA
 
 The third throat-singing mechanism, and the only one that is a **source** change
@@ -421,6 +513,27 @@ a human tract puts them, with the per-vowel amplitudes from the same table —
 they span thirty decibels, and that balance is most of what tells one vowel from
 another. The gain is divided by Q, so Sharpness sharpens the vowel rather than
 turning it up.
+
+**Tract** is how big the throat is. A tube's resonances scale inversely with its
+length — `F_n = (2n−1)c / 4L` — so one ratio on all three formants *is* the
+physics of a longer or shorter vocal tract. The pitch does not move at all; only
+the size of the thing making the sound does, which is why it reads as a creature
+rather than as a pitch shift.
+
+The vowel table was measured on an adult male tract, about 17.5 cm, and the
+readout gives the length each setting means: **0.50× is a 35 cm throat, 2.00× is
+8.75 cm**. An adult woman sits near 1.2 and a small child near 1.6, so the range
+runs well past a person at both ends and passes through everybody on the way.
+
+Two things follow from it being physics rather than an effect. **Q is
+preserved** — the bandwidths are resized with the formants, because a longer
+tube is the same tube — and **the relative loudness of the three peaks is not
+touched**, which the source table supports: it averaged its amplitudes across
+men, women and children because they did not differ. Measured on "ah" at 0.50×:
+F1 730 → 365, F2 1090 → 545, F3 2440 → 1220 Hz, with Q identical to 1e-9.
+
+It is applied **before** the harmonic lock, so at full lock the resonances still
+land exactly on their partials and overtone singing stays in tune.
 
 **Harmonic lock** pulls the three resonances off the vowel and onto **harmonics
 of the played note**. This is what overtone singing actually is: not a second
@@ -821,6 +934,18 @@ D = 600 the furthest was **9.2 cents** against a cap of 15; at D = 40,
 | **Bar riser** | The same sixteen points as a shape rather than a gate — a stepped climb whose acceleration is drawn leg by leg, sweeping cutoff, filter type and drive together |
 | **Two-hand macro** | Two knobs, eight destinations: MACRO 1 is aggression, MACRO 2 is size. Play with one hand on each |
 | **Morph wah** | A wah that changes filter *type* rather than cutoff — a bar-synced LFO swinging lowpass to bandpass and back. No cutoff sweep makes that sound |
+| **Descent** | Shepard falling into a key-tracked comb, a quarter of an octave a second. Hold one note; nothing arrives |
+| **Ascent** | The same trick upward and faster, into a resonant filter an envelope opens. The stinger rather than the drone |
+| **Cloister** | Stack at Scale, one key per copy — so what it *is* depends entirely on the TUNING page. A chromatic cluster in 12-TET; something with a history in Werckmeister III or a dastgah |
+| **Long Room** | Tract at 0.55 — a 32 cm throat — with the vowel crawling under a smooth-random LFO, over noise rather than an oscillator. The anti-formant is in, because a nasal is what makes it a mouth |
+| **Cellar** | Stacked fifths under deep slow Sag, sixty-second period: it lurches about twice a chorus. The one to leave running |
+| **Tritone Engine** | Stacked tritones with PM for teeth and the sequencer chopping the level into sixteenths. Hold a note and let the sequencer do the rhythm |
+
+Every preset's peak at MIDI note 45, held: Descent −4.47, Ascent −2.17,
+Cloister −4.88, Long Room −9.02, Cellar −4.73, Tritone Engine −8.68 dBFS.
+Measured rather than assumed, and it caught two: Descent peaked at **+3.53
+dBFS** before its trim and Long Room at **−29.3**, twenty-five decibels below
+everything else.
 
 ---
 
@@ -863,6 +988,14 @@ otherwise, and this project has now twice proved how that goes. And a decision:
 > mean something else, and every project using the vowel filter would shift.
 > CLAUDE.md §8. Adding vowels needs either a separate "vowel set" choice
 > parameter, or the morph reinterpreted with the current layout preserved.
+
+### More on the horror thread
+
+Phase 5 built Stack, Tract and Sag (`PLAN-PHASE5.md`). Four things were cut from
+it deliberately and live in [`../../docs/ROADMAP.md`](../../docs/ROADMAP.md) §11
+with what would unpark each: an origin control for the stack's ranks, a Shepard
+"shear" with A rising while B falls, Shepard panning by phase rather than rank,
+and the vowel list, which Tract does **not** unblock and does not touch.
 
 ### Self-oscillation, from the filter book
 

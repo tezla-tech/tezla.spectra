@@ -906,6 +906,10 @@ private:
     int shownNotch_      { -1 };
     int shownRender_     { -1 };
     int shownOffline_    { -1 };
+
+    /// Stack A, Stack B and the Shepard sync switch, packed into one integer --
+    /// see `updateForSwitches`. -1 forces the first pass to run.
+    int shownStackState_ { -1 };
     juce::String shownScale_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SonitusEditor)

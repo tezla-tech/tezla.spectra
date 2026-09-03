@@ -654,7 +654,7 @@ TEZLA_TEST (a_fresh_prepare_renders_the_same_bits_twice)
     // presses *within* a session stop repeating.
     constexpr double rate = 48000.0;
 
-    const auto take = [rate]
+    const auto take = []
     {
         Voice voice;
         voice.prepare (rate, 7);

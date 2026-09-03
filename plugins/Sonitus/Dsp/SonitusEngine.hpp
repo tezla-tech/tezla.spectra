@@ -82,6 +82,7 @@
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/Formant.hpp>
 #include <tezla/dsp/Lfo.hpp>
+#include <tezla/dsp/SlowWalk.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Phaser.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
@@ -163,6 +164,17 @@ enum class GlobalSource
     macro3,
     macro4,
 
+    /// **Sag** -- the machine's temperature, in [-1, 1]. Appended, like every
+    /// entry here (CLAUDE.md section 8).
+    ///
+    /// Global rather than per note, like the LFOs and the sequencer already in
+    /// this list, and it reads the same number here as in the global matrix --
+    /// there is one walk for the whole instrument, which is the point of it.
+    /// It reads the walk even when the Sag depth is 0: the depth knob is how
+    /// much reaches the voice *directly*, not whether the machine has a
+    /// temperature.
+    sag,
+
     count
 };
 
@@ -196,6 +208,14 @@ enum class GlobalDestination
 
     /// Where the anti-formant sits, in octaves.
     formantNotch,
+
+    /// **Phase 5, all appended** -- a stored slot is an index (CLAUDE.md §8).
+    ///
+    /// The size of the throat, in octaves of formant scaling; the depth of the
+    /// machine's instability; and how fast the Shepard glissando climbs.
+    tract,
+    sagDepth,
+    shepardRate,
 
     count
 };
@@ -333,12 +353,46 @@ struct EngineParameters
     /// matrices read the same number. Zero contributes nothing anywhere.
     std::array<double, 4> macros {};
 
+    /// **Shepard.** How fast the glissando climbs, in octaves per second,
+    /// signed -- negative falls. Zero is a legitimate setting and is a *held*
+    /// windowed octave stack, which is its own sound; the panel reads it as
+    /// "held" the way LFO rate 0 already does.
+    ///
+    /// One rate for the whole instrument, because the phase is one accumulator
+    /// for the whole instrument -- see `GlobalSources::shepardOctaves`. It
+    /// means nothing unless an oscillator's Stack is set to Shepard.
+    double shepardRate { 0.0 };
+
+    /// Tempo sync for it: one octave per division, taking its direction from
+    /// `shepardRate`'s sign. The same pattern the LFOs use.
+    bool shepardSync { false };
+    int shepardDivision { dsp::defaultDivision };
+
+    /// **Sag** -- how deep the machine's one shared instability runs, 0 to 1.
+    ///
+    /// The complement of the two drifts already here, both of which are
+    /// uncorrelated on purpose: this one is **common-mode across every voice**,
+    /// so the instrument goes wrong together the way a tape machine or a
+    /// failing supply does rather than getting thicker. Exactly 0 is bit-exactly
+    /// out of the path, and the walk keeps walking regardless -- it is still a
+    /// modulation source at 0, because the depth knob is how much reaches the
+    /// voice *directly*, not whether the machine has a temperature.
+    double sagDepth { 0.0 };
+
+    /// How long between the walk's new targets, in seconds.
+    double sagPeriodSeconds { 20.0 };
+
     double phaseFrequencyHz { 800.0 };
     int phaseStages { 4 };
 
     double formantMorph { 0.0 };
     double formantSharpness { 0.5 };
     double formantMix { 0.0 };
+
+    /// **Tract** -- how big the throat is, as a ratio on all three formants.
+    /// The physics of tract length, so 0.5 is a 35 cm throat and 2.0 an 8.75 cm
+    /// one. Exactly 1.0 is bit-exactly neutral. See `Formant.hpp`.
+    double formantTract { 1.0 };
 
     /// The overtone-singing controls. All neutral by default, so a patch saved
     /// before they existed reopens sounding the same.
@@ -417,6 +471,23 @@ public:
     void setSustain (bool down) { voices_.setSustain (down); }
     void setBendSemitones (double semitones) noexcept { voices_.setBendSemitones (semitones); }
     void allNotesOff() noexcept { voices_.allNotesOff(); }
+
+    /// The Shepard glissando's accumulator, in octaves travelled. For the test
+    /// that pins the wrap, and for a display.
+    [[nodiscard]] double getShepardOctaves() const noexcept { return shepardOctaves_; }
+
+    /// Where the machine's temperature has got to, in [-1, 1]. For the panel
+    /// and for the tests that pin it.
+    [[nodiscard]] double getSag() const noexcept { return sagWalk_.value(); }
+
+    /// What the sag is doing to the tuning right now, in cents. Common-mode
+    /// across every voice, which is the point of it.
+    [[nodiscard]] double getSagCents() const noexcept
+    {
+        return dsp::isExactlyZero (active_.sagDepth)
+                 ? 0.0
+                 : kSagPitchCents * active_.sagDepth * sagWalk_.value();
+    }
 
     dsp::Tuning& tuning() noexcept { return voices_.tuning(); }
     [[nodiscard]] const dsp::Tuning& tuning() const noexcept { return voices_.tuning(); }
@@ -628,6 +699,19 @@ private:
     double ppq_ { -1.0 };
     double bpm_ { 120.0 };
     double beatsIntoBlock_ { 0.0 };
+
+    /// Where the Shepard glissando has got to, in octaves travelled. One for
+    /// the whole instrument -- both oscillators of every voice read it, so a
+    /// held chord glides as one thing. Wrapped into [0, 420) because 420 is
+    /// divisible by every copy count the bank allows, which makes the wrap an
+    /// exact whole number of turns at any count rather than a small jump.
+    double shepardOctaves_ { 0.0 };
+
+    /// **The machine's temperature.** One walk for the whole instrument, on the
+    /// control grid, never restarted by a note -- a key going down does not
+    /// reset the temperature of a transistor, and it does not reset this
+    /// either. What it moves is below.
+    dsp::SlowWalk sagWalk_;
     bool transportRunning_ { false };
     int sinceControl_ { 0 };
 

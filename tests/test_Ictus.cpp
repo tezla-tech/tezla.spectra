@@ -2741,3 +2741,250 @@ TEZLA_TEST (the_claps_body_rings_at_its_pitch_and_retires_exactly)
     CHECK (! hiss.isActive());
     CHECK (lastNonZeroSample (noiseOnly) > 0);
 }
+
+// ---------------------------------------------------------------------------
+// Drive, and the clap's gate (I4.2 -- the rig's second round)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+double rmsOf (const std::vector<double>& x)
+{
+    double sum = 0.0;
+
+    for (const double sample : x)
+        sum += sample * sample;
+
+    return std::sqrt (sum / static_cast<double> (std::max<std::size_t> (x.size(), 1)));
+}
+
+double peakOf (const std::vector<double>& x)
+{
+    double peak = 0.0;
+
+    for (const double sample : x)
+        peak = std::max (peak, std::abs (sample));
+
+    return peak;
+}
+} // namespace
+
+TEZLA_TEST (drive_clips_the_hit_rather_than_replacing_it_with_its_own_residue)
+{
+    // The bug this pins, reported from the rig: `SoftClipExcess` evaluates to
+    // what the clipper CHANGES -- clip(x) - x -- and not to the clipped
+    // signal. Taking it alone leaves only the clipping residue, which is
+    // EXACTLY ZERO below the knee. The clap went almost silent at low drive,
+    // came back as a harsh remnant with no tail at full drive, and sounded
+    // right only at exactly 0, where the branch skips the stage.
+    //
+    // So what is asserted is the shape of a working drive: unity for small
+    // signals, a level that barely moves, and a peak that falls because the
+    // clipping is real.
+    constexpr double rate = 192000.0;
+
+    {
+        ClapSettings s;
+        s.body = 0.25;
+
+        double firstRms = 0.0;
+        double firstPeak = 0.0;
+        double lastPeak = 0.0;
+
+        for (const double drive : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+        {
+            s.drive = drive;
+
+            ClapEngine engine;
+            const auto out = renderClapEngine (engine, s, rate, 0.6);
+
+            const double rms = rmsOf (out);
+            const double peak = peakOf (out);
+
+            std::printf ("        [clap drive] %3.0f%%: rms %.4f, peak %.3f\n",
+                         100.0 * drive, rms, peak);
+
+            if (isExactlyZero (drive))
+            {
+                firstRms = rms;
+                firstPeak = peak;
+            }
+            else
+            {
+                // Measured 2026-09-03 across the whole control: the clap
+                // rises 2.1 dB and the hat falls 2.7 dB, because a clipper's
+                // output depends on where the signal already sat against the
+                // threshold and one trim exponent cannot hold both exactly.
+                // The broken version read a small fraction of the first at
+                // 25 % and would fail this by an order of magnitude.
+                CHECK (rms > firstRms * 0.6);
+                CHECK (rms < firstRms * 1.7);
+            }
+
+            lastPeak = peak;
+        }
+
+        // The peak falls because the clipping is doing something: 0.320 to
+        // 0.119, measured.
+        CHECK (lastPeak < firstPeak * 0.6);
+    }
+
+    // The same shape on the hat, whose Drive had the identical bug and whose
+    // presets ship with it up.
+    {
+        HatSettings s = bareHat();
+        s.decayOpenSeconds = 0.5;
+
+        double firstRms = 0.0;
+
+        for (const double drive : { 0.0, 0.3, 0.6, 1.0 })
+        {
+            s.drive = drive;
+
+            HatEngine engine;
+            const auto out = renderHatEngine (engine, s, rate, 0.7, true);
+            const double rms = rmsOf (out);
+
+            std::printf ("        [hat drive] %3.0f%%: rms %.4f, peak %.3f\n",
+                         100.0 * drive, rms, peakOf (out));
+
+            if (isExactlyZero (drive))
+                firstRms = rms;
+            else
+            {
+                CHECK (rms > firstRms * 0.6);
+                CHECK (rms < firstRms * 1.7);
+            }
+        }
+    }
+}
+
+TEZLA_TEST (a_gated_clap_fades_out_at_note_off_and_a_one_shot_rings_on)
+{
+    constexpr double rate = 96000.0;
+    constexpr int block = 64;
+
+    EngineParameters parameters;
+    parameters.clap = ClapSettings {};
+    parameters.clap.tailSeconds = 0.8;
+    parameters.clap.body = 0.4;
+    parameters.clap.bodyRingSeconds = 0.4;
+    parameters.clap.gate = true;
+    parameters.clap.releaseSeconds = 0.05;
+    parameters.oversampling = OversamplingMode::Off;
+
+    const auto gated = render (parameters, rate, static_cast<int> (0.6 * rate),
+                               { { 0, 39, 1.0 }, { static_cast<int> (0.1 * rate), 39, -1.0 } },
+                               block);
+
+    const double gatedEnd = static_cast<double> (lastNonZeroSample (gated)) / rate;
+
+    parameters.clap.gate = false;
+
+    const auto oneShot = render (parameters, rate, static_cast<int> (0.6 * rate),
+                                 { { 0, 39, 1.0 }, { static_cast<int> (0.1 * rate), 39, -1.0 } },
+                                 block);
+
+    const double oneShotEnd = static_cast<double> (lastNonZeroSample (oneShot)) / rate;
+
+    std::printf ("        [clap gate] gated ends at %.3f s, one-shot at %.3f s (max step %.4f)\n",
+                 gatedEnd, oneShotEnd, maxStep (gated));
+
+    // The note-off lands at 100 ms and the release is 50 ms, so the gated
+    // clap is gone by 150-odd; the one-shot runs its tail out.
+    CHECK (gatedEnd < 0.17);
+    CHECK (oneShotEnd > 0.5);
+
+    // It is a ramp, not a cut: no step larger than the hit's own.
+    CHECK (maxStep (gated) <= maxStep (oneShot) * 1.05);
+
+    // Release 0 is the 1 ms ramp.
+    parameters.clap.gate = true;
+    parameters.clap.releaseSeconds = 0.0;
+
+    const auto cut = render (parameters, rate, static_cast<int> (0.6 * rate),
+                             { { 0, 39, 1.0 }, { static_cast<int> (0.1 * rate), 39, -1.0 } },
+                             block);
+
+    CHECK (static_cast<double> (lastNonZeroSample (cut)) / rate < 0.105);
+    CHECK (maxStep (cut) <= maxStep (oneShot) * 1.05);
+}
+
+TEZLA_TEST (the_wires_hold_at_full_level_before_they_start_to_fall)
+{
+    // A snare's wires are thrown against a head that is still moving and stay
+    // there for a moment; they do not begin dying at the instant of the
+    // strike. Hold is that moment, and what it buys is a buzz with a length
+    // of its own -- the alternative being a long decay, which washes.
+    constexpr double rate = 96000.0;
+
+    // The wires alone: no shell, no crack, so the envelope IS the signal.
+    SnareSettings s = neutralSnare();
+    s.body = 0.0;
+    s.decaySeconds = 0.06;   // a short shell, so the hit ends when the wires do
+    s.wires = 1.0;
+    s.wiresDecaySeconds = 0.1;
+    s.snappyHz = 2000.0;
+    s.velocityWires = 0.0;
+
+    // A short-window RMS follows the noise's envelope; the raw samples do not.
+    const auto envelopeAt = [] (const std::vector<double>& x, double seconds)
+    {
+        const auto centre = static_cast<std::size_t> (seconds * rate);
+        const auto half = static_cast<std::size_t> (0.004 * rate);
+
+        if (centre + half >= x.size())
+            return 0.0;
+
+        double sum = 0.0;
+
+        for (std::size_t n = centre - half; n < centre + half; ++n)
+            sum += x[n] * x[n];
+
+        return std::sqrt (sum / static_cast<double> (2 * half));
+    };
+
+    SnareEngine plain, held;
+    s.wiresHoldSeconds = 0.0;
+    const auto without = renderSnareEngine (plain, s, rate, 0.6);
+    s.wiresHoldSeconds = 0.12;
+    const auto with = renderSnareEngine (held, s, rate, 0.6);
+
+    // Measured at the strike, where both are still at full level. NOT at
+    // 10 ms: a hundred-millisecond decay is already a third down by then, so
+    // "the strike is unchanged" has to be asked at the strike -- the first
+    // version of this test asked at 10 ms and failed on the control working.
+    const double startWithout = envelopeAt (without, 0.005);
+    const double startWith = envelopeAt (with, 0.005);
+    const double lateWithout = envelopeAt (without, 0.1);
+    const double lateWith = envelopeAt (with, 0.1);
+
+    std::printf ("        [wires hold] at 5 ms %.4f -> %.4f; at 100 ms %.4f -> %.4f\n",
+                 startWithout, startWith, lateWithout, lateWith);
+
+    // The definition of a hold: the level at the END of it is the level at
+    // the start. (Not "the strike is unchanged" -- an exponential decay is
+    // already 14 % down by 5 ms, so that question cannot be asked of a
+    // four-millisecond window, and the first version of this test failed on
+    // the control working rather than on it being broken.)
+    CHECK (std::abs (lateWith - startWith) < startWith * 0.15);
+
+    // ...and 100 ms in, inside the hold, the wires are still at full level
+    // where without it they have fallen most of the way. Measured
+    // 2026-09-03: 0.0233 against 0.0009, a factor of 25.
+    CHECK (lateWith > lateWithout * 5.0);
+    CHECK (lateWith > startWith * 0.8);
+
+    // The whole hit is longer by about the hold, and still retires exactly.
+    const double endWithout = static_cast<double> (lastNonZeroSample (without)) / rate;
+    const double endWith = static_cast<double> (lastNonZeroSample (with)) / rate;
+
+    std::printf ("        [wires hold] the hit runs %.3f s -> %.3f s, active %d\n",
+                 endWithout, endWith, held.isActive() ? 1 : 0);
+
+    CHECK (endWith > endWithout + 0.1 * 0.8);
+    CHECK (! held.isActive());
+
+    for (std::size_t n = static_cast<std::size_t> (lastNonZeroSample (with)) + 1; n < with.size(); ++n)
+        CHECK (isExactlyZero (with[n]));
+}

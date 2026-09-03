@@ -283,7 +283,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **1000 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all twelve plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **1089 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -822,7 +822,11 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   it is now **complete through V7**. `plugins/Malleus/PLAN.md`,
   `plugins/Crossbar/PLAN.md`, `plugins/Phonoss/PLAN.md` and
   `plugins/Malleus/PLAN-PHASE2.md` are complete and stay as the worked examples
-  of the shape. Sonitus **phase 4 is complete**; Malleus **phase 2 is complete**
+  of the shape. Sonitus **phases 4 and 5 are complete** —
+  `plugins/Sonitus/PLAN-PHASE5.md` is the horror phase (Stack, Tract, Sag),
+  asked for on 2026-09-03 with the plan written first at the user's request and
+  built through H5 the same day; **none of it has been heard on the rig yet.**
+  Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
   positions); **Membrana is complete through MB7** — the microphone stage
   (`Tzmb`, before Phonoss in the vocal chain), `plugins/Membrana/PLAN.md` is

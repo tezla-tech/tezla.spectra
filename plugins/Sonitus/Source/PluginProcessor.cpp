@@ -54,7 +54,12 @@ constexpr int kSchemaV6 = 6;
 /// Voice drift -- the voice card's temperature. Its own version, as ever.
 constexpr int kSchemaV7 = 7;
 
-constexpr int kStateSchemaVersion = kSchemaV7;
+/// **Phase 5 -- the horror phase.** Stack, Tract and Sag, all appended here and
+/// all neutral at their defaults. Its own version, as ever: the hint feeds the
+/// VST3 parameter ID, so one version means one piece of work forever.
+constexpr int kSchemaV8 = 8;
+
+constexpr int kStateSchemaVersion = kSchemaV8;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -124,6 +129,98 @@ juce::NormalisableRange<float> skewedRange (float minimum, float maximum, float 
     juce::NormalisableRange<float> range { minimum, maximum };
     range.setSkewForCentre (centre);
     return range;
+}
+
+/// A bipolar range whose law is `sign(u) * u^2` about the centre.
+///
+/// The same shape the modulation matrix's depth uses, and for the same reason:
+/// a tenth of the travel from the middle is a hundredth of the range, so fine
+/// control survives at the bottom while the ends stay enormous. **Exactly zero
+/// is reachable**, at exactly half travel, which matters when zero is a
+/// setting in its own right rather than "very slow".
+juce::NormalisableRange<float> bipolarSquaredRange (float maximum)
+{
+    return { -maximum, maximum,
+             [maximum] (float, float, float t)
+             {
+                 const float u = 2.0f * t - 1.0f;
+                 return maximum * std::copysign (u * u, u);
+             },
+             [maximum] (float, float, float value)
+             {
+                 const float u = std::copysign (std::sqrt (std::abs (value) / maximum), value);
+                 return 0.5f * (u + 1.0f);
+             },
+             [] (float low, float high, float value)
+             {
+                 return juce::jlimit (low, high, value);
+             } };
+}
+
+/// A range that is symmetric in *ratio* about 1.0 rather than in value.
+///
+/// Half travel is exactly 1.0, a quarter is the geometric mean of 1.0 and the
+/// minimum, and so on: the knob's two halves are mirror images to the ear,
+/// which linear travel between 0.5 and 2.0 is not (it would put 1.25 at the
+/// middle).
+juce::NormalisableRange<float> geometricRange (float minimum, float maximum)
+{
+    return { minimum, maximum,
+             [minimum, maximum] (float, float, float t)
+             {
+                 return minimum * std::pow (maximum / minimum, t);
+             },
+             [minimum, maximum] (float, float, float value)
+             {
+                 return std::log (value / minimum) / std::log (maximum / minimum);
+             },
+             [] (float low, float high, float value)
+             {
+                 return juce::jlimit (low, high, value);
+             } };
+}
+
+/// The size of the throat, shown as the ratio *and* the length it means -- the
+/// number is only legible once it is centimetres.
+juce::AudioParameterFloatAttributes tractAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            const double cm = dsp::Formant::tractLengthCm (static_cast<double> (value));
+
+            return juce::String (value, 2) + "x  (" + juce::String (cm, 1) + " cm)";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
+}
+
+/// Whole seconds, for a control whose useful range is tens of them.
+juce::AudioParameterFloatAttributes secondsAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withLabel ("s")
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            return juce::String (value, value < 10.0f ? 1 : 0) + " s";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
+}
+
+/// Octaves per second, signed, with zero shown as "held" rather than 0.00 --
+/// the same reading LFO rate 0 already gets, and for the same reason: it is a
+/// deliberate setting, not the bottom of a range.
+juce::AudioParameterFloatAttributes octavesPerSecondAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            if (std::abs (value) < 0.0005f)
+                return juce::String ("held");
+
+            return (value > 0.0f ? juce::String ("+") : juce::String ("-"))
+                     + juce::String (std::abs (value), 2) + " oct/s";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
 }
 
 juce::AudioParameterFloatAttributes decibelAttributes (int decimals = 1)
@@ -273,6 +370,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
                                           const char* unisonId,
                                           const char* detuneId, const char* spreadId,
                                           const char* driftId, const char* levelId,
+                                          const char* stackId, const char* stackStepId,
                                           const juce::String& prefix, float defaultLevel)
     {
         layout.add (std::make_unique<Choice> (
@@ -321,15 +419,66 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
         layout.add (std::make_unique<Parameter> (
             juce::ParameterID { levelId, kSchemaV1 }, prefix + " level",
             juce::NormalisableRange<float> { 0.0f, 1.0f }, defaultLevel, percentAttributes()));
+
+        // **Stack** -- where the unison copies go. Index 0 is Detune, which is
+        // what shipped and is bit-exact, so a project saved before phase 5
+        // reopens with the stack it always had.
+        layout.add (std::make_unique<Choice> (
+            juce::ParameterID { stackId, kSchemaV8 }, prefix + " stack",
+            choices::stack, 0));
+
+        // Keys per copy, and it means something only in Scale mode -- which is
+        // why the page greys it everywhere else rather than leaving a control
+        // that silently does nothing.
+        layout.add (std::make_unique<Integer> (
+            juce::ParameterID { stackStepId, kSchemaV8 }, prefix + " stack step",
+            kMinimumStackStep, kMaximumStackStep, 1));
     };
 
     addOscillator (ids::shapeA, ids::octaveA, ids::semitonesA, ids::centsA, ids::widthA,
                    ids::morphA, ids::unisonA, ids::detuneA, ids::spreadA, ids::driftA, ids::levelA,
-                   "Osc A", 1.0f);
+                   ids::stackA, ids::stackStepA, "Osc A", 1.0f);
 
     addOscillator (ids::shapeB, ids::octaveB, ids::semitonesB, ids::centsB, ids::widthB,
                    ids::morphB, ids::unisonB, ids::detuneB, ids::spreadB, ids::driftB, ids::levelB,
-                   "Osc B", 0.0f);
+                   ids::stackB, ids::stackStepB, "Osc B", 0.0f);
+
+    // **The Shepard glissando's speed**, in octaves per second, signed --
+    // negative falls. One control for the instrument, because the phase is one
+    // accumulator for the instrument: a held chord has to glide as one thing.
+    // Zero is a legitimate setting and is a *held* windowed octave stack.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::shepardRate, kSchemaV8 }, "Shepard rate",
+        bipolarSquaredRange (4.0f), 0.0f, octavesPerSecondAttributes()));
+
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::shepardSync, kSchemaV8 }, "Shepard sync", false));
+
+    // **Sag** -- one slow instability shared by every voice. 0 is bit-exactly
+    // out of the path, and the walk keeps walking regardless: it is still a
+    // modulation source there, because the depth is how much reaches the voice
+    // directly rather than whether the machine has a temperature.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::sag, kSchemaV8 }, "Sag",
+        juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
+
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::sagRate, kSchemaV8 }, "Sag rate",
+        skewedRange (2.0f, 120.0f, 20.0f), 20.0f, secondsAttributes()));
+
+    // **Tract** -- the size of the throat the vowel filter is modelling, as a
+    // ratio on all three formants. Geometric about 1.0, because it is a
+    // frequency ratio and the ear hears ratios; exactly 1.0 is neutral and is
+    // bit-exact, so a project saved before phase 5 sounds identical.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::tract, kSchemaV8 }, "Tract",
+        geometricRange (static_cast<float> (dsp::Formant::kNarrowestTract),
+                        static_cast<float> (dsp::Formant::kWidestTract)),
+        1.0f, tractAttributes()));
+
+    layout.add (std::make_unique<Choice> (
+        juce::ParameterID { ids::shepardDiv, kSchemaV8 }, "Shepard division",
+        choices::lfoDivision, dsp::defaultDivision));
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::syncB, kSchemaV1 }, "Sync B to A", false));
@@ -1124,6 +1273,18 @@ void SonitusProcessor::pullParameters()
     v.spreadB = valueOf (state_, ids::spreadB);
     v.driftB = valueOf (state_, ids::driftB);
     v.levelB = valueOf (state_, ids::levelB);
+
+    // **Stack.** Where each bank's copies go, and how many keys apart Scale
+    // mode puts them. Index 0 is Detune, which is what shipped.
+    v.stackA = static_cast<StackMode> (juce::jlimit (0, static_cast<int> (StackMode::count) - 1,
+                                                     indexOf (state_, ids::stackA)));
+    v.stackB = static_cast<StackMode> (juce::jlimit (0, static_cast<int> (StackMode::count) - 1,
+                                                     indexOf (state_, ids::stackB)));
+
+    v.stackStepA = juce::jlimit (kMinimumStackStep, kMaximumStackStep,
+                                 static_cast<int> (valueOf (state_, ids::stackStepA)));
+    v.stackStepB = juce::jlimit (kMinimumStackStep, kMaximumStackStep,
+                                 static_cast<int> (valueOf (state_, ids::stackStepB)));
     v.syncB = valueOf (state_, ids::syncB) > 0.5f;
     v.pmIndex = valueOf (state_, ids::pmIndex);
 
@@ -1335,6 +1496,20 @@ void SonitusProcessor::pullParameters()
     p.combMix = valueOf (state_, ids::combMix);
     p.combInverted = valueOf (state_, ids::combInvert) > 0.5f;
     p.combScaleLock = valueOf (state_, ids::combScale) > 0.5f;
+
+    // The Shepard glissando, which is one control for the instrument because
+    // its phase is one accumulator for the instrument.
+    p.shepardRate = valueOf (state_, ids::shepardRate);
+    p.shepardSync = valueOf (state_, ids::shepardSync) > 0.5f;
+    p.shepardDivision = indexOf (state_, ids::shepardDiv);
+
+    p.formantTract = valueOf (state_, ids::tract);
+
+    // Sag: the depth reaches the voices through `VoiceParameters`, the period
+    // stays with the engine that owns the walk.
+    p.voice.sagDepth = valueOf (state_, ids::sag);
+    p.sagDepth = p.voice.sagDepth;
+    p.sagPeriodSeconds = valueOf (state_, ids::sagRate);
 
     for (int macro = 0; macro < 4; ++macro)
         p.macros[static_cast<std::size_t> (macro)] = valueOf (state_, ids::macro (macro));
@@ -3224,6 +3399,217 @@ const std::vector<Preset>& presets()
 
                 { ids::polyphony, 8.0f },
                 { ids::output, -6.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        // **Phase 5 -- the horror set.** Stack, Tract and Sag, one apiece and
+        // then together. Appended, like every preset here: a program is
+        // recalled by index, so inserting one would repoint every saved choice.
+        // -------------------------------------------------------------------
+        {
+            // **Shepard falling.** Seven copies an octave apart under the
+            // window, sliding down one octave every four seconds, into a comb
+            // that key-tracks. Nothing arrives and nothing resolves.
+            //
+            // Hold one note. The illusion needs no playing at all -- and it
+            // needs the sustain up, because a decay would end the descent that
+            // is the entire point.
+            "Descent -- the fall that never lands",
+            {
+                { ids::shapeA, 0.0f },                            // saw
+                { ids::stackA, 7.0f },                            // Shepard
+                { ids::unisonA, 7.0f }, { ids::spreadA, 0.7f },
+                { ids::shepardRate, -0.25f },
+                { ids::levelB, 0.0f },
+
+                { ids::subLevel, 0.3f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 2600.0f }, { ids::resonance, 0.25f },
+                { ids::filterTrack, 0.0f },
+
+                { ids::combMode, 1.0f }, { ids::combTrack, 0.8f },
+                { ids::combFeed, 0.62f }, { ids::combMix, 0.4f },
+                { ids::combSpread, 0.6f }, { ids::combDamp, 0.35f },
+
+                { ids::ampAttack, 0.9f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 1.6f },
+
+                { ids::sag, 0.25f }, { ids::sagRate, 40.0f },
+
+                { ids::polyphony, 4.0f },
+                { ids::output, -15.0f },   // measured: -7 peaked at +3.53 dBFS
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The same trick upward, and faster.** A rising Shepard into a
+            // resonant filter that an envelope opens -- the stinger, rather
+            // than the drone. Short release, so it can be played as stabs.
+            "Ascent -- the riser that never arrives",
+            {
+                { ids::shapeA, 1.0f }, { ids::widthA, 0.35f },     // pulse
+                { ids::stackA, 7.0f },
+                { ids::unisonA, 7.0f }, { ids::spreadA, 0.55f },
+                { ids::shepardRate, 0.9f },
+                { ids::levelB, 0.0f },
+
+                { ids::cutoff, 700.0f }, { ids::resonance, 0.62f },
+                { ids::filterDrive, 0.35f }, { ids::filterTrack, 0.3f },
+
+                { ids::ampAttack, 0.02f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.5f },
+
+                { ids::env1Attack, 1.4f }, { ids::env1Decay, 1.0f },
+                { ids::env1Sustain, 1.0f },
+                { ids::modSource (0), 2.0f }, { ids::modDest (0), 1.0f },
+                { ids::modDepth (0), 0.55f },                      // cutoff
+
+                { ids::tubeDrive, 6.0f },
+                { ids::polyphony, 6.0f },
+                { ids::output, -8.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **A cluster in a tuning that cannot resolve it.** Stack at Scale,
+            // one key per copy, five copies -- so what you get depends entirely
+            // on the TUNING page. In twelve-tone equal temperament it is a
+            // chromatic cluster; load Werckmeister III or a Persian dastgah and
+            // it becomes a cluster with a history.
+            //
+            // Slow attack, long release, and the drift up, so the cluster
+            // breathes rather than sitting still.
+            "Cloister -- a cluster in whatever tuning is loaded",
+            {
+                { ids::shapeA, 4.0f }, { ids::morphA, 0.45f },     // vintage saw
+                { ids::stackA, 6.0f },                            // Scale
+                { ids::stackStepA, 1.0f },
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.85f },
+                { ids::detuneA, 4.0f }, { ids::driftA, 7.0f },
+
+                { ids::shapeB, 3.0f }, { ids::levelB, 0.35f },     // sine
+                { ids::octaveB, -1.0f },
+
+                { ids::cutoff, 1500.0f }, { ids::resonance, 0.2f },
+                { ids::filterTrack, 0.5f },
+
+                { ids::ampAttack, 1.2f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 2.2f },
+
+                { ids::voiceDrift, 8.0f },
+                { ids::sag, 0.18f }, { ids::sagRate, 55.0f },
+
+                { ids::polyphony, 8.0f },
+                { ids::output, -9.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **Something much too big is talking.** Tract at 0.55 -- a 32 cm
+            // throat -- with the vowel morph crawling under a slow LFO, over
+            // noise rather than an oscillator. The anti-formant is in, because
+            // a nasal is what makes it read as a mouth rather than as a filter.
+            "Long Room -- a throat thirty centimetres too big",
+            {
+                { ids::shapeA, 8.0f }, { ids::morphA, 0.35f },     // noise
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.9f },
+                { ids::levelB, 0.0f },
+
+                { ids::cutoff, 3200.0f }, { ids::resonance, 0.15f },
+
+                { ids::formantMix, 0.8f }, { ids::formantMorph, 0.3f },
+                { ids::tubeDrive, 12.0f },
+                { ids::formantSharp, 0.7f },
+                { ids::tract, 0.55f },
+                { ids::formantNotch, 1100.0f }, { ids::formantNotchDepth, 0.5f },
+
+                { ids::lfo1Rate, 0.09f }, { ids::lfo1Wave, 6.0f },  // smooth random
+                { ids::globalSource (0), 1.0f },                    // LFO 1
+                { ids::globalDest (0), 5.0f },                      // vowel
+                { ids::globalDepth (0), 0.6f },
+
+                { ids::globalSource (1), 1.0f },
+                { ids::globalDest (1), 10.0f },                     // tract
+                { ids::globalDepth (1), 0.25f },
+
+                { ids::ampAttack, 0.6f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 1.4f },
+
+                { ids::sag, 0.3f }, { ids::sagRate, 25.0f },
+
+                { ids::polyphony, 4.0f },
+                { ids::output, 10.0f },   // measured: -5 peaked at -29.3 dBFS
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **A drone on a machine that is giving up.** Stacked fifths --
+            // hollow, wide, no third to say major or minor -- under deep slow
+            // sag, so the whole thing goes flat and dull together and then
+            // comes back. Sixty-second period: it lurches about twice a
+            // chorus.
+            //
+            // The one to leave running while something else happens over it.
+            "Cellar -- fifths on a failing machine",
+            {
+                { ids::shapeA, 0.0f },
+                { ids::stackA, 2.0f },                            // Fifths
+                { ids::unisonA, 5.0f }, { ids::spreadA, 0.75f },
+                { ids::detuneA, 9.0f }, { ids::driftA, 6.0f },
+
+                { ids::shapeB, 0.0f }, { ids::levelB, 0.5f },
+                { ids::stackB, 1.0f },                            // Octaves
+                { ids::unisonB, 3.0f }, { ids::octaveB, -1.0f },
+
+                { ids::subLevel, 0.5f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 900.0f }, { ids::resonance, 0.3f },
+                { ids::filterDrive, 0.25f }, { ids::filterTrack, 0.35f },
+
+                { ids::ampAttack, 0.8f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 2.5f },
+
+                { ids::sag, 0.85f }, { ids::sagRate, 60.0f },
+                { ids::voiceDrift, 10.0f },
+
+                { ids::tubeDrive, 5.0f },
+                { ids::polyphony, 6.0f },
+                { ids::output, -9.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The action one.** Stacked tritones -- symmetric, rootless, and
+            // the interval that will not sit still -- with PM for teeth and the
+            // sequencer chopping the level into sixteenths. Short and hard.
+            //
+            // Play it as one held note and let the sequencer do the rhythm.
+            "Tritone Engine -- the pulse that will not resolve",
+            {
+                { ids::shapeA, 1.0f }, { ids::widthA, 0.3f },
+                { ids::stackA, 3.0f },                            // Tritones
+                { ids::unisonA, 3.0f }, { ids::spreadA, 0.5f },
+
+                { ids::shapeB, 3.0f }, { ids::levelB, 0.0f },
+                { ids::pmIndex, 2.2f }, { ids::semitonesB, 7.0f },
+                { ids::feedbackA, 0.35f },
+
+                { ids::subLevel, 0.55f }, { ids::subOctave, -1.0f },
+
+                { ids::cutoff, 1800.0f }, { ids::resonance, 0.45f },
+                { ids::filterDrive, 0.5f },
+
+                { ids::ampAttack, 0.002f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 0.12f },
+
+                { ids::seqRate, 8.0f }, { ids::seqLength, 16.0f },
+                { ids::modSource (0), 9.0f },                      // sequencer
+                { ids::modDest (0), 15.0f },                       // level
+                { ids::modDepth (0), 0.85f },
+
+                { ids::tubeDrive, 9.0f },
+                { ids::polyphony, 6.0f },
+                { ids::output, -8.0f },
             }
         },
 

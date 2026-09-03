@@ -29,7 +29,10 @@
 //     complex multiplies a sample and no transcendentals.
 //   * The WIRES are seeded white noise through a state-variable filter --
 //     Snappy is its corner, Snap morphs it from high-pass to band-pass --
-//     under an AHD envelope killed the moment it lands. RATTLE is the one
+//     under an AHD envelope killed the moment it lands. HOLD keeps them at
+//     full level before the decay starts, because wires thrown against a
+//     moving head stay there for a moment rather than falling from the
+//     instant of the strike. RATTLE is the one
 //     nonlinearity kept from the physical models (Bilbao's point that the
 //     wire interaction is what the linear models miss): the shell's own
 //     motion throws the wires, so a second drive on the wires FOLLOWS the
@@ -84,6 +87,7 @@ struct SnareSettings
     double wires { 0.6 };                ///< the wires' level, 0..1; exactly nothing at 0
     double snappyHz { 3000.0 };          ///< the wires' filter corner, 1000..8000
     double snap { 0.0 };                 ///< 0 = high-pass above the corner, 1 = band-pass at it
+    double wiresHoldSeconds { 0.0 };     ///< the wires sit at full level this long first, 0..0.3
     double wiresDecaySeconds { 0.15 };   ///< 0.05..0.4
     double rattle { 0.0 };               ///< how much the shell's motion drives the wires, 0..1
 
@@ -276,7 +280,15 @@ public:
 
             wiresEnv_.setAttackSeconds (0.0);
             wiresEnv_.setAttackTension (0.0);
-            wiresEnv_.setHoldSeconds (0.0);
+            // HOLD: the wires sit at full level before they start falling.
+            //
+            // A snare's wires do not begin dying the instant the stick lands
+            // -- they are thrown against the head and stay against it while
+            // the drum is still moving. Without this the only way to get a
+            // long buzz is a long decay, which makes the whole thing wash
+            // rather than sit; with it the buzz has a length of its own and
+            // then falls at whatever rate Wires decay says.
+            wiresEnv_.setHoldSeconds (std::clamp (s.wiresHoldSeconds, 0.0, 0.3));
             wiresEnv_.setDecaySeconds (std::clamp (s.wiresDecaySeconds, 0.05, 0.4));
             wiresEnv_.setDecayTension (1.0);
             wiresEnv_.setSustain (0.0);

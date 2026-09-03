@@ -283,3 +283,45 @@ existing renders no longer null against new ones (the 32 goldens included),
 and every saved project's PDC moves.
 
 **What would unpark it:** the user saying so.
+
+## 11. Sonitus phase 5 — ideas parked at the plan stage
+
+**Parked 2026-09-03 while `plugins/Sonitus/PLAN-PHASE5.md` was written**, so the
+first build is the plan and not the plan plus its afterthoughts. **Phase 5 is
+now complete**: **Stack** (the unison bank at musical intervals, at the loaded
+tuning's degrees, or as a Shepard glissando), **Tract** (one ratio resizing the
+vowel filter's three formants) and **Sag** (one slow instability shared by every
+voice) all shipped. These four were cut from it deliberately and are still
+parked.
+
+1. **`stackOrigin` — Centre / Up / Down.** Stack's ranks are symmetric
+   (`rank(i) = i - floor((N-1)/2)`), so seven copies of *Octaves* puts one copy
+   three octaves **below** the played note — at A2 that is 13.75 Hz, a rattle
+   rather than a pitch. An organ registration is normally upward. Would change:
+   one append-only choice per oscillator and the one line computing `rank(i)`.
+   **Decided by:** whether the octave stack sounds bottom-heavy on the rig.
+2. **Shepard shear — A rising while B falls.** The Shepard phase is one global
+   accumulator on purpose: a held chord has to glide as one, and independent
+   phases smear a rise into a wash. A *second* accumulator for B, or a signed
+   per-oscillator rate scale, would give the two-directions-at-once effect.
+   Would change: a second accumulator in `SonitusEngine` and one parameter.
+   **Decided by:** whether one global rate feels like a gesture too few once it
+   has been played.
+3. **Shepard panning by phase rather than by rank.** Copies keep the pan slot
+   their rank gives them (`position(i) * spread_`), so the tone rises but stays
+   put in the image. Panning by `u` instead would sweep it across the field as
+   it climbs. Would change: two lines in the offsets the caller pushes, plus a
+   measurement that the mono sum still holds. **Decided by:** the user's ear.
+4. **More vowels stays blocked exactly as it was**, on a source and on the
+   append-only decision about `formantMorph` (`plugins/Sonitus/README.md`,
+   Roadmap). **Tract does not unblock it and does not touch it**: it is a new
+   parameter at its own schema version, and the vowel list and the meaning of a
+   stored morph position are unchanged.
+
+**Still the next horror item after phase 5, and still only scoped:**
+self-oscillation via Zavalishin's antisaturator, in `plugins/Sonitus/README.md`.
+It needs CLAUDE.md §7's treatment — a bound inside the loop that cannot be
+defeated, swept across the whole parameter space rather than sampled — which is
+most of the work and is why it is a phase of its own rather than a knob here.
+
+**What would unpark each:** the user saying so, per item.

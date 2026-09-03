@@ -474,3 +474,223 @@ TEZLA_TEST (a_frequency_change_reaches_the_oscillators_on_the_next_sample)
     // drift by default, so its increment is exactly the note.
     CHECK_NEAR (bank.voice (1).getIncrement(), 220.0 / 48000.0, 1.0e-12);
 }
+
+// ---------------------------------------------------------------------------
+// Rank offsets -- the stack placed by something other than the detune
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// Renders a bank and returns both channels, so a comparison is of the whole
+/// output rather than of one side of a spread.
+Stereo renderPatch (int voices, double detune, double spread, double drift,
+                    const double* cents, const double* gains, std::size_t n)
+{
+    UnisonBank bank;
+    bank.prepare (kRate);
+    bank.setShape (OscShape::saw);
+    bank.setVoiceCount (voices);
+    bank.setDetuneCents (detune);
+    bank.setSpread (spread);
+    bank.setDrift (drift);
+
+    if (cents != nullptr || gains != nullptr)
+        bank.setRankOffsets (cents, gains, voices);
+
+    bank.setFrequency (110.0);
+    bank.reset();
+
+    return render (bank, n);
+}
+} // namespace
+
+TEZLA_TEST (explicit_neutral_rank_offsets_change_nothing_bit_for_bit)
+{
+    // CLAUDE.md section 7: a stage permanently in the path needs a bit-exact
+    // bypass at its neutral setting, not merely a transparent one, and the
+    // proof is a signal compared sample for sample rather than an argument
+    // about the arithmetic.
+    //
+    // There is no branch around the offsets, on purpose -- see the header. So
+    // this is the test that matters: it drives the *general* path with an
+    // explicitly neutral array, which is where a regression would show. The
+    // one case worth naming is that the lower half of a zero-detune stack
+    // produces -0.0 for its offset and 0.0 + -0.0 is +0.0; pow(2, +-0.0) is
+    // exactly 1.0 either way, so the increment is the same double.
+    constexpr std::size_t kSamples = static_cast<std::size_t> (kRate * 0.25);
+
+    const std::array<double, UnisonBank::kMaxVoices> zeros {};
+    const std::array<double, UnisonBank::kMaxVoices> ones { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+
+    for (const int voices : { 1, 2, 4, 7 })
+        for (const double detune : { 0.0, 13.0, 100.0 })
+            for (const double spread : { 0.0, 0.6 })
+            {
+                const auto untouched = renderPatch (voices, detune, spread, 0.0,
+                                                    nullptr, nullptr, kSamples);
+                const auto told = renderPatch (voices, detune, spread, 0.0,
+                                               zeros.data(), ones.data(), kSamples);
+
+                std::size_t differing = 0;
+
+                for (std::size_t i = 0; i < kSamples; ++i)
+                    if (untouched.left[i] != told.left[i] || untouched.right[i] != told.right[i])
+                        ++differing;
+
+                if (differing != 0)
+                    std::printf ("    %d voices, %.0f cents, spread %.1f: %zu of %zu differ\n",
+                                 voices, detune, spread, differing, kSamples);
+
+                CHECK (differing == 0);
+            }
+}
+
+TEZLA_TEST (rank_offsets_ride_on_top_of_the_detune_rather_than_replacing_it)
+{
+    // The design decision that keeps the Detune knob alive in every mode: a
+    // stack placed at intervals still churns. So the offset a copy ends up at
+    // is its interval *plus* what the detune would have given it, and both
+    // halves are checked -- an implementation that replaced the detune would
+    // pass a test that only looked at the intervals.
+    constexpr int kVoices = 5;
+
+    // Stacked fifths, symmetric about the played note: ranks -2..+2.
+    std::array<double, UnisonBank::kMaxVoices> cents {};
+
+    for (int i = 0; i < kVoices; ++i)
+        cents[static_cast<std::size_t> (i)] = 700.0 * (i - (kVoices - 1) / 2);
+
+    UnisonBank plain;
+    plain.prepare (kRate);
+    plain.setVoiceCount (kVoices);
+    plain.setDetuneCents (20.0);
+    plain.setFrequency (110.0);
+    plain.reset();
+
+    UnisonBank stacked = plain;
+    stacked.setRankOffsets (cents.data(), nullptr, kVoices);
+
+    // The bank does not expose an increment, so read the pitch back the way a
+    // measurement would: through the frequency each copy is actually running.
+    for (int i = 0; i < kVoices; ++i)
+    {
+        CHECK_NEAR (stacked.rankCentsOf (i), cents[static_cast<std::size_t> (i)], 1.0e-12);
+
+        // ...and the middle copy sits exactly where the plain stack's middle
+        // copy sits, which is what "on top of" means.
+        if (i == (kVoices - 1) / 2)
+            CHECK (stacked.rankCentsOf (i) == 0.0);
+    }
+
+    // Nothing was set, so nothing changed there either.
+    CHECK (plain.rankCentsOf (0) == 0.0);
+    CHECK (plain.rankGainOf (0) == 1.0);
+}
+
+TEZLA_TEST (rank_gains_generalise_the_normalisation_to_the_summed_power)
+{
+    // 1/sqrt(N) becomes 1/sqrt(sum of g^2), and the generalisation has to be
+    // *exact* in the old case rather than merely equal: summing N ones gives
+    // precisely N for every N this class allows, so a bank with no rank gains
+    // divides by the same double it always did.
+    for (int voices = 1; voices <= UnisonBank::kMaxVoices; ++voices)
+    {
+        UnisonBank bank;
+        bank.prepare (kRate);
+        bank.setVoiceCount (voices);
+        bank.setFrequency (110.0);
+        bank.reset();
+
+        CHECK (bank.getNormalisation() == 1.0 / std::sqrt (static_cast<double> (voices)));
+    }
+
+    // Silence one copy of seven and the remaining six are normalised as six --
+    // which is what makes a windowed stack land at the level a flat one does.
+    std::array<double, UnisonBank::kMaxVoices> gains { 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0 };
+
+    UnisonBank bank;
+    bank.prepare (kRate);
+    bank.setVoiceCount (7);
+    bank.setFrequency (110.0);
+    bank.setRankOffsets (nullptr, gains.data(), 7);
+    bank.reset();
+
+    CHECK_NEAR (bank.getNormalisation(), 1.0 / std::sqrt (6.0), 1.0e-15);
+
+    // A copy at zero gain is gone from the output, not merely quiet.
+    CHECK (bank.rankGainOf (3) == 0.0);
+}
+
+TEZLA_TEST (pushing_the_same_rank_offsets_again_recomputes_nothing)
+{
+    // The guard, and it is observable rather than a matter of trust:
+    // `updateIncrements()` zeroes the countdown that paces the drift, so a bank
+    // pushed identical arrays on every sample would advance its wander once per
+    // sample instead of once per 32 -- thirty-two times too fast, in a walk
+    // whose whole job is to be slow.
+    //
+    // This is CLAUDE.md section 7's fourth bite in miniature, and the reason
+    // the guard is in the callee: Sonitus pushes these arrays every control
+    // chunk in every stack mode but the sliding one.
+    constexpr std::size_t kSamples = static_cast<std::size_t> (kRate * 2.0);
+
+    const std::array<double, UnisonBank::kMaxVoices> cents { 0.0, 700.0, 1400.0, 0.0, 0.0, 0.0, 0.0 };
+
+    UnisonBank quiet;
+    quiet.prepare (kRate);
+    quiet.setVoiceCount (3);
+    quiet.setDrift (20.0);
+    quiet.setFrequency (110.0);
+    quiet.setRankOffsets (cents.data(), nullptr, 3);
+    quiet.reset();
+
+    UnisonBank pushed = quiet;
+
+    for (std::size_t i = 0; i < kSamples; ++i)
+    {
+        double l = 0.0, r = 0.0;
+        quiet.process (0.0, l, r);
+
+        pushed.setRankOffsets (cents.data(), nullptr, 3);
+        pushed.process (0.0, l, r);
+    }
+
+    for (int i = 0; i < 3; ++i)
+    {
+        std::printf ("    drift %d: unguarded-would-differ check %+.9f vs %+.9f\n",
+                     i, quiet.driftOf (i), pushed.driftOf (i));
+
+        CHECK (quiet.driftOf (i) == pushed.driftOf (i));
+    }
+}
+
+TEZLA_TEST (a_changed_rank_offset_reaches_the_oscillators_on_the_next_sample)
+{
+    // The other half of the guard: it must refuse a no-op and nothing more. A
+    // sliding stack changes these arrays every control chunk, and an offset
+    // that arrived an interval late would put a glissando's seam in the wrong
+    // place.
+    UnisonBank bank;
+    bank.prepare (kRate);
+    bank.setShape (OscShape::sine);
+    bank.setVoiceCount (1);
+    bank.setFrequency (1000.0);
+    bank.reset();
+
+    double l = 0.0, r = 0.0;
+
+    for (int i = 0; i < 100; ++i)
+        bank.process (0.0, l, r);
+
+    const double phaseBefore = bank.phaseOf (0);
+
+    // An octave up: the very next sample must advance the phase by twice what
+    // 1000 Hz would, not by the old increment.
+    const double octave[1] { 1200.0 };
+    bank.setRankOffsets (octave, nullptr, 1);
+    bank.process (0.0, l, r);
+
+    const double advanced = bank.phaseOf (0) - phaseBefore;
+
+    CHECK_NEAR (advanced, 2000.0 / kRate, 1.0e-12);
+}

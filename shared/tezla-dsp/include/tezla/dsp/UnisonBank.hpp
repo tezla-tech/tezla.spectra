@@ -55,6 +55,35 @@
 // walk, and a given voice slot played the same wander on every press. Two
 // streams now: one for the scatter, re-seeded per note; one for the drift,
 // seeded once and never by a note. See `reset` and `restartNote`.
+//
+// ---------------------------------------------------------------------------
+// The stack does not have to be a detune
+// ---------------------------------------------------------------------------
+//
+// Everything above is one way of placing N oscillators: symmetric, in cents,
+// shaped by `kSpreadExponent`. It is a reese and it is the right default. It
+// is also the *only* thing this class knew how to be, and one array short of
+// being three other instruments.
+//
+// `setRankOffsets` supplies a pitch offset in cents and a gain **per copy**,
+// on top of the detune rather than instead of it -- so a stack placed at
+// musical intervals can still churn, and the detune control never becomes a
+// dead knob in some mode. What the offsets *mean* is not this class's
+// business: musical intervals, degrees of a loaded tuning and a Shepard
+// glissando are all the same array from here, and the two that need to know
+// about scales or about a moving phase are computed by the caller. See
+// `Shepard.hpp` for the one whose arithmetic has a theorem in it.
+//
+// **The neutral case is bit-exact, and by arithmetic rather than by a branch.**
+// Adding 0.0 to a finite double returns it unchanged; the single exception is
+// -0.0 + 0.0 = +0.0, which happens for the lower half of the stack when the
+// detune is zero, and which cannot be observed because `pow(2, +-0.0)` is
+// exactly 1.0 either way. A gain of 1.0 multiplies exactly, and the
+// normalisation below sums N ones to exactly N. So a caller that never touches
+// these arrays gets the same samples it always did -- CLAUDE.md section 7 wants
+// a neutral setting proved with a signal, and `tests/test_UnisonBank.cpp`
+// proves it twice: once for a bank that was never told, and once for one told
+// explicitly to be neutral, which is the path that would catch a regression.
 
 #include <algorithm>
 #include <array>
@@ -62,43 +91,9 @@
 #include <cstdint>
 
 #include "Oscillator.hpp"
+#include "SmallRandom.hpp"
 
 namespace tezla::dsp {
-
-/// A small deterministic generator, so a test can rely on what it produces.
-///
-/// xorshift64*, which is cheap, has no visible structure at this scale, and --
-/// unlike rand() -- gives the same stream on every platform. That last part is
-/// what makes "the drift is bounded" a testable claim rather than a hope.
-class SmallRandom
-{
-public:
-    explicit SmallRandom (std::uint64_t seed = 0x9e3779b97f4a7c15ull) noexcept
-        : state_ (seed | 1ull)
-    {
-    }
-
-    void seed (std::uint64_t value) noexcept { state_ = value | 1ull; }
-
-    /// Uniform in [0, 1).
-    [[nodiscard]] double next() noexcept
-    {
-        state_ ^= state_ >> 12;
-        state_ ^= state_ << 25;
-        state_ ^= state_ >> 27;
-
-        const std::uint64_t value = state_ * 0x2545f4914f6cdd1dull;
-
-        // The top 53 bits, which is exactly a double's mantissa.
-        return static_cast<double> (value >> 11) * (1.0 / 9007199254740992.0);
-    }
-
-    /// Uniform in [-1, 1).
-    [[nodiscard]] double bipolar() noexcept { return next() * 2.0 - 1.0; }
-
-private:
-    std::uint64_t state_;
-};
 
 class UnisonBank
 {
@@ -282,6 +277,60 @@ public:
         incrementCountdown_ = 0;
     }
 
+    /// A pitch offset in cents and a gain, **per copy**, on top of the detune.
+    ///
+    /// `count` copies are read from each array; the rest are left neutral, and
+    /// a null pointer means neutral for that array alone. So the default state
+    /// -- 0 cents, gain 1 -- is what a caller that never calls this gets, bit
+    /// for bit. See the header for why that is arithmetic rather than a branch.
+    ///
+    /// **Guarded, and the guard is here rather than at the call site.** Every
+    /// stack mode but the sliding one pushes the same numbers on every control
+    /// chunk, and what this triggers is `updateIncrements()`: seven `pow`s and
+    /// fourteen trigonometric calls. Comparing fourteen doubles is cheaper by
+    /// two orders of magnitude, and a guard in the caller would desynchronise
+    /// the moment a second caller disagreed -- CLAUDE.md section 7.
+    void setRankOffsets (const double* cents, const double* gains, int count) noexcept
+    {
+        const int wanted = std::clamp (count, 0, kMaxVoices);
+
+        bool changed = false;
+
+        for (int i = 0; i < kMaxVoices; ++i)
+        {
+            const auto index = static_cast<std::size_t> (i);
+
+            const double cent = (cents != nullptr && i < wanted) ? cents[index] : 0.0;
+            const double gain = (gains != nullptr && i < wanted) ? gains[index] : 1.0;
+
+            if (! isExactly (cent, rankCents_[index]))
+            {
+                rankCents_[index] = cent;
+                changed = true;
+            }
+
+            if (! isExactly (gain, rankGains_[index]))
+            {
+                rankGains_[index] = gain;
+                changed = true;
+            }
+        }
+
+        if (changed)
+            updateIncrements();
+    }
+
+    /// Copy `index`'s offset and gain as currently set, for tests and displays.
+    [[nodiscard]] double rankCentsOf (int index) const noexcept
+    {
+        return rankCents_[static_cast<std::size_t> (std::clamp (index, 0, kMaxVoices - 1))];
+    }
+
+    [[nodiscard]] double rankGainOf (int index) const noexcept
+    {
+        return rankGains_[static_cast<std::size_t> (std::clamp (index, 0, kMaxVoices - 1))];
+    }
+
     void setFrequency (double hz) noexcept
     {
         const double wanted = std::max (hz, 0.0);
@@ -411,10 +460,15 @@ private:
 
     void updateIncrements() noexcept
     {
+        double power = 0.0;
+
         for (int i = 0; i < kMaxVoices; ++i)
         {
             const auto index = static_cast<std::size_t> (i);
-            const double offset = position (i) * detuneCents_ * 0.5;
+
+            // The rank offset rides on the detune rather than replacing it, so
+            // a stack placed at intervals can still churn.
+            const double offset = position (i) * detuneCents_ * 0.5 + rankCents_[index];
 
             // Cents to a frequency ratio, then to cycles per sample.
             const double ratio = std::pow (2.0, offset / 1200.0);
@@ -426,13 +480,23 @@ private:
             const double pan = position (i) * spread_;
             const double angle = (pan * 0.5 + 0.5) * 1.5707963267948966;
 
-            gainL_[index] = std::cos (angle);
-            gainR_[index] = std::sin (angle);
+            gainL_[index] = std::cos (angle) * rankGains_[index];
+            gainR_[index] = std::sin (angle) * rankGains_[index];
+
+            if (i < voiceCount_)
+                power += rankGains_[index] * rankGains_[index];
         }
 
         // sqrt(N), not N: the voices are uncorrelated once their phases have
         // scattered, so that is how their sum actually grows.
-        normalisation_ = 1.0 / std::sqrt (static_cast<double> (voiceCount_));
+        //
+        // With per-copy gains that generalises to the root of their summed
+        // *power*, and the generalisation is exact rather than merely equal:
+        // summing N ones gives exactly N in floating point for every N this
+        // class allows, so a bank with no rank gains set divides by precisely
+        // the 1/sqrt(N) it always did. A windowed stack -- see `Shepard.hpp` --
+        // is quieter by the window's own factor and this is what puts it back.
+        normalisation_ = power > 0.0 ? 1.0 / std::sqrt (power) : 0.0;
 
         // A frequency, detune or count change reaches the oscillators on the
         // next sample, not up to an interval late: a stolen voice retriggered
@@ -490,6 +554,12 @@ private:
     std::array<double, kMaxVoices> increments_ {};
     std::array<double, kMaxVoices> gainL_ {};
     std::array<double, kMaxVoices> gainR_ {};
+
+    /// Per-copy offsets and gains -- see `setRankOffsets`. The gains start at
+    /// one rather than zero, so a default-constructed bank is the bank this
+    /// class has always been.
+    std::array<double, kMaxVoices> rankCents_ {};
+    std::array<double, kMaxVoices> rankGains_ { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
 
     std::array<double, kMaxVoices> drift_ {};
     std::array<double, kMaxVoices> driftTarget_ {};

@@ -221,6 +221,14 @@ inline constexpr auto cpBodyRing  = "cpBodyRing";
 inline constexpr auto cpWidth     = "cpWidth";
 inline constexpr auto cpTailTone  = "cpTailTone";
 inline constexpr auto cpDrive     = "cpDrive";
+
+// CLAP, schema 8 -- the gate the other pads had
+inline constexpr auto cpGate      = "cpGate";
+inline constexpr auto cpRelease   = "cpRelease";
+
+// SNARES, schema 9 -- a hold on the wires, so a buzz has a length of its own
+inline constexpr auto s1WiresHold = "s1WiresHold";
+inline constexpr auto g1WiresHold = "g1WiresHold";
 } // namespace ids
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and
@@ -240,6 +248,7 @@ struct SnareIds
     const char* wires;
     const char* snappy;
     const char* snap;
+    const char* wiresHold;
     const char* wiresDecay;
     const char* rattle;
     const char* crack;
@@ -259,7 +268,7 @@ struct SnareIds
 inline constexpr SnareIds kSnare1Ids {
     ids::s1Tune, ids::s1FollowKey, ids::s1NoteSnap, ids::s1Spread, ids::s1Tone,
     ids::s1Decay, ids::s1Start, ids::s1Drop, ids::s1Body,
-    ids::s1Wires, ids::s1Snappy, ids::s1Snap, ids::s1WiresDecay, ids::s1Rattle,
+    ids::s1Wires, ids::s1Snappy, ids::s1Snap, ids::s1WiresHold, ids::s1WiresDecay, ids::s1Rattle,
     ids::s1Crack, ids::s1CrackTone, ids::s1Noise, ids::s1NoiseTime,
     ids::s1Level, ids::s1Gate, ids::s1Release,
     ids::s1VelLevel, ids::s1VelWires, ids::s1VelCrack, ids::s1VelDrop,
@@ -269,7 +278,7 @@ inline constexpr SnareIds kSnare1Ids {
 inline constexpr SnareIds kGhostIds {
     ids::g1Tune, ids::g1FollowKey, ids::g1NoteSnap, ids::g1Spread, ids::g1Tone,
     ids::g1Decay, ids::g1Start, ids::g1Drop, ids::g1Body,
-    ids::g1Wires, ids::g1Snappy, ids::g1Snap, ids::g1WiresDecay, ids::g1Rattle,
+    ids::g1Wires, ids::g1Snappy, ids::g1Snap, ids::g1WiresHold, ids::g1WiresDecay, ids::g1Rattle,
     ids::g1Crack, ids::g1CrackTone, ids::g1Noise, ids::g1NoiseTime,
     ids::g1Level, ids::g1Gate, ids::g1Release,
     ids::g1VelLevel, ids::g1VelWires, ids::g1VelCrack, ids::g1VelDrop,

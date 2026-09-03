@@ -216,6 +216,32 @@ inline constexpr auto renderOversampling = "renderOversampling";
 /// tuning a little. Appended at schema V7, defaulting to 0, which is
 /// bit-exactly off.
 inline constexpr auto voiceDrift = "voiceDrift";
+
+/// **Phase 5 -- the horror phase.** All appended at schema V8, all neutral at
+/// their defaults, so a project saved before any of them existed reopens
+/// sounding identical.
+///
+/// Stack: where the unison copies go. `Detune` is what shipped and is
+/// bit-exact. The step is keys per copy and means something only in Scale mode.
+inline constexpr auto stackA      = "stackA";
+inline constexpr auto stackB      = "stackB";
+inline constexpr auto stackStepA  = "stackStepA";
+inline constexpr auto stackStepB  = "stackStepB";
+
+/// The Shepard glissando's speed, in octaves per second, signed. One for the
+/// instrument, because the phase is one accumulator for the instrument.
+inline constexpr auto shepardRate = "shepardRate";
+inline constexpr auto shepardSync = "shepardSync";
+inline constexpr auto shepardDiv  = "shepardDiv";
+
+/// Tract: one ratio scaling the vowel filter's three formants, which is the
+/// physics of tract length. Exactly 1.0 is bit-exactly neutral.
+inline constexpr auto tract       = "tract";
+
+/// Sag: one slow instability shared common-mode by every voice. 0 is
+/// bit-exactly out of the path; the walk keeps walking regardless.
+inline constexpr auto sag         = "sag";
+inline constexpr auto sagRate     = "sagRate";
 } // namespace ids
 
 /// The option lists behind the choice parameters.
@@ -254,6 +280,11 @@ inline const juce::StringArray lfoDivision = []
 }();
 inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 
+/// Where the unison copies go. **Append-only**, like every list here, and
+/// indexed straight into `StackMode`. Index 0 is what shipped.
+inline const juce::StringArray stack { "Detune", "Octaves", "Fifths", "Tritones",
+                                       "Cluster", "Diminished", "Scale", "Shepard" };
+
 /// What an offline bounce runs at. Index 0 is neutral; the rest are the live
 /// list without Off, in its order, and map by arithmetic onto
 /// `dsp::RenderOversampling`. **Append-only**, like every list here.
@@ -264,7 +295,12 @@ inline const juce::StringArray modSource { "Off", "Amp env", "Mod env 1", "Mod e
                                            "Velocity", "Key track", "Note random",
                                            "LFO 1", "LFO 2", "Sequencer",
                                            "ADV 1", "ADV 2", "ADV 3",
-                                           "Macro 1", "Macro 2", "Macro 3", "Macro 4" };
+                                           "Macro 1", "Macro 2", "Macro 3", "Macro 4",
+                                           // Phase 5: the machine's temperature,
+                                           // which is one number for the whole
+                                           // instrument and reads the same here
+                                           // as in the global matrix.
+                                           "Sag" };
 
 /// The modulation destinations, likewise. **Continuous controls only** -- a
 /// choice or a switch reconfigures rather than adjusts, so modulating one would
@@ -290,14 +326,17 @@ inline const juce::StringArray kargyraaDivisor { "/2  true kargyraa", "/3", "/4"
 inline const juce::StringArray globalSource { "Off", "LFO 1", "LFO 2", "Sequencer",
                                              "Amp env", "Mod env 1", "Mod env 2", "Velocity",
                                              "ADV 1", "ADV 2", "ADV 3",
-                                             "Macro 1", "Macro 2", "Macro 3", "Macro 4" };
+                                             "Macro 1", "Macro 2", "Macro 3", "Macro 4",
+                                             "Sag" };
 
 /// The global matrix's destinations: the mangle's continuous controls. **Comb
 /// time is the one this instrument exists for** -- the brief's flanger-at-rate-
 /// zero trick with something better than an automation lane behind it.
 inline const juce::StringArray globalDest { "Off", "Comb time", "Comb feedback", "Comb mix",
                                             "Phase centre", "Vowel", "Tube", "Output",
-                                            "Harmonic", "Notch" };
+                                            "Harmonic", "Notch",
+                                            // Phase 5, appended.
+                                            "Tract", "Sag", "Shepard rate" };
 
 static_assert (static_cast<int> (dsp::OscShape::saw)       == 0
             && static_cast<int> (dsp::OscShape::pulse)     == 1
@@ -310,6 +349,17 @@ static_assert (static_cast<int> (dsp::OscShape::saw)       == 0
             && static_cast<int> (dsp::OscShape::noise)     == 8
             && static_cast<int> (dsp::OscShape::count)     == 9,
                "the shape option list is indexed straight into OscShape");
+
+static_assert (static_cast<int> (StackMode::detune)     == 0
+            && static_cast<int> (StackMode::octaves)    == 1
+            && static_cast<int> (StackMode::fifths)     == 2
+            && static_cast<int> (StackMode::tritones)   == 3
+            && static_cast<int> (StackMode::cluster)    == 4
+            && static_cast<int> (StackMode::diminished) == 5
+            && static_cast<int> (StackMode::scale)      == 6
+            && static_cast<int> (StackMode::shepard)    == 7
+            && static_cast<int> (StackMode::count)      == 8,
+               "the stack option list is indexed straight into StackMode");
 
 static_assert (static_cast<int> (SubShape::sine)   == 0
             && static_cast<int> (SubShape::square) == 1
@@ -361,7 +411,8 @@ static_assert (static_cast<int> (ModSource::none)      == 0
             && static_cast<int> (ModSource::advEnv3)   == 12
             && static_cast<int> (ModSource::macro1)    == 13
             && static_cast<int> (ModSource::macro4)    == 16
-            && static_cast<int> (ModSource::count)     == 17,
+            && static_cast<int> (ModSource::sag)       == 17
+            && static_cast<int> (ModSource::count)     == 18,
                "the modulation source list is indexed straight into ModSource");
 
 static_assert (static_cast<int> (ModDestination::none)     == 0
@@ -384,14 +435,18 @@ static_assert (static_cast<int> (GlobalSource::none)         == 0
             && static_cast<int> (GlobalSource::advEnv3)      == 10
             && static_cast<int> (GlobalSource::macro1)        == 11
             && static_cast<int> (GlobalSource::macro4)        == 14
-            && static_cast<int> (GlobalSource::count)         == 15,
+            && static_cast<int> (GlobalSource::sag)           == 15
+            && static_cast<int> (GlobalSource::count)         == 16,
                "the global source list is indexed straight into GlobalSource");
 
 static_assert (static_cast<int> (GlobalDestination::none)            == 0
             && static_cast<int> (GlobalDestination::output)          == 7
             && static_cast<int> (GlobalDestination::formantHarmonic) == 8
             && static_cast<int> (GlobalDestination::formantNotch)    == 9
-            && static_cast<int> (GlobalDestination::count)           == 10,
+            && static_cast<int> (GlobalDestination::tract)           == 10
+            && static_cast<int> (GlobalDestination::sagDepth)        == 11
+            && static_cast<int> (GlobalDestination::shepardRate)     == 12
+            && static_cast<int> (GlobalDestination::count)           == 13,
                "the global destination list is indexed straight into GlobalDestination");
 } // namespace choices
 

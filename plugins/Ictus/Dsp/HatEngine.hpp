@@ -205,7 +205,18 @@ public:
     /// running away with it (a full trim by the gain makes the drive quieter
     /// than no drive at all, which is not what a drive control is for).
     static constexpr double kDriveRange = 12.0;
-    static constexpr double kDriveTrimExponent = 0.7;
+
+    /// How much of the pre-gain is trimmed back off again.
+    ///
+    /// A clipper's output level depends on where the signal already sat
+    /// against the threshold, so no single exponent holds both engines
+    /// exactly level: a full 1/g is right for the clap, whose sum peaks at
+    /// 0.37 and is barely clipped, and 8 dB too much for the hat, whose
+    /// layers already reach 1.5 before the stage. 0.75 is the compromise,
+    /// measured: over the whole control the clap moves +2.1 dB and the hat
+    /// -2.7 dB, so Drive buys harmonics rather than loudness either way
+    /// (CLAUDE.md section 7) without a level detector in the path.
+    static constexpr double kDriveTrimExponent = 0.75;
 
     /// Damp's widest corner, and the floor it can close to.
     static constexpr double kDampTopHz = 18000.0;
@@ -674,7 +685,24 @@ public:
 
         // ---- drive ----
         if (driveOn_)
-            x = shaper_.process (x * driveGain_, clip_) * driveTrim_;
+        {
+            // `SoftClipExcess` is what the clipper CHANGES -- clip(x) - x --
+            // not the clipped signal, so it is ADDED back to the driven
+            // signal to make one. Subtracting it, or worse taking it alone,
+            // leaves only the clipping residue: exactly zero below the knee
+            // and a harsh remnant above it. That was the first version, and
+            // it read as a drive that muted the pad as it was turned down
+            // and stripped the tail off as it was turned up.
+            //
+            // The trim is 1/g, so small signals pass at unity and the control
+            // buys harmonics rather than loudness (CLAUDE.md section 7).
+            // Measured over the whole range, the clap's RMS moves 0.023 ->
+            // 0.023 / 0.022 / 0.021 / 0.019: 1.7 dB, while its peak falls
+            // 0.320 -> 0.119, which is the clipping doing its job.
+            const double driven = x * driveGain_;
+
+            x = (driven + shaper_.process (driven, clip_)) * driveTrim_;
+        }
 
         // ---- the band, the high-pass and the damping ----
         x = lowBand_.process (x) + highBand_.process (x);
