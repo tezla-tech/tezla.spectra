@@ -156,6 +156,16 @@ function(tezla_add_plugin)
 
         target_sources(${ARG_NAME}Render PRIVATE "${TEZLA_ROOT_DIR}/tools/render/main.cpp")
 
+        # The plugin's own Dsp/ directory, so the tool can reach a
+        # framework-free header the plugin also uses. One main.cpp serves every
+        # plugin, so anything plugin-specific in it is guarded with
+        # `__has_include` and simply is not compiled where the header is absent
+        # -- which is how `tezla-render dice` exists for Sonitus and nowhere
+        # else without a per-plugin source file.
+        target_include_directories(${ARG_NAME}Render PRIVATE
+            "${CMAKE_CURRENT_LIST_DIR}"
+            ${ARG_INCLUDE_DIRS})
+
         target_link_libraries(${ARG_NAME}Render PRIVATE
             ${ARG_NAME}
             tezla::compiler-options

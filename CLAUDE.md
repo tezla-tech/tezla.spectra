@@ -284,7 +284,7 @@ Rules:
   architectures.
   Verified locally since, with Anvil and Sonitus added: 579 tests pass on x86-64
   and identically under `qemu-aarch64`, and all six plugins pass Steinberg's
-  validator 47/47 on Linux. The count has since grown to **1104 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
+  validator 47/47 on Linux. The count has since grown to **1110 on x86-64** (Svarayantra, Ferrite, Malleus, Crossbar, Phonoss and Membrana included, all thirteen plugins validating 47/47); the
   `qemu-aarch64` figure is deliberately stale, and stays that way until §2.3's
   gate lifts. Quote the two separately rather than letting the newer number
   stand for both.
@@ -835,6 +835,13 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   (Origin, Shear, Phase pan, all now struck through in `docs/ROADMAP.md` §11)
   and the filter's Sing. Five presets appended, *Slow Descent* being the user's
   own patch written down. **None of the four has been heard on the rig.**
+  Phase 6 was then played and two follow-ups asked for and built: Shepard
+  **Retrigger** (schema V10) and the **Conflux** preset. The same session found
+  that DICEROLL had been ignoring **twenty-one** parameters for three phases,
+  because `DiceSections.hpp` documented a `tezla-render dice` gate that had
+  never been written; the gate exists now and exits non-zero on an unclassified
+  parameter. **Run it after adding parameters to any plugin that has a
+  classifier.**
   Malleus **phase 2 is complete**
   (Bloom, Damp, two exciters with velocity-picked hardness, two listening
   positions); **Membrana is complete through MB7** — the microphone stage

@@ -3725,7 +3725,7 @@ void SonitusEditor::buildPages()
         "out. Antialiased, and at full fold it is the widest-band thing in the instrument: this "
         "is the one control that genuinely wants x8 oversampling.");
 
-    osc->addHeading ("SHEPARD -- the endless rise", 4, true);
+    osc->addHeading ("SHEPARD -- the endless rise", 5, true);
 
     osc->addKnob (ids::shepardRate, "Speed",
         "How fast the glissando climbs, in **octaves per second**, and the sign is the "
@@ -3745,6 +3745,21 @@ void SonitusEditor::buildPages()
 
     osc->addChoice (ids::shepardDiv, "Division",
         "How long one octave of climb takes, in note values. Greyed unless Sync is on.");
+
+    osc->addToggle (ids::shepardRetrig, "Retrig",
+        "**Whether a note starts its own climb, or joins the one already running.**\n\n"
+        "Off is what it has always done: one glide clock for the instrument, so every note "
+        "hears the same point of the same endless rise and a chord climbs as a single gesture. "
+        "That is the right default -- voices with their own phases smear a rise into a wash -- "
+        "but it means a note played now begins wherever the clock happens to be, which for a "
+        "riser you want to *land* somewhere is the wrong end of the illusion.\n\n"
+        "On, each note captures the clock as it starts and counts from there, so it begins at "
+        "the bottom of the octave. Notes already sounding are not touched: the clock itself "
+        "never resets, each voice just remembers its own starting point. So a chord struck "
+        "together still climbs together, and a note added later climbs its own line through "
+        "the others -- which is the sound this is for.\n\n"
+        "Costs one subtraction a voice. Needs an oscillator set to Shepard, like the rest of "
+        "this group.");
 
     osc->addKnob (ids::shepardShear, "Shear",
         "**How far oscillator B's climb runs against A's.** At 0 the two share one phase "
@@ -4391,6 +4406,7 @@ void SonitusEditor::updateForSwitches()
         osc->setControlEnabled (ids::shepardRate, sliding);
         osc->setControlEnabled (ids::shepardSync, sliding);
         osc->setControlEnabled (ids::shepardDiv, sliding && synced);
+        osc->setControlEnabled (ids::shepardRetrig, sliding);
 
         // Shear needs *both* stacks sliding to mean anything -- it is the
         // distance between two climbs, and one climb has no distance from

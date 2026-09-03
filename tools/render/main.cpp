@@ -45,6 +45,25 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+// **DICEROLL's classifier, where the plugin has one.** One main.cpp serves
+// every plugin, so this is guarded rather than conditionally compiled from
+// CMake: the header lives in the plugin's own `Dsp/` directory, which the
+// build puts on this tool's include path, and a plugin without one simply does
+// not get the `dice` command.
+//
+// It exists because `DiceSections.hpp` has claimed since it was written that
+// "`tezla-render dice` lists every unknown and the count is expected to be
+// zero" -- and the command was never actually built. Twenty parameters drifted
+// into `unknown` across three phases with nothing to notice, including the
+// whole of Stack, Shepard, Tract and Sag. A promise in a comment is not a gate.
+#if __has_include("DiceSections.hpp")
+    #include "DiceSections.hpp"
+    #define TEZLA_HAS_DICE_SECTIONS 1
+#else
+    #define TEZLA_HAS_DICE_SECTIONS 0
+#endif
+
+
 namespace
 {
 constexpr double kSampleRate = 48000.0;
@@ -765,10 +784,13 @@ int main (int argc, char** argv)
 
     const bool exerciseEditor = argc >= 2 && juce::String (argv[1]) == "editor";
 
-    if (argc < 4 && ! dumpParameters && ! exerciseEditor)
+    const bool auditDiceSections = argc >= 2 && juce::String (argv[1]) == "dice";
+
+    if (argc < 4 && ! dumpParameters && ! exerciseEditor && ! auditDiceSections)
     {
         std::printf ("usage: tezla-render <samples> <blockSize> <out.raw> [id=value ...]\n"
                      "       tezla-render params\n"
+                     "       tezla-render dice\n"
                      "       tezla-render editor [componentId | id@x,y | press:id@x,y\n"
                      "                            | release:id@x,y | hit:id | shot:out.png\n"
                      "                            | wheel:id@x,y=delta[+shift] | dclick:id@x,y\n"
@@ -781,7 +803,7 @@ int main (int argc, char** argv)
 
     // Guarded on both commands, not just one: argv[2] does not exist for either
     // of them, and atoi does not check.
-    const bool renderingAudio = ! dumpParameters && ! exerciseEditor;
+    const bool renderingAudio = ! dumpParameters && ! exerciseEditor && ! auditDiceSections;
 
     const int totalSamples = renderingAudio ? std::atoi (argv[1]) : 0;
     const int blockSize    = renderingAudio ? std::max (1, std::atoi (argv[2])) : 1;
@@ -828,6 +850,68 @@ int main (int argc, char** argv)
         }
 
         return 0;
+    }
+
+    // **`dice` -- every published parameter against DICEROLL's classifier.**
+    //
+    // DICEROLL rolls every parameter except the ones the player locked, and it
+    // decides which section a parameter is in by reading its id
+    // (`DiceSections.hpp`). An id that matches nothing comes back `unknown`,
+    // and the roller treats unknown as locked -- so a parameter nobody
+    // classified is silently never rolled.
+    //
+    // That is the safe direction to fail, but it is silent, and silence is how
+    // twenty parameters drifted: the whole of Stack, Shepard, Tract and Sag,
+    // plus the four macros and the drift, went three phases without the dice
+    // ever touching them. `DiceSections.hpp` has claimed this command existed
+    // since it was written. It did not. It does now, and it **exits non-zero**
+    // when the count is not zero, so it is a gate rather than a report.
+    if (auditDiceSections)
+    {
+#if TEZLA_HAS_DICE_SECTIONS
+        using tezla::sonitus::DiceSection;
+
+        int unknown = 0;
+        int total = 0;
+
+        std::printf ("  %-22s  %s\n", "parameter", "DICEROLL section");
+        std::printf ("  %-22s  %s\n", "----------------------", "----------------");
+
+        for (auto* candidate : processor->getParameters())
+        {
+            const auto* ranged = dynamic_cast<const juce::RangedAudioParameter*> (candidate);
+
+            if (ranged == nullptr)
+                continue;
+
+            ++total;
+
+            const auto id = ranged->paramID.toStdString();
+            const auto section = tezla::sonitus::diceSectionFor (id);
+
+            if (section == DiceSection::unknown)
+            {
+                ++unknown;
+                std::printf ("  %-22s  UNKNOWN -- never rolled\n", id.c_str());
+            }
+            else
+            {
+                std::printf ("  %-22s  %s\n", id.c_str(),
+                             tezla::sonitus::diceSectionName (section));
+            }
+        }
+
+        std::printf ("\n  %d parameters, %d unclassified\n", total, unknown);
+
+        if (unknown > 0)
+            std::printf ("  FAIL: an unclassified parameter is never rolled by DICEROLL.\n"
+                         "        Classify it in plugins/Sonitus/Dsp/DiceSections.hpp.\n");
+
+        return unknown == 0 ? 0 : 1;
+#else
+        std::printf ("  this plugin has no DiceSections.hpp, so there is nothing to audit\n");
+        return 0;
+#endif
     }
 
     int playNote = -1;

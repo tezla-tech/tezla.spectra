@@ -65,7 +65,12 @@ constexpr int kSchemaV8 = 8;
 /// above it.
 constexpr int kSchemaV9 = 9;
 
-constexpr int kStateSchemaVersion = kSchemaV9;
+/// Shepard *Retrigger*, asked for on 2026-09-03 after phase 6 was played on
+/// the rig. Its own version, as every parameter here has its own: the hint
+/// feeds the VST3 parameter ID, so one version means one piece of work forever.
+constexpr int kSchemaV10 = 10;
+
+constexpr int kStateSchemaVersion = kSchemaV10;
 constexpr auto kStateTypeName = "SonitusState";
 
 /// DICEROLL's locks and strengths, stored beside the tuning rather than as
@@ -483,6 +488,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
     // other and the beating between them is the sound. Linear, because the
     // interesting settings are spread across the whole travel rather than
     // bunched at one end: the midpoint is B held still while A climbs.
+    // **Retrigger** -- whether a note starts its own climb.
+    //
+    // Off is the shared accumulator that shipped: one clock, so a chord climbs
+    // as a single gesture. On, each note captures the clock at its own note-on
+    // and subtracts it, so it starts at the bottom while everything already
+    // sounding carries on untouched -- an offset per voice rather than a reset
+    // of the clock, which would drag every voice already sounding back with it.
+    layout.add (std::make_unique<Boolean> (
+        juce::ParameterID { ids::shepardRetrig, kSchemaV10 }, "Shepard retrigger", false));
+
     layout.add (std::make_unique<Parameter> (
         juce::ParameterID { ids::shepardShear, kSchemaV9 }, "Shepard shear",
         juce::NormalisableRange<float> { 0.0f, 1.0f }, 0.0f, percentAttributes()));
@@ -1558,6 +1573,7 @@ void SonitusProcessor::pullParameters()
     // its phase is one accumulator for the instrument.
     p.shepardRate = valueOf (state_, ids::shepardRate);
     p.shepardShear = valueOf (state_, ids::shepardShear);
+    p.voice.shepardRetrigger = valueOf (state_, ids::shepardRetrig) > 0.5f;
     p.shepardSync = valueOf (state_, ids::shepardSync) > 0.5f;
     p.shepardDivision = indexOf (state_, ids::shepardDiv);
 
@@ -3884,6 +3900,113 @@ const std::vector<Preset>& presets()
 
                 { ids::polyphony, 8.0f },
                 { ids::output, -11.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // **The converging riser.** Asked for on 2026-09-03: the sound
+            // that opened films in the eighties -- a mass of voices that starts
+            // as a tight cluster, wanders, and then opens out and arrives all
+            // at once on an enormous chord that simply sits there.
+            //
+            // **Built from the published sketch of the technique**, which the
+            // player supplied: thirty voices at random pitches in a narrow band
+            // around 200-400 Hz, each moving slowly and randomly, then all
+            // proceeding direct to their target note -- three slightly detuned
+            // voices per note, two per note in the bass. Nothing is sampled and
+            // nothing is reverse engineered; the method is the published part.
+            //
+            // **The first version of this preset had it backwards**, and the
+            // correction is the interesting bit: it started the voices spread
+            // over three octaves and converged them inward onto the played
+            // note. That is not the gesture. The gesture is narrow-to-wide, and
+            // what reads as "converging" is that every voice stops moving at
+            // the same instant.
+            //
+            // So the width is **modulated detune**, not a fixed stack:
+            //
+            //   * Stack stays at *Detune* and both banks start at 0 cents, so
+            //     the note begins as a genuine unison -- one pitch, fourteen
+            //     copies of it.
+            //   * Both mod envelopes run a **long attack to a held sustain**,
+            //     which is the ordinary direction and here means the
+            //     displacement grows to its maximum and then holds.
+            //   * Mod env 1 opens `detuneA` and mod env 2 opens `detuneB`, to
+            //     660 and 840 cents. Two different attack times, so the banks
+            //     do not arrive in lockstep.
+            //   * Drift is high on both banks: that is the "moves slowly and
+            //     randomly", and it carries on after the arrival, which is what
+            //     stops the held chord being static.
+            //
+            // **What one instance cannot do**, and it is worth knowing before
+            // reaching for the knobs: in the original, a voice's *starting*
+            // pitch is unrelated to its target -- everything begins near 300 Hz
+            // whether it ends up in the bass or three octaves up. Doing that
+            // needs displacement proportional to the note, faded out over time,
+            // which is a product of key tracking and an envelope. This matrix
+            // multiplies neither pair, so it cannot be built here. Two or three
+            // instances each holding one register, each with its own envelope
+            // depth on pitch, is the faithful route -- `docs/WHATS-NEW.md` has
+            // that recipe.
+            //
+            // Play a wide chord and **hold it**. It takes about twelve seconds.
+            "Conflux -- many pitches arriving as one",
+            {
+                { ids::shapeA, 0.0f },                             // saw
+                { ids::unisonA, 7.0f }, { ids::detuneA, 0.0f },
+                { ids::spreadA, 1.0f }, { ids::driftA, 18.0f },
+                { ids::levelA, 1.0f },
+
+                { ids::shapeB, 0.0f }, { ids::levelB, 1.0f },
+                { ids::unisonB, 7.0f }, { ids::detuneB, 0.0f },
+                { ids::spreadB, 1.0f }, { ids::driftB, 22.0f },
+                { ids::centsB, 4.0f },
+
+                { ids::subLevel, 0.55f }, { ids::subOctave, -1.0f },
+                { ids::subShape, 0.0f },                           // sine, pure weight
+
+                // The opening, bank A. Attack to a held sustain: the spread
+                // grows and then stays.
+                { ids::env1Attack, 11.0f }, { ids::env1Sustain, 1.0f },
+                { ids::env1Release, 4.0f }, { ids::env1AttackT, -0.25f },
+                { ids::modSource (0), 2.0f },                      // Mod env 1
+                { ids::modDest (0), 7.0f },                        // detune A
+                { ids::modDepth (0), 0.55f },
+
+                // Bank B, a little slower, so the two do not land together.
+                { ids::env2Attack, 13.0f }, { ids::env2Sustain, 1.0f },
+                { ids::env2Release, 4.0f }, { ids::env2AttackT, -0.25f },
+                { ids::modSource (1), 3.0f },                      // Mod env 2
+                { ids::modDest (1), 8.0f },                        // detune B
+                { ids::modDepth (1), 0.7f },
+
+                // Each voice its own few cents that never resolve -- the
+                // sketch's "random pitches", at the scale one instance can
+                // manage.
+                { ids::modSource (2), 6.0f },                      // Note random
+                { ids::modDest (2), 13.0f },                       // pitch
+                { ids::modDepth (2), 0.0025f },
+
+                // It brightens into the arrival, which is most of why the
+                // arrival reads as one.
+                { ids::cutoff, 700.0f }, { ids::resonance, 0.12f },
+                { ids::filterTrack, 0.35f },
+                { ids::modSource (3), 1.0f },                      // Amp env
+                { ids::modDest (3), 1.0f },                        // cutoff
+                { ids::modDepth (3), 0.38f },
+
+                { ids::voiceDrift, 14.0f },
+
+                // Slow in, and it holds for as long as the key is down. The
+                // sketch marks the dynamics mf rising to fff, which is this
+                // attack plus the filter opening under it.
+                { ids::ampAttack, 3.0f }, { ids::ampSustain, 1.0f },
+                { ids::ampRelease, 5.0f }, { ids::ampAttackT, -0.3f },
+
+                { ids::tubeDrive, 5.0f },
+
+                { ids::polyphony, 12.0f },
+                { ids::output, -17.0f },
             }
         },
 

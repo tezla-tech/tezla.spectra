@@ -1282,3 +1282,415 @@ TEZLA_TEST (shear_at_zero_leaves_the_two_stacks_bit_identical)
         CHECK (engine->getShepardOctaves() == engine->getShepardOctavesB());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shepard retrigger
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (shepard_retrigger_off_leaves_every_voice_on_the_one_shared_glide)
+{
+    // The default has to be what shipped, and "what shipped" is specifically
+    // that two notes started seconds apart are at the *same* point of the same
+    // climb -- one clock for the instrument. Measured as the two voices'
+    // spectra rather than as an internal number, because the shared clock is
+    // the audible claim.
+    auto p = bareStack (StackMode::shepard, 5);
+
+    p.shepardRate = 0.5;
+    p.voice.amp.decay = 8.0;
+    p.voice.amp.sustain = 1.0;
+    p.voice.shepardRetrigger = false;
+
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (kRate, 512);
+    engine->setParameters (p);
+
+    Buffers settle (64);
+    engine->process (settle.pointers, 64);
+
+    // Two notes an octave apart, the second started a second after the first.
+    // With one shared clock they are at the same phase, so the stacks land on
+    // the same set of frequencies and the pair beats rather than chorusing.
+    engine->noteOn (48, 1.0);
+
+    Buffers gap (512);
+
+    for (int i = 0; i < static_cast<int> (kRate / 512.0); ++i)
+        engine->process (gap.pointers, 512);
+
+    const double before = engine->getShepardOctaves();
+
+    engine->noteOn (60, 1.0);
+
+    // Nothing about the clock moved because a note arrived.
+    CHECK_NEAR (engine->getShepardOctaves(), before, 1.0e-12);
+}
+
+TEZLA_TEST (a_note_on_never_moves_the_shared_shepard_clock_even_with_retrigger_on)
+{
+    // **This is the test that defends the design**, and it exists because the
+    // obvious alternative -- reset the accumulator on a note-on -- was tried as
+    // a break-check and the click test did not catch it. It would not: the
+    // oscillators' phases stay continuous through a reset, so there is no
+    // sample-level step to find, only every sounding voice's stack silently
+    // jumping to a different set of pitches. A discontinuity test cannot see a
+    // pitch jump, and saying so is the point.
+    //
+    // So the claim is asserted where it lives: retrigger is an offset **per
+    // voice**, and the clock the whole instrument shares is never touched by a
+    // note arriving.
+    for (const bool retrigger : { false, true })
+    {
+        auto p = bareStack (StackMode::shepard, 5);
+
+        p.shepardRate = 1.5;
+        p.voice.amp.decay = 8.0;
+        p.voice.amp.sustain = 1.0;
+        p.voice.shepardRetrigger = retrigger;
+
+        auto engine = std::make_unique<Engine>();
+
+        engine->prepare (kRate, 512);
+        engine->setParameters (p);
+
+        Buffers block (512);
+
+        engine->process (block.pointers, 64);
+        engine->noteOn (48, 1.0);
+
+        for (int i = 0; i < static_cast<int> (kRate * 2.0 / 512.0); ++i)
+            engine->process (block.pointers, 512);
+
+        const double beforeA = engine->getShepardOctaves();
+        const double beforeB = engine->getShepardOctavesB();
+
+        CHECK (beforeA > 1.0);            // it really has been climbing
+
+        engine->noteOn (60, 1.0);
+        engine->noteOn (67, 1.0);
+
+        // Not "close to": the note-on path must not write to it at all.
+        CHECK (engine->getShepardOctaves() == beforeA);
+        CHECK (engine->getShepardOctavesB() == beforeB);
+
+        // And one more block, to catch a reset deferred to the next control
+        // chunk rather than done in the note-on itself.
+        engine->process (block.pointers, 512);
+
+        CHECK (engine->getShepardOctaves() > beforeA);
+    }
+}
+
+TEZLA_TEST (shepard_retrigger_starts_a_new_note_at_the_bottom_and_leaves_the_others)
+{
+    // The claim, and the reason it is an offset per voice rather than a reset
+    // of the clock: a note started later climbs its own line, and the notes
+    // already sounding do not move at all.
+    //
+    // Measured through the placement function, which is where the offset lands
+    // -- a voice at offset `o` computes its ranks from `global - o`, so a note
+    // taken at global = 2.5 with retrigger on sees 0 at its own note-on and
+    // the identical ranks a note taken at global = 0 would have seen.
+    double firstCents[kMaxStackCopies] {}, firstGains[kMaxStackCopies] {};
+    double laterCents[kMaxStackCopies] {}, laterGains[kMaxStackCopies] {};
+
+    for (int i = 0; i < kMaxStackCopies; ++i)
+    {
+        firstGains[i] = 1.0;
+        laterGains[i] = 1.0;
+    }
+
+    static const Tuning twelveEqual {};
+
+    // A note taken when the clock read 0, half a turn later.
+    const double halfTurn = 5.0 * 0.5;   // five copies, so a turn is five octaves
+
+    stackRanks (StackMode::shepard, 5, 1, halfTurn - 0.0, StackOrigin::centre,
+                twelveEqual, 60, firstCents, firstGains);
+
+    // A note taken when the clock read 2.5, at the same instant -- so its own
+    // elapsed travel is zero and it must see what the first note saw at zero.
+    double atZeroCents[kMaxStackCopies] {}, atZeroGains[kMaxStackCopies] {};
+
+    for (int i = 0; i < kMaxStackCopies; ++i)
+        atZeroGains[i] = 1.0;
+
+    stackRanks (StackMode::shepard, 5, 1, 0.0, StackOrigin::centre,
+                twelveEqual, 60, atZeroCents, atZeroGains);
+
+    stackRanks (StackMode::shepard, 5, 1, halfTurn - halfTurn, StackOrigin::centre,
+                twelveEqual, 60, laterCents, laterGains);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        const auto index = static_cast<std::size_t> (i);
+
+        // The retriggered note is at the bottom of its climb, bit for bit.
+        CHECK (laterCents[index] == atZeroCents[index]);
+        CHECK (laterGains[index] == atZeroGains[index]);
+    }
+
+    // And it is genuinely somewhere else from the note that has been climbing:
+    // half a turn of five copies is two and a half octaves of travel.
+    bool moved = false;
+
+    for (int i = 0; i < 5; ++i)
+        if (firstCents[static_cast<std::size_t> (i)] != atZeroCents[static_cast<std::size_t> (i)])
+            moved = true;
+
+    CHECK (moved);
+}
+
+TEZLA_TEST (a_retriggered_note_lands_on_the_same_partials_however_late_it_is_played)
+{
+    // **The claim retrigger actually makes**, measured spectrally -- and the
+    // first version of this test measured it as a waveform difference and was
+    // wrong to.
+    //
+    // Worth the paragraph, because the mistake looks like a tolerance that
+    // needs loosening and is not. Two Shepard stacks whose phases differ by
+    // 0.000187 of a turn are 1.12 cents apart, which at 200 Hz is a 0.13 Hz
+    // beat: after three seconds they are half a cycle out and a sample-by-
+    // sample comparison reads 0.754 of full scale. That is two nearly
+    // identical sounds, reported as completely different ones. A pitch claim
+    // has to be measured as pitch.
+    //
+    // So: play a note immediately, and the same note two seconds into the
+    // climb, both with retrigger on. Both start their own climb at zero, so
+    // both must put their partials in the same places.
+    auto p = bareStack (StackMode::shepard, 5);
+
+    p.shepardRate = 0.7;
+    p.voice.amp.attack = 0.001;
+    p.voice.amp.decay = 6.0;
+    p.voice.amp.sustain = 1.0;
+    p.voice.shepardRetrigger = true;
+
+    const auto renderAfter = [] (const EngineParameters& parameters, double waitSeconds)
+    {
+        auto engine = std::make_unique<Engine>();
+
+        engine->prepare (kRate, 512);
+        engine->setParameters (parameters);
+
+        Buffers block (512);
+
+        engine->process (block.pointers, 64);
+
+        for (int i = 0; i < static_cast<int> (kRate * waitSeconds / 512.0); ++i)
+            engine->process (block.pointers, 512);
+
+        engine->noteOn (55, 1.0);
+
+        std::vector<double> out;
+
+        while (out.size() < 16384)
+        {
+            std::fill (block.left.begin(), block.left.end(), 0.0);
+            std::fill (block.right.begin(), block.right.end(), 0.0);
+            engine->process (block.pointers, 512);
+
+            for (int n = 0; n < 512; ++n)
+                out.push_back (block.left[static_cast<std::size_t> (n)]);
+        }
+
+        return out;
+    };
+
+    const auto immediate = renderAfter (p, 0.0);
+    const auto late = renderAfter (p, 2.0);
+
+    // The strongest partial of each, interpolated -- the stack's whole point is
+    // that the set of partials is what moves, so the loudest one moving is the
+    // thing retrigger has to reset.
+    // The stack sits an octave or two around the played note, so the search
+    // is anchored where a five-copy Shepard stack at note 55 starts.
+    const double first = partialNear (immediate, 2048, 200.0);
+    const double second = partialNear (late, 2048, 200.0);
+
+    std::printf ("    note at 0 s: %.2f Hz    note at 2 s: %.2f Hz    %+.2f cents\n",
+                 first, second,
+                 1200.0 * std::log2 (second / std::max (first, 1.0e-9)));
+
+    // Within two cents. Without retrigger the late note is 1.4 octaves up the
+    // climb, which is 1680 cents away.
+    CHECK (std::abs (1200.0 * std::log2 (second / std::max (first, 1.0e-9))) < 2.0);
+}
+
+TEZLA_TEST (shepard_retrigger_moves_a_note_that_starts_late_and_nothing_else)
+{
+    // The other half: a note taken well into the climb must differ, and by a
+    // lot. Without this the test above would pass on a retrigger that did
+    // nothing at all.
+    auto p = bareStack (StackMode::shepard, 5);
+
+    p.shepardRate = 0.7;
+    p.voice.amp.decay = 6.0;
+    p.voice.amp.sustain = 1.0;
+
+    auto off = std::make_unique<Engine>();
+    auto on = std::make_unique<Engine>();
+
+    off->prepare (kRate, 512);
+    on->prepare (kRate, 512);
+
+    auto q = p;
+    p.voice.shepardRetrigger = false;
+    q.voice.shepardRetrigger = true;
+
+    const auto render = [] (Engine& engine, const EngineParameters& parameters)
+    {
+        engine.setParameters (parameters);
+
+        Buffers block (512);
+
+        // Two seconds of clock before the note, so the shared glide is 1.4
+        // octaves in and the retriggered one is not.
+        for (int i = 0; i < static_cast<int> (kRate * 2.0 / 512.0); ++i)
+            engine.process (block.pointers, 512);
+
+        engine.noteOn (55, 1.0);
+
+        std::vector<double> out;
+
+        for (int i = 0; i < static_cast<int> (kRate * 1.0 / 512.0); ++i)
+        {
+            std::fill (block.left.begin(), block.left.end(), 0.0);
+            std::fill (block.right.begin(), block.right.end(), 0.0);
+            engine.process (block.pointers, 512);
+
+            for (int n = 0; n < 512; ++n)
+                out.push_back (block.left[static_cast<std::size_t> (n)]);
+        }
+
+        return out;
+    };
+
+    const auto a = render (*off, p);
+    const auto b = render (*on, q);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < a.size(); ++i)
+        worst = std::max (worst, std::abs (a[i] - b[i]));
+
+    std::printf ("    late note, retrigger off against on:   worst |difference| %.3g\n", worst);
+
+    CHECK (worst > 0.05);
+}
+
+TEZLA_TEST (shepard_retrigger_is_the_same_at_every_block_size)
+{
+    // The offset is captured at a note-on and then held, so it must not be a
+    // per-block quantity -- CLAUDE.md section 7's buffer-size rule, which
+    // Emberdrive failed by 0.296 of full scale before the control loop was cut
+    // at the chunk boundary rather than the callback's.
+    auto p = bareStack (StackMode::shepard, 5);
+
+    p.shepardRate = 0.7;
+    p.voice.amp.decay = 6.0;
+    p.voice.amp.sustain = 1.0;
+    p.voice.spreadA = 0.6;
+    p.voice.shepardRetrigger = true;
+
+    const int samples = static_cast<int> (kRate * 3.0);
+
+    auto small = std::make_unique<Engine>();
+    auto large = std::make_unique<Engine>();
+
+    small->prepare (kRate, 512);
+    large->prepare (kRate, 512);
+
+    const auto a = play (*small, p, 55, samples, 64);
+    const auto b = play (*large, p, 55, samples, 512);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < a.size(); ++i)
+        worst = std::max (worst, std::abs (a[i] - b[i]));
+
+    std::printf ("    64 against 512 samples, retrigger on:  worst |difference| %.3g\n", worst);
+
+    CHECK (worst == 0.0);
+}
+
+TEZLA_TEST (a_retriggered_shepard_note_starts_quietly_enough_not_to_click)
+{
+    // Playing a second note into a held one must not produce a discontinuity.
+    //
+    // **This does not discriminate the design**, and the comment used to claim
+    // it did. Break-checked: resetting the shared clock on a note-on -- the
+    // alternative this design rejects -- leaves this test green, because the
+    // oscillators' phases stay continuous through a reset and only their
+    // *pitches* jump. What defends the design is
+    // `a_note_on_never_moves_the_shared_shepard_clock_even_with_retrigger_on`.
+    // This one is still worth having for what it does cover: that the join
+    // itself is clean.
+    auto p = bareStack (StackMode::shepard, 5);
+
+    p.shepardRate = 1.5;                 // fast, so the clock is far from zero
+    p.voice.amp.attack = 0.001;
+    p.voice.amp.decay = 8.0;
+    p.voice.amp.sustain = 1.0;
+    p.voice.shepardRetrigger = true;
+
+    auto engine = std::make_unique<Engine>();
+    engine->prepare (kRate, 512);
+    engine->setParameters (p);
+
+    Buffers settle (64);
+    engine->process (settle.pointers, 64);
+
+    engine->noteOn (48, 1.0);
+
+    Buffers block (128);
+
+    // Two seconds of climbing, so the clock is nowhere near a turn boundary.
+    for (int i = 0; i < static_cast<int> (kRate * 2.0 / 128.0); ++i)
+        engine->process (block.pointers, 128);
+
+    // The largest step the held note takes on its own, as the reference.
+    double heldStep = 0.0;
+    double previous = 0.0;
+
+    for (int i = 0; i < 40; ++i)
+    {
+        std::fill (block.left.begin(), block.left.end(), 0.0);
+        std::fill (block.right.begin(), block.right.end(), 0.0);
+        engine->process (block.pointers, 128);
+
+        for (int n = 0; n < 128; ++n)
+        {
+            const double value = block.left[static_cast<std::size_t> (n)];
+            heldStep = std::max (heldStep, std::abs (value - previous));
+            previous = value;
+        }
+    }
+
+    // Now add a note, and measure the same thing across the join.
+    engine->noteOn (60, 1.0);
+
+    double joinStep = 0.0;
+
+    for (int i = 0; i < 40; ++i)
+    {
+        std::fill (block.left.begin(), block.left.end(), 0.0);
+        std::fill (block.right.begin(), block.right.end(), 0.0);
+        engine->process (block.pointers, 128);
+
+        for (int n = 0; n < 128; ++n)
+        {
+            const double value = block.left[static_cast<std::size_t> (n)];
+            joinStep = std::max (joinStep, std::abs (value - previous));
+            previous = value;
+        }
+    }
+
+    std::printf ("    held note max step %.4f,  across a retriggered note-on %.4f\n",
+                 heldStep, joinStep);
+
+    // The new note legitimately adds signal, so the step grows -- what must
+    // not happen is a discontinuity, which for a stack jerked back to phase 0
+    // would be a large multiple rather than a small one.
+    CHECK (joinStep < heldStep * 4.0);
+}
