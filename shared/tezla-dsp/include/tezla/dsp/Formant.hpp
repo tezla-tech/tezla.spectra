@@ -68,6 +68,37 @@
 // constant. Sweep N from the sequencer and the overtone line can only land in
 // tune, because there is nowhere else for it to land.
 //
+// **A tract that is the wrong size.** A tube's resonances scale inversely with
+// its length -- F_n = (2n-1)c / 4L for a uniform one -- so **one ratio applied
+// to all three centres is the same tract, a different size**. Not a pitch
+// shift, not a formant effect: the played pitch does not move at all, only the
+// size of the thing making the sound, which is exactly why it reads as a
+// creature rather than as a transposition.
+//
+// Peterson & Barney measured an adult male tract, about 17.5 cm. So the control
+// is that length divided by the ratio: 0.5 is a 35 cm throat, 2.0 is 8.75 cm,
+// and every human sits between -- an adult female tract is about 1.2 on it and
+// a small child about 1.6. The range runs well past a person at both ends and
+// passes through everybody on the way.
+//
+// Two things fall out of it being physics rather than an effect:
+//
+// **The bandwidths scale by the same ratio, so Q is preserved.** A longer tube
+// is the same tube, longer; its resonator quality is a property of its shape
+// rather than of its size. Holding the bandwidths fixed instead would make a
+// big throat sharper and a small one blurrier -- a second effect nobody asked
+// for, riding on the first.
+//
+// **The amplitudes are untouched**, and the paper argues that case itself: it
+// averaged its relative amplitudes across men, women and children because the
+// measurements "did not show decided differences between classes of speakers",
+// which is a statement that formant balance is size-independent.
+//
+// It is applied **before** the harmonic lock, so the lock still lands exactly
+// on its partial and overtone singing stays in tune. After it, a resized tract
+// would knock the resonance off the harmonic and silently break the one thing
+// the lock exists to guarantee.
+//
 // **An anti-formant.** A nasal is not a vowel with different peaks; it is a
 // vowel with a *zero*. The nasal cavity is a side branch, and a side branch
 // cancels rather than resonates. Every synth vowel filter I know of has only
@@ -198,6 +229,23 @@ public:
 
     static constexpr double kMaximumCutoffFraction = 0.45;
 
+    /// The smallest and largest the tract may be scaled to, and the length the
+    /// paper's table was measured on, in centimetres.
+    ///
+    /// Nothing clamps at either end at any supported rate: the highest formant
+    /// is 3010 Hz ("ee"'s third), which at 2.0 is 6020 Hz against a ceiling of
+    /// 19845 at 44.1 kHz; the lowest is 270 Hz, which at 0.5 is 135 against a
+    /// floor of 20. A test says so at 44.1 kHz, where it is tightest.
+    static constexpr double kNarrowestTract = 0.5;
+    static constexpr double kWidestTract = 2.0;
+    static constexpr double kReferenceTractCm = 17.5;
+
+    /// What the control means in centimetres, for the tooltip and the panel.
+    [[nodiscard]] static constexpr double tractLengthCm (double tract) noexcept
+    {
+        return kReferenceTractCm / (tract > 0.0 ? tract : 1.0);
+    }
+
     void prepare (double sampleRate) noexcept
     {
         sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -235,6 +283,28 @@ public:
     }
 
     [[nodiscard]] double getMorph() const noexcept { return morph_; }
+
+    /// How big the throat is: the ratio all three formants are scaled by.
+    ///
+    /// **1.0 is bit-exactly neutral, with no branch** -- multiplying by exactly
+    /// 1.0 changes no bit, which is what CLAUDE.md section 7 asks of a stage
+    /// permanently in the path, and a test proves it with a signal rather than
+    /// with this sentence. Above 1 the tract is shorter and everything about it
+    /// smaller; below 1 it is longer. See the header for the physics.
+    void setTract (double tract) noexcept
+    {
+        const double wanted = std::clamp (tract, kNarrowestTract, kWidestTract);
+
+        // Guarded: a caller pushes this every control chunk and below is three
+        // `tan` calls and a `pow`.
+        if (isExactly (wanted, tract_))
+            return;
+
+        tract_ = wanted;
+        updateCoefficients();
+    }
+
+    [[nodiscard]] double getTract() const noexcept { return tract_; }
 
     /// 0 is the widest, 1 the sharpest.
     void setSharpness (double sharpness) noexcept
@@ -460,7 +530,10 @@ private:
 
             // Geometric, so half way between "ee" and "eh" is 378 Hz and not
             // 400 -- which is where a mouth puts it.
-            double frequency = a * std::pow (b / a, blend);
+            //
+            // ...and then resized. Before the lock, deliberately: see the
+            // header. At 1.0 this multiplication changes no bit.
+            double frequency = a * std::pow (b / a, blend) * tract_;
 
             // **The harmonic lock.** The three resonances move onto harmonics
             // N, N+1 and N+2 of the played note. Consecutive rather than the
@@ -478,7 +551,9 @@ private:
                 frequency *= std::pow (partial / frequency, lockAmount);
             }
 
-            const double bandwidth = kBandwidths[static_cast<std::size_t> (index)] * width
+            // The bandwidth is resized with the tract, so Q survives -- a
+            // longer tube is the same tube, longer.
+            const double bandwidth = kBandwidths[static_cast<std::size_t> (index)] * width * tract_
                                        * std::pow (kLockedNarrowing, lockAmount);
 
             band.frequency = std::clamp (frequency, 20.0, sampleRate_ * kMaximumCutoffFraction);
@@ -518,6 +593,9 @@ private:
     double sampleRate_ { 48000.0 };
 
     double morph_ { 0.0 };
+
+    /// How big the throat is -- see `setTract`. Exactly 1.0 is neutral.
+    double tract_ { 1.0 };
     double sharpness_ { 0.5 };
     double mix_ { 0.0 };
 

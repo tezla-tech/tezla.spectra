@@ -525,7 +525,7 @@ this file and CLAUDE.md.
 | H0 plan | done |
 | H1 shared DSP — `setRankOffsets`, `Shepard`, `SlowWalk` | done |
 | H2 Stack | done |
-| H3 Tract | pending |
+| H3 Tract | done |
 | H4 Sag | pending |
 | H5 close-out | pending |
 

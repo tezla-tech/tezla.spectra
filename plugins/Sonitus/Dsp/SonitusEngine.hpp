@@ -374,6 +374,11 @@ struct EngineParameters
     double formantSharpness { 0.5 };
     double formantMix { 0.0 };
 
+    /// **Tract** -- how big the throat is, as a ratio on all three formants.
+    /// The physics of tract length, so 0.5 is a 35 cm throat and 2.0 an 8.75 cm
+    /// one. Exactly 1.0 is bit-exactly neutral. See `Formant.hpp`.
+    double formantTract { 1.0 };
+
     /// The overtone-singing controls. All neutral by default, so a patch saved
     /// before they existed reopens sounding the same.
     double formantHarmonic { 1.0 };

@@ -157,6 +157,43 @@ juce::NormalisableRange<float> bipolarSquaredRange (float maximum)
              } };
 }
 
+/// A range that is symmetric in *ratio* about 1.0 rather than in value.
+///
+/// Half travel is exactly 1.0, a quarter is the geometric mean of 1.0 and the
+/// minimum, and so on: the knob's two halves are mirror images to the ear,
+/// which linear travel between 0.5 and 2.0 is not (it would put 1.25 at the
+/// middle).
+juce::NormalisableRange<float> geometricRange (float minimum, float maximum)
+{
+    return { minimum, maximum,
+             [minimum, maximum] (float, float, float t)
+             {
+                 return minimum * std::pow (maximum / minimum, t);
+             },
+             [minimum, maximum] (float, float, float value)
+             {
+                 return std::log (value / minimum) / std::log (maximum / minimum);
+             },
+             [] (float low, float high, float value)
+             {
+                 return juce::jlimit (low, high, value);
+             } };
+}
+
+/// The size of the throat, shown as the ratio *and* the length it means -- the
+/// number is only legible once it is centimetres.
+juce::AudioParameterFloatAttributes tractAttributes()
+{
+    return juce::AudioParameterFloatAttributes()
+        .withStringFromValueFunction ([] (float value, int)
+        {
+            const double cm = dsp::Formant::tractLengthCm (static_cast<double> (value));
+
+            return juce::String (value, 2) + "x  (" + juce::String (cm, 1) + " cm)";
+        })
+        .withValueFromStringFunction ([] (const juce::String& text) { return text.getFloatValue(); });
+}
+
 /// Octaves per second, signed, with zero shown as "held" rather than 0.00 --
 /// the same reading LFO rate 0 already gets, and for the same reason: it is a
 /// deliberate setting, not the bottom of a range.
@@ -404,6 +441,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout SonitusProcessor::createPara
 
     layout.add (std::make_unique<Boolean> (
         juce::ParameterID { ids::shepardSync, kSchemaV8 }, "Shepard sync", false));
+
+    // **Tract** -- the size of the throat the vowel filter is modelling, as a
+    // ratio on all three formants. Geometric about 1.0, because it is a
+    // frequency ratio and the ear hears ratios; exactly 1.0 is neutral and is
+    // bit-exact, so a project saved before phase 5 sounds identical.
+    layout.add (std::make_unique<Parameter> (
+        juce::ParameterID { ids::tract, kSchemaV8 }, "Tract",
+        geometricRange (static_cast<float> (dsp::Formant::kNarrowestTract),
+                        static_cast<float> (dsp::Formant::kWidestTract)),
+        1.0f, tractAttributes()));
 
     layout.add (std::make_unique<Choice> (
         juce::ParameterID { ids::shepardDiv, kSchemaV8 }, "Shepard division",
@@ -1431,6 +1478,8 @@ void SonitusProcessor::pullParameters()
     p.shepardRate = valueOf (state_, ids::shepardRate);
     p.shepardSync = valueOf (state_, ids::shepardSync) > 0.5f;
     p.shepardDivision = indexOf (state_, ids::shepardDiv);
+
+    p.formantTract = valueOf (state_, ids::tract);
 
     for (int macro = 0; macro < 4; ++macro)
         p.macros[static_cast<std::size_t> (macro)] = valueOf (state_, ids::macro (macro));

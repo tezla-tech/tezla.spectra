@@ -13,7 +13,10 @@
 #include <numbers>
 #include <vector>
 
+#include <cstdio>
+
 #include <tezla/dsp/Formant.hpp>
+#include <tezla/dsp/SmallRandom.hpp>
 
 using namespace tezla::dsp;
 
@@ -724,4 +727,238 @@ TEZLA_TEST (the_anti_formant_cuts_a_hole_and_is_bit_exactly_out_at_zero)
     const double farCut = dbOf (magnitudeAt (formant, far, rate));
 
     CHECK (std::abs (farCut - farOpen) < 3.0);
+}
+
+// ---------------------------------------------------------------------------
+// Tract -- one ratio that resizes the throat
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (moving_the_tract_away_and_back_restores_the_filter_exactly)
+{
+    // **What this can and cannot prove, stated because the first draft got it
+    // wrong.** It was written as "a tract of 1.0 is bit-exact" and compared a
+    // Formant told to be neutral against one never told -- but there is no
+    // branch around the tract, so both objects run the identical code and no
+    // perturbation of it can make them differ. A break-check found that: two
+    // separate one-part-in-1e12 errors left the test passing, because they
+    // applied to both sides.
+    //
+    // "Neutral is bit-exact **against the code before Tract existed**" is a
+    // claim about two builds, and only a render compared between them can make
+    // it -- the commit quotes that hash. What a unit test can hold is the round
+    // trip: a filter moved away from 1.0 and back must be the filter that never
+    // moved, sample for sample. That catches a setter that stores something
+    // other than what it was given, which is the failure this arithmetic is
+    // actually exposed to.
+    constexpr double kRate = 48000.0;
+    constexpr std::size_t kSamples = 8000;
+
+    for (const double morph : { 0.0, 0.37, 1.0 })
+        for (const double sharpness : { 0.0, 0.5, 1.0 })
+            for (const double lock : { 0.0, 0.6 })
+            {
+                Formant untouched, told;
+
+                for (Formant* f : { &untouched, &told })
+                {
+                    f->prepare (kRate);
+                    f->setMorph (morph);
+                    f->setSharpness (sharpness);
+                    f->setMix (1.0);
+                    f->setNoteHz (110.0);
+                    f->setHarmonicLock (lock);
+                    f->setNotchDepth (0.4);
+                    f->setNotchHz (1500.0);
+                }
+
+                // Away, and back. The setter's guard refuses the second call
+                // if it stores anything but exactly what it was handed.
+                told.setTract (0.61);
+                told.setTract (1.7);
+                told.setTract (1.0);
+
+                SmallRandom random { 0x51ce1234ull };
+
+                std::size_t differing = 0;
+
+                for (std::size_t i = 0; i < kSamples; ++i)
+                {
+                    const double x = random.bipolar();
+
+                    double aLeft = x, aRight = x;
+                    double bLeft = x, bRight = x;
+
+                    untouched.process (aLeft, aRight);
+                    told.process (bLeft, bRight);
+
+                    if (aLeft != bLeft || aRight != bRight)
+                        ++differing;
+                }
+
+                CHECK (differing == 0);
+            }
+}
+
+TEZLA_TEST (the_tract_scales_the_formants_and_leaves_their_q_alone)
+{
+    // The physics: a tube's resonances go as 1/length, and its resonator
+    // quality is a property of its shape rather than of its size. So the
+    // centres move by the ratio and Q does not move at all -- holding the
+    // bandwidths fixed instead would make a big throat sharper and a small one
+    // blurrier, which is a second effect nobody asked for.
+    Formant reference;
+    reference.prepare (48000.0);
+    reference.setMorph (0.5);
+    reference.setSharpness (0.6);
+
+    for (const double tract : { 0.5, 0.8, 1.25, 2.0 })
+    {
+        Formant sized;
+        sized.prepare (48000.0);
+        sized.setMorph (0.5);
+        sized.setSharpness (0.6);
+        sized.setTract (tract);
+
+        std::printf ("    tract %.2fx (%.1f cm):", tract, Formant::tractLengthCm (tract));
+
+        for (int band = 0; band < Formant::kFormants; ++band)
+        {
+            std::printf ("  F%d %.0f->%.0f Hz", band + 1,
+                         reference.formantHz (band), sized.formantHz (band));
+
+            CHECK_NEAR (sized.formantHz (band), reference.formantHz (band) * tract, 1.0e-6);
+            CHECK_NEAR (sized.formantQ (band), reference.formantQ (band), 1.0e-9);
+        }
+
+        std::printf ("\n");
+
+        // ...and the relative loudness of the three peaks is untouched, which
+        // is what the paper's own averaging across men, women and children
+        // says it should be.
+        for (int band = 0; band < Formant::kFormants; ++band)
+            CHECK_NEAR (sized.formantAmplitudeDb (band),
+                        reference.formantAmplitudeDb (band), 1.0e-9);
+    }
+}
+
+TEZLA_TEST (the_tract_moves_the_peaks_where_the_ratio_says)
+{
+    // Measured on the response rather than read off the coefficients, because
+    // the coefficients are what is being tested.
+    constexpr double kRate = 48000.0;
+
+    const auto peakNear = [] (Formant& formant, double aroundHz)
+    {
+        // A slow sweep either side, taking the RMS of the output: the peak of
+        // that is where the resonance is.
+        double best = -1.0;
+        double at = aroundHz;
+
+        for (double hz = aroundHz * 0.6; hz < aroundHz * 1.7; hz *= 1.01)
+        {
+            Formant probe = formant;
+            probe.reset();
+
+            double sum = 0.0;
+
+            const auto samples = static_cast<std::size_t> (kRate * 0.08);
+
+            for (std::size_t i = 0; i < samples; ++i)
+            {
+                const double phase = 6.283185307179586 * hz * static_cast<double> (i) / kRate;
+
+                double left = std::sin (phase), right = left;
+                probe.process (left, right);
+
+                if (i > samples / 2)
+                    sum += left * left;
+            }
+
+            if (sum > best)
+            {
+                best = sum;
+                at = hz;
+            }
+        }
+
+        return at;
+    };
+
+    Formant reference;
+    reference.prepare (kRate);
+    reference.setMorph (1.0);        // "oo": F1 300, F2 870, F3 2240
+    reference.setSharpness (0.9);
+    reference.setMix (1.0);
+
+    Formant sized = reference;
+    sized.setTract (0.6);
+
+    const double before = peakNear (reference, reference.formantHz (0));
+    const double after = peakNear (sized, sized.formantHz (0));
+
+    std::printf ("    first formant measured: %.0f Hz -> %.0f Hz at 0.60x (ratio %.3f)\n",
+                 before, after, after / before);
+
+    CHECK_NEAR (after / before, 0.6, 0.03);
+}
+
+TEZLA_TEST (the_harmonic_lock_still_wins_under_a_resized_tract)
+{
+    // Tract is applied *before* the lock, so at full lock the resonance still
+    // lands exactly on its partial. Applied after, a resized tract would knock
+    // it off the harmonic and quietly break the one thing the lock guarantees.
+    Formant formant;
+    formant.prepare (48000.0);
+    formant.setMorph (0.5);
+    formant.setNoteHz (110.0);
+    formant.setHarmonic (8.0);
+    formant.setHarmonicLock (1.0);
+
+    for (const double tract : { 0.5, 1.0, 2.0 })
+    {
+        formant.setTract (tract);
+
+        for (int band = 0; band < Formant::kFormants; ++band)
+            CHECK_NEAR (formant.formantHz (band), 110.0 * (8.0 + band), 1.0e-6);
+    }
+
+    // Partway, the tract still colours where the resonance sits -- it is a
+    // geometric blend, not a switch.
+    formant.setHarmonicLock (0.5);
+
+    formant.setTract (1.0);
+    const double neutral = formant.formantHz (0);
+
+    formant.setTract (0.5);
+    const double resized = formant.formantHz (0);
+
+    std::printf ("    at half lock, 1.00x puts F1 at %.0f Hz and 0.50x at %.0f Hz\n",
+                 neutral, resized);
+
+    CHECK (resized < neutral * 0.95);
+}
+
+TEZLA_TEST (no_tract_setting_reaches_a_clamp_at_any_supported_rate)
+{
+    // The highest formant is "ee"'s third at 3010 Hz, which at 2.0x is 6020
+    // against a ceiling of 0.45 * 44100 = 19845; the lowest is 270 Hz, which at
+    // 0.5x is 135 against a floor of 20. Checked at 44.1 kHz, where the ceiling
+    // is tightest, across the whole vowel list.
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+        for (const double tract : { Formant::kNarrowestTract, Formant::kWidestTract })
+            for (int step = 0; step <= 8; ++step)
+            {
+                Formant formant;
+                formant.prepare (rate);
+                formant.setMorph (step / 8.0);
+                formant.setTract (tract);
+
+                for (int band = 0; band < Formant::kFormants; ++band)
+                {
+                    const double hz = formant.formantHz (band);
+
+                    CHECK (hz > 20.0);
+                    CHECK (hz < rate * Formant::kMaximumCutoffFraction - 1.0);
+                }
+            }
 }

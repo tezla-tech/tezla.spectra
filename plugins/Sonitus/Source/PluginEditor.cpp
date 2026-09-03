@@ -4077,7 +4077,7 @@ void SonitusEditor::buildPages()
         "How many allpass sections, 2 to 16. Each pair makes one notch, so 8 stages is 4 notches. "
         "Only in Phase mode.");
 
-    mangle->addHeading ("VOWEL -- the comb, shaped like a mouth", 3);
+    mangle->addHeading ("VOWEL -- the comb, shaped like a mouth", 4);
 
     mangle->addKnob (ids::formantMorph, "Vowel",
         "Morphs across ee - eh - ah - oh - oo. Three resonant peaks at the frequencies a human "
@@ -4087,6 +4087,22 @@ void SonitusEditor::buildPages()
     mangle->addKnob (ids::formantSharp, "Sharpness",
         "How narrow the three peaks are. The gain is divided by the Q, so this sharpens the "
         "vowel rather than turning it up.");
+
+    mangle->addKnob (ids::tract, "Tract",
+        "**How big the throat is.** A tube's resonances scale inversely with its length, so one "
+        "ratio on all three formants *is* the physics of a longer or shorter vocal tract. The "
+        "pitch does not move at all -- only the size of the thing making the sound, which is why "
+        "it reads as a creature rather than as a pitch shift.\n\n"
+        "The vowel table was measured on an adult male tract, about 17.5 cm, and the readout "
+        "gives the length each setting means: 0.50x is a **35 cm** throat, 2.00x is **8.75 cm**. "
+        "An adult woman sits near 1.2 and a small child near 1.6, so the range runs well past a "
+        "person at both ends and passes through everybody on the way.\n\n"
+        "Q is preserved -- the bandwidths are resized with the formants, because a longer tube is "
+        "the same tube -- and the relative loudness of the three peaks is not touched, which the "
+        "source table supports: it averaged its amplitudes across men, women and children because "
+        "they did not differ.\n\n"
+        "Applied *before* Harmonic lock, so the lock still lands exactly on its partial and "
+        "overtone singing stays in tune. 1.00x is bit-exactly neutral.");
 
     mangle->addKnob (ids::formantMix, "Vowel mix",
         "Dry against vowelled. At 0 the formant filter is bit-exactly out of the path.");

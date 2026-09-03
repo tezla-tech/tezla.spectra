@@ -321,6 +321,15 @@ void Engine::applyGlobalModulation() noexcept
     formant_.setMorph (std::clamp (
         active_.formantMorph + globalModulationFor (GlobalDestination::formantMorph), 0.0, 1.0));
 
+    // The size of the throat, modulated in **octaves** like every other
+    // frequency here -- it is a ratio on three frequencies, so an additive
+    // sweep would crawl at one end and leap at the other. Two octaves is the
+    // whole 0.5..2.0 range reachable from anywhere in it.
+    static constexpr double kTractOctaves = 2.0;
+
+    formant_.setTract (active_.formantTract
+        * std::pow (2.0, kTractOctaves * globalModulationFor (GlobalDestination::tract)));
+
     // Which partial the lock selects. Additive in *harmonic number* rather than
     // in octaves, because the harmonic series is what it walks: a depth of 1
     // reaches sixteen partials, which at full is two octaves of overtone line.
