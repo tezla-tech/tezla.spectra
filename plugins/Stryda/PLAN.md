@@ -347,7 +347,7 @@ first `pending` row.**
 | phase | status |
 |---|---|
 | F0 plan + registry + references + Ictus pause + roadmap | done |
-| F1 `FmBandwidth` + `tezla-measure stryda`, four tables | pending |
+| F1 `FmBandwidth` + `tezla-measure stryda`, four tables | done |
 | F2 `FmOperator` + `OperatorMatrix` + voice + engine + index cap | pending |
 | F3 minimal JUCE layer, rig build + ear round | pending |
 | F4 `PhaseShaper`, exponential cells, formant operator, key scaling | pending |
@@ -356,6 +356,76 @@ first `pending` row.**
 | F7 vowel lane + mangle chain | pending |
 | F8 modulation layer + dice gate | pending |
 | F9 editor + close-out | pending |
+
+**Measured at F1** (`tezla-measure stryda`, `tezla-tests`; the reference
+operator is the published closed form written out as plain arithmetic, so what
+is measured is the mathematics the predictor claims to predict):
+
+| claim | figure |
+|---|---|
+| predictor vs the rendered -80 dB edge, 27 combinations (55/220/880 Hz x ratios 1/3/7 x indices 1/4/16 rad) | **+0 Hz on every row** — exact to the bin |
+| the same sweep as a suite test, 18 combinations at 393216 Hz | **+0 Hz**, bin width 6.0 Hz |
+| Kapteyn feedback coefficients vs a numerical solve of Kepler's equation, beta 0.25–0.95, harmonics 1–9 | **2.665e-15** |
+| `besselJn` sum rule `J_0^2 + 2*sum J_n^2 = 1` at x = 100.53 | **1.000000000000** (the fixed 256-point rule reads 1.770586) |
+| `besselI` against the ModFM paper's own worked number `I_0(5 ln2)` | **7.16882** vs the paper's 7.17 |
+| alias floor, index 4 rad, ratio 7, 48 kHz: x1 / x2 | −63.0 / **−180.3 dB** |
+| alias floor, index 16 rad, ratio 7, 48 kHz: x1 / x2 / x4 | +2.6 / −75.8 / **−114.6 dB** |
+| alias floor, index 64 rad, ratio 7, 48 kHz: x1 / x2 / x4 / x8 | +9.8 / +7.7 / +6.2 / **−112.9 dB** |
+| feedback, measured -80 dB edge at beta 0.25 / 0.9 / 1.0 / 6.28 rad (192 kHz) | 2637 / 18896 / 25928 / **95997 Hz** (Nyquist) |
+| feedback peak output across the whole range Oscillator accepts | **1.000**, bounded everywhere |
+| Character 0 -> 1 at index 5: spectral centroid | 4.14 -> **2.69** harmonics |
+| Character 0 -> 1: partial-order reversals (the Bessel oscillation) | 2 -> **0** |
+| index needed at Character 1 to match Character 0's centroid | 11.12 vs 5.00 — **+122 %** |
+
+**Three things the measurement decided, and one it corrected:**
+
+1. **The house Auto policy is right, and it is not sufficient on its own.** x4
+   at 48 kHz holds a hard patch (index 16 rad, ratio 7) at −114.6 dB, comfortably
+   inside section 7's −60 dB. But at index 64 rad even x4 reads **+6.2 dB** —
+   the aliasing is louder than the signal — and only x8 recovers. Oversampling
+   alone cannot cover the top of the index range, which is what makes the index
+   cap a requirement rather than a convenience.
+2. **The feedback model saturates exactly where it should.** Above beta = 1
+   radian the measured edge is Nyquist itself at every value up to the 6.28
+   radians `Oscillator::kMaxFeedback` allows, so "wide, and no longer predicted"
+   is the literal truth rather than a hedge. The operator stays bounded at 1.000
+   throughout, so section 7's undefeatable bound holds.
+3. **The paper's ModFM claims hold, with one number of ours that differs.** The
+   partial-order reversals fall from 2 to 0 across Character, which is exactly
+   the "smoothly from one to the next, without the unexpected appearance of
+   insignificant partials" the DAFx-08 paper describes. The paper also says
+   ModFM needs "a distortion index 50 % higher" for matched steady-state
+   brightness; measured here by spectral centroid at index 5 it is **+122 %**.
+   Both can be true — theirs is a listening judgement at their operating point,
+   ours is a centroid at ours — and the figure quoted anywhere in this project
+   is ours, with the metric named.
+
+**What F1 corrected in the design**, found by measurement and not by review:
+`significantOrder` first compared `|J_n(I)|` against a level relative to
+**unity**, which read the predictor **4 % short** — up to 6152 Hz at 880 Hz,
+ratio 7, index 16. FM spreads energy, so the loudest partial at index 16 is
+about 0.21 rather than 1, and "80 dB below the peak" is some 13 dB lower in
+absolute terms than "80 dB below unity". Normalising by the peak took the error
+to zero on every row. Under-estimating is the one direction a bandwidth bound
+may not err in.
+
+**Two instrument bugs found before any number was trusted** (CLAUDE.md section
+10, "check the instrument before trusting it"):
+
+- `analyseHarmonics` is the wrong tool for an FM spectrum at a ratio like 2:7,
+  because the true fundamental — `f_c/2` — **has no energy in it**: the partials
+  land on every odd multiple of it and none of the even ones. Dividing by an
+  absent fundamental produced alias figures of **+160 and +327 dB**. The
+  replacement generates the sideband set from the closed form instead, negative
+  frequencies reflected as Chowning describes.
+- The decimator's halfband FIR has to fill before its output means anything.
+  47 host samples of ramp inside a 65536-point transform is
+  `10*log10(47/65536)` = **−31.4 dB** of broadband energy, and it read as a
+  *uniform* −31 dB alias floor at every factor and every rate — which looks
+  exactly like a real result and would have been quoted as one. The render now
+  discards 4096 host samples first.
+
+---
 
 **Risks held open**, to be answered by measurement rather than argument:
 
