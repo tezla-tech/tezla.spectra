@@ -109,7 +109,8 @@ tooltip reads the session's actual rate and says what Auto is doing right now.
 
 ### The panel is paged
 
-**OPERATORS · MATRIX · VOICE · SEQ · TUNING.** Each page gets the whole window,
+**OPERATORS · MATRIX · VOICE · SEQ · MANGLE · ADV · MOD · TUNING.** Each page
+gets the whole window,
 so the window only has to fit the largest page rather than the sum of them, and
 each page lays its rows out from the height it is given — a small window gets
 denser, not clipped. Minimum 860 × 520.
@@ -226,6 +227,54 @@ Two things about it are worth knowing:
 - **Crush and downsample alias on purpose.** They run at the host rate with no
   oversampling and no antialiasing at all: the folded-back images *are* the
   sound. Everything else that generates harmonics is antialiased.
+
+### The modulation layer
+
+Two shared **ADV envelopes**, two **LFOs**, four **macros**, and eight slots of
+source → destination → amount. That is 146 parameters and it is skipped
+entirely — the destinations are not read at all — unless a slot has **all
+three** of a source, a destination and a non-zero amount. A patch that uses none
+of it sounds bit-for-bit like one from before the layer existed.
+
+**ADV** (its own page) is a 16-breakpoint envelope with a sustain point and a
+loop region, drawn with the DSP's own tension arithmetic so what you see is what
+plays. Click a breakpoint to aim the three knobs beneath at it. Two of them
+rather than one per operator: six would have been 288 parameters for a feature
+used on two operators at a time, so each operator *chooses* its envelope source
+instead.
+
+**LFOs** run free or lock to the bar, and **Retrigger** is the interesting
+switch: off, an LFO free-runs, so two notes played a bar apart sit at different
+points in its cycle — which is what makes a bass line vary rather than repeat.
+
+**Macros** are knobs with no job until a slot gives them one. Assign the same
+macro to four destinations with different amounts, some negative, and one hand
+movement opens the filter, deepens the matrix and detunes an operator together.
+
+The **destination list holds continuous controls only**, by construction: a
+choice or a switch reconfigures rather than adjusts, so modulating one would
+mean rebuilding a filter graph per control chunk. **Matrix depth** scales every
+live cell together rather than adding to them, which is why it can never switch
+on a path the patch did not ask for.
+
+Two things that took work and are worth knowing:
+
+- **The index cap answers the modulated numbers, not the patch.** A slot that
+  multiplies the matrix depth multiplies the sideband ladder with it, and a cap
+  resolved from the patch would be protecting a spectrum nobody is hearing.
+  Measured: a patch whose own index needs no capping resolves to a scale of
+  exactly 1.0; the same patch with a slot at matrix depth ×25 resolves to 0.320.
+- **A sequencer step edge does not run the modulators.** The engine refreshes a
+  voice twice inside a chunk that contains a step edge, and letting the extra
+  refresh advance an LFO would make its rate depend on the sequencer's division
+  — a 1/32 sequence at 174 BPM ran every LFO in the patch fast.
+
+**Character only does something on an operator that something else modulates.**
+That is the mathematics rather than a limitation: Character is the ModFM
+exponential `exp(r·k·cos(ω_m t) − r·k)`, and `k` is the index *arriving* at this
+operator. Nothing arriving means k = 0, the exponential is 1, and the operator
+is a plain sine at every Character setting. Turn CHAR on a carrier nobody
+modulates and you will hear exactly nothing.
 
 ### The index cap, and why it is Off by default
 

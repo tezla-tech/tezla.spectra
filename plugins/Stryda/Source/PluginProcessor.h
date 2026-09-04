@@ -150,6 +150,37 @@ inline constexpr auto compRatio     = "compRatio";
 inline constexpr auto compAttack    = "compAttack";
 inline constexpr auto compRelease   = "compRelease";
 inline constexpr auto compMakeup    = "compMakeup";
+
+// ---- F8, appended at schema 6 ---------------------------------------------
+//
+// The generated ids are as frozen as the literals: `e<n>p<m>{Time,Level,Tens}`
+// for an ADV envelope's breakpoints, `l<n><Name>` for an LFO, `mac<n>` for a
+// macro, and `mod<n>{Src,Dst,Amt}` for a slot.
+
+[[nodiscard]] inline juce::String advPoint (int envelope, int point, const char* field)
+{
+    return "e" + juce::String (envelope + 1) + "p" + juce::String (point + 1) + field;
+}
+
+[[nodiscard]] inline juce::String adv (int envelope, const char* field)
+{
+    return "e" + juce::String (envelope + 1) + field;
+}
+
+[[nodiscard]] inline juce::String lfo (int index, const char* field)
+{
+    return "l" + juce::String (index + 1) + field;
+}
+
+[[nodiscard]] inline juce::String macro (int index)
+{
+    return "mac" + juce::String (index + 1);
+}
+
+[[nodiscard]] inline juce::String modSlot (int index, const char* field)
+{
+    return "mod" + juce::String (index + 1) + field;
+}
 } // namespace ids
 
 /// Every parameter Stryda has ever had was born at one of these. A live
@@ -180,7 +211,12 @@ inline constexpr int kSchemaV4 = 4;
 /// transparent at. An F6 project is bit-identical.
 inline constexpr int kSchemaV5 = 5;
 
-inline constexpr int kStateSchemaVersion = kSchemaV5;
+/// F8: two ADV envelopes, two LFOs, four macros and eight modulation slots.
+/// Appended, and every slot's source and destination default to Off -- so the
+/// whole layer is skipped and an F7 project is bit-identical.
+inline constexpr int kSchemaV6 = 6;
+
+inline constexpr int kStateSchemaVersion = kSchemaV6;
 
 namespace choices
 {
@@ -210,6 +246,26 @@ inline const juce::StringArray ratioMode { "Free", "Harmonic", "Scale" };
 /// sequencer has a destination-less state that is not a magic number.
 inline const juce::StringArray seqTarget { "Off", "Op 1", "Op 2", "Op 3",
                                            "Op 4", "Op 5", "Op 6" };
+
+/// **Append-only**, and built from the frozen tables rather than retyped: a
+/// slot stores an index, so a list that drifts from `source::names` or
+/// `dest::names` repoints every saved modulation.
+[[nodiscard]] inline juce::StringArray fromTable (const char* const* names, int count)
+{
+    juce::StringArray list;
+
+    for (int i = 0; i < count; ++i)
+        list.add (names[i]);
+
+    return list;
+}
+
+inline const juce::StringArray modSources = fromTable (source::names, source::count);
+inline const juce::StringArray modDests = fromTable (dest::names, dest::count);
+
+/// **Append-only.** Matches `dsp::Lfo::Wave` index for index.
+inline const juce::StringArray lfoWave { "Sine", "Triangle", "Saw up", "Saw down",
+                                         "Square", "Random", "Smooth random" };
 } // namespace choices
 
 static_assert (static_cast<int> (RatioMode::free) == 0
@@ -360,6 +416,10 @@ private:
     dsp::KeyboardMap keyboardMap_ {};
     bool hasKeyboardMap_ { false };
     double concertPitchHz_ { 440.0 };
+
+    /// The host tempo from the last block, so a synced LFO can resolve its
+    /// division without every voice having to be told the tempo separately.
+    double lastBpm_ { 120.0 };
 
     juce::SpinLock tuningLock_;
     std::atomic<bool> tuningPending_ { false };

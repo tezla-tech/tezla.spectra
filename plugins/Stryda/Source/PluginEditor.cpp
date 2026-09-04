@@ -23,6 +23,9 @@ constexpr int kTabHeight = 30;
 /// The bandwidth readout on the matrix page.
 constexpr int kReadoutHeight = 74;
 
+/// The slot number down the left of each modulation row.
+constexpr int kSlotNumberWidth = 18;
+
 /// The braid row at the foot of the sequencer page.
 constexpr int kBraidHeight = 64;
 
@@ -47,6 +50,72 @@ struct BandPlates
     plates.filter = band.removeFromLeft (band.getWidth() * 47 / 100);
     plates.sub = band.removeFromLeft (band.getWidth() * 55 / 100);
     plates.unison = band;
+
+    return plates;
+}
+
+/// The MOD page's three regions, and the slot table's own grid, split once and
+/// used by both `paintMod` and `layoutMod`.
+///
+/// Same reason as `splitBand`: a plate drawn in one place and laid out from
+/// another arithmetic is how a knob ends up half off its own background. Here
+/// it matters more, because the row numbers and column headings are *painted*
+/// while the boxes under them are *laid out*.
+struct ModPlates
+{
+    juce::Rectangle<int> lfo[2];
+    juce::Rectangle<int> macros;
+    juce::Rectangle<int> matrix;
+
+    /// The slot table: `columns` strips of `perColumn` rows, each `rowHeight`
+    /// tall, starting under a heading row.
+    juce::Rectangle<int> table;
+    int columns { 2 };
+    int perColumn { 4 };
+    int rowHeight { 34 };
+    int headingHeight { 16 };
+};
+
+[[nodiscard]] ModPlates splitMod (juce::Rectangle<int> area)
+{
+    ModPlates plates;
+
+    // **The table is sized first and the rest goes to the LFOs.** Splitting by
+    // a percentage left the matrix plate half empty on a tall window while the
+    // LFO lamps were squeezed into 24 px -- the rows are capped, so the plate
+    // should be too.
+    const int perColumn = area.getWidth() >= 840 ? 4 : kNumSlots;
+    const int rows = perColumn;
+    const int wanted = ui::design::kValueHeight + 6 + 16 + rows * 40 + 16;
+
+    auto top = area.removeFromTop (
+        juce::jmax (area.getHeight() * 34 / 100, area.getHeight() - wanted - kMargin));
+    area.removeFromTop (kMargin);
+
+    auto lfoArea = top.removeFromLeft (top.getWidth() * 62 / 100);
+    top.removeFromLeft (kMargin);
+
+    plates.lfo[0] = lfoArea.removeFromLeft (lfoArea.getWidth() / 2);
+    lfoArea.removeFromLeft (6);
+    plates.lfo[1] = lfoArea;
+    plates.macros = top;
+    plates.matrix = area;
+
+    // A combo box below about 150 px cannot show a destination name, so a
+    // narrow panel gets one column of eight rather than two of four.
+    auto table = plates.matrix.reduced (8);
+    table.removeFromTop (ui::design::kValueHeight + 6);
+
+    plates.perColumn = perColumn;
+    plates.columns = kNumSlots / plates.perColumn;
+    plates.headingHeight = 16;
+
+    // **Capped, not divided.** Dividing the plate by the row count made a
+    // 120 px combo box on a tall window: a row is as tall as its controls
+    // need, and the spare height stays spare.
+    const int available = table.getHeight() - plates.headingHeight;
+    plates.rowHeight = juce::jlimit (26, 40, available / plates.perColumn);
+    plates.table = table;
 
     return plates;
 }
@@ -190,6 +259,226 @@ void MatrixGrid::resized()
 
         noise_[static_cast<std::size_t> (to)]->knob.setBounds (row.reduced (2));
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// The ADV envelope graph
+// ---------------------------------------------------------------------------
+
+AdvGraph::AdvGraph (StrydaProcessor& owner, int envelopeIndex, ui::Palette palette)
+    : processor_ (owner), envelope_ (envelopeIndex), palette_ (palette)
+{
+    setTooltip ("The shape this envelope plays, drawn with the DSP's own tension arithmetic -- "
+                "what you see is what it does. Click a breakpoint to aim the three knobs "
+                "underneath at it: TIME is how long the leg into it takes, LEVEL where it "
+                "arrives, CURVE how it bends on the way.\n\n"
+                "The ringed point is the sustain: the envelope holds there until the key is "
+                "released, then plays the rest. The shaded region is the loop, while LOOP is on.");
+}
+
+float AdvGraph::plain (const char* field, int point) const
+{
+    if (auto* parameter = processor_.getState().getParameter (ids::advPoint (envelope_, point, field)))
+        return parameter->convertFrom0to1 (parameter->getValue());
+
+    return 0.0f;
+}
+
+int AdvGraph::pointCount() const
+{
+    if (auto* parameter = processor_.getState().getParameter (ids::adv (envelope_, "Points")))
+        return juce::jlimit (2, dsp::MultiEnvelope::kMaxPoints,
+                             static_cast<int> (std::lround (
+                                 parameter->convertFrom0to1 (parameter->getValue()))));
+
+    return 2;
+}
+
+void AdvGraph::paint (juce::Graphics& g)
+{
+    const auto tint = ui::design::tintFor (palette_.accent, envelope_ == 0 ? 1 : 3);
+    auto plot = getLocalBounds().toFloat().reduced (6.0f);
+
+    g.setColour (palette_.background.darker (0.25f));
+    g.fillRoundedRectangle (plot, 4.0f);
+
+    const int count = pointCount();
+
+    // The x axis is the envelope's own length, so a short envelope fills the
+    // graph exactly as a long one does -- what is being read here is the
+    // shape, and a picture whose scale changes with a knob is unreadable.
+    double total = 0.0;
+
+    for (int p = 0; p < count; ++p)
+        total += static_cast<double> (plain ("Time", p));
+
+    total = std::max (total, 1.0e-4);
+
+    std::array<float, static_cast<std::size_t> (dsp::MultiEnvelope::kMaxPoints) + 1> xs {};
+    std::array<float, static_cast<std::size_t> (dsp::MultiEnvelope::kMaxPoints) + 1> ys {};
+
+    // Slot 0 is the gate's own start at level 0; slot p+1 is point p.
+    xs[0] = plot.getX();
+    ys[0] = plot.getBottom();
+
+    double elapsed = 0.0;
+
+    for (int p = 0; p < count; ++p)
+    {
+        elapsed += static_cast<double> (plain ("Time", p));
+
+        const auto i = static_cast<std::size_t> (p) + 1;
+        xs[i] = plot.getX() + plot.getWidth() * static_cast<float> (elapsed / total);
+        ys[i] = plot.getBottom() - plot.getHeight() * plain ("Level", p);
+    }
+
+    const int sustainIndex = [this]
+    {
+        if (auto* parameter = processor_.getState().getParameter (ids::adv (envelope_, "Sustain")))
+            return static_cast<int> (std::lround (
+                       parameter->convertFrom0to1 (parameter->getValue()))) - 1;
+
+        return 0;
+    }();
+
+    const int loopStart = [this]
+    {
+        if (auto* parameter = processor_.getState().getParameter (ids::adv (envelope_, "LoopStart")))
+            return static_cast<int> (std::lround (
+                       parameter->convertFrom0to1 (parameter->getValue()))) - 1;
+
+        return 0;
+    }();
+
+    const bool looping = [this]
+    {
+        if (auto* parameter = processor_.getState().getParameter (ids::adv (envelope_, "Loop")))
+            return parameter->getValue() > 0.5f;
+
+        return false;
+    }();
+
+    // The loop region first, under everything.
+    if (looping && loopStart < count - 1)
+    {
+        const float from = xs[static_cast<std::size_t> (juce::jlimit (0, count, loopStart + 1))];
+        const float to = xs[static_cast<std::size_t> (count)];
+
+        g.setColour (tint.withAlpha (0.10f));
+        g.fillRect (juce::Rectangle<float> (from, plot.getY(), std::max (1.0f, to - from),
+                                            plot.getHeight()));
+    }
+
+    // The curve, leg by leg, in the library's own arithmetic: a segment aims
+    // past its destination and approaches it (positive tension) or aims past
+    // its origin and recedes (negative), which is `dsp::Adsr::overshootFor`.
+    juce::Path curve;
+    curve.startNewSubPath (xs[0], ys[0]);
+
+    for (int p = 0; p < count; ++p)
+    {
+        const auto i = static_cast<std::size_t> (p);
+        const double from = p == 0 ? 0.0 : static_cast<double> (plain ("Level", p - 1));
+        const double to = static_cast<double> (plain ("Level", p));
+        const double tension = static_cast<double> (plain ("Tens", p));
+        const double distance = to - from;
+
+        const int steps = 24;
+
+        for (int s = 1; s <= steps; ++s)
+        {
+            const double u = static_cast<double> (s) / steps;
+            double level = to;
+
+            if (std::abs (distance) >= 1.0e-12)
+            {
+                const double overshoot = dsp::Adsr::overshootFor (tension);
+                const double ratio = (overshoot - 1.0) / overshoot;
+                const double target = tension < 0.0 ? from - distance * (overshoot - 1.0)
+                                                    : to + distance * (overshoot - 1.0);
+
+                level = target + (from - target) * std::pow (ratio, tension < 0.0 ? -u : u);
+            }
+
+            const float x = xs[i] + (xs[i + 1] - xs[i]) * static_cast<float> (u);
+            curve.lineTo (x, plot.getBottom() - plot.getHeight() * static_cast<float> (level));
+        }
+    }
+
+    g.setColour (tint.withAlpha (0.22f));
+    {
+        juce::Path filled (curve);
+        filled.lineTo (xs[static_cast<std::size_t> (count)], plot.getBottom());
+        filled.lineTo (plot.getX(), plot.getBottom());
+        filled.closeSubPath();
+        g.fillPath (filled);
+    }
+
+    g.setColour (tint);
+    g.strokePath (curve, juce::PathStrokeType (1.6f));
+
+    // The points, with the selected one filled and the sustain ringed.
+    for (int p = 0; p < count; ++p)
+    {
+        const auto i = static_cast<std::size_t> (p) + 1;
+        const float radius = p == selected_ ? 4.5f : 3.0f;
+
+        g.setColour (p == selected_ ? palette_.text : tint);
+        g.fillEllipse (xs[i] - radius, ys[i] - radius, radius * 2.0f, radius * 2.0f);
+
+        if (p == sustainIndex)
+        {
+            g.setColour (palette_.text.withAlpha (0.85f));
+            g.drawEllipse (xs[i] - 7.0f, ys[i] - 7.0f, 14.0f, 14.0f, 1.4f);
+        }
+    }
+
+    g.setColour (palette_.dimText);
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText (juce::String (total, 2) + " s",
+                getLocalBounds().reduced (10, 6), juce::Justification::topRight);
+}
+
+void AdvGraph::mouseDown (const juce::MouseEvent& event)
+{
+    auto plot = getLocalBounds().toFloat().reduced (6.0f);
+    const int count = pointCount();
+
+    double total = 0.0;
+
+    for (int p = 0; p < count; ++p)
+        total += static_cast<double> (plain ("Time", p));
+
+    total = std::max (total, 1.0e-4);
+
+    int nearest = 0;
+    float best = std::numeric_limits<float>::max();
+    double elapsed = 0.0;
+
+    for (int p = 0; p < count; ++p)
+    {
+        elapsed += static_cast<double> (plain ("Time", p));
+
+        const float x = plot.getX() + plot.getWidth() * static_cast<float> (elapsed / total);
+        const float y = plot.getBottom() - plot.getHeight() * plain ("Level", p);
+        const float distance = event.position.getDistanceFrom (juce::Point<float> (x, y));
+
+        if (distance < best)
+        {
+            best = distance;
+            nearest = p;
+        }
+    }
+
+    if (nearest == selected_)
+        return;
+
+    selected_ = nearest;
+    repaint();
+
+    if (onSelectionChanged != nullptr)
+        onSelectionChanged();
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +971,211 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
             "mangled growl sit still enough to sit in a mix.");
     }
 
+    // ---- F8: the modulation layer ------------------------------------------
+    //
+    // Two ADV envelopes with a graph each, two LFOs, four macros and eight
+    // slots. **Every slot defaults to Off**, so the whole layer is skipped and
+    // a patch that uses none of it is bit-identical to a build without it.
+
+    for (int e = 0; e < 2; ++e)
+    {
+        const auto slot = static_cast<std::size_t> (e);
+        const auto tint = ui::design::tintFor (palette_.accent, e == 0 ? 1 : 3);
+
+        advGraphs_[slot] = std::make_unique<AdvGraph> (owner, e, palette_);
+        addAndMakeVisible (*advGraphs_[slot]);
+        advGraphs_[slot]->onSelectionChanged = [this, e] { retargetAdvPoint (e); };
+
+        advShape_[slot].push_back (&addControl (ids::adv (e, "Points"), "POINTS", tint,
+                                                ui::design::Emphasis::trim));
+        advShape_[slot].push_back (&addControl (ids::adv (e, "Sustain"), "SUSTAIN", tint,
+                                                ui::design::Emphasis::trim));
+        advShape_[slot].push_back (&addControl (ids::adv (e, "LoopStart"), "LOOP FROM", tint,
+                                                ui::design::Emphasis::trim));
+
+        advShape_[slot][0]->knob.setTooltip (
+            "How many breakpoints this envelope uses. Points past the last one are flat "
+            "level-0 legs, so raising this adds time rather than a shape you did not ask for.");
+
+        advShape_[slot][1]->knob.setTooltip (
+            "Which breakpoint the envelope holds at while the key is down; the rest plays on "
+            "release. **Without one an ADV envelope is a one-shot** -- useful for a pluck, "
+            "wrong for a held bass.");
+
+        advShape_[slot][2]->knob.setTooltip (
+            "Where the loop returns to, while LOOP is on. The loop runs from here to the last "
+            "point and back, which is how a sustained growl gets a rhythm of its own without "
+            "spending an LFO on it.");
+
+        advLoopButtons_[slot].setClickingTogglesState (true);
+        advLoopButtons_[slot].setTooltip (
+            "Loops the region from LOOP FROM to the last point, forwards then backwards, for as "
+            "long as the note is held.");
+        addAndMakeVisible (advLoopButtons_[slot]);
+        advLoopAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+                owner.getState(), ids::adv (e, "Loop"), advLoopButtons_[slot]);
+
+        // The three point knobs. They are re-attached as the graph's selection
+        // moves rather than duplicated forty-eight times.
+        static const char* const pointCaptions[] { "TIME", "LEVEL", "CURVE" };
+
+        for (int k = 0; k < 3; ++k)
+        {
+            const auto index = static_cast<std::size_t> (k);
+            auto& caption = advPoints_[slot].captions[index];
+            auto& knob = advPoints_[slot].knobs[index];
+
+            caption.setText (pointCaptions[k], juce::dontSendNotification);
+            styleCaption (caption, palette_);
+            addAndMakeVisible (caption);
+
+            knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            ui::styleKnob (knob, palette_, tint, ui::design::Emphasis::normal);
+            knob.setNumDecimalPlacesToDisplay (3);
+            knob.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64,
+                                  ui::design::kValueHeight);
+            addAndMakeVisible (knob);
+        }
+
+        advPoints_[slot].knobs[0].setTooltip ("How long the leg into the selected breakpoint takes.");
+        advPoints_[slot].knobs[1].setTooltip ("Where the selected breakpoint sits, 0 to 1.");
+        advPoints_[slot].knobs[2].setTooltip (
+            "How the leg bends: positive aims past the destination and eases in, negative aims "
+            "past the origin and accelerates away. Zero is a straight line. Same arithmetic as "
+            "every other envelope in the suite.");
+
+        ui::styleName (advPoints_[slot].heading, palette_, tint);
+        addAndMakeVisible (advPoints_[slot].heading);
+
+        retargetAdvPoint (e);
+    }
+
+    for (int l = 0; l < 2; ++l)
+    {
+        const auto slot = static_cast<std::size_t> (l);
+        const auto tint = ui::design::tintFor (palette_.accent, l == 0 ? 0 : 5);
+
+        lfoWaveBoxes_[slot] = std::make_unique<juce::ComboBox>();
+        ui::styleChoice (*lfoWaveBoxes_[slot], palette_, tint);
+        lfoWaveBoxes_[slot]->addItemList (choices::lfoWave, 1);
+        lfoWaveBoxes_[slot]->setTooltip (
+            "The shape. The two random waves step at the LFO's rate -- SMOOTH RANDOM "
+            "interpolates between steps, RANDOM jumps.");
+        addAndMakeVisible (*lfoWaveBoxes_[slot]);
+        lfoWaveAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::lfo (l, "Wave"), *lfoWaveBoxes_[slot]);
+
+        lfoControls_[slot].push_back (&addControl (ids::lfo (l, "Rate"), "RATE", tint));
+        lfoControls_[slot].push_back (&addControl (ids::lfo (l, "Smooth"), "SMOOTH", tint,
+                                                   ui::design::Emphasis::trim));
+        lfoControls_[slot].push_back (&addControl (ids::lfo (l, "Phase"), "PHASE", tint,
+                                                   ui::design::Emphasis::trim));
+
+        lfoControls_[slot][0]->knob.setTooltip (
+            "Free-running rate. Ignored while SYNC is on, where the division sets it from the "
+            "session tempo instead.");
+
+        lfoControls_[slot][1]->knob.setTooltip (
+            "Rounds the waveform's corners. At the top it will swallow a square whole, which "
+            "is a way of getting a slow rise out of a fast shape.");
+
+        lfoControls_[slot][2]->knob.setTooltip (
+            "Where in the cycle the LFO starts, while RETRIG is on. Two LFOs on the same rate "
+            "at different phases is the cheapest way to make a growl move in two directions "
+            "at once.");
+
+        lfoSyncButtons_[slot].setClickingTogglesState (true);
+        lfoSyncButtons_[slot].setTooltip (
+            "Locks the rate to the session tempo at the division beside it. The rate is "
+            "resolved once per block from the host's tempo, so every voice agrees about it.");
+        addAndMakeVisible (lfoSyncButtons_[slot]);
+        lfoSyncAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+                owner.getState(), ids::lfo (l, "Sync"), lfoSyncButtons_[slot]);
+
+        lfoDivisionBoxes_[slot] = std::make_unique<juce::ComboBox>();
+        ui::styleChoice (*lfoDivisionBoxes_[slot], palette_, tint);
+        for (int i = 0; i < dsp::numDivisions; ++i)
+            lfoDivisionBoxes_[slot]->addItem (dsp::divisions[static_cast<std::size_t> (i)].name,
+                                              i + 1);
+        lfoDivisionBoxes_[slot]->setTooltip ("How long one LFO cycle lasts, while SYNC is on.");
+        addAndMakeVisible (*lfoDivisionBoxes_[slot]);
+        lfoDivisionAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::lfo (l, "Div"), *lfoDivisionBoxes_[slot]);
+
+        lfoRetrigButtons_[slot].setClickingTogglesState (true);
+        lfoRetrigButtons_[slot].setTooltip (
+            "Restarts the LFO at PHASE on every note. Off, it free-runs -- so two notes played "
+            "a bar apart are at different points in the cycle, which is what makes a pad "
+            "breathe and a bass line vary.");
+        addAndMakeVisible (lfoRetrigButtons_[slot]);
+        lfoRetrigAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+                owner.getState(), ids::lfo (l, "Retrig"), lfoRetrigButtons_[slot]);
+    }
+
+    for (int m = 0; m < kNumMacros; ++m)
+        macros_.push_back (&addControl (ids::macro (m), "MACRO " + juce::String (m + 1),
+                                        palette_.secondary));
+
+    macros_[0]->knob.setTooltip (
+        "A knob with no job until a slot gives it one. Assign the same macro to four "
+        "destinations with different amounts -- some negative -- and one hand movement opens "
+        "the filter, deepens the matrix and detunes an operator together. This is where a "
+        "growl becomes playable rather than programmed.");
+
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        const auto slot = static_cast<std::size_t> (s);
+
+        slotSourceBoxes_[slot] = std::make_unique<juce::ComboBox>();
+        ui::styleChoice (*slotSourceBoxes_[slot], palette_, palette_.secondary);
+        slotSourceBoxes_[slot]->addItemList (choices::modSources, 1);
+        slotSourceBoxes_[slot]->setTooltip (
+            "What moves this slot. **Off costs nothing**: a slot without a source, a "
+            "destination and an amount is not merely zero, it is never read -- and if no slot "
+            "has all three the whole layer is skipped and the patch is bit-identical to one "
+            "from before the layer existed.");
+        addAndMakeVisible (*slotSourceBoxes_[slot]);
+        slotSourceAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::modSlot (s, "Src"), *slotSourceBoxes_[slot]);
+
+        slotDestBoxes_[slot] = std::make_unique<juce::ComboBox>();
+        ui::styleChoice (*slotDestBoxes_[slot], palette_, palette_.secondary);
+        slotDestBoxes_[slot]->addItemList (choices::modDests, 1);
+        slotDestBoxes_[slot]->setTooltip (
+            "What it moves. MATRIX DEPTH scales every live cell together -- the gesture people "
+            "actually want, and safer than thirty separate destinations, because scaling never "
+            "switches on a path the patch did not ask for.\n\n"
+            "Only continuous controls appear here. A choice or a switch reconfigures rather "
+            "than adjusts, so modulating one would mean rebuilding a filter graph per chunk.");
+        addAndMakeVisible (*slotDestBoxes_[slot]);
+        slotDestAttachments_[slot]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::modSlot (s, "Dst"), *slotDestBoxes_[slot]);
+
+        auto& amount = addControl (ids::modSlot (s, "Amt"), juce::String (s + 1),
+                                   palette_.secondary, ui::design::Emphasis::trim);
+
+        // **A row wants a bar, not a rotary.** A knob shrunk into a 34 px table
+        // row is a 20 px circle with three pixels of pointer, and the amount is
+        // bipolar: a horizontal slider shows which side of zero it is on at a
+        // glance, which is the one thing a rotary that small cannot.
+        amount.knob.setSliderStyle (juce::Slider::LinearHorizontal);
+        amount.knob.setTextBoxStyle (juce::Slider::TextBoxRight, false, 46,
+                                     ui::design::kValueHeight);
+        slotAmounts_.push_back (&amount);
+    }
+
+    slotAmounts_[0]->knob.setTooltip (
+        "How far, in the destination's own units, and bipolar so a slot can subtract. A ratio "
+        "moves in ratio, a cutoff in octaves, a level in level.\n\n"
+        "Exactly zero is inert, and inert here means the destination is not even read.");
+
     tuningPage_ = std::make_unique<ui::TuningPanel> (owner, palette_,
         "Notes play through this scale, as everywhere in the suite. What is different is that "
         "an operator's RATIO can snap to it too -- set an operator's Ratio mode to Scale on the "
@@ -698,13 +1192,21 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
 
     // The tabs. Built last so every page's controls exist to be hidden.
     static const char* const tabNames[] { "OPERATORS", "MATRIX", "VOICE", "SEQ",
-                                         "MANGLE", "TUNING" };
+                                         "MANGLE", "ADV", "MOD", "TUNING" };
+
+    static_assert (static_cast<int> (std::size (tabNames)) == pageCount,
+                   "every page needs a tab, and in the same order");
 
     for (int i = 0; i < pageCount; ++i)
     {
         auto& tab = tabs_[static_cast<std::size_t> (i)];
 
         tab.setButtonText (tabNames[i]);
+
+        // So `tezla-render editor hit:tab-mod shot:...` can photograph a page
+        // without a window manager -- which is how a layout gets checked here
+        // at all, the rig being the only place a panel is otherwise seen.
+        tab.setComponentID ("tab-" + juce::String (tabNames[i]).toLowerCase());
         tab.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
         tab.onClick = [this, i] { showPage (i); };
         addAndMakeVisible (tab);
@@ -930,6 +1432,67 @@ void StrydaEditor::applyPageVisibility()
     vowelSeqButton_.setVisible (mangling);
     vowelDivisionBox_.setVisible (mangling);
 
+    const bool adv = currentPage_ == pageAdv;
+
+    for (int e = 0; e < 2; ++e)
+    {
+        const auto slot = static_cast<std::size_t> (e);
+
+        advGraphs_[slot]->setVisible (adv);
+        advLoopButtons_[slot].setVisible (adv);
+        advPoints_[slot].heading.setVisible (adv);
+
+        for (auto* control : advShape_[slot])
+        {
+            control->knob.setVisible (adv);
+            control->caption.setVisible (adv);
+        }
+
+        for (int k = 0; k < 3; ++k)
+        {
+            const auto index = static_cast<std::size_t> (k);
+            advPoints_[slot].knobs[index].setVisible (adv);
+            advPoints_[slot].captions[index].setVisible (adv);
+        }
+    }
+
+    const bool modulating = currentPage_ == pageMod;
+
+    for (int l = 0; l < 2; ++l)
+    {
+        const auto slot = static_cast<std::size_t> (l);
+
+        lfoWaveBoxes_[slot]->setVisible (modulating);
+        lfoDivisionBoxes_[slot]->setVisible (modulating);
+        lfoSyncButtons_[slot].setVisible (modulating);
+        lfoRetrigButtons_[slot].setVisible (modulating);
+
+        for (auto* control : lfoControls_[slot])
+        {
+            control->knob.setVisible (modulating);
+            control->caption.setVisible (modulating);
+        }
+    }
+
+    for (auto* control : macros_)
+    {
+        control->knob.setVisible (modulating);
+        control->caption.setVisible (modulating);
+    }
+
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        const auto slot = static_cast<std::size_t> (s);
+
+        slotSourceBoxes_[slot]->setVisible (modulating);
+        slotDestBoxes_[slot]->setVisible (modulating);
+        slotAmounts_[slot]->knob.setVisible (modulating);
+
+        // The slot rows label themselves by position, so the caption would only
+        // repeat the row number the combo boxes already sit on.
+        slotAmounts_[slot]->caption.setVisible (false);
+    }
+
     if (tuningPage_ != nullptr)
     {
         const bool tuning = currentPage_ == pageTuning;
@@ -958,6 +1521,8 @@ void StrydaEditor::paint (juce::Graphics& g)
         case pageVoice:     paintVoice (g, area);     break;
         case pageSequencer: paintSequencer (g, area); break;
         case pageMangle:    paintMangle (g, area);    break;
+        case pageAdv:       paintAdv (g, area);       break;
+        case pageMod:       paintMod (g, area);       break;
         default: break;   // the tuning page paints itself
     }
 }
@@ -1069,6 +1634,8 @@ void StrydaEditor::resized()
         case pageVoice:     layoutVoice (area);     break;
         case pageSequencer: layoutSequencer (area);  break;
         case pageMangle:    layoutMangle (area);     break;
+        case pageAdv:       layoutAdv (area);        break;
+        case pageMod:       layoutMod (area);        break;
 
         case pageTuning:
             if (tuningPage_ != nullptr)
@@ -1307,6 +1874,267 @@ void StrydaEditor::layoutMangle (juce::Rectangle<int> area)
             auto cell = line.removeFromLeft (width);
             mangle_[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
             mangle_[index]->knob.setBounds (cell.reduced (2, 0));
+        }
+    }
+}
+
+void StrydaEditor::retargetAdvPoint (int which)
+{
+    const auto slot = static_cast<std::size_t> (which);
+    const int point = advGraphs_[slot] != nullptr ? advGraphs_[slot]->getSelectedPoint() : 0;
+
+    static const char* const fields[] { "Time", "Level", "Tens" };
+
+    for (int k = 0; k < 3; ++k)
+    {
+        const auto index = static_cast<std::size_t> (k);
+
+        // **The old attachment goes first.** Two attachments on one slider both
+        // write the slider on a parameter change and both write a parameter on
+        // a drag, so leaving the previous one alive would edit the breakpoint
+        // you just stopped looking at.
+        advPoints_[slot].attachments[index].reset();
+        advPoints_[slot].attachments[index]
+            = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+                processor_.getState(), ids::advPoint (which, point, fields[k]),
+                advPoints_[slot].knobs[index]);
+    }
+
+    advPoints_[slot].heading.setText ("POINT " + juce::String (point + 1),
+                                      juce::dontSendNotification);
+}
+
+void StrydaEditor::paintAdv (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    const int half = area.getHeight() / 2;
+
+    for (int e = 0; e < 2; ++e)
+    {
+        auto plate = e == 0 ? area.removeFromTop (half) : area;
+
+        if (e == 1)
+            plate.removeFromTop (kMargin);
+
+        const auto tint = ui::design::tintFor (palette_.accent, e == 0 ? 1 : 3);
+
+        ui::paintPlate (g, plate, palette_.panel, tint);
+        ui::paintPlateHeading (
+            g, palette_, plate.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+            "ADV " + juce::String (e + 1),
+            e == 0 ? "a breakpoint envelope -- click a point, edit it with the three knobs"
+                   : "the second one; an operator picks which envelope it answers to",
+            tint);
+    }
+}
+
+void StrydaEditor::layoutAdv (juce::Rectangle<int> area)
+{
+    const int half = area.getHeight() / 2;
+
+    for (int e = 0; e < 2; ++e)
+    {
+        const auto slot = static_cast<std::size_t> (e);
+        auto plate = (e == 0 ? area.removeFromTop (half) : area);
+
+        if (e == 1)
+            plate.removeFromTop (kMargin);
+
+        plate = plate.reduced (8);
+        plate.removeFromTop (ui::design::kValueHeight + 6);
+
+        // The graph takes the left; the controls stack down the right, because
+        // a wide graph is what makes a sixteen-point shape readable.
+        auto controls = plate.removeFromRight (juce::jlimit (250, 420, plate.getWidth() * 2 / 5));
+        plate.removeFromRight (6);
+
+        advGraphs_[slot]->setBounds (plate);
+
+        // Top row: the three structural controls plus LOOP.
+        auto top = controls.removeFromTop (juce::jmax (52, controls.getHeight() / 2 - 6));
+        const int columnWidth = top.getWidth() / 4;
+
+        for (auto* control : advShape_[slot])
+        {
+            auto cell = top.removeFromLeft (columnWidth);
+            control->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+            control->knob.setBounds (cell.reduced (2, 0));
+        }
+
+        advLoopButtons_[slot].setBounds (top.reduced (4, 12));
+
+        controls.removeFromTop (4);
+
+        // Bottom row: which point, then its three knobs.
+        advPoints_[slot].heading.setBounds (controls.removeFromTop (kCaptionHeight));
+
+        const int pointWidth = controls.getWidth() / 3;
+
+        for (int k = 0; k < 3; ++k)
+        {
+            const auto index = static_cast<std::size_t> (k);
+            auto cell = controls.removeFromLeft (pointWidth);
+
+            advPoints_[slot].captions[index].setBounds (cell.removeFromTop (kCaptionHeight));
+            advPoints_[slot].knobs[index].setBounds (cell.reduced (2, 0));
+        }
+    }
+}
+
+void StrydaEditor::paintMod (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    const auto plates = splitMod (area);
+
+    for (int l = 0; l < 2; ++l)
+    {
+        const auto tint = ui::design::tintFor (palette_.accent, l == 0 ? 0 : 5);
+
+        ui::paintPlate (g, plates.lfo[l], palette_.panel, tint);
+        ui::paintPlateHeading (
+            g, palette_,
+            plates.lfo[l].reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+            "LFO " + juce::String (l + 1),
+            l == 0 ? juce::String ("free, or locked to the bar") : juce::String(), tint);
+    }
+
+    ui::paintPlate (g, plates.macros, palette_.panel, palette_.secondary);
+    ui::paintPlateHeading (
+        g, palette_, plates.macros.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+        "MACROS", "one hand, several controls", palette_.secondary);
+
+    ui::paintPlate (g, plates.matrix, palette_.panel, palette_.accent);
+    ui::paintPlateHeading (
+        g, palette_, plates.matrix.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+        "MATRIX", "eight slots: what moves what, and by how much", palette_.accent);
+
+    // The row numbers and column headings, on the same grid the boxes are laid
+    // out on. Without them eight identical Off/Off/knob rows say nothing about
+    // which slot is which -- which is exactly how the first screenshot read.
+    auto table = plates.table;
+    const int columnWidth = table.getWidth() / plates.columns;
+
+    g.setFont (juce::FontOptions (10.0f));
+
+    for (int column = 0; column < plates.columns; ++column)
+    {
+        auto strip = table.removeFromLeft (columnWidth).reduced (2, 0);
+        auto heading = strip.removeFromTop (plates.headingHeight);
+
+        const int amountWidth = juce::jlimit (96, 190, heading.getWidth() * 3 / 10);
+        auto amount = heading.removeFromRight (amountWidth);
+        heading.removeFromLeft (kSlotNumberWidth);
+
+        const int boxWidth = heading.getWidth() / 2;
+
+        g.setColour (palette_.dimText);
+        g.drawText ("SOURCE", heading.removeFromLeft (boxWidth), juce::Justification::centredLeft);
+        g.drawText ("DESTINATION", heading, juce::Justification::centredLeft);
+        g.drawText ("AMOUNT", amount, juce::Justification::centred);
+
+        for (int row = 0; row < plates.perColumn; ++row)
+        {
+            const int index = column * plates.perColumn + row;
+
+            if (index >= kNumSlots)
+                break;
+
+            auto line = strip.removeFromTop (plates.rowHeight);
+
+            // Lit when the slot is actually doing something, so a page of
+            // eight rows says at a glance which ones are live.
+            const bool live = slotSourceBoxes_[static_cast<std::size_t> (index)]
+                                    ->getSelectedItemIndex() > 0
+                              && slotDestBoxes_[static_cast<std::size_t> (index)]
+                                       ->getSelectedItemIndex() > 0;
+
+            g.setColour (live ? palette_.accent : palette_.dimText);
+            g.drawText (juce::String (index + 1), line.removeFromLeft (kSlotNumberWidth),
+                        juce::Justification::centred);
+        }
+    }
+}
+
+void StrydaEditor::layoutMod (juce::Rectangle<int> area)
+{
+    const auto plates = splitMod (area);
+
+    for (int l = 0; l < 2; ++l)
+    {
+        const auto slot = static_cast<std::size_t> (l);
+        auto plate = plates.lfo[l].reduced (8);
+        plate.removeFromTop (ui::design::kValueHeight + 6);
+
+        auto boxes = plate.removeFromTop (26);
+        lfoWaveBoxes_[slot]->setBounds (boxes.removeFromLeft (boxes.getWidth() * 55 / 100)
+                                            .reduced (2, 1));
+        lfoDivisionBoxes_[slot]->setBounds (boxes.reduced (2, 1));
+
+        plate.removeFromTop (6);
+
+        // **The lamps need 40 px of bounds, not whatever is left.** A LampButton
+        // reserves `kGlowMargin` (7 px) on every side for its halo and another
+        // 3 for the bezel, so a 26 px box leaves a 6 px cap and the legend --
+        // sized `capHeight * 0.55` -- comes out at three pixels. They drew as
+        // two coloured bars with no writing on them, which is exactly what the
+        // first screenshot showed.
+        auto lamps = plate.removeFromBottom (juce::jmax (34, plate.getHeight() / 3));
+        lfoSyncButtons_[slot].setBounds (lamps.removeFromLeft (lamps.getWidth() / 2).reduced (4, 0));
+        lfoRetrigButtons_[slot].setBounds (lamps.reduced (4, 0));
+
+        const int columnWidth = plate.getWidth() / 3;
+
+        for (auto* control : lfoControls_[slot])
+        {
+            auto cell = plate.removeFromLeft (columnWidth);
+            control->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+            control->knob.setBounds (cell.reduced (2, 0));
+        }
+    }
+
+    // Four macros, two by two, so the plate stays square-ish beside the LFOs.
+    auto macroPlate = plates.macros.reduced (8);
+    macroPlate.removeFromTop (ui::design::kValueHeight + 6);
+
+    for (int row = 0; row < 2; ++row)
+    {
+        auto line = macroPlate.removeFromTop (macroPlate.getHeight() / (2 - row));
+        const int width = line.getWidth() / 2;
+
+        for (int column = 0; column < 2; ++column)
+        {
+            const auto index = static_cast<std::size_t> (row * 2 + column);
+            auto cell = line.removeFromLeft (width);
+
+            macros_[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+            macros_[index]->knob.setBounds (cell.reduced (2, 0));
+        }
+    }
+
+    auto table = plates.table;
+    const int columnWidth = table.getWidth() / plates.columns;
+
+    for (int column = 0; column < plates.columns; ++column)
+    {
+        auto strip = table.removeFromLeft (columnWidth).reduced (2, 0);
+        strip.removeFromTop (plates.headingHeight);
+
+        for (int row = 0; row < plates.perColumn; ++row)
+        {
+            const auto index = static_cast<std::size_t> (column * plates.perColumn + row);
+
+            if (index >= static_cast<std::size_t> (kNumSlots))
+                break;
+
+            auto line = strip.removeFromTop (plates.rowHeight);
+            const int amountWidth = juce::jlimit (96, 190, line.getWidth() * 3 / 10);
+
+            auto amount = line.removeFromRight (amountWidth);
+            slotAmounts_[index]->knob.setBounds (amount.reduced (4, 4));
+
+            line.removeFromLeft (kSlotNumberWidth);
+
+            const int boxWidth = line.getWidth() / 2;
+            slotSourceBoxes_[index]->setBounds (line.removeFromLeft (boxWidth).reduced (2, 3));
+            slotDestBoxes_[index]->setBounds (line.reduced (2, 3));
         }
     }
 }

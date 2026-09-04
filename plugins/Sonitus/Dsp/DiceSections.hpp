@@ -223,3 +223,15 @@ namespace detail
 }
 
 } // namespace tezla::sonitus
+
+/// The alias every plugin's `DiceSections.hpp` provides, so `tezla-render
+/// dice` can audit any of them without naming a plugin. Added when Stryda
+/// grew a classifier of its own and the tool turned out to hard-code this
+/// namespace.
+namespace tezla::dice
+{
+using sonitus::DiceSection;
+using sonitus::diceSectionFor;
+using sonitus::diceSectionName;
+} // namespace tezla::dice
+

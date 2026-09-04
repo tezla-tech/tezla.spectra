@@ -14,6 +14,7 @@
 // layout says what the engine does and nothing more.
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -59,6 +60,39 @@ private:
     std::array<std::unique_ptr<Control>, kNumOperators> noise_ {};
 };
 
+/// One ADV envelope drawn as the polyline it is, with the point you clicked
+/// last picked out.
+///
+/// **The curve is the DSP's curve**, not a spline that resembles it: each leg
+/// is `dsp::Adsr::overshootFor`'s own arithmetic, the same function the
+/// envelope runs, so a shape that looks wrong here is wrong in the sound too.
+/// Editing is the three knobs beside it -- click a point to aim them at it.
+/// Dragging the graph itself is F9's job, along with the rest of the displays.
+class AdvGraph final : public juce::Component,
+                       public juce::SettableTooltipClient
+{
+public:
+    AdvGraph (StrydaProcessor& owner, int envelopeIndex, ui::Palette palette);
+
+    void paint (juce::Graphics& g) override;
+    void mouseDown (const juce::MouseEvent& event) override;
+
+    /// Which point the three edit knobs are aimed at.
+    [[nodiscard]] int getSelectedPoint() const noexcept { return selected_; }
+
+    /// Called when the selection changes, so the page can re-attach the knobs.
+    std::function<void()> onSelectionChanged;
+
+private:
+    [[nodiscard]] float plain (const char* field, int point) const;
+    [[nodiscard]] int pointCount() const;
+
+    StrydaProcessor& processor_;
+    int envelope_ { 0 };
+    ui::Palette palette_;
+    int selected_ { 0 };
+};
+
 class StrydaEditor final : public juce::AudioProcessorEditor,
                            private juce::Timer
 {
@@ -78,6 +112,8 @@ public:
         pageVoice,
         pageSequencer,
         pageMangle,
+        pageAdv,
+        pageMod,
         pageTuning,
         pageCount
     };
@@ -93,12 +129,22 @@ private:
     void layoutVoice (juce::Rectangle<int> area);
     void layoutSequencer (juce::Rectangle<int> area);
     void layoutMangle (juce::Rectangle<int> area);
+    void layoutAdv (juce::Rectangle<int> area);
+    void layoutMod (juce::Rectangle<int> area);
 
     void paintOperators (juce::Graphics& g, juce::Rectangle<int> area);
     void paintMatrix (juce::Graphics& g, juce::Rectangle<int> area);
     void paintVoice (juce::Graphics& g, juce::Rectangle<int> area);
     void paintSequencer (juce::Graphics& g, juce::Rectangle<int> area);
     void paintMangle (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintAdv (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintMod (juce::Graphics& g, juce::Rectangle<int> area);
+
+    /// Aim envelope `which`'s three edit knobs at whichever point its graph
+    /// has selected. The attachment is rebuilt rather than the value copied:
+    /// an attachment *is* the link to the parameter, so pointing three knobs
+    /// at a different breakpoint means three new ones.
+    void retargetAdvPoint (int which);
 
     /// Everything the current page does not own is hidden rather than laid out
     /// off-screen: a control that is merely somewhere else still takes the
@@ -186,6 +232,54 @@ private:
 
     juce::ComboBox vowelDivisionBox_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> vowelDivisionAttachment_;
+
+    /// F8: the modulation layer. Two ADV envelopes with their graphs, two
+    /// LFOs, four macros and eight slots.
+    std::array<std::unique_ptr<AdvGraph>, 2> advGraphs_ {};
+    std::array<std::vector<Control*>, 2> advShape_ {};
+    std::array<ui::LampButton, 2> advLoopButtons_ { ui::LampButton { "LOOP" },
+                                                    ui::LampButton { "LOOP" } };
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 2>
+        advLoopAttachments_ {};
+
+    /// Three knobs per envelope, re-attached as the graph's selection moves.
+    struct PointEditor
+    {
+        std::array<juce::Label, 3> captions {};
+        std::array<juce::Slider, 3> knobs {};
+        std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>, 3>
+            attachments {};
+        juce::Label heading;
+    };
+
+    std::array<PointEditor, 2> advPoints_ {};
+
+    std::array<std::vector<Control*>, 2> lfoControls_ {};
+    std::array<std::unique_ptr<juce::ComboBox>, 2> lfoWaveBoxes_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>, 2>
+        lfoWaveAttachments_ {};
+    std::array<std::unique_ptr<juce::ComboBox>, 2> lfoDivisionBoxes_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>, 2>
+        lfoDivisionAttachments_ {};
+    std::array<ui::LampButton, 2> lfoSyncButtons_ { ui::LampButton { "SYNC" },
+                                                    ui::LampButton { "SYNC" } };
+    std::array<ui::LampButton, 2> lfoRetrigButtons_ { ui::LampButton { "RETRIG" },
+                                                      ui::LampButton { "RETRIG" } };
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 2>
+        lfoSyncAttachments_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>, 2>
+        lfoRetrigAttachments_ {};
+
+    std::vector<Control*> macros_;
+
+    /// Eight rows of source, destination and amount.
+    std::array<std::unique_ptr<juce::ComboBox>, kNumSlots> slotSourceBoxes_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>,
+               kNumSlots> slotSourceAttachments_ {};
+    std::array<std::unique_ptr<juce::ComboBox>, kNumSlots> slotDestBoxes_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>,
+               kNumSlots> slotDestAttachments_ {};
+    std::vector<Control*> slotAmounts_;
 
     juce::Label bandwidth_;
     juce::Label voices_;

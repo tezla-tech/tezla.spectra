@@ -887,7 +887,7 @@ int main (int argc, char** argv)
     if (auditDiceSections)
     {
 #if TEZLA_HAS_DICE_SECTIONS
-        using tezla::sonitus::DiceSection;
+        using tezla::dice::DiceSection;
 
         int unknown = 0;
         int total = 0;
@@ -905,7 +905,7 @@ int main (int argc, char** argv)
             ++total;
 
             const auto id = ranged->paramID.toStdString();
-            const auto section = tezla::sonitus::diceSectionFor (id);
+            const auto section = tezla::dice::diceSectionFor (id);
 
             if (section == DiceSection::unknown)
             {
@@ -915,7 +915,7 @@ int main (int argc, char** argv)
             else
             {
                 std::printf ("  %-22s  %s\n", id.c_str(),
-                             tezla::sonitus::diceSectionName (section));
+                             tezla::dice::diceSectionName (section));
             }
         }
 
@@ -923,7 +923,7 @@ int main (int argc, char** argv)
 
         if (unknown > 0)
             std::printf ("  FAIL: an unclassified parameter is never rolled by DICEROLL.\n"
-                         "        Classify it in plugins/Sonitus/Dsp/DiceSections.hpp.\n");
+                         "        Classify it in this plugin's Dsp/DiceSections.hpp.\n");
 
         return unknown == 0 ? 0 : 1;
 #else

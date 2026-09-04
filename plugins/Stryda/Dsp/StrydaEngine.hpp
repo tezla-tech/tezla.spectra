@@ -283,7 +283,7 @@ public:
             // sub-grid: a voice that started uncapped would alias for those
             // 2.7 ms, and the start of a note is exactly where the ear is
             // listening.
-            voice.refreshIndexCap (parameters_, internalRate_);
+            voice.refreshIndexCap (internalRate_);
             ++capResolutions_;
         }
     }
@@ -353,9 +353,14 @@ public:
                 pushSequencedRatio();
                 stepEdge_ = false;
 
+                // `chunkDue` is what says whether the modulators may advance.
+                // A step edge is an EXTRA refresh inside a chunk, so letting it
+                // advance them too would make an LFO's rate depend on the
+                // sequencer's division -- a 1/16 sequence at 174 BPM would run
+                // every LFO in the patch fast.
                 for (auto& voice : voices_)
                     if (voice.isActive())
-                        voice.applyParameters (parameters_);
+                        voice.applyParameters (parameters_, chunkDue);
             }
 
             if (chunkDue)
@@ -372,7 +377,7 @@ public:
                     for (auto& voice : voices_)
                         if (voice.isActive())
                         {
-                            voice.refreshIndexCap (parameters_, internalRate_);
+                            voice.refreshIndexCap (internalRate_);
                             ++capResolutions_;
                         }
                 }

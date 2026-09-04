@@ -294,6 +294,118 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
          skewed (5.0f, 2000.0f, 150.0f), 120.0f, "ms", 0, kSchemaV5);
     add (ids::compMakeup, "Comp makeup", { 0.0f, 24.0f }, 0.0f, "dB", 1, kSchemaV5);
 
+    // ---- F8, appended at schema 6 ------------------------------------------
+    //
+    // Two ADV envelopes, two LFOs, four macros and eight slots. Every slot's
+    // source and destination default to Off, so the whole layer is skipped and
+    // an F7 project is bit-identical.
+
+    // Sixteen breakpoints each, and the defaults are a shape rather than a
+    // flat line -- an envelope assigned to a slot and never edited should do
+    // something audible, or the first thing anyone learns about the layer is
+    // that it appears not to work.
+    for (int e = 0; e < 2; ++e)
+    {
+        const juce::String label = "ADV " + juce::String (e + 1) + " \xc2\xb7 ";
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            versioned (ids::adv (e, "Points"), kSchemaV6), label + "Points",
+            2, dsp::MultiEnvelope::kMaxPoints, 4));
+
+        // Displayed 1-based, as on Sonitus's ADV page; the engine subtracts
+        // one. **Without a sustain point an ADV envelope is a one-shot**, and
+        // a held bass note is exactly what this instrument is for.
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            versioned (ids::adv (e, "Sustain"), kSchemaV6), label + "Sustain point",
+            1, dsp::MultiEnvelope::kMaxPoints, 3));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            versioned (ids::adv (e, "Loop"), kSchemaV6), label + "Loop", false));
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            versioned (ids::adv (e, "LoopStart"), kSchemaV6), label + "Loop from",
+            1, dsp::MultiEnvelope::kMaxPoints, 1));
+
+        // Points past the fourth are flat, level-0 legs, so raising Points
+        // adds time rather than a shape nobody asked for.
+        constexpr float defaultSeconds[] { 0.004f, 0.18f, 0.05f, 0.25f,
+                                           0.1f, 0.1f, 0.1f, 0.1f,
+                                           0.1f, 0.1f, 0.1f, 0.1f,
+                                           0.1f, 0.1f, 0.1f, 0.1f };
+        constexpr float defaultLevel[]   { 1.0f, 0.45f, 0.45f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f };
+        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f };
+
+        static_assert (static_cast<int> (std::size (defaultSeconds)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultLevel)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultTension)) == dsp::MultiEnvelope::kMaxPoints);
+
+        for (int p = 0; p < dsp::MultiEnvelope::kMaxPoints; ++p)
+        {
+            const juce::String point = label + juce::String (p + 1) + " ";
+            const auto i = static_cast<std::size_t> (p);
+
+            add (ids::advPoint (e, p, "Time"), point + "time",
+                 skewed (0.0f, 20.0f, 0.3f), defaultSeconds[i], "s", 3, kSchemaV6);
+
+            add (ids::advPoint (e, p, "Level"), point + "level",
+                 { 0.0f, 1.0f }, defaultLevel[i], {}, 2, kSchemaV6);
+
+            add (ids::advPoint (e, p, "Tens"), point + "tension",
+                 { -1.0f, 1.0f }, defaultTension[i], {}, 2, kSchemaV6);
+        }
+    }
+
+    for (int l = 0; l < 2; ++l)
+    {
+        const juce::String label = "LFO " + juce::String (l + 1) + " \xc2\xb7 ";
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::lfo (l, "Wave"), kSchemaV6), label + "Wave",
+            choices::lfoWave, 0));
+
+        add (ids::lfo (l, "Rate"), label + "Rate",
+             skewed (0.01f, 40.0f, 2.0f), 2.0f, "Hz", 2, kSchemaV6);
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            versioned (ids::lfo (l, "Sync"), kSchemaV6), label + "Sync", false));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::lfo (l, "Div"), kSchemaV6), label + "Division",
+            divisionNames(), 6));
+
+        add (ids::lfo (l, "Smooth"), label + "Smooth", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+        add (ids::lfo (l, "Phase"), label + "Phase", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            versioned (ids::lfo (l, "Retrig"), kSchemaV6), label + "Retrigger", true));
+    }
+
+    for (int m = 0; m < kNumMacros; ++m)
+        add (ids::macro (m), "Macro " + juce::String (m + 1),
+             { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        const juce::String label = "Mod " + juce::String (s + 1) + " \xc2\xb7 ";
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::modSlot (s, "Src"), kSchemaV6), label + "Source",
+            choices::modSources, 0));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::modSlot (s, "Dst"), kSchemaV6), label + "Destination",
+            choices::modDests, 0));
+
+        add (ids::modSlot (s, "Amt"), label + "Amount",
+             { -1.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+    }
+
     return layout;
 }
 
@@ -464,6 +576,56 @@ void StrydaProcessor::pullParameters()
     for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
         engine_.setVowelStep (i, raw (ids::vowelStep (i)));
 
+    auto& modulation = parameters_.modulation;
+
+    for (int e = 0; e < 2; ++e)
+    {
+        auto& shape = modulation.envelopes[static_cast<std::size_t> (e)];
+
+        shape.pointCount = static_cast<int> (std::lround (raw (ids::adv (e, "Points"))));
+        shape.loop = raw (ids::adv (e, "Loop")) > 0.5f;
+
+        // Both displayed 1-based; the envelope counts from zero.
+        shape.sustain = static_cast<int> (std::lround (raw (ids::adv (e, "Sustain")))) - 1;
+        shape.loopStart = static_cast<int> (std::lround (raw (ids::adv (e, "LoopStart")))) - 1;
+
+        for (int p = 0; p < dsp::MultiEnvelope::kMaxPoints; ++p)
+            shape.points[static_cast<std::size_t> (p)] = {
+                raw (ids::advPoint (e, p, "Time")),
+                raw (ids::advPoint (e, p, "Level")),
+                raw (ids::advPoint (e, p, "Tens"))
+            };
+    }
+
+    for (int l = 0; l < 2; ++l)
+    {
+        auto& shape = modulation.lfos[static_cast<std::size_t> (l)];
+
+        shape.wave = static_cast<int> (std::lround (raw (ids::lfo (l, "Wave"))));
+        shape.synced = raw (ids::lfo (l, "Sync")) > 0.5f;
+        shape.division = static_cast<int> (std::lround (raw (ids::lfo (l, "Div"))));
+        shape.smooth = raw (ids::lfo (l, "Smooth"));
+        shape.phaseOffset = raw (ids::lfo (l, "Phase"));
+        shape.retrigger = raw (ids::lfo (l, "Retrig")) > 0.5f;
+
+        // A synced LFO's rate is the division at the session's tempo, resolved
+        // here rather than in the voice so every voice agrees about it.
+        shape.rateHz = shape.synced ? dsp::divisionRateHz (shape.division, lastBpm_)
+                                    : raw (ids::lfo (l, "Rate"));
+    }
+
+    for (int m = 0; m < kNumMacros; ++m)
+        modulation.macros[static_cast<std::size_t> (m)] = raw (ids::macro (m));
+
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        auto& slot = modulation.slots[static_cast<std::size_t> (s)];
+
+        slot.source = static_cast<int> (std::lround (raw (ids::modSlot (s, "Src"))));
+        slot.destination = static_cast<int> (std::lround (raw (ids::modSlot (s, "Dst"))));
+        slot.amount = raw (ids::modSlot (s, "Amt"));
+    }
+
     engine_.setPolyphony (static_cast<int> (std::lround (raw (ids::polyphony))));
     engine_.setOversamplingMode (static_cast<dsp::OversamplingMode> (
         static_cast<int> (std::lround (raw (ids::oversampling)))));
@@ -501,16 +663,12 @@ void StrydaProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer, juc
 
     collectTuning();
 
-    // **Before `setParameters`, not after.** The ratio modes are resolved
-    // against the scale inside `setParameters`, so a tuning that arrived this
-    // block has to be in place first or the ratios spend one block snapped to
-    // the previous scale.
-    pullParameters();
-    engine_.setParameters (parameters_);
-    engine_.updateFactor (isNonRealtime());
-
-    // The transport, once per block, so the ratio sequencer locks to the bar.
-    // The engine keeps its rate between anchors and free-runs, which is what
+    // **The transport first**, because `pullParameters` resolves a synced
+    // LFO's rate from the tempo: reading it afterwards would leave every
+    // synced LFO one block behind the session.
+    //
+    // Once per block, so the ratio sequencer locks to the bar. The engine
+    // keeps its rate between anchors and free-runs, which is what
     // makes the step edges sample-accurate inside the block rather than only
     // at its head -- and a growl that is not in time with the drums is a
     // mistake, not a texture.
@@ -526,7 +684,16 @@ void StrydaProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer, juc
             playing = position->getIsPlaying();
         }
 
+    lastBpm_ = bpm;
     engine_.setTransport (ppq, bpm, playing);
+
+    // **Before `setParameters`, not after.** The ratio modes are resolved
+    // against the scale inside `setParameters`, so a tuning that arrived this
+    // block has to be in place first or the ratios spend one block snapped to
+    // the previous scale.
+    pullParameters();
+    engine_.setParameters (parameters_);
+    engine_.updateFactor (isNonRealtime());
 
     if (scratch_.getNumSamples() < numSamples)
         scratch_.setSize (2, numSamples, false, false, true);
