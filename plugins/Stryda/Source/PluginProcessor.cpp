@@ -294,6 +294,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
          skewed (5.0f, 2000.0f, 150.0f), 120.0f, "ms", 0, kSchemaV5);
     add (ids::compMakeup, "Comp makeup", { 0.0f, 24.0f }, 0.0f, "dB", 1, kSchemaV5);
 
+    // ---- F9, appended at schema 7 ------------------------------------------
+    //
+    // One waveform choice per operator. Index 0 is Sine and is the default, and
+    // the operator branches to `std::sin` for it, so an F8 project is
+    // bit-identical.
+
+    for (int op = 0; op < kNumOperators; ++op)
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::op (op, "Shape"), kSchemaV7),
+            "Op " + juce::String (op + 1) + " shape", choices::fmShape, 0));
+
     // ---- F8, appended at schema 6 ------------------------------------------
     //
     // Two ADV envelopes, two LFOs, four macros and eight slots. Every slot's
@@ -462,6 +473,7 @@ void StrydaProcessor::pullParameters()
         settings.release = raw (ids::op (op, "Release"));
 
         settings.fold = raw (ids::op (op, "Fold"));
+        settings.shape = static_cast<int> (std::lround (raw (ids::op (op, "Shape"))));
         settings.mode = static_cast<int> (std::lround (raw (ids::op (op, "Mode"))));
         settings.formantHz = raw (ids::op (op, "Formant"));
         settings.formantDepth = raw (ids::op (op, "Width"));

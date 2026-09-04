@@ -228,6 +228,46 @@ Two things about it are worth knowing:
   oversampling and no antialiasing at all: the folded-back images *are* the
   sound. Everything else that generates harmonics is antialiased.
 
+### Operator waveforms, and the display that shows what they do
+
+Every operator has a **SHAPE**: Sine, Bright, Triangle, Square, Saw, Half sine.
+Sine is the default and it is the one to reach for — **in FM a non-sine
+operator is not a cosmetic choice.** The harmonics of a modulator *multiply* the
+sideband ladder rather than adding to it, so a Saw at index 4 is a different
+order of brightness, and of aliasing, than a sine at the same index.
+
+They are safe to use anyway, and the reason is worth knowing because it is what
+makes them different from the obvious implementation. Each shape is a fixed sum
+of sine harmonics — 2 for Bright, 8 for Triangle and Square (odd only), 16 for
+Saw, 8 even ones for Half sine — rendered into a one-cycle table and read with
+interpolation at whatever phase arrives. That makes it band-limited by
+construction, readable at any phase (which a BLEP oscillator is not: BLEP
+corrects a discontinuity from the phase *increment*, and an operator's phase
+jumps around), and — the point — its bandwidth is a **known integer** that the
+predictor multiplies by. Measured: a 16-harmonic saw modulator moves the
+predicted top from 14 740 Hz to 232 540 Hz, **15.8×**, and the index cap that
+sits at exactly 1.000000 for the sine drops to 0.218 for the saw.
+
+Expect the cap to bite sooner on Saw, and expect Auto oversampling to earn its
+CPU. Measured inharmonic energy in the audible band at the internal rate: sine
+−300 dB, half sine −96.4, triangle −102.9, saw −90.7, square −88.3 — all well
+under the −60 dB gate.
+
+**Above each operator strip is one cycle of what that operator actually puts
+out.** Not a drawing of a sine that gets bent: a real `dsp::FmOperator` — the
+same class the voice runs — stepped through a cycle and fed the same three
+numbers the matrix feeds it, built from that operator's row of the patch. SHAPE,
+FOLD, CHAR and its own feedback all appear exactly as they sound.
+
+It also answers the question the panel would otherwise keep provoking. **CHAR
+only does something on an operator that something else modulates**, and that is
+the mathematics rather than a limitation: Character is the ModFM exponential
+`exp(r·k·cos(ω_m t) − r·k)`, and `k` is the index *arriving* at the operator.
+Nothing arriving means k = 0, the exponential is 1, and the operator is its
+plain waveform at every Character setting. Turn CHAR up on a carrier nobody
+modulates and you will hear nothing — the display says **unmodulated** and shows
+you an unchanged wave, instead of leaving you to conclude the knob is broken.
+
 ### The modulation layer
 
 Two shared **ADV envelopes**, two **LFOs**, four **macros**, and eight slots of

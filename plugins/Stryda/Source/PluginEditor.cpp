@@ -23,6 +23,15 @@ constexpr int kTabHeight = 30;
 /// The bandwidth readout on the matrix page.
 constexpr int kReadoutHeight = 74;
 
+/// How many points one cycle of an operator's wave is drawn from. Enough that
+/// a sixteen-harmonic saw reads as a saw rather than as steps.
+constexpr int kWaveSamples = 256;
+
+/// The wave strip at the top of each operator column.
+constexpr int kWaveHeight = 40;
+
+constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+
 /// The slot number down the left of each modulation row.
 constexpr int kSlotNumberWidth = 18;
 
@@ -261,6 +270,138 @@ void MatrixGrid::resized()
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// The operator's own wave
+// ---------------------------------------------------------------------------
+
+OperatorWave::OperatorWave (StrydaProcessor& owner, int operatorIndex, ui::Palette palette)
+    : processor_ (owner), operator_ (operatorIndex), palette_ (palette)
+{
+    setInterceptsMouseClicks (false, false);
+    setTooltip (
+        "One cycle of what this operator actually puts out -- not a drawing of a sine, but a "
+        "real operator run for a cycle and fed the same modulation the matrix feeds it. "
+        "SHAPE, FOLD, CHAR and the operator's own feedback all show up here exactly as they "
+        "sound.\n\n"
+        "If CHAR appears to do nothing, that is the mathematics rather than a fault: Character "
+        "scales with the index ARRIVING at this operator, so an operator nothing modulates is "
+        "its plain waveform at every setting. Give it something to answer to -- a matrix cell, "
+        "or its own feedback -- and the knob comes alive.");
+}
+
+float OperatorWave::plain (const char* field) const
+{
+    return plainOf (ids::op (operator_, field));
+}
+
+float OperatorWave::plainOf (const juce::String& id) const
+{
+    if (auto* parameter = processor_.getState().getParameter (id))
+        return parameter->convertFrom0to1 (parameter->getValue());
+
+    return 0.0f;
+}
+
+void OperatorWave::paint (juce::Graphics& g)
+{
+    const auto tint = ui::design::tintFor (palette_.accent, operator_);
+    auto plot = getLocalBounds().toFloat().reduced (3.0f);
+
+    g.setColour (palette_.background.darker (0.25f));
+    g.fillRoundedRectangle (plot, 3.0f);
+
+    g.setColour (palette_.dimText.withAlpha (0.25f));
+    g.drawLine (plot.getX(), plot.getCentreY(), plot.getRight(), plot.getCentreY(), 1.0f);
+
+    // The same operator the voice runs, configured from the patch.
+    dsp::FmOperator op;
+    op.prepare (kWaveSamples);          // one cycle per "second"
+    op.setFrequency (1.0);
+    op.setShape (static_cast<dsp::FmShape> (juce::jlimit (
+        0, static_cast<int> (dsp::FmShape::count) - 1,
+        static_cast<int> (std::lround (plain ("Shape"))))));
+
+    const double character = plain ("Character");
+    op.setCharacter (character);
+    op.setTilt (1.0 - character);
+    op.setFold (plain ("Fold"));
+
+    // Feedback is `o<n>Feedback` -- it is *drawn* on the matrix diagonal,
+    // because a cell modulating an operator with itself is the same idea as one
+    // modulating it with a neighbour, but it is its own parameter rather than a
+    // cell: `m11` does not exist.
+    const double feedback = plain ("Feedback");
+    op.setFeedback (feedback);
+    op.setQuadratureNeeded (false);
+
+    // The modulation arriving from this operator's row of the matrix, at each
+    // modulator's frequency relative to this one. Exactly the three sums
+    // `OperatorMatrix::process` builds, from the patch rather than the audio.
+    struct Incoming { double index; double ratio; };
+    std::vector<Incoming> incoming;
+
+    const double ownRatio = std::max (1.0e-6, static_cast<double> (plain ("Ratio")));
+
+    for (int from = 0; from < kNumOperators; ++from)
+    {
+        if (from == operator_)
+            continue;   // the diagonal is feedback, which the operator does itself
+
+        const double cell = plainOf (ids::cell (operator_, from));
+
+        if (cell <= 0.0)
+            continue;
+
+        const double sourceRatio = std::max (1.0e-6,
+            static_cast<double> (plainOf (ids::op (from, "Ratio"))));
+
+        incoming.push_back ({ cell, sourceRatio / ownRatio });
+    }
+
+    juce::Path wave;
+
+    for (int i = 0; i < kWaveSamples; ++i)
+    {
+        const double t = static_cast<double> (i) / kWaveSamples;
+
+        double pm = 0.0;
+        double am = 0.0;
+        double norm = 0.0;
+
+        for (const auto& source : incoming)
+        {
+            const double theta = kTwoPi * source.ratio * t;
+
+            pm += source.index * std::sin (theta);
+            am += source.index * std::cos (theta);
+            norm += source.index;
+        }
+
+        const double value = op.advance (pm, am, norm);
+        const float x = plot.getX() + plot.getWidth() * static_cast<float> (t);
+        const float y = plot.getCentreY()
+                      - plot.getHeight() * 0.44f * static_cast<float> (juce::jlimit (-1.0, 1.0, value));
+
+        if (i == 0)
+            wave.startNewSubPath (x, y);
+        else
+            wave.lineTo (x, y);
+    }
+
+    g.setColour (tint);
+    g.strokePath (wave, juce::PathStrokeType (1.4f));
+
+    // Say when the operator has nothing arriving, because that is when CHAR
+    // and the index look broken and are not.
+    if (incoming.empty() && feedback <= 0.0)
+    {
+        g.setColour (palette_.dimText.withAlpha (0.7f));
+        g.setFont (juce::FontOptions (9.0f));
+        g.drawText ("unmodulated", plot.reduced (4.0f, 2.0f),
+                    juce::Justification::topRight);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The ADV envelope graph
@@ -564,6 +705,35 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
 
         addAndMakeVisible (*box);
         modeBoxes_[static_cast<std::size_t> (op)] = std::move (box);
+
+        // ---- F9: the shape choice and the wave it produces ------------------
+
+        auto shape = std::make_unique<juce::ComboBox>();
+        ui::styleChoice (*shape, palette_, tint);
+        shape->addItemList (choices::fmShape, 1);
+        shape->setTooltip (
+            "The operator's waveform. **Sine is the default and it is the one to reach for**: "
+            "in FM the harmonics of a non-sine operator MULTIPLY the sideband ladder rather "
+            "than adding to it, so a Saw modulator at index 4 is a different order of "
+            "brightness -- and of aliasing -- than a sine at the same index.\n\n"
+            "They are safe to use anyway, because each shape is a fixed sum of harmonics "
+            "(2 for Bright, 8 for Triangle and Square, 16 for Saw) and the bandwidth predictor "
+            "is told the number, so the index cap protects them by arithmetic rather than by "
+            "luck. Expect the cap to bite sooner on Saw, and expect Auto oversampling to be "
+            "worth the CPU.\n\n"
+            "As a CARRIER a shape is a straightforward tone change. As a MODULATOR it is the "
+            "loudest control on the panel.");
+
+        shapeAttachments_[static_cast<std::size_t> (op)]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::op (op, "Shape"), *shape);
+
+        addAndMakeVisible (*shape);
+        shapeBoxes_[static_cast<std::size_t> (op)] = std::move (shape);
+
+        waves_[static_cast<std::size_t> (op)]
+            = std::make_unique<OperatorWave> (owner, op, palette_);
+        addAndMakeVisible (*waves_[static_cast<std::size_t> (op)]);
 
         // Key scaling and velocity, on their own plate.
         static const char* const scalingCaptions[] { "BREAK", "BELOW", "ABOVE",
@@ -1369,6 +1539,14 @@ void StrydaEditor::applyPageVisibility()
         if (box != nullptr)
             box->setVisible (operators);
 
+    for (auto& box : shapeBoxes_)
+        if (box != nullptr)
+            box->setVisible (operators);
+
+    for (auto& wave : waves_)
+        if (wave != nullptr)
+            wave->setVisible (operators);
+
     matrix_.setVisible (matrix);
     bandwidth_.setVisible (matrix);
     indexCapBox_.setVisible (matrix);
@@ -1653,7 +1831,7 @@ void StrydaEditor::layoutOperators (juce::Rectangle<int> area)
     // Three rows share whatever height the page has, rather than each taking a
     // fixed 74: that is what lets the window shrink instead of clipping.
     const int modeRowHeight = 26;
-    const int rowHeight = juce::jmax (34, (area.getHeight() - modeRowHeight
+    const int rowHeight = juce::jmax (34, (area.getHeight() - modeRowHeight * 2 - kWaveHeight
                                              - ui::design::kValueHeight - 8
                                              - kCaptionHeight * 3) / 3);
 
@@ -1663,6 +1841,14 @@ void StrydaEditor::layoutOperators (juce::Rectangle<int> area)
         strip.removeFromTop (ui::design::kValueHeight + 8);
 
         auto& controls = strips_[static_cast<std::size_t> (op)];
+
+        // The wave first, at the top of the strip, because it is what the eye
+        // goes to and because every knob under it changes it.
+        waves_[static_cast<std::size_t> (op)]
+            ->setBounds (strip.removeFromTop (kWaveHeight).reduced (2, 0));
+
+        auto shapeRow = strip.removeFromBottom (modeRowHeight);
+        shapeBoxes_[static_cast<std::size_t> (op)]->setBounds (shapeRow.reduced (6, 2));
 
         auto modeRow = strip.removeFromBottom (modeRowHeight);
         modeBoxes_[static_cast<std::size_t> (op)]->setBounds (modeRow.reduced (6, 2));

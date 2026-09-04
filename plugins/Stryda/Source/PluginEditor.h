@@ -60,6 +60,48 @@ private:
     std::array<std::unique_ptr<Control>, kNumOperators> noise_ {};
 };
 
+/// One operator's actual output wave, for one cycle.
+///
+/// ---------------------------------------------------------------------------
+/// **It runs the real operator. Nothing here draws a sine and bends it**
+/// ---------------------------------------------------------------------------
+///
+/// A picture that merely resembles the wave is worse than no picture, because
+/// it is believed. So this steps a live `dsp::FmOperator` -- the same class the
+/// voice runs -- through one cycle, fed the same three numbers `OperatorMatrix`
+/// feeds it every sample:
+///
+///     pm   = sum over modulators of  index * sin(theta_from)
+///     am   = sum over modulators of  index * cos(theta_from)
+///     norm = sum over modulators of  index
+///
+/// built from this operator's column of the patch's matrix. Feedback, phase
+/// distortion (Fold), the waveform choice and Character all therefore appear
+/// exactly as they sound.
+///
+/// **And it explains the thing that otherwise looks like a bug.** Character is
+/// the ModFM exponential `exp(r k cos - r k)`, and `k` is the index *arriving*
+/// at this operator: with nothing modulating it, k = 0, the exponential is 1,
+/// and the wave stays whatever the shape says at every Character setting. A
+/// player who turns CHAR on a carrier nobody modulates hears nothing and
+/// reasonably concludes the knob is broken. Here they see why instead.
+class OperatorWave final : public juce::Component,
+                           public juce::SettableTooltipClient
+{
+public:
+    OperatorWave (StrydaProcessor& owner, int operatorIndex, ui::Palette palette);
+
+    void paint (juce::Graphics& g) override;
+
+private:
+    [[nodiscard]] float plain (const char* field) const;
+    [[nodiscard]] float plainOf (const juce::String& id) const;
+
+    StrydaProcessor& processor_;
+    int operator_ { 0 };
+    ui::Palette palette_;
+};
+
 /// One ADV envelope drawn as the polyline it is, with the point you clicked
 /// last picked out.
 ///
@@ -186,6 +228,12 @@ private:
     std::array<std::unique_ptr<juce::ComboBox>, kNumOperators> modeBoxes_ {};
     std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>,
                kNumOperators> modeAttachments_ {};
+
+    /// F9: the waveform choice and the wave it actually produces, one per strip.
+    std::array<std::unique_ptr<juce::ComboBox>, kNumOperators> shapeBoxes_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>,
+               kNumOperators> shapeAttachments_ {};
+    std::array<std::unique_ptr<OperatorWave>, kNumOperators> waves_ {};
 
     std::vector<Control*> globals_;
 

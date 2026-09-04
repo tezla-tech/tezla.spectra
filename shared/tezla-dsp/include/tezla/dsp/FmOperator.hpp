@@ -69,6 +69,7 @@
 #include <cmath>
 #include <numbers>
 
+#include <tezla/dsp/FmShapes.hpp>
 #include <tezla/dsp/PhaseShaper.hpp>
 
 namespace tezla::dsp
@@ -151,6 +152,17 @@ public:
     void setFold (double amount) noexcept { fold_.setAmount (amount); }
     [[nodiscard]] double getFold() const noexcept { return fold_.getAmount(); }
 
+    /// The waveform this operator reads. **`FmShape::sine` is the default and
+    /// costs nothing** -- `advance` branches to `std::sin` exactly as it did
+    /// before shapes existed, so every patch saved before them is bit-exact.
+    ///
+    /// Anything else carries `dsp::fmShapeHarmonics` harmonics of the
+    /// operator's own frequency, which multiplies the sideband ladder it
+    /// produces by the same number. `FmBandwidth` is told; the index cap
+    /// answers it.
+    void setShape (FmShape shape) noexcept { shape_ = shape; }
+    [[nodiscard]] FmShape getShape() const noexcept { return shape_; }
+
     /// Where the formant sits, in Hz, when the mode is `formant`.
     void setFormantHz (double hz) noexcept { formantHz_ = hz > 0.0 ? hz : 0.0; }
 
@@ -220,7 +232,8 @@ public:
         }
         else
         {
-            const double theta = kTwoPi * (shaped + tilt_ * pmCycles + self);
+            const double cycles = shaped + tilt_ * pmCycles + self;
+            const double theta = kTwoPi * cycles;
 
             // Branched so Character 0 is the classic operator bit for bit, and
             // pays nothing for the other half of the equation existing.
@@ -228,8 +241,33 @@ public:
                                       ? std::exp (kTwoPi * character_ * (amCycles - normCycles))
                                       : 1.0;
 
-            out_ = envelope * std::sin (theta);
-            quadrature_ = needsQuadrature_ ? envelope * std::cos (theta) : 0.0;
+            // Branched to skip the call, not to guarantee the result: the
+            // bit-exactness guarantee lives in `FmShapeTables::read`, which
+            // returns `std::sin` for Sine before it touches a table. Removing
+            // *this* branch changes nothing at all, and a break-check proved
+            // it -- every shape test stayed green. The guard that matters is
+            // the one in `read`, and breaking that is what turns the
+            // bit-exactness test red.
+            if (shape_ == FmShape::sine)
+            {
+                out_ = envelope * std::sin (theta);
+                quadrature_ = needsQuadrature_ ? envelope * std::cos (theta) : 0.0;
+            }
+            else
+            {
+                const auto& tables = FmShapeTables::instance();
+
+                out_ = envelope * tables.read (shape_, cycles);
+
+                // The quadrature partner is the shape read a quarter cycle
+                // early. For a sine that is exactly cos; for anything else it
+                // is the Hilbert partner only harmonic by harmonic, which is
+                // what the ModFM exponential wants -- it reads a modulator's
+                // *cosine companion*, and a quarter-cycle shift is that
+                // companion for every partial the shape actually has.
+                quadrature_ = needsQuadrature_ ? envelope * tables.read (shape_, cycles + 0.25)
+                                               : 0.0;
+            }
         }
 
         history_[1] = history_[0];
@@ -303,6 +341,7 @@ private:
 
     double character_ { 0.0 };
     double tilt_ { 1.0 };
+    FmShape shape_ { FmShape::sine };
     double feedback_ { 0.0 };
 
     Mode mode_ { Mode::normal };

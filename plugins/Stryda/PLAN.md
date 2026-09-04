@@ -398,6 +398,29 @@ sine (1 harmonic, the default and bit-exactly what ships today), half sine,
 triangle-ish (odd, 1/n²), square-ish (odd, 1/n), saw-ish (all, 1/n), and a
 two-harmonic "bright" that is the cheapest useful step away from a sine.
 
+**Built and measured** (`tests/test_FmShapes.cpp`, five tests):
+
+| claim | measured |
+|---|---|
+| Sine is the pre-shape operator, bit for bit | 0 of 48 000 samples differ, feedback and PM engaged |
+| Every shape stops at its promised harmonic | highest seen == promised for all six; energy above it −300 dB (the FFT floor) |
+| Every shape is unit peak and zero mean | peak 1.000000, mean < 3e-16 |
+| A saw modulator widens the prediction | 14 740 Hz → 232 540 Hz, **15.8×** |
+| …and the cap answers it | sine modulator **exactly 1.000000**, saw modulator 0.217701 |
+| Inharmonic energy in the audible band at the internal rate | sine −300.0, half sine −96.4, triangle −102.9, saw −90.7, square −88.3 dB — the gate is −60 |
+
+Two of those five tests were wrong on their first run and the code was right,
+which is worth writing down because both mistakes are easy to repeat:
+
+- **Half sine reported 255 harmonics and +11 dB of leak.** `|sin|`'s series has
+  only *even* harmonics — it has no first harmonic at all — and the test
+  referenced harmonic 1, so it was dividing every partial by the FFT's own
+  floor. Referencing the *strongest* partial instead gives 8, as promised.
+- **The aliasing test reported +13.3 dB for a pair that has none.** 220 Hz at
+  192 kHz over 65 536 samples is bin 75.09, not 75: every partial smeared
+  across neighbours and landed in the "inharmonic" pile. Putting the carrier
+  exactly on bin 75 (219.7265625 Hz) takes a clean sine pair to −300 dB.
+
 **The list is a choice parameter, so it is append-only and frozen from the
 commit it ships in** (CLAUDE.md section 8), and sine must be **index 0** and
 **bit-exactly** today's operator, or every existing Stryda patch changes.
@@ -430,7 +453,8 @@ first `pending` row.**
 | F6 microtuning at the ratio, ratio sequencer, named braids | done — and the panel is **paged**, at the user's request. Not yet played on the rig |
 | F7 vowel lane + mangle chain, and Split arrives | done — not yet played on the rig |
 | F8 modulation layer + dice gate | done — not yet played on the rig. Two new pages, ADV and MOD |
-| F9 editor + close-out, **plus the two things the user asked for on 2026-09-04**: an operator waveform display and a per-operator shape choice | pending |
+| F9a operator waveform display + shape choice (the two the user asked for on 2026-09-04) | done — not yet played on the rig |
+| F9b editor close-out: spectrum with the predicted edge, NOTES page, presets, registry flip, validator on all fourteen | pending |
 
 **Measured at F1** (`tezla-measure stryda`, `tezla-tests`; the reference
 operator is the published closed form written out as plain arithmetic, so what

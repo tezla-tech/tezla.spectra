@@ -48,6 +48,13 @@ struct OperatorParameters
     // ---- F4 -----------------------------------------------------------------
 
     double fold { 0.0 };            ///< phase distortion, 0 = identity
+
+    /// The waveform, as a `dsp::FmShape`. **0 is Sine and is bit-exact**,
+    /// so a patch from before shapes existed renders unchanged. Anything
+    /// else multiplies the sidebands this operator produces by
+    /// `dsp::fmShapeHarmonics`, which the bandwidth predictor is told.
+    int shape { 0 };
+
     int mode { 0 };                 ///< 0 normal, 1 formant
     double formantHz { 800.0 };
     double formantDepth { 1.0 };    ///< the ModFM index k, in cycles
@@ -335,6 +342,8 @@ public:
 
             matrix_.setFrequency (op, hz);
             matrix_.setCharacter (op, settings.character);
+            matrix_.setShape (op, static_cast<dsp::FmShape> (
+                std::clamp (settings.shape, 0, static_cast<int> (dsp::FmShape::count) - 1)));
             matrix_.setFeedback (op, settings.feedback);
             matrix_.setFold (op, settings.fold);
             matrix_.setMode (op, settings.mode == 1 ? dsp::FmOperator::Mode::formant
@@ -699,6 +708,15 @@ public:
 
             bandwidth.setOperatorFrequency (op, hz);
             bandwidth.setFeedback (op, settings.feedback);
+
+            // **A non-sine operator is only safe because of this line.** Its
+            // waveform carries n harmonics of its own frequency, so it puts
+            // its sideband ladder n times further out; leaving the predictor
+            // at 1 would let a saw modulator through the cap at sixteen times
+            // the bandwidth the cap thought it was allowing.
+            bandwidth.setHarmonics (op, dsp::fmShapeHarmonics (
+                static_cast<dsp::FmShape> (std::clamp (
+                    settings.shape, 0, static_cast<int> (dsp::FmShape::count) - 1))));
 
             for (int from = 0; from < kNumOperators; ++from)
                 bandwidth.setIndex (from, op,

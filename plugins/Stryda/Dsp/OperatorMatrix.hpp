@@ -118,6 +118,21 @@ public:
             operators_[index (op)].setFold (amount);
     }
 
+    /// The operator's waveform. Sine is the default and is bit-exact.
+    void setShape (int op, dsp::FmShape shape) noexcept
+    {
+        if (inRange (op))
+        {
+            shapes_[index (op)] = shape;
+            operators_[index (op)].setShape (shape);
+        }
+    }
+
+    [[nodiscard]] dsp::FmShape getShape (int op) const noexcept
+    {
+        return shapes_[index (std::clamp (op, 0, kNumOperators - 1))];
+    }
+
     void setMode (int op, dsp::FmOperator::Mode mode) noexcept
     {
         if (inRange (op))
@@ -313,6 +328,7 @@ private:
     std::array<std::array<double, kNumOperators>, kNumOperators> cells_ {};
     std::array<double, kNumOperators> noiseCells_ {};
     std::array<double, kNumOperators> characters_ {};
+    std::array<dsp::FmShape, kNumOperators> shapes_ {};
     std::array<double, kNumOperators> levels_ {};
     std::array<double, kNumOperators> pans_ {};
     std::array<double, kNumOperators> leftGains_ {};

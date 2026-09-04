@@ -216,7 +216,11 @@ inline constexpr int kSchemaV5 = 5;
 /// whole layer is skipped and an F7 project is bit-identical.
 inline constexpr int kSchemaV6 = 6;
 
-inline constexpr int kStateSchemaVersion = kSchemaV6;
+/// F9: a waveform choice per operator. **Sine is index 0 and is bit-exact**,
+/// so every project saved before shapes existed reopens sounding the same.
+inline constexpr int kSchemaV7 = 7;
+
+inline constexpr int kStateSchemaVersion = kSchemaV7;
 
 namespace choices
 {
@@ -264,6 +268,12 @@ inline const juce::StringArray modSources = fromTable (source::names, source::co
 inline const juce::StringArray modDests = fromTable (dest::names, dest::count);
 
 /// **Append-only.** Matches `dsp::Lfo::Wave` index for index.
+/// **Append-only**, built from `dsp::fmShapeNames` rather than retyped: an
+/// operator stores an index, so a list that drifts from the enum repoints every
+/// saved operator's waveform.
+inline const juce::StringArray fmShape
+    = fromTable (dsp::fmShapeNames, static_cast<int> (dsp::FmShape::count));
+
 inline const juce::StringArray lfoWave { "Sine", "Triangle", "Saw up", "Saw down",
                                          "Square", "Random", "Smooth random" };
 } // namespace choices
