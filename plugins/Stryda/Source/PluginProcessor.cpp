@@ -31,6 +31,31 @@ namespace {
     return { id, schema };
 }
 
+constexpr const char* kScaleNameProperty = "scaleName";
+constexpr const char* kScaleTextProperty = "scaleText";
+constexpr const char* kKeyboardMapProperty = "keyboardMap";
+constexpr const char* kConcertPitchProperty = "concertPitch";
+
+/// The tempo divisions as a JUCE list, built once from the shared table.
+///
+/// **Append-only for the same reason every other choice list is**: a synced
+/// sequencer stores which division it chose, not what it means, and
+/// `dsp::divisions` carries a static_assert saying so.
+[[nodiscard]] const juce::StringArray& divisionNames()
+{
+    static const juce::StringArray names = []
+    {
+        juce::StringArray list;
+
+        for (int i = 0; i < dsp::numDivisions; ++i)
+            list.add (dsp::divisions[static_cast<std::size_t> (i)].name);
+
+        return list;
+    }();
+
+    return names;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -109,6 +134,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
         layout.add (std::make_unique<juce::AudioParameterChoice> (
             versioned (ids::op (op, "Mode"), kSchemaV2), label + "Mode",
             choices::operatorMode, 0));
+
+        // F5 appended the extras; F6 appends the ratio mode. Free at index 0
+        // returns the ratio bit for bit, so this is inert until asked for.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::op (op, "RatioMode"), kSchemaV4), label + "Ratio mode",
+            choices::ratioMode, 0));
     }
 
     // The thirty off-diagonal cells. The diagonal is Feedback, above.
@@ -183,6 +214,36 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
     add (ids::unisonIndex, "Unison index spread",
          skewed (0.0f, 2.0f, 0.3f), 0.0f, "cyc", 2, kSchemaV3);
 
+    // ---- F6, appended at schema 4 ------------------------------------------
+    //
+    // Sixteen steps whose value is a RATIO, plus the five controls that decide
+    // what the pattern does with them. Off by default and with no destination,
+    // so nothing here can touch an F5 project.
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        versioned (ids::seqOn, kSchemaV4), "Sequencer", false));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::seqTarget, kSchemaV4), "Sequencer target",
+        choices::seqTarget, 0));
+
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        versioned (ids::seqLength, kSchemaV4), "Sequencer steps",
+        1, RatioSequencer::kMaxSteps, 8));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::seqDivision, kSchemaV4), "Sequencer division",
+        divisionNames(), 7));   // 1/16
+
+    add (ids::seqGlide, "Sequencer glide", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV4);
+
+    // Every step starts at 1.0 -- the ratio the operator would have had anyway,
+    // so switching the sequencer on with an untouched pattern changes nothing
+    // audible and the player hears the rhythm appear as they move steps.
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        add (ids::step (i), "Step " + juce::String (i + 1),
+             skewed (0.25f, 32.0f, 4.0f), 1.0f, {}, 2, kSchemaV4);
+
     return layout;
 }
 
@@ -250,6 +311,8 @@ void StrydaProcessor::pullParameters()
         settings.velLevel = raw (ids::op (op, "VelLevel"));
         settings.velIndex = raw (ids::op (op, "VelIndex"));
 
+        settings.ratioMode = static_cast<int> (std::lround (raw (ids::op (op, "RatioMode"))));
+
         for (int from = 0; from < kNumOperators; ++from)
             parameters_.indices[static_cast<std::size_t> (op)][static_cast<std::size_t> (from)]
                 = op == from ? 0.0 : raw (ids::cell (op, from));
@@ -296,6 +359,21 @@ void StrydaProcessor::pullParameters()
     extras.unisonSpread = raw (ids::unisonSpread);
     extras.unisonIndexSpread = raw (ids::unisonIndex);
 
+    auto& sequencer = engine_.getSequencer();
+
+    sequencer.setEnabled (raw (ids::seqOn) > 0.5f);
+
+    // Index 0 of the target list is "Off", so the operator index is one less --
+    // which is how a destination-less state is spelt without a magic number.
+    sequencer.setTarget (static_cast<int> (std::lround (raw (ids::seqTarget))) - 1);
+    sequencer.setLength (static_cast<int> (std::lround (raw (ids::seqLength))));
+    sequencer.setGlide (raw (ids::seqGlide));
+
+    engine_.setSequencerDivision (static_cast<int> (std::lround (raw (ids::seqDivision))));
+
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        sequencer.setStep (i, raw (ids::step (i)));
+
     engine_.setPolyphony (static_cast<int> (std::lround (raw (ids::polyphony))));
     engine_.setOversamplingMode (static_cast<dsp::OversamplingMode> (
         static_cast<int> (std::lround (raw (ids::oversampling)))));
@@ -331,9 +409,34 @@ void StrydaProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer, juc
     if (numSamples <= 0 || ! prepared_)
         return;
 
+    collectTuning();
+
+    // **Before `setParameters`, not after.** The ratio modes are resolved
+    // against the scale inside `setParameters`, so a tuning that arrived this
+    // block has to be in place first or the ratios spend one block snapped to
+    // the previous scale.
     pullParameters();
     engine_.setParameters (parameters_);
     engine_.updateFactor (isNonRealtime());
+
+    // The transport, once per block, so the ratio sequencer locks to the bar.
+    // The engine keeps its rate between anchors and free-runs, which is what
+    // makes the step edges sample-accurate inside the block rather than only
+    // at its head -- and a growl that is not in time with the drums is a
+    // mistake, not a texture.
+    double ppq = 0.0;
+    double bpm = 120.0;
+    bool playing = false;
+
+    if (auto* head = getPlayHead())
+        if (const auto position = head->getPosition())
+        {
+            ppq = position->getPpqPosition().orFallback (0.0);
+            bpm = position->getBpm().orFallback (120.0);
+            playing = position->getIsPlaying();
+        }
+
+    engine_.setTransport (ppq, bpm, playing);
 
     if (scratch_.getNumSamples() < numSamples)
         scratch_.setSize (2, numSamples, false, false, true);
@@ -612,6 +715,13 @@ void StrydaProcessor::getStateInformation (juce::MemoryBlock& destData)
     tree.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
     tree.setProperty ("tooltips", tooltipsEnabled_, nullptr);
 
+    // The scale travels with the project as .scl text, so a session opened on
+    // another machine does not need the file that made it.
+    tree.setProperty (kScaleNameProperty, scaleName_, nullptr);
+    tree.setProperty (kScaleTextProperty, scalaText_, nullptr);
+    tree.setProperty (kKeyboardMapProperty, keyboardMapText_, nullptr);
+    tree.setProperty (kConcertPitchProperty, concertPitchHz_, nullptr);
+
     if (auto xml = tree.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -623,8 +733,210 @@ void StrydaProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             auto tree = juce::ValueTree::fromXml (*xml);
             tooltipsEnabled_ = tree.getProperty ("tooltips", true);
+
+            concertPitchHz_ = tree.getProperty (kConcertPitchProperty, 440.0);
+
+            const juce::String scaleText = tree.getProperty (kScaleTextProperty, juce::String());
+            const juce::String name = tree.getProperty (kScaleNameProperty, juce::String());
+
+            if (scaleText.isNotEmpty())
+                loadScalaText (scaleText, name);
+            else if (name.isNotEmpty())
+                selectBuiltInScale (name);
+            else
+                resetTuning();
+
+            const juce::String mapText = tree.getProperty (kKeyboardMapProperty, juce::String());
+
+            if (mapText.isNotEmpty())
+                loadKeyboardMapText (mapText);
+
+            publishTuning();
             state_.replaceState (tree);
         }
+}
+
+// ---------------------------------------------------------------------------
+// The tuning
+// ---------------------------------------------------------------------------
+//
+// Message-thread side, handed to the audio thread under a spin lock -- the
+// pattern Malleus established and Ictus follows. What is new here is what the
+// engine does with it: `resolveRatio` snaps an operator's RATIO to the scale's
+// degrees, so the whole sideband ladder lands in the session's tuning at every
+// key rather than only the notes doing so.
+
+void StrydaProcessor::publishTuning()
+{
+    const juce::SpinLock::ScopedLockType lock (tuningLock_);
+
+    pendingScale_ = scale_;
+    pendingMap_ = hasKeyboardMap_ ? keyboardMap_ : dsp::KeyboardMap {};
+    pendingConcertHz_ = concertPitchHz_;
+
+    tuningPending_.store (true, std::memory_order_release);
+}
+
+void StrydaProcessor::collectTuning() noexcept
+{
+    if (! tuningPending_.load (std::memory_order_acquire))
+        return;
+
+    const juce::SpinLock::ScopedTryLockType lock (tuningLock_);
+
+    // A try-lock, not a lock: the audio thread never waits on the message
+    // thread. Missing a swap costs one block of the old tuning and the flag
+    // stays set, so the next block takes it.
+    if (! lock.isLocked())
+        return;
+
+    auto& tuning = engine_.getTuning();
+
+    tuning.setScale (pendingScale_);
+    tuning.setKeyboardMap (pendingMap_);
+    tuning.setConcertPitch (pendingConcertHz_);
+
+    tuningPending_.store (false, std::memory_order_release);
+}
+
+juce::String StrydaProcessor::loadScalaText (const juce::String& text,
+                                             const juce::String& name)
+{
+    dsp::Scale parsed;
+
+    const auto result = dsp::parseScl (text.toStdString(), parsed);
+
+    if (! result.ok)
+        return "Line " + juce::String (result.line) + ": " + juce::String (result.message);
+
+    scale_ = parsed;
+    scalaText_ = text;
+    scaleName_ = name.isNotEmpty() ? name : juce::String (parsed.name);
+
+    publishTuning();
+    return {};
+}
+
+juce::String StrydaProcessor::loadKeyboardMapText (const juce::String& text)
+{
+    dsp::KeyboardMap parsed;
+
+    const auto result = dsp::parseKbm (text.toStdString(), parsed);
+
+    if (! result.ok)
+        return "Line " + juce::String (result.line) + ": " + juce::String (result.message);
+
+    keyboardMap_ = parsed;
+    keyboardMapText_ = text;
+    hasKeyboardMap_ = true;
+
+    publishTuning();
+    return {};
+}
+
+juce::String StrydaProcessor::selectBuiltInScale (const juce::String& name)
+{
+    for (const auto& scale : dsp::scales::all())
+    {
+        if (name == juce::String (scale.name))
+        {
+            scale_ = scale;
+            scaleName_ = name;
+            scalaText_.clear();
+
+            publishTuning();
+            return {};
+        }
+    }
+
+    return "No built-in scale is named \"" + name + "\".";
+}
+
+void StrydaProcessor::resetTuning()
+{
+    scale_ = dsp::scales::twelveToneEqual();
+    scaleName_ = scale_.name;
+    scalaText_.clear();
+    keyboardMap_ = {};
+    keyboardMapText_.clear();
+    hasKeyboardMap_ = false;
+
+    publishTuning();
+}
+
+void StrydaProcessor::setConcertPitch (double hz)
+{
+    concertPitchHz_ = std::clamp (hz, dsp::Tuning::kMinimumConcertHz,
+                                  dsp::Tuning::kMaximumConcertHz);
+    publishTuning();
+}
+
+double StrydaProcessor::getRootHz() const noexcept
+{
+    dsp::Tuning preview;
+    preview.setScale (scale_);
+    preview.setConcertPitch (concertPitchHz_);
+
+    return preview.frequencyFor (preview.getRootNote());
+}
+
+juce::String StrydaProcessor::describeTuning() const
+{
+    return scaleName_ + "  --  " + juce::String (scale_.ratios.size())
+             + " degrees, A4 = " + juce::String (concertPitchHz_, 2) + " Hz";
+}
+
+double StrydaProcessor::resolvedRatio (int op) const
+{
+    if (op < 0 || op >= kNumOperators)
+        return 1.0;
+
+    const auto value = [this] (const juce::String& id)
+    {
+        const auto* parameter = state_.getRawParameterValue (id);
+        return parameter != nullptr ? static_cast<double> (parameter->load()) : 0.0;
+    };
+
+    const auto mode = static_cast<RatioMode> (
+        static_cast<int> (std::lround (value (ids::op (op, "RatioMode")))));
+
+    return resolveRatio (value (ids::op (op, "Ratio")), mode, scale_);
+}
+
+void StrydaProcessor::applyBraid (int index)
+{
+    if (index < 0 || index >= braids::kCount)
+        return;
+
+    const auto& braid = braids::table()[static_cast<std::size_t> (index)];
+
+    const auto set = [this] (const juce::String& id, float value)
+    {
+        if (auto* parameter = state_.getParameter (id))
+            parameter->setValueNotifyingHost (
+                parameter->convertTo0to1 (value));
+    };
+
+    for (int to = 0; to < kNumOperators; ++to)
+    {
+        for (int from = 0; from < kNumOperators; ++from)
+        {
+            const auto amount = static_cast<float> (
+                braid.cells[static_cast<std::size_t> (to)][static_cast<std::size_t> (from)]);
+
+            // The diagonal is the operator's own feedback, which is the same
+            // idea as a cell but a different parameter -- OperatorMatrix keeps
+            // it on `Oscillator::setFeedback` because the recursion is
+            // bounded there and nowhere else.
+            if (to == from)
+                set (ids::op (to, "Feedback"), amount);
+            else
+                set (ids::cell (to, from), amount);
+        }
+
+        set (ids::op (to, "Level"),
+             static_cast<float> (braid.levels[static_cast<std::size_t> (to)]));
+    }
 }
 
 juce::AudioProcessorEditor* StrydaProcessor::createEditor()

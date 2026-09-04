@@ -353,7 +353,7 @@ first `pending` row.**
 | F4 `PhaseShaper`, formant operator, key scaling, velocity | done in code; not yet played on the rig. **Exponential-FM cells deferred** — see below |
 | **FIX** index cap hung the audio thread; oversampling control attached | done — see "The rig freeze" below |
 | F5 sub lane, per-voice filter, unison index spread | done — **Split deferred to F7**, see below. Not yet played on the rig |
-| F6 microtuning at the ratio, ratio sequencer, named braids | pending |
+| F6 microtuning at the ratio, ratio sequencer, named braids | done — and the panel is **paged**, at the user's request. Not yet played on the rig |
 | F7 vowel lane + mangle chain | pending |
 | F8 modulation layer + dice gate | pending |
 | F9 editor + close-out | pending |
@@ -377,6 +377,65 @@ is measured is the mathematics the predictor claims to predict):
 | Character 0 -> 1 at index 5: spectral centroid | 4.14 -> **2.69** harmonics |
 | Character 0 -> 1: partial-order reversals (the Bessel oscillation) | 2 -> **0** |
 | index needed at Character 1 to match Character 0's centroid | 11.12 vs 5.00 — **+122 %** |
+
+### F6, the paged panel, and a sequencer that was silently inert
+
+Delivered: `Scale::snapRatio` and the **three ratio modes** (Free / Harmonic /
+Scale) per operator, the **ratio sequencer** with the step-boundary loop cut,
+the **six named braids**, and the shared **tuning page** with the processor as
+its `ui::TuningHost`. Twenty-six parameters at `kSchemaV4`, appended, all inert
+by default.
+
+**The panel is now paged** — OPERATORS / MATRIX / VOICE / SEQ / TUNING — and the
+window minimum came back down from 980×760 to **860×520**. That was not a
+design preference: the user reported the F5 panel did not fit their screen, and
+one page of everything was also the wrong shape for a phase that adds a
+sequencer and a tuning page. Each page lays its rows out from the height it is
+given, so a small window gets denser rather than clipped.
+
+**Three bugs, and the shape of each is worth keeping.**
+
+1. **The sequencer was completely inert and three tests said it was fine.**
+   `dsp::StepSequencer` is a *modulation* sequencer: `setStep` clamps to −1..1,
+   because that is what a step driving a depth or a pan means. Handing it a
+   ratio of 4 stored 1. A block-size test, a phase-continuity test and an
+   is-it-enabled test all passed — the first two because a signal that never
+   changes is trivially smooth and trivially buffer-independent, the third
+   because step 0 still differed from the patch ratio. What caught it was a
+   test that asked **where** the jump landed. Steps are stored logarithmically
+   now, which also makes glide geometric: a glide from 1 to 4 passes through 2
+   at the halfway point, which is an octave a beat rather than an arbitrary
+   2.5.
+
+2. **The step-boundary cut reached the parameters but not the voices.** Pushing
+   the new ratio into `parameters_` and waiting for the next control chunk to
+   apply it puts the jump back where it would have been without the cut. The
+   engine now applies parameters at a step edge as well as at a chunk boundary;
+   the cap stays on its own coarser sub-grid, because it costs a bisection
+   where applying parameters costs arithmetic.
+
+3. **Harmonic mode snapped to the simplest ratio, not the nearest.**
+   `dsp::nearestRatio` returns the simplest p:q *inside the tolerance*, falling
+   back to the nearest when none qualifies — so a wide tolerance made
+   everything qualify and 3.49 snapped to 3/1 rather than 7/2. A quantiser
+   wants the nearest, always, so the tolerance is deliberately unreachable.
+
+**Two more decorations, found by breaking them.** The block-size test passes
+with the step cut removed — the control-chunk grid is already stream-anchored,
+so buffer independence was never what the cut protects. And the scale-mode test
+passed with the repeat-above scan removed, because none of its cases sat just
+under a repeat boundary. Both now assert what they claim: the first differing
+sample lands at the edge (4139 measured against a computed 4138, the difference
+being the decimator's own smear) rather than at the next chunk (4144), and 1.95
+snaps up to 2/1 rather than down to 3/2.
+
+**What Scale mode is for.** `Tuning::nearestScaleHz` snaps an absolute
+frequency against the root's pitch. A ratio is a different quantity — an
+interval above the note — so it snaps against 1/1 and the answer is the same at
+every key. That is the whole point: a modulator snapped to the loaded scale
+puts its entire sideband ladder on that scale's degrees, everywhere on the
+keyboard. Fixed-Hz operators and the formant mode are exempt and say so: a
+formant centre is a vocal-tract resonance, not a musical interval.
 
 ### F5, and the one thing it deliberately does not ship
 

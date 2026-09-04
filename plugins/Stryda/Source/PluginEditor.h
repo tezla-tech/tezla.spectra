@@ -24,7 +24,9 @@
 #include <tezla/ui/KnobLookAndFeel.hpp>
 #include <tezla/ui/Palette.hpp>
 #include <tezla/ui/PanelDesign.hpp>
+#include <tezla/ui/LampButton.hpp>
 #include <tezla/ui/Plate.hpp>
+#include <tezla/ui/TuningPanel.hpp>
 #include <tezla/ui/TooltipHost.hpp>
 
 #include "PluginProcessor.h"
@@ -67,8 +69,41 @@ public:
     void paint (juce::Graphics& g) override;
     void resized() override;
 
+    /// The pages, in tab order. **Append-only in spirit rather than by rule:**
+    /// nothing stores a page index, but a player learns where things are.
+    enum Page
+    {
+        pageOperators = 0,
+        pageMatrix,
+        pageVoice,
+        pageSequencer,
+        pageTuning,
+        pageCount
+    };
+
 private:
     void timerCallback() override;
+
+    void showPage (int page);
+    void styleTab (juce::TextButton& tab, bool active);
+
+    void layoutOperators (juce::Rectangle<int> area);
+    void layoutMatrix (juce::Rectangle<int> area);
+    void layoutVoice (juce::Rectangle<int> area);
+    void layoutSequencer (juce::Rectangle<int> area);
+
+    void paintOperators (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintMatrix (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintVoice (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintSequencer (juce::Graphics& g, juce::Rectangle<int> area);
+
+    /// Everything the current page does not own is hidden rather than laid out
+    /// off-screen: a control that is merely somewhere else still takes the
+    /// mouse, and a hidden one cannot.
+    void applyPageVisibility();
+
+    int currentPage_ { pageOperators };
+    std::array<juce::TextButton, pageCount> tabs_ {};
 
     /// The predicted top of the spectrum, from the parameters rather than from
     /// the audio thread, so the readout is live with the transport stopped.
@@ -116,6 +151,27 @@ private:
 
     juce::ComboBox subShapeBox_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> subShapeAttachment_;
+
+    /// F6: the ratio sequencer -- sixteen step knobs and five controls -- and
+    /// the six named braids, which are buttons rather than a choice because
+    /// pressing one *writes* the matrix and leaves it editable.
+    std::vector<Control*> steps_;
+    std::vector<Control*> seqControls_;
+
+    ui::LampButton seqOnButton_ { "RUN" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> seqOnAttachment_;
+
+    juce::ComboBox seqTargetBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> seqTargetAttachment_;
+
+    juce::ComboBox seqDivisionBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> seqDivisionAttachment_;
+
+    std::array<juce::TextButton, braids::kCount> braidButtons_ {};
+
+    /// The shared microtuning panel. The processor is its host, exactly as it
+    /// is for Malleus, Sonitus, Svarayantra and Ictus.
+    std::unique_ptr<ui::TuningPanel> tuningPage_;
 
     juce::Label bandwidth_;
     juce::Label voices_;

@@ -155,6 +155,65 @@ struct Scale
 
         return true;
     }
+
+    /// The nearest scale degree to `ratio`, extended through every repeat.
+    ///
+    /// ---------------------------------------------------------------------
+    /// **Why a scale needs to snap a ratio and not only a frequency**
+    /// ---------------------------------------------------------------------
+    ///
+    /// `Tuning::nearestScaleHz` snaps an absolute frequency against the root's
+    /// own pitch, which is what a comb filter or a drum's tuning wants. An FM
+    /// operator's ratio is a different quantity: it is an interval above the
+    /// note, so it has to be snapped against **1/1**, and the answer is the
+    /// same for every key. That is the whole point -- in FM the ratio *is* the
+    /// interval, so a modulator snapped to the loaded scale puts its entire
+    /// sideband ladder on that scale's degrees, at every note, rather than on
+    /// 12-TET's.
+    ///
+    /// Nearest in **cents**, like every other nearness here, and by arithmetic
+    /// rather than search: reduce into one repeat, scan that repeat's degrees
+    /// and the next one's (a ratio just under a repeat boundary is nearer the
+    /// next repeat's 1/1 than this one's last degree -- the wrap is where a
+    /// naive scan is wrong), and take the closest.
+    ///
+    /// Returns `ratio` unchanged when the scale is unusable or the ratio is not
+    /// positive: a caller asking for a snap on a broken tuning wants its own
+    /// value back, not a zero.
+    [[nodiscard]] double snapRatio (double ratio) const noexcept
+    {
+        if (! (ratio > 0.0) || ! isUsable())
+            return ratio;
+
+        const double repeats = std::log (ratio) / std::log (repeat);
+        const double base = std::pow (repeat, std::floor (repeats));
+
+        double best = ratio;
+        double bestCents = 1.0e300;
+
+        for (int step = 0; step <= 1; ++step)
+        {
+            const double octave = base * std::pow (repeat, static_cast<double> (step));
+
+            for (std::size_t degree = 0; degree < ratios.size(); ++degree)
+            {
+                const double candidate = octave * ratios[degree];
+
+                if (! (candidate > 0.0))
+                    continue;
+
+                const double cents = std::abs (1200.0 * std::log2 (candidate / ratio));
+
+                if (cents < bestCents)
+                {
+                    bestCents = cents;
+                    best = candidate;
+                }
+            }
+        }
+
+        return best;
+    }
 };
 
 /// A whole-number ratio recovered from a double, when the double *is* one.

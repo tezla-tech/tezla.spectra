@@ -19,6 +19,10 @@
 #include <tezla/dsp/FmOperator.hpp>
 #include <tezla/dsp/PhaseShaper.hpp>
 
+#include <tezla/dsp/Divisions.hpp>
+#include <tezla/dsp/Scales.hpp>
+
+#include "Braids.hpp"
 #include "StrydaEngine.hpp"
 
 using namespace tezla::dsp;
@@ -1595,4 +1599,397 @@ TEZLA_TEST (an_inaudible_filter_or_sub_envelope_never_holds_a_voice_open)
                  engine.getActiveVoiceCount());
 
     CHECK (engine.getActiveVoiceCount() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// F6: the ratio modes, the sequencer, and the step-boundary cut
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (free_ratio_mode_returns_its_input_bit_for_bit)
+{
+    // The default, and the one every existing patch runs through. "Transparent"
+    // is not enough: a mode that returned a value equal to within an ulp would
+    // change every project the day it shipped (CLAUDE.md section 7).
+    const auto scale = dsp::scales::twelveToneEqual();
+
+    for (double ratio : { 0.25, 0.9999, 1.0, 1.0000001, 2.5, 3.14159265358979,
+                          7.0, 11.3333333333, 31.999999 })
+    {
+        const double free = resolveRatio (ratio, RatioMode::free, scale);
+
+        CHECK (free == ratio);
+    }
+
+    // And zero and nonsense come back untouched rather than becoming a snap.
+    CHECK (resolveRatio (0.0, RatioMode::harmonic, scale) == 0.0);
+    CHECK (resolveRatio (-1.0, RatioMode::scale, scale) == -1.0);
+}
+
+TEZLA_TEST (harmonic_mode_lands_on_simple_ratios_and_scale_mode_on_the_scale)
+{
+    const auto twelve = dsp::scales::twelveToneEqual();
+
+    // Harmonic: the nearest p:q with both terms at most 16.
+    struct Row { double asked; double expected; };
+
+    const Row rows[] {
+        { 1.02, 1.0 }, { 1.98, 2.0 }, { 3.02, 3.0 },
+        { 1.51, 1.5 }, { 3.49, 3.5 }, { 0.51, 0.5 }
+    };
+
+    for (const auto& row : rows)
+    {
+        const double got = resolveRatio (row.asked, RatioMode::harmonic, twelve);
+
+        std::printf ("        [ratio] harmonic %.3f -> %.6f (want %.4f)\n",
+                     row.asked, got, row.expected);
+
+        CHECK (std::abs (got - row.expected) < 1e-9);
+    }
+
+    // Scale, on 12-TET: every answer is a power of the twelfth root of two,
+    // which is what "a degree of this scale, octave-extended" means.
+    for (double asked : { 1.03, 1.4, 2.9, 5.1, 11.7 })
+    {
+        const double got = resolveRatio (asked, RatioMode::scale, twelve);
+        const double semitones = 12.0 * std::log2 (got);
+
+        std::printf ("        [ratio] scale %.3f -> %.6f (%.4f semitones)\n",
+                     asked, got, semitones);
+
+        CHECK (std::abs (semitones - std::round (semitones)) < 1e-9);
+
+        // And it is the NEAREST degree, not merely a degree.
+        CHECK (std::abs (1200.0 * std::log2 (got / asked)) <= 50.000001);
+    }
+}
+
+TEZLA_TEST (scale_mode_follows_a_loaded_scale_rather_than_twelve_tone)
+{
+    // The whole point of snapping a ratio rather than a frequency: load a scale
+    // whose degrees are somewhere else, and the ratios move with it.
+    dsp::Scale third;
+    third.name = "three degrees";
+    third.repeat = 2.0;
+    third.ratios = { 1.0, 4.0 / 3.0, 3.0 / 2.0 };
+
+    CHECK (third.isUsable());
+
+    // 1.4 sits between 4/3 (1.3333) and 3/2 (1.5); nearer 4/3 in cents.
+    const double snapped = resolveRatio (1.4, RatioMode::scale, third);
+
+    std::printf ("        [ratio] on a 1 : 4/3 : 3/2 scale, 1.400 -> %.6f\n", snapped);
+
+    CHECK (std::abs (snapped - 4.0 / 3.0) < 1e-12);
+
+    // Octave-extended: 2.9 is nearest 3/2 an octave up.
+    CHECK (std::abs (resolveRatio (2.9, RatioMode::scale, third) - 3.0) < 1e-12);
+
+    // **The wrap, which the first version of this test did not reach.** A ratio
+    // just under a repeat boundary is nearer the NEXT repeat's 1/1 than this
+    // one's last degree, and a scan of only the repeat it falls in gets it
+    // wrong. 1.95 is 44 cents under 2/1 and 810 cents over 3/2. Found by
+    // breaking the scan to one repeat and watching the test still pass.
+    CHECK (std::abs (resolveRatio (1.95, RatioMode::scale, third) - 2.0) < 1e-12);
+    CHECK (std::abs (resolveRatio (3.9, RatioMode::scale, third) - 4.0) < 1e-12);
+
+    // Below the first repeat too -- a ratio under 1 is a sub-harmonic modulator
+    // and has to snap as cleanly as one above it.
+    CHECK (std::abs (resolveRatio (0.7, RatioMode::scale, third) - 2.0 / 3.0) < 1e-12);
+
+    // The same ratio on 12-TET does NOT land there, or the test above proves
+    // nothing about the scale being read.
+    const double tempered = resolveRatio (1.4, RatioMode::scale,
+                                          dsp::scales::twelveToneEqual());
+
+    CHECK (std::abs (tempered - 4.0 / 3.0) > 1e-6);
+}
+
+TEZLA_TEST (the_sequencer_is_exactly_inert_until_it_is_switched_on)
+{
+    const auto render = [] (bool enabled, double stepOne)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.operators[1].ratio = 2.0;
+        parameters.indices[0][1] = 1.2;
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (enabled);
+        sequencer.setTarget (1);
+        sequencer.setLength (4);
+
+        for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+            sequencer.setStep (i, i == 0 ? stepOne : 2.0);
+
+        engine.setSequencerDivision (7);
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 24000, 512);
+    };
+
+    const auto off = render (false, 7.0);
+    const auto offAgain = render (false, 0.25);
+
+    // With the sequencer off, the pattern cannot reach the audio at all --
+    // not even a wildly different first step.
+    std::printf ("        [seq] off, step 1 at 7.0 vs 0.25: %zu of %zu samples differ\n",
+                 differingSamples (off, offAgain), off.size());
+
+    CHECK (rmsOf (off) > 0.01);
+    CHECK (differingSamples (off, offAgain) == 0);
+
+    // On, it very much can.
+    const auto on = render (true, 7.0);
+
+    CHECK (differingSamples (off, on) > 1000);
+}
+
+TEZLA_TEST (the_sequenced_render_is_the_same_at_every_block_size)
+{
+    // ---------------------------------------------------------------------
+    // **The property the step-boundary cut exists for**
+    // ---------------------------------------------------------------------
+    //
+    // A ratio jump is a far larger event than a voicing rebuild -- it swaps one
+    // harmonic identity for another. Reading the step once per callback would
+    // put the jump up to a buffer late and make the render depend on the host's
+    // buffer size, which is the defect CLAUDE.md section 7 measured at 0.296 of
+    // full scale on Emberdrive.
+    const auto render = [] (int blockSize)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.operators[1].ratio = 2.0;
+        parameters.indices[0][1] = 1.5;
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (true);
+        sequencer.setTarget (1);
+        sequencer.setLength (4);
+        sequencer.setStep (0, 1.0);
+        sequencer.setStep (1, 4.0);
+        sequencer.setStep (2, 2.0);
+        sequencer.setStep (3, 7.0);
+
+        engine.setSequencerDivision (7);      // 1/16
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 24000, blockSize);
+    };
+
+    const auto small = render (64);
+    const auto large = render (512);
+    const auto odd = render (97);
+
+    std::printf ("        [seq] 64 vs 512: %zu of %zu differ;  97 vs 512: %zu\n",
+                 differingSamples (small, large), large.size(),
+                 differingSamples (odd, large));
+
+    CHECK (rmsOf (large) > 0.01);
+    CHECK (differingSamples (small, large) == 0);
+    CHECK (differingSamples (odd, large) == 0);
+}
+
+TEZLA_TEST (a_step_lands_on_its_own_edge_and_not_at_the_next_control_chunk)
+{
+    // ---------------------------------------------------------------------
+    // **What the step-boundary cut actually buys, since the obvious test
+    // did not measure it**
+    // ---------------------------------------------------------------------
+    //
+    // The block-size test above passes with the cut removed, and that is not a
+    // flaw in the cut -- it is that the CONTROL CHUNK grid is already anchored
+    // to the stream, so the jump gets quantised to the same 32-sample instant
+    // at every buffer size either way. Buffer independence was never the thing
+    // the cut protects.
+    //
+    // What it protects is WHERE the jump lands: without it, a step edge is
+    // rounded up to the next control chunk, up to 32 internal samples (0.17 ms
+    // at 192 kHz) late, and always late in the same direction. So the
+    // assertion is on the exact sample the output first changes.
+    const auto render = [] (double secondStep)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (1);
+
+        VoiceParameters parameters = singleCarrier();
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (true);
+        sequencer.setTarget (0);
+        sequencer.setLength (2);
+        sequencer.setStep (0, 1.0);
+        sequencer.setStep (1, secondStep);
+
+        engine.setSequencerDivision (7);      // 1/16
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 24000, 512);
+    };
+
+    const auto a = render (1.0);
+    const auto b = render (4.0);
+
+    std::size_t first = a.size();
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (! (a[i] == b[i]))
+        {
+            first = i;
+            break;
+        }
+
+    // Where the edge actually is: one step of a 1/16 at 174 bpm, in internal
+    // samples, rounded up because the engine renders whole samples.
+    const int factor = 4;                     // 48 kHz -> x4
+    const double internalRate = 48000.0 * factor;
+    const double stepSeconds = 1.0 / dsp::divisionRateHz (7, 174.0);
+    const auto edgeInternal = static_cast<std::size_t> (std::ceil (stepSeconds * internalRate));
+    const std::size_t edgeHost = edgeInternal / static_cast<std::size_t> (factor);
+
+    const std::size_t chunk = static_cast<std::size_t> (StrydaEngine::kControlChunk);
+    const std::size_t quantised = ((edgeInternal + chunk - 1) / chunk) * chunk
+                                    / static_cast<std::size_t> (factor);
+
+    std::printf ("        [seq] first difference at host sample %zu; the edge is %zu, "
+                 "the next control chunk %zu\n", first, edgeHost, quantised);
+
+    // **Not exact equality, and the reason is the decimator.** The engine runs
+    // at four times the host rate and decimates through a 63-tap halfband
+    // chain, so a change at internal sample N smears across a host sample or
+    // two either side of N/4. Asserting equality would be asserting the FIR's
+    // impulse response rather than where the sequencer put the edge. Measured
+    // at 4139 against a computed edge of 4138.
+    CHECK (first >= edgeHost);
+    CHECK (first - edgeHost <= 2);
+
+    // The assertion with the teeth: the jump lands BEFORE the next control
+    // chunk would have delivered it. Remove the cut and it lands at 4145 --
+    // past `quantised` -- which is what this catches.
+    CHECK (first < quantised + 1);
+
+    // And the two instants are genuinely different, or the check above could
+    // not tell the cut from its absence.
+    CHECK (quantised > edgeHost);
+}
+
+TEZLA_TEST (a_step_jump_does_not_retrigger_the_phase)
+{
+    // A ratio change is a frequency step, not a note-on: the accumulator runs
+    // on and the spectrum jumps. If it retriggered, every step edge would put a
+    // discontinuity in the carrier and the pattern would click rather than
+    // growl.
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setPolyphony (1);
+
+    VoiceParameters parameters = singleCarrier();
+    engine.setParameters (parameters);
+
+    auto& sequencer = engine.getSequencer();
+    sequencer.setEnabled (true);
+    sequencer.setTarget (0);              // the carrier itself, so it is audible
+    sequencer.setLength (2);
+    sequencer.setStep (0, 1.0);
+    sequencer.setStep (1, 3.0);
+
+    engine.setSequencerDivision (7);
+    engine.setTransport (0.0, 174.0, true);
+    engine.noteOn (60, 1.0);
+
+    const auto rendered = renderEngine (engine, 48000, 512);
+
+    // The largest sample-to-sample step in the whole render. A phase reset at a
+    // ratio jump shows up as a jump of order the signal's amplitude; a
+    // continuous phase at a new frequency cannot step further than the new
+    // frequency's own slope.
+    double worst = 0.0;
+    for (std::size_t i = 1; i < rendered.size(); ++i)
+        worst = std::max (worst, std::abs (rendered[i] - rendered[i - 1]));
+
+    double peak = 0.0;
+    for (const double sample : rendered)
+        peak = std::max (peak, std::abs (sample));
+
+    std::printf ("        [seq] peak %.4f, largest neighbouring step %.5f (%.1f %% of peak)\n",
+                 peak, worst, 100.0 * worst / peak);
+
+    CHECK (peak > 0.1);
+    CHECK (worst < 0.2 * peak);
+
+    // **And the pattern is actually running**, which the first version of this
+    // test did not check -- it passed while every step above unity was being
+    // clamped to unity by `dsp::StepSequencer` and the sequencer was inert.
+    // A smoothness assertion is trivially true of a signal that never changes.
+    StrydaEngine flat;
+    flat.prepare (48000.0, 512);
+    flat.setPolyphony (1);
+    flat.setParameters (parameters);
+    flat.getSequencer().setEnabled (false);
+    flat.noteOn (60, 1.0);
+
+    const auto unsequenced = renderEngine (flat, 48000, 512);
+
+    std::printf ("        [seq] sequenced vs not: %zu of %zu samples differ\n",
+                 differingSamples (rendered, unsequenced), rendered.size());
+
+    CHECK (differingSamples (rendered, unsequenced) > 10000);
+}
+
+TEZLA_TEST (a_braid_writes_the_matrix_and_leaves_the_rest_alone)
+{
+    // Six topologies, each a starting point rather than a mode. What the table
+    // must guarantee is that every one of them is a *reachable* patch: indices
+    // inside the parameter range, at least one operator carrying, and no cell
+    // on the diagonal except where feedback is meant.
+    const auto& table = braids::table();
+
+    CHECK (static_cast<int> (table.size()) == braids::kCount);
+
+    for (const auto& braid : table)
+    {
+        double loudest = 0.0;
+
+        for (double level : braid.levels)
+        {
+            CHECK (level >= 0.0);
+            CHECK (level <= 1.0);
+            loudest = std::max (loudest, level);
+        }
+
+        // A topology with nothing reaching the output is silence with extra
+        // steps.
+        CHECK (loudest > 0.0);
+
+        for (int to = 0; to < StrydaVoice::kNumOperators; ++to)
+            for (int from = 0; from < StrydaVoice::kNumOperators; ++from)
+            {
+                const double cell = braid.cells[static_cast<std::size_t> (to)]
+                                               [static_cast<std::size_t> (from)];
+
+                CHECK (cell >= 0.0);
+                CHECK (cell <= 8.0);       // the matrix parameter's own ceiling
+
+                // The diagonal is feedback, whose parameter tops out at 1.
+                if (to == from)
+                    CHECK (cell <= 1.0);
+            }
+
+        // Named, and described -- a button with no name is a button nobody presses.
+        CHECK (braid.name != nullptr && *braid.name != 0);
+        CHECK (braid.description != nullptr && *braid.description != 0);
+    }
 }

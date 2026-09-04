@@ -17,11 +17,14 @@ constexpr int kMinStripWidth = 190;
 constexpr int kRowHeight = 74;
 constexpr int kCaptionHeight = 15;
 
-/// The F5 band under the strips: the filter, the sub and the unison stack.
-/// A shorter row than the operator strips on purpose -- these are set once and
-/// then left, where a strip control is played.
-constexpr int kBandRowHeight = 58;
-constexpr int kBandHeight = kBandRowHeight * 2 + kCaptionHeight * 2 + 30;
+/// The tab strip under the header.
+constexpr int kTabHeight = 30;
+
+/// The bandwidth readout on the matrix page.
+constexpr int kReadoutHeight = 74;
+
+/// The braid row at the foot of the sequencer page.
+constexpr int kBraidHeight = 64;
 
 /// The three F5 plates, split the same way in `paint` and in `resized`.
 ///
@@ -492,14 +495,126 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
     voices_.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (voices_);
 
+    // ---- F6: the ratio sequencer and the six braids -------------------------
+
+    {
+        const auto tint = palette_.accent;
+
+        for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+            steps_.push_back (&addControl (ids::step (i), juce::String (i + 1), tint,
+                                           ui::design::Emphasis::trim));
+
+        steps_[0]->knob.setTooltip (
+            "Each step is a RATIO, not a level.\n\n"
+            "In FM the ratio is the interval -- sidebands land at the carrier plus and minus "
+            "whole multiples of the modulator -- so stepping a modulator's ratio does not "
+            "sweep a timbre, it swaps one harmonic identity for another. That is the neuro "
+            "growl as a rhythm rather than as a filter.\n\n"
+            "A step change never resets the phase: the accumulator runs on and the spectrum "
+            "jumps. Glide interpolates the ratio between steps, which slides the whole "
+            "sideband ladder rather than crossfading two of them.\n\n"
+            "Every step starts at 1.0, so switching RUN on with an untouched pattern changes "
+            "nothing -- move a step and you hear the rhythm appear.");
+
+        static const char* const seqCaptions[] { "STEPS", "GLIDE" };
+        const juce::String seqIds[] { ids::seqLength, ids::seqGlide };
+
+        for (int i = 0; i < 2; ++i)
+            seqControls_.push_back (&addControl (seqIds[i], seqCaptions[i], tint,
+                                                 ui::design::Emphasis::normal));
+
+        seqOnButton_.setClickingTogglesState (true);
+        seqOnButton_.setTooltip (
+            "Runs the pattern. Locked to the host's transport when it is playing, so the "
+            "jumps land on the bar; free-running at the division's rate when it is not, so "
+            "you can hear the pattern with the transport stopped.");
+        addAndMakeVisible (seqOnButton_);
+        seqOnAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+            owner.getState(), ids::seqOn, seqOnButton_);
+
+        ui::styleChoice (seqTargetBox_, palette_, tint);
+        seqTargetBox_.addItemList (choices::seqTarget, 1);
+        seqTargetBox_.setTooltip (
+            "Which operator's ratio the pattern drives. Off leaves every operator on the "
+            "ratio its own knob says.\n\n"
+            "Point it at a MODULATOR for a growl that changes harmonic identity in time; "
+            "point it at the carrier for a melodic line made of ratios rather than of notes.");
+        addAndMakeVisible (seqTargetBox_);
+        seqTargetAttachment_
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::seqTarget, seqTargetBox_);
+
+        ui::styleChoice (seqDivisionBox_, palette_, tint);
+        for (int i = 0; i < dsp::numDivisions; ++i)
+            seqDivisionBox_.addItem (dsp::divisions[static_cast<std::size_t> (i)].name, i + 1);
+        seqDivisionBox_.setTooltip (
+            "How long a step lasts, as a note value. 1/16 against the drums is where a neuro "
+            "bass usually lives.\n\n"
+            "The engine cuts its sample loop at the step edge, so a jump lands exactly on the "
+            "beat rather than up to a buffer late -- and the render is identical at 64 and at "
+            "512 samples a block.");
+        addAndMakeVisible (seqDivisionBox_);
+        seqDivisionAttachment_
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::seqDivision, seqDivisionBox_);
+
+        for (int i = 0; i < braids::kCount; ++i)
+        {
+            const auto& braid = braids::table()[static_cast<std::size_t> (i)];
+            auto& button = braidButtons_[static_cast<std::size_t> (i)];
+
+            button.setButtonText (braid.name);
+            button.setColour (juce::TextButton::buttonColourId, palette_.panel.brighter (0.18f));
+            button.setColour (juce::TextButton::textColourOffId, palette_.accent);
+            button.setTooltip (juce::String (braid.description)
+                                 + "\n\nPressing this WRITES the matrix and the operator "
+                                   "levels and then gets out of the way -- every cell is still "
+                                   "a knob, nothing is locked, and your ratios, envelopes and "
+                                   "Character are left exactly as they were.");
+            button.onClick = [this, i] { processor_.applyBraid (i); };
+            addAndMakeVisible (button);
+        }
+    }
+
+    tuningPage_ = std::make_unique<ui::TuningPanel> (owner, palette_,
+        "Notes play through this scale, as everywhere in the suite. What is different is that "
+        "an operator's RATIO can snap to it too -- set an operator's Ratio mode to Scale on the "
+        "OPERATORS page and its ratio lands on the nearest degree, octave-extended.\n\n"
+        "That matters because in FM the ratio IS the interval: sidebands land at the carrier "
+        "plus and minus whole multiples of the modulator, so a snapped modulator puts its "
+        "entire sideband ladder on this scale's degrees -- at every key, because a ratio is an "
+        "interval and not a pitch. In 19-TET or a Persian dastgah that is the difference "
+        "between a growl that belongs to the track and one that fights it.\n\n"
+        "Fixed-Hz operators and the formant mode are exempt and always will be: a formant "
+        "centre is a vocal-tract resonance, not a musical interval, and snapping it would be "
+        "wrong rather than merely useless. The scale travels with the project as .scl text.");
+    addChildComponent (*tuningPage_);
+
+    // The tabs. Built last so every page's controls exist to be hidden.
+    static const char* const tabNames[] { "OPERATORS", "MATRIX", "VOICE", "SEQ", "TUNING" };
+
+    for (int i = 0; i < pageCount; ++i)
+    {
+        auto& tab = tabs_[static_cast<std::size_t> (i)];
+
+        tab.setButtonText (tabNames[i]);
+        tab.setConnectedEdges (juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+        tab.onClick = [this, i] { showPage (i); };
+        addAndMakeVisible (tab);
+    }
+
     setResizable (true, true);
 
-    // Taller than F4's, because the F5 band is a real row of controls rather
-    // than something squeezed into the footer. The minimum grew with it: a
-    // window that cannot show the sub lane is a window that hides the one
-    // control a DnB patch needs most.
-    setResizeLimits (980, 760, 2200, 1500);
-    setSize (1240, 900);
+    // **Back down, and deliberately.** One page of everything wanted 980x760,
+    // which does not fit a laptop with a DAW's chrome around it -- reported
+    // from the rig. Paged, the window only has to fit the largest single page,
+    // and every page lays its rows out from the height it is given rather than
+    // from a fixed row size, so it degrades by getting denser instead of by
+    // clipping.
+    setResizeLimits (860, 520, 2200, 1500);
+    setSize (1040, 640);
+
+    showPage (pageOperators);
 
     startTimerHz (12);
 }
@@ -589,51 +704,160 @@ Control& StrydaEditor::addControl (const juce::String& id,
     return *controls_.back();
 }
 
+// ---------------------------------------------------------------------------
+// Pages
+// ---------------------------------------------------------------------------
+//
+// **The panel is paged because it stopped fitting on the user's screen.**
+// F3 put six operator strips, a 6x6 matrix and a scaling plate on one page and
+// that already wanted 1120x700; F5 added a band of three more plates under the
+// strips and pushed the minimum to 980x760, which is taller than a laptop with
+// a DAW's own chrome around it. Reported from the rig on 2026-09-04.
+//
+// One page of everything is also the wrong shape for what is still coming: F6
+// adds a sequencer and a tuning page, F7 a mangle chain, F8 a modulation
+// matrix. So the fix is structural rather than a font size -- each page gets
+// the whole content area, the window shrinks to fit the largest single page
+// rather than the sum of them, and the minimum comes back down to 900x560.
+//
+// Controls not on the current page are HIDDEN, not moved: a control that is
+// merely somewhere else still takes the mouse wheel and the keyboard.
+
+void StrydaEditor::styleTab (juce::TextButton& tab, bool active)
+{
+    tab.setColour (juce::TextButton::buttonColourId,
+                   active ? palette_.accent : palette_.panel.brighter (0.18f));
+    tab.setColour (juce::TextButton::textColourOffId,
+                   active ? palette_.background : palette_.accent);
+}
+
+void StrydaEditor::showPage (int page)
+{
+    currentPage_ = juce::jlimit (0, static_cast<int> (pageCount) - 1, page);
+
+    for (int i = 0; i < pageCount; ++i)
+        styleTab (tabs_[static_cast<std::size_t> (i)], i == currentPage_);
+
+    applyPageVisibility();
+    resized();
+    repaint();
+}
+
+void StrydaEditor::applyPageVisibility()
+{
+    const bool operators = currentPage_ == pageOperators;
+    const bool matrix = currentPage_ == pageMatrix;
+    const bool voice = currentPage_ == pageVoice;
+
+    for (auto& strip : strips_)
+        for (auto* control : strip)
+        {
+            control->knob.setVisible (operators);
+            control->caption.setVisible (operators);
+        }
+
+    for (auto& box : modeBoxes_)
+        if (box != nullptr)
+            box->setVisible (operators);
+
+    matrix_.setVisible (matrix);
+    bandwidth_.setVisible (matrix);
+    indexCapBox_.setVisible (matrix);
+
+    for (auto& row : scaling_)
+        for (auto* control : row)
+            control->knob.setVisible (matrix);
+
+    const auto showBand = [voice] (const std::vector<Control*>& controls)
+    {
+        for (auto* control : controls)
+        {
+            control->knob.setVisible (voice);
+            control->caption.setVisible (voice);
+        }
+    };
+
+    showBand (filter_);
+    showBand (sub_);
+    showBand (unison_);
+
+    subOctaveBox_.setVisible (voice);
+    subShapeBox_.setVisible (voice);
+
+    const bool sequencer = currentPage_ == pageSequencer;
+
+    for (auto* control : steps_)
+    {
+        control->knob.setVisible (sequencer);
+        control->caption.setVisible (sequencer);
+    }
+
+    for (auto* control : seqControls_)
+    {
+        control->knob.setVisible (sequencer);
+        control->caption.setVisible (sequencer);
+    }
+
+    seqOnButton_.setVisible (sequencer);
+    seqTargetBox_.setVisible (sequencer);
+    seqDivisionBox_.setVisible (sequencer);
+
+    for (auto& button : braidButtons_)
+        button.setVisible (sequencer);
+
+    if (tuningPage_ != nullptr)
+    {
+        const bool tuning = currentPage_ == pageTuning;
+
+        tuningPage_->setVisible (tuning);
+
+        if (tuning)
+            tuningPage_->refresh();
+    }
+}
+
 void StrydaEditor::paint (juce::Graphics& g)
 {
     g.fillAll (palette_.background);
 
     auto area = getLocalBounds();
     area.removeFromTop (kHeaderHeight);
+    area.removeFromTop (kTabHeight);
     area = area.reduced (kMargin);
+    area.removeFromBottom (34 + kMargin);
 
-    auto strips = area.removeFromTop (kRowHeight * 3 + kCaptionHeight * 3 + 56);
-    const int stripWidth = juce::jmax (kMinStripWidth, strips.getWidth() / kNumOperators);
+    switch (currentPage_)
+    {
+        case pageOperators: paintOperators (g, area); break;
+        case pageMatrix:    paintMatrix (g, area);    break;
+        case pageVoice:     paintVoice (g, area);     break;
+        case pageSequencer: paintSequencer (g, area); break;
+        default: break;   // the tuning page paints itself
+    }
+}
+
+void StrydaEditor::paintOperators (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    const int stripWidth = juce::jmax (kMinStripWidth, area.getWidth() / kNumOperators);
 
     for (int op = 0; op < kNumOperators; ++op)
     {
-        auto strip = strips.removeFromLeft (stripWidth);
+        auto strip = area.removeFromLeft (stripWidth);
         const auto tint = ui::design::tintFor (palette_.accent, op);
 
         ui::paintPlate (g, strip.reduced (3), palette_.panel, tint);
-        ui::paintPlateHeading (g, palette_, strip.reduced (3).removeFromTop (ui::design::kValueHeight + 4),
+        ui::paintPlateHeading (g, palette_,
+                               strip.reduced (3).removeFromTop (ui::design::kValueHeight + 4),
                                "OP " + juce::String (op + 1), {}, tint);
     }
+}
 
-    area.removeFromTop (kMargin);
-
-    const auto band = splitBand (area.removeFromTop (kBandHeight));
-
-    const auto paintBandPlate = [&g, this] (juce::Rectangle<int> plate,
-                                            const char* title,
-                                            const char* subtitle)
-    {
-        ui::paintPlate (g, plate.reduced (3), palette_.panel, palette_.secondary);
-        ui::paintPlateHeading (g, palette_,
-                               plate.reduced (3).removeFromTop (ui::design::kValueHeight + 4),
-                               title, subtitle, palette_.secondary);
-    };
-
-    paintBandPlate (band.filter, "FILTER", "per voice, after the matrix");
-    paintBandPlate (band.sub, "SUB", "its own lane, through nothing");
-    paintBandPlate (band.unison, "UNISON", "copies, and how they differ");
-
-    area.removeFromBottom (34 + kMargin);
-
-    const int matrixWidth = juce::jlimit (420, 760, area.getWidth() * 3 / 5);
+void StrydaEditor::paintMatrix (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    const int matrixWidth = juce::jlimit (360, 760, area.getWidth() * 3 / 5);
     area.removeFromLeft (matrixWidth);
     area.removeFromLeft (kMargin);
-    area.removeFromTop (74 + 6);
+    area.removeFromTop (kReadoutHeight + 6);
 
     ui::paintPlate (g, area, palette_.panel, palette_.secondary);
 
@@ -666,31 +890,236 @@ void StrydaEditor::paint (juce::Graphics& g)
     }
 }
 
+void StrydaEditor::paintVoice (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    const auto band = splitBand (area);
+
+    const auto plate = [&g, this] (juce::Rectangle<int> bounds,
+                                   const char* title,
+                                   const char* subtitle)
+    {
+        ui::paintPlate (g, bounds.reduced (3), palette_.panel, palette_.secondary);
+        ui::paintPlateHeading (g, palette_,
+                               bounds.reduced (3).removeFromTop (ui::design::kValueHeight + 4),
+                               title, subtitle, palette_.secondary);
+    };
+
+    plate (band.filter, "FILTER", "per voice, after the matrix");
+    plate (band.sub, "SUB", "its own lane, through nothing");
+    plate (band.unison, "UNISON", "copies, and how they differ");
+}
+
 void StrydaEditor::resized()
 {
     auto area = getLocalBounds();
     header_.setBounds (area.removeFromTop (kHeaderHeight));
+
+    auto tabRow = area.removeFromTop (kTabHeight).reduced (kMargin, 3);
+    const int tabWidth = juce::jmin (150, tabRow.getWidth() / pageCount);
+
+    for (int i = 0; i < pageCount; ++i)
+        tabs_[static_cast<std::size_t> (i)].setBounds (
+            tabRow.removeFromLeft (tabWidth).reduced (2, 0));
+
     area = area.reduced (kMargin);
 
-    const int stripHeight = kRowHeight * 3 + kCaptionHeight * 3 + 56;
-    auto strips = area.removeFromTop (stripHeight);
-    const int stripWidth = juce::jmax (kMinStripWidth, strips.getWidth() / kNumOperators);
+    auto footer = area.removeFromBottom (34);
+    area.removeFromBottom (kMargin);
 
-    // The F5 band sits under the strips and above the matrix row.
-    area.removeFromTop (kMargin);
-    const auto band = splitBand (area.removeFromTop (kBandHeight));
+    presetBox_.setBounds (footer.removeFromLeft (juce::jmin (200, footer.getWidth() / 3))
+                              .reduced (2));
+    footer.removeFromLeft (kMargin);
+
+    auto masterCell = footer.removeFromRight (100);
+    globals_[0]->caption.setBounds (masterCell.removeFromTop (kCaptionHeight));
+    globals_[0]->knob.setBounds (masterCell);
+
+    voices_.setBounds (footer.removeFromRight (120));
+
+    switch (currentPage_)
+    {
+        case pageOperators: layoutOperators (area); break;
+        case pageMatrix:    layoutMatrix (area);    break;
+        case pageVoice:     layoutVoice (area);     break;
+        case pageSequencer: layoutSequencer (area);  break;
+
+        case pageTuning:
+            if (tuningPage_ != nullptr)
+                tuningPage_->setBounds (area);
+            break;
+
+        default: break;
+    }
+}
+
+void StrydaEditor::layoutOperators (juce::Rectangle<int> area)
+{
+    const int stripWidth = juce::jmax (kMinStripWidth, area.getWidth() / kNumOperators);
+
+    // Three rows share whatever height the page has, rather than each taking a
+    // fixed 74: that is what lets the window shrink instead of clipping.
+    const int modeRowHeight = 26;
+    const int rowHeight = juce::jmax (34, (area.getHeight() - modeRowHeight
+                                             - ui::design::kValueHeight - 8
+                                             - kCaptionHeight * 3) / 3);
+
+    for (int op = 0; op < kNumOperators; ++op)
+    {
+        auto strip = area.removeFromLeft (stripWidth).reduced (3);
+        strip.removeFromTop (ui::design::kValueHeight + 8);
+
+        auto& controls = strips_[static_cast<std::size_t> (op)];
+
+        auto modeRow = strip.removeFromBottom (modeRowHeight);
+        modeBoxes_[static_cast<std::size_t> (op)]->setBounds (modeRow.reduced (6, 2));
+
+        for (std::size_t row = 0; row < 3; ++row)
+        {
+            auto line = strip.removeFromTop (rowHeight + kCaptionHeight);
+            const int columnWidth = line.getWidth() / 4;
+
+            for (std::size_t column = 0; column < 4; ++column)
+            {
+                const std::size_t i = row * 4 + column;
+                if (i >= controls.size())
+                    continue;
+
+                auto cell = line.removeFromLeft (columnWidth);
+                controls[i]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+                controls[i]->knob.setBounds (cell.reduced (2, 0));
+            }
+        }
+    }
+}
+
+void StrydaEditor::layoutMatrix (juce::Rectangle<int> area)
+{
+    const int matrixWidth = juce::jlimit (360, 760, area.getWidth() * 3 / 5);
+    matrix_.setBounds (area.removeFromLeft (matrixWidth));
+
+    area.removeFromLeft (kMargin);
+
+    bandwidth_.setBounds (area.removeFromTop (kReadoutHeight).reduced (12, 6));
+    area.removeFromTop (6);
+
+    auto plate = area.reduced (6);
+    plate.removeFromTop (ui::design::kValueHeight + 6);
+
+    indexCapBox_.setBounds (plate.removeFromBottom (26).reduced (4, 1));
+
+    plate.removeFromTop (kCaptionHeight);   // the column headings paint() draws
+    plate.removeFromLeft (30);
+
+    const int scaleRow = juce::jmax (18, plate.getHeight() / kNumOperators);
+    const int scaleColumn = plate.getWidth() / 5;
+
+    for (int op = 0; op < kNumOperators; ++op)
+    {
+        auto row = plate.removeFromTop (scaleRow);
+
+        for (std::size_t i = 0; i < scaling_[static_cast<std::size_t> (op)].size(); ++i)
+            scaling_[static_cast<std::size_t> (op)][i]
+                ->knob.setBounds (row.removeFromLeft (scaleColumn).reduced (4, 1));
+    }
+}
+
+void StrydaEditor::paintSequencer (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    auto braidRow = area.removeFromBottom (kBraidHeight);
+    area.removeFromBottom (kMargin);
+
+    ui::paintPlate (g, area, palette_.panel, palette_.accent);
+    ui::paintPlateHeading (g, palette_,
+                           area.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+                           "RATIO SEQUENCER",
+                           "sixteen steps whose value is a ratio, cut at the step edge",
+                           palette_.accent);
+
+    ui::paintPlate (g, braidRow, palette_.panel, palette_.secondary);
+    ui::paintPlateHeading (g, palette_,
+                           braidRow.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+                           "BRAIDS", "a topology to start from, still editable afterwards",
+                           palette_.secondary);
+}
+
+void StrydaEditor::layoutSequencer (juce::Rectangle<int> area)
+{
+    auto braidRow = area.removeFromBottom (kBraidHeight).reduced (6);
+    area.removeFromBottom (kMargin);
+
+    braidRow.removeFromTop (ui::design::kValueHeight + 6);
+
+    const int braidWidth = braidRow.getWidth() / braids::kCount;
+
+    for (auto& button : braidButtons_)
+        button.setBounds (braidRow.removeFromLeft (braidWidth).reduced (4, 2));
+
+    auto plate = area.reduced (6);
+    plate.removeFromTop (ui::design::kValueHeight + 6);
+
+    // The five controls across the top, then the sixteen steps in two rows of
+    // eight -- which is how a pattern is read, a bar at a time.
+    auto controlRow = plate.removeFromTop (30);
+
+    seqOnButton_.setBounds (controlRow.removeFromLeft (80).reduced (3, 1));
+    controlRow.removeFromLeft (kMargin);
+    seqTargetBox_.setBounds (controlRow.removeFromLeft (110).reduced (3, 1));
+    controlRow.removeFromLeft (kMargin);
+    seqDivisionBox_.setBounds (controlRow.removeFromLeft (110).reduced (3, 1));
+    controlRow.removeFromLeft (kMargin);
+
+    const int knobWidth = juce::jmin (90, juce::jmax (40, controlRow.getWidth() / 2));
+
+    for (auto* control : seqControls_)
+    {
+        auto cell = controlRow.removeFromLeft (knobWidth);
+        control->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+        control->knob.setBounds (cell);
+    }
+
+    plate.removeFromTop (kMargin);
+
+    const int rowHeight = juce::jmax (30, plate.getHeight() / 2 - kCaptionHeight);
+
+    for (int row = 0; row < 2; ++row)
+    {
+        auto line = plate.removeFromTop (rowHeight + kCaptionHeight);
+        const int columnWidth = line.getWidth() / 8;
+
+        for (int column = 0; column < 8; ++column)
+        {
+            const auto index = static_cast<std::size_t> (row * 8 + column);
+
+            if (index >= steps_.size())
+                break;
+
+            auto cell = line.removeFromLeft (columnWidth);
+            steps_[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+            steps_[index]->knob.setBounds (cell.reduced (2, 0));
+        }
+    }
+}
+
+void StrydaEditor::layoutVoice (juce::Rectangle<int> area)
+{
+    const auto band = splitBand (area);
 
     const auto layoutPlate = [] (juce::Rectangle<int> plate,
                                  const std::vector<Control*>& controls,
                                  int perRow,
+                                 int rows,
                                  juce::Rectangle<int>* choicesOut)
     {
         plate = plate.reduced (3);
         plate.removeFromTop (ui::design::kValueHeight + 6);
 
+        const int reserved = choicesOut != nullptr ? 30 : 0;
+        const int rowHeight = juce::jmax (34, (plate.getHeight() - reserved) / rows
+                                                - kCaptionHeight);
+
         for (std::size_t i = 0; i < controls.size(); i += static_cast<std::size_t> (perRow))
         {
-            auto line = plate.removeFromTop (kBandRowHeight + kCaptionHeight);
+            auto line = plate.removeFromTop (rowHeight + kCaptionHeight);
             const int columnWidth = line.getWidth() / perRow;
 
             for (int column = 0; column < perRow; ++column)
@@ -709,10 +1138,10 @@ void StrydaEditor::resized()
             *choicesOut = plate;
     };
 
-    layoutPlate (band.filter, filter_, 6, nullptr);
+    layoutPlate (band.filter, filter_, 6, 2, nullptr);
 
     juce::Rectangle<int> subChoices;
-    layoutPlate (band.sub, sub_, 5, &subChoices);
+    layoutPlate (band.sub, sub_, 5, 1, &subChoices);
 
     if (! subChoices.isEmpty())
     {
@@ -721,80 +1150,7 @@ void StrydaEditor::resized()
         subShapeBox_.setBounds (row.reduced (4, 1));
     }
 
-    layoutPlate (band.unison, unison_, 4, nullptr);
-
-    for (int op = 0; op < kNumOperators; ++op)
-    {
-        auto strip = strips.removeFromLeft (stripWidth).reduced (3);
-        strip.removeFromTop (ui::design::kValueHeight + 8);
-
-        auto& controls = strips_[static_cast<std::size_t> (op)];
-
-        auto modeRow = strip.removeFromBottom (26);
-        modeBoxes_[static_cast<std::size_t> (op)]->setBounds (modeRow.reduced (6, 2));
-
-        for (std::size_t row = 0; row < 3; ++row)
-        {
-            auto line = strip.removeFromTop (kRowHeight + kCaptionHeight);
-            const int columnWidth = line.getWidth() / 4;
-
-            for (std::size_t column = 0; column < 4; ++column)
-            {
-                const std::size_t i = row * 4 + column;
-                if (i >= controls.size())
-                    continue;
-
-                auto cell = line.removeFromLeft (columnWidth);
-                controls[i]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
-                controls[i]->knob.setBounds (cell.reduced (2, 0));
-            }
-        }
-    }
-
-    area.removeFromTop (kMargin);
-
-    auto footer = area.removeFromBottom (34);
-    presetBox_.setBounds (footer.removeFromLeft (200).reduced (2));
-    footer.removeFromLeft (kMargin);
-    indexCapBox_.setBounds (footer.removeFromLeft (150).reduced (2));
-    footer.removeFromLeft (kMargin);
-
-    auto masterCell = footer.removeFromRight (110);
-    globals_[0]->caption.setBounds (masterCell.removeFromTop (kCaptionHeight));
-    globals_[0]->knob.setBounds (masterCell);
-
-    voices_.setBounds (footer.removeFromRight (140));
-    footer.removeFromLeft (kMargin);
-
-    area.removeFromBottom (kMargin);
-
-    // The matrix is square-ish however wide the window gets, and the bandwidth
-    // readout lives beside it rather than squeezed into the footer -- it is the
-    // one number on this panel that says whether the patch is about to alias,
-    // and it should not be the smallest thing on it.
-    const int matrixWidth = juce::jlimit (420, 760, area.getWidth() * 3 / 5);
-    matrix_.setBounds (area.removeFromLeft (matrixWidth));
-
-    area.removeFromLeft (kMargin);
-    bandwidth_.setBounds (area.removeFromTop (74).reduced (12, 8));
-
-    area.removeFromTop (6);
-    auto plate = area.reduced (6);
-    plate.removeFromTop (ui::design::kValueHeight + 6);
-    plate.removeFromTop (kCaptionHeight);   // the column headings paint() draws
-    plate.removeFromLeft (30);
-
-    const int scaleRow = plate.getHeight() / kNumOperators;
-    const int scaleColumn = plate.getWidth() / 5;
-
-    for (int op = 0; op < kNumOperators; ++op)
-    {
-        auto row = plate.removeFromTop (scaleRow);
-
-        for (std::size_t i = 0; i < scaling_[static_cast<std::size_t> (op)].size(); ++i)
-            scaling_[static_cast<std::size_t> (op)][i]
-                ->knob.setBounds (row.removeFromLeft (scaleColumn).reduced (4, 1));
-    }
+    layoutPlate (band.unison, unison_, 4, 1, nullptr);
 }
 
 void StrydaEditor::timerCallback()

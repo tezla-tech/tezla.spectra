@@ -30,6 +30,7 @@
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Tuning.hpp>
 
+#include "RatioSequencer.hpp"
 #include "StrydaVoice.hpp"
 
 namespace tezla::stryda
@@ -75,6 +76,8 @@ public:
             voices_[v].setSeed (0x9e3779b97f4a7c15ull ^ (v * 0x632be59bd9b4e019ull));
         }
 
+        sequencer_.prepare (internalRate_);
+
         reset();
     }
 
@@ -92,6 +95,9 @@ public:
         // left over from the last stream.
         capChunksLeft_ = 1;
         capResolutions_ = 0;
+
+        sequencer_.reset();
+        stepEdge_ = false;
     }
 
     void setOversamplingMode (dsp::OversamplingMode mode) noexcept { mode_ = mode; }
@@ -114,6 +120,8 @@ public:
         for (auto& voice : voices_)
             voice.prepare (internalRate_);
 
+        sequencer_.prepare (internalRate_);
+
         // The cap is resolved against the *internal* Nyquist, which has just
         // moved, so the scale every voice is holding is now the answer to a
         // different question. Re-ask it at the next chunk.
@@ -126,7 +134,53 @@ public:
     [[nodiscard]] double getInternalRate() const noexcept { return internalRate_; }
     [[nodiscard]] int getLatencySamples() const noexcept { return oversampler_.getLatencySamples(); }
 
-    void setParameters (const VoiceParameters& parameters) noexcept { parameters_ = parameters; }
+    /// Take the patch and resolve everything the voices should not have to.
+    ///
+    /// The ratio modes are quantised here rather than in the voice because the
+    /// quantiser needs the loaded scale, and the scale lives with the tuning.
+    /// A voice therefore only ever handles a plain ratio, and **Free returns
+    /// its input bit for bit**, so the default costs nothing and changes
+    /// nothing.
+    void setParameters (const VoiceParameters& parameters) noexcept
+    {
+        parameters_ = parameters;
+        patchRatios_ = {};
+
+        for (int op = 0; op < StrydaVoice::kNumOperators; ++op)
+        {
+            auto& settings = parameters_.operators[static_cast<std::size_t> (op)];
+
+            settings.ratio = resolveRatio (settings.ratio,
+                                           static_cast<RatioMode> (settings.ratioMode),
+                                           tuning_.getScale());
+
+            // Kept so the sequencer can be switched off mid-note and the
+            // target operator go back to the ratio the patch actually asks for,
+            // rather than to whichever step happened to be playing.
+            patchRatios_[static_cast<std::size_t> (op)] = settings.ratio;
+        }
+    }
+
+    [[nodiscard]] RatioSequencer& getSequencer() noexcept { return sequencer_; }
+    [[nodiscard]] const RatioSequencer& getSequencer() const noexcept { return sequencer_; }
+
+    /// Where the host's transport is, so the pattern can lock to the bar.
+    ///
+    /// Called once per block from the processor. The sequencer keeps its rate
+    /// between anchors and free-runs, which is what makes
+    /// `samplesToNextStep` exact where the cutting happens.
+    void setTransport (double ppqPosition, double bpm, bool playing) noexcept
+    {
+        bpm_ = bpm > 0.0 ? bpm : bpm_;
+
+        if (playing && sequencer_.isEnabled())
+            sequencer_.anchorToPpq (ppqPosition, bpm_, division_);
+        else
+            sequencer_.setDivision (division_, bpm_);
+    }
+
+    void setSequencerDivision (int index) noexcept { division_ = index; }
+    [[nodiscard]] int getSequencerDivision() const noexcept { return division_; }
 
     void setPolyphony (int voices) noexcept
     {
@@ -229,25 +283,46 @@ public:
         int written = 0;
         while (written < internalSamples)
         {
-            if (chunkCountdown_ <= 0)
+            // A control chunk is due, or the sequencer has just crossed a step
+            // edge. The edge is an EXTRA refresh rather than a re-phasing of
+            // the chunk grid: the grid stays anchored to the stream and the
+            // test that proves it keeps proving it.
+            //
+            // **And the refresh has to reach the voices, not just the
+            // parameters.** Pushing the new ratio into `parameters_` and
+            // waiting for the next chunk to apply it puts the jump back where
+            // it would have been without the cut -- which is exactly what the
+            // first version did, and the test that measures *where* the output
+            // first changes is what caught it.
+            const bool chunkDue = chunkCountdown_ <= 0;
+
+            if (chunkDue || stepEdge_)
             {
+                pushSequencedRatio();
+                stepEdge_ = false;
+
+                for (auto& voice : voices_)
+                    if (voice.isActive())
+                        voice.applyParameters (parameters_);
+            }
+
+            if (chunkDue)
+            {
+                // The cap stays on its own coarser sub-grid: it costs a
+                // bandwidth bisection, where applying parameters costs
+                // arithmetic on numbers already to hand.
                 const bool resolveCap = --capChunksLeft_ <= 0;
 
                 if (resolveCap)
+                {
                     capChunksLeft_ = kCapChunks;
 
-                for (auto& voice : voices_)
-                {
-                    if (! voice.isActive())
-                        continue;
-
-                    voice.applyParameters (parameters_);
-
-                    if (resolveCap)
-                    {
-                        voice.refreshIndexCap (parameters_, internalRate_);
-                        ++capResolutions_;
-                    }
+                    for (auto& voice : voices_)
+                        if (voice.isActive())
+                        {
+                            voice.refreshIndexCap (parameters_, internalRate_);
+                            ++capResolutions_;
+                        }
                 }
 
                 chunkCountdown_ = kControlChunk;
@@ -255,7 +330,23 @@ public:
 
             // Cut the loop at the chunk boundary, never at the block's: this is
             // what makes the output independent of the host's buffer size.
-            const int run = std::min (chunkCountdown_, internalSamples - written);
+            int run = std::min (chunkCountdown_, internalSamples - written);
+
+            // And at the sequencer's step edge, which is a far larger event
+            // than a voicing rebuild -- a ratio jump swaps one harmonic
+            // identity for another. The step grid is anchored to the stream
+            // too (rate, or the transport), so cutting at it stays buffer-size
+            // independent.
+            if (sequencer_.isEnabled())
+            {
+                const double toStep = sequencer_.samplesToNextStep();
+
+                if (toStep > 0.0 && toStep < static_cast<double> (run))
+                {
+                    run = std::max (1, static_cast<int> (std::ceil (toStep)));
+                    stepEdge_ = true;
+                }
+            }
 
             for (int i = 0; i < run; ++i)
             {
@@ -271,6 +362,9 @@ public:
 
             written += run;
             chunkCountdown_ -= run;
+
+            if (sequencer_.isEnabled())
+                sequencer_.advance (run);
         }
 
         double* outputs[2] { left, right };
@@ -278,6 +372,33 @@ public:
     }
 
 private:
+    /// Put the sequencer's current ratio on its target operator.
+    ///
+    /// Called at every control chunk, so glide is heard at 32-sample
+    /// resolution, and again at every step edge, so a jump lands exactly on
+    /// the beat rather than up to a chunk late.
+    ///
+    /// When the sequencer is off -- or its target is out of range, which is
+    /// how "no destination" is spelt -- the operator goes back to the ratio
+    /// the patch asks for. Restoring rather than leaving it is what stops a
+    /// switched-off sequencer freezing a note on whichever step was playing.
+    void pushSequencedRatio() noexcept
+    {
+        const int target = sequencer_.getTarget();
+
+        if (target < 0 || target >= StrydaVoice::kNumOperators)
+            return;
+
+        const auto slot = static_cast<std::size_t> (target);
+        auto& settings = parameters_.operators[slot];
+
+        settings.ratio = sequencer_.isEnabled()
+                           ? sequencer_.currentRatio (
+                                 static_cast<RatioMode> (settings.ratioMode),
+                                 tuning_.getScale())
+                           : patchRatios_[slot];
+    }
+
     /// A free voice, or the best one to steal. `exclude` holds the indices
     /// already claimed by this note-on, which are not yet started and so would
     /// otherwise look free.
@@ -346,6 +467,12 @@ private:
     int chunkCountdown_ { 0 };
     int capChunksLeft_ { 1 };
     long long capResolutions_ { 0 };
+
+    RatioSequencer sequencer_;
+    std::array<double, StrydaVoice::kNumOperators> patchRatios_ {};
+    double bpm_ { 120.0 };
+    int division_ { 7 };          ///< 1/16 in `dsp::divisions`
+    bool stepEdge_ { false };
 
     dsp::OversamplingMode mode_ { dsp::OversamplingMode::Auto };
     dsp::RenderOversampling render_ { dsp::RenderOversampling::sameAsLive };

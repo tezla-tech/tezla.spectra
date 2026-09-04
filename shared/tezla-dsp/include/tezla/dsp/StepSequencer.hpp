@@ -128,6 +128,35 @@ public:
         return getValue();
     }
 
+    /// How many samples remain before the position crosses into the next step,
+    /// or -1 when the clock is stopped and no boundary is coming.
+    ///
+    /// ---------------------------------------------------------------------
+    /// **This exists so a caller can cut its sample loop at the boundary**
+    /// ---------------------------------------------------------------------
+    ///
+    /// A sequencer whose value is read once per block makes the output depend
+    /// on the host's buffer size, and no arrangement of a per-call timer fixes
+    /// that (CLAUDE.md section 7 -- Emberdrive measured 0.296 of full scale of
+    /// disagreement between 64- and 512-sample blocks before its loop was cut
+    /// at the timer). A step change is a far larger event than a voicing
+    /// rebuild, so the caller needs to know exactly where the edge is rather
+    /// than approximately when it passed.
+    ///
+    /// Exact for the free-running clock. A caller locked to the transport
+    /// should still set a rate from the tempo and the division, and use
+    /// `setPhaseFromPpq` only to re-anchor at the head of each block -- then
+    /// this is exact between anchors, which is where the cutting happens.
+    [[nodiscard]] double samplesToNextStep() const noexcept
+    {
+        if (! (rateHz_ > 0.0))
+            return -1.0;
+
+        const double remaining = 1.0 - (position_ - std::floor (position_));
+
+        return remaining * sampleRate_ / rateHz_;
+    }
+
     /// Which step is playing, 0 to `length - 1`. For a playhead.
     [[nodiscard]] int getStepIndex() const noexcept
     {

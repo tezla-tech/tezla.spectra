@@ -107,6 +107,56 @@ setting rather than a formality — it is the first thing to reach for if the CP
 meter climbs, and at 176.4 or 192 kHz sessions it is what Auto picks anyway. The
 tooltip reads the session's actual rate and says what Auto is doing right now.
 
+### The panel is paged
+
+**OPERATORS · MATRIX · VOICE · SEQ · TUNING.** Each page gets the whole window,
+so the window only has to fit the largest page rather than the sum of them, and
+each page lays its rows out from the height it is given — a small window gets
+denser, not clipped. Minimum 860 × 520.
+
+### Ratio modes, and microtuning that reaches the ratio
+
+Every operator has a **Ratio mode**: *Free* (continuous, and bit-for-bit what
+you set), *Harmonic* (the nearest simple p:q — Chowning's `N₁:N₂`), or *Scale*
+(the nearest degree of the loaded tuning, octave-extended).
+
+Scale is the one no other FM synth has, and the reason is worth a sentence.
+Snapping a *frequency* to a scale is ordinary; snapping a **ratio** is not,
+because a ratio is an interval rather than a pitch — so the answer is the same
+at every key, and a snapped modulator puts its **entire sideband ladder** on
+the loaded scale's degrees, everywhere on the keyboard. In 19-TET or a Persian
+dastgah that is the difference between a growl that belongs to the track and
+one that fights it.
+
+Fixed-Hz operators and the formant mode are exempt and always will be: a
+formant centre is a vocal-tract resonance, not a musical interval.
+
+### The ratio sequencer
+
+Sixteen steps whose value is a **ratio**, locked to the transport by note value.
+Stepping a modulator's ratio does not sweep a timbre — it swaps one harmonic
+identity for another, which is the neuro growl as a rhythm rather than as a
+filter sweep.
+
+- **A step change never retriggers the phase.** It is a frequency step: the
+  accumulator runs on and the spectrum jumps.
+- **Glide is geometric**, because steps are stored logarithmically. A glide
+  from 1 to 4 passes through 2 at the halfway point — an octave a beat.
+- **The engine cuts its sample loop at the step edge**, so a jump lands on the
+  beat rather than up to a control chunk late. Measured: the output first
+  changes at host sample 4139 against a computed edge of 4138, where the next
+  control chunk would have been 4144.
+
+### Braids
+
+Six topologies — **Stack, Twin, Fan, Ring, Pairs, Solo** — as buttons rather
+than a mode list. Pressing one *writes* the matrix and the operator levels and
+then gets out of the way: every cell is still a knob, nothing is locked, and
+your ratios, envelopes and Character are left exactly as they were. A full 6×6
+matrix contains every fixed algorithm of the era as a special case, which is
+strictly more capable and strictly harder to start from — thirty-six zeroes is
+not a sound.
+
 ### The filter, the sub lane and unison
 
 **FILTER** is one state-variable filter per voice, after the whole operator

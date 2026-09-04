@@ -57,6 +57,12 @@ struct OperatorParameters
     double keyLeft { 0.0 };         ///< -1 .. 1, per octave below the break
     double keyRight { 0.0 };        ///< -1 .. 1, per octave above it
 
+    /// Free / Harmonic / Scale, as a `RatioMode`. The engine resolves it before
+    /// the voice ever sees `ratio`, so a voice only ever handles a plain
+    /// number -- the quantiser needs the loaded scale, and the scale lives with
+    /// the tuning in the engine.
+    int ratioMode { 0 };
+
     double velLevel { 0.0 };        ///< how much velocity moves the output level
     double velIndex { 0.0 };        ///< how much it moves the modulation this operator sends
 };
