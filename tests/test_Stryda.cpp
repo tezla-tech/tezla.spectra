@@ -483,6 +483,174 @@ TEZLA_TEST (six_operators_at_eight_voices_fit_the_budget)
     CHECK_CPU_BUDGET (modfmSeconds, 1.60, "8 Stryda voices, 6 operators at half ModFM");
 }
 
+TEZLA_TEST (the_index_cap_costs_almost_nothing_to_keep_engaged)
+{
+    // ---------------------------------------------------------------------
+    // **The test that was missing when the cap froze FL Studio**
+    // ---------------------------------------------------------------------
+    //
+    // The budget test above runs with `indexCap` at its default of 0, so the
+    // cap never resolved and its cost was never on any scale. On the rig a
+    // Neuro Growl patch with the cap at Soft pinned the CPU meter past 100 %
+    // and locked the DAW the moment a knob moved (reported 2026-09-04). Three
+    // things had gone wrong together and each is now guarded:
+    //
+    //   1. `fm::significantOrder` evaluated a Bessel integral per order, which
+    //      is quadratic -- 5.7 ms at an index of 64 radians.
+    //   2. `fm::feedbackOrder` walked 512 orders whenever beta was **below**
+    //      1 radian, so the cost hid at low feedback and, worse, appeared
+    //      halfway through every bisection because bisecting scales beta down.
+    //      30-55 ms per call, twelve calls per prediction, thirty-three
+    //      predictions per resolution: two to three seconds.
+    //   3. The engine resolved all of it per voice per 32-sample chunk.
+    //
+    // This asserts the whole of that: the same patch as the budget test, with
+    // feedback below the boundary and the cap hard on, must cost no more than
+    // a modest fraction over the uncapped figure. It is deliberately a *ratio*
+    // rather than an absolute, so a busy container moves both numbers together.
+    const auto measure = [] (double capAmount, double& outElapsed)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (8);
+
+        VoiceParameters parameters;
+        parameters.indexCap = capAmount;
+
+        for (int op = 0; op < StrydaVoice::kNumOperators; ++op)
+        {
+            auto& settings = parameters.operators[static_cast<std::size_t> (op)];
+            settings.ratio = 1.0 + static_cast<double> (op);
+            settings.level = op == 0 ? 1.0 : 0.0;
+            settings.decay = 4.0;
+            settings.sustain = 0.8;
+            settings.attack = 0.005;
+        }
+
+        // 0.1 cycles is 0.63 radians -- the side of the boundary that used to
+        // take the slow path, which is the case the user actually hit.
+        parameters.operators[0].feedback = 0.1;
+
+        for (int op = 0; op + 1 < StrydaVoice::kNumOperators; ++op)
+            parameters.indices[static_cast<std::size_t> (op)][static_cast<std::size_t> (op + 1)] = 1.5;
+
+        engine.setParameters (parameters);
+
+        for (int v = 0; v < 8; ++v)
+            engine.noteOn (48 + v * 3, 1.0);
+
+        const auto start = std::chrono::steady_clock::now();
+        renderEngine (engine, 48000 * 2, 512);
+        outElapsed = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
+    };
+
+    double offSeconds = 0.0;
+    double hardSeconds = 0.0;
+
+    measure (0.0, offSeconds);
+    measure (1.0, hardSeconds);
+
+    const double overhead = offSeconds > 0.0 ? hardSeconds / offSeconds : 0.0;
+
+    std::printf ("        [cap] 8 voices, 2 s of audio: cap off %.3f s, cap hard %.3f s (%.2fx)\n",
+                 offSeconds, hardSeconds, overhead);
+
+    // The bound was 1.5 first and caught nothing: resolving the cap every chunk
+    // again -- the rig behaviour exactly -- measured 1.30 and sailed through.
+    // Three baseline runs give 0.84 / 0.85 / 0.87, so 1.10 separates them
+    // cleanly with a quarter of headroom over the noisiest of the three.
+    //
+    // Below 1 rather than a little above it, and that is not noise: the cap
+    // scales the indices *down*, so a capped voice does slightly less work than
+    // an uncapped one. The cost of deciding is smaller than the work it saves.
+    CHECK (overhead < 1.10);
+
+    CHECK_CPU_BUDGET (hardSeconds, 1.60, "8 Stryda voices with the index cap hard on");
+}
+
+TEZLA_TEST (the_cap_resolves_on_its_own_sub_grid_and_not_per_chunk)
+{
+    // ---------------------------------------------------------------------
+    // **The clock cannot assert this; the count can**
+    // ---------------------------------------------------------------------
+    //
+    // The wall-clock test above is a coarse net: on a shared container the two
+    // renders it compares move together by tens of per cent, so the threshold
+    // has to be loose enough to miss a 46 % regression -- which is exactly the
+    // size of the one that reaching for `refreshIndexCap` every chunk would
+    // reintroduce. So assert the thing itself. This counts the expensive
+    // operation and is exact on any machine at any load.
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setPolyphony (4);
+
+    VoiceParameters parameters = singleCarrier();
+    parameters.indexCap = 1.0;
+    engine.setParameters (parameters);
+
+    engine.noteOn (60, 1.0);
+    engine.noteOn (64, 1.0);
+
+    const long long afterNotes = engine.getCapResolutionCount();
+    CHECK (afterNotes == 2);   // one each, immediately, so neither starts uncapped
+
+    constexpr int kHostFrames = 4800;
+    renderEngine (engine, kHostFrames, 512);
+
+    const long long during = engine.getCapResolutionCount() - afterNotes;
+
+    const int internalSamples = kHostFrames * engine.getFactor();
+    const int chunks = internalSamples / StrydaEngine::kControlChunk;
+    const long long expected = 2LL * (chunks / StrydaEngine::kCapChunks);
+
+    std::printf ("        [cap] %d internal samples, %d chunks: %lld resolutions "
+                 "(one per voice every %d chunks would be %lld; every chunk, %lld)\n",
+                 internalSamples, chunks, during, StrydaEngine::kCapChunks, expected,
+                 2LL * chunks);
+
+    // Within one sub-grid step of the ideal -- the grid is anchored to the
+    // stream, so where the render happens to start and stop can add or drop a
+    // single boundary.
+    CHECK (std::llabs (during - expected) <= 2);
+
+    // And emphatically not the per-chunk figure that froze the rig.
+    CHECK (during < chunks);
+}
+
+TEZLA_TEST (the_cap_sub_grid_is_anchored_to_the_stream_not_the_block)
+{
+    // The same property `getChunkCountdown` exists to prove, one level down:
+    // if the cap grid were counted per callback rather than per control chunk,
+    // a host at 64 samples would resolve it eight times as often as one at 512
+    // and the two would drift apart in what they cap to. Same stream, three
+    // buffer sizes, same count.
+    const auto count = [] (int blockSize)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.indexCap = 1.0;
+        engine.setParameters (parameters);
+
+        engine.noteOn (60, 1.0);
+        renderEngine (engine, 8192, blockSize);
+
+        return engine.getCapResolutionCount();
+    };
+
+    const long long small = count (64);
+    const long long large = count (512);
+    const long long odd = count (97);
+
+    std::printf ("        [cap] resolutions at 64/512/97-sample blocks: %lld / %lld / %lld\n",
+                 small, large, odd);
+
+    CHECK (small == large);
+    CHECK (odd == large);
+}
+
 TEZLA_TEST (an_idle_instrument_costs_almost_nothing)
 {
     StrydaEngine engine;
@@ -962,4 +1130,168 @@ TEZLA_TEST (key_scaling_leans_the_way_it_is_pointed)
     // nothing here, and 0.5 the other way.
     CHECK_NEAR (up / flat, 2.0, 0.02);
     CHECK_NEAR (down / flat, 0.5, 0.02);
+}
+
+// ---------------------------------------------------------------------------
+// F5 groundwork: the filter, the sub lane and the unison offsets
+// ---------------------------------------------------------------------------
+//
+// The DSP for phase 5 sits in `StrydaVoice` ahead of the parameters that will
+// drive it, so every one of its defaults has to be **exactly** neutral -- not
+// nearly. Until F5's JUCE layer lands this is the only thing standing between
+// a patch and a silently different sound, and CLAUDE.md section 7 is explicit
+// that "almost identity" means every existing project changes on update.
+
+TEZLA_TEST (the_filter_is_skipped_bit_exactly_above_its_bypass_corner)
+{
+    // ---------------------------------------------------------------------
+    // **The first version of this test was a decoration, and here is why**
+    // ---------------------------------------------------------------------
+    //
+    // It rendered a reference at the defaults and compared other spellings of
+    // "neutral" against it. Forcing the filter to run unconditionally -- the
+    // exact regression it was meant to catch -- made it run for the reference
+    // too, so all four renders still agreed and the test passed. Found by
+    // breaking it (CLAUDE.md section 10).
+    //
+    // What actually has teeth is the *boundary*. Every cutoff at or above
+    // `kFilterBypassHz` takes the skip, so they must all be bit-identical to
+    // each other however far apart they are set; if the skip were removed they
+    // would each get their own coefficients and diverge. And a cutoff just
+    // below the corner must differ, or the filter is not in the path at all.
+    const auto render = [] (double cutoffHz)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (1);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.extras.cutoffHz = cutoffHz;
+        engine.setParameters (parameters);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 4096, 512);
+    };
+
+    const auto reference = render (20000.0);
+
+    double energy = 0.0;
+    for (const double sample : reference)
+        energy += sample * sample;
+
+    // Worthless against silence, so prove there is a signal to compare first.
+    std::printf ("        [f5] reference energy %.4f over %zu samples\n",
+                 energy, reference.size());
+    CHECK (energy > 1.0);
+
+    for (double cutoffHz : { 19000.0, 24000.0, 40000.0 })
+    {
+        const auto candidate = render (cutoffHz);
+
+        std::size_t differing = 0;
+        for (std::size_t i = 0; i < candidate.size(); ++i)
+            if (! (candidate[i] == reference[i]))
+                ++differing;
+
+        std::printf ("        [f5] cutoff %.0f Hz vs 20 kHz: %zu of %zu samples differ\n",
+                     cutoffHz, differing, candidate.size());
+
+        CHECK (differing == 0);
+    }
+
+    // And the filter is really there when it is asked for.
+    const auto engaged = render (18000.0);
+
+    std::size_t engagedDiffering = 0;
+    for (std::size_t i = 0; i < engaged.size(); ++i)
+        if (! (engaged[i] == reference[i]))
+            ++engagedDiffering;
+
+    std::printf ("        [f5] cutoff 18 kHz (below the corner): %zu samples differ\n",
+                 engagedDiffering);
+
+    CHECK (engagedDiffering > 0);
+}
+
+TEZLA_TEST (the_sub_lane_is_silent_at_zero_level_whatever_else_it_is_set_to)
+{
+    // The sub's `isExactlyZero` guard saves work rather than changing the
+    // answer -- multiplying by a level of zero would give zero anyway -- so
+    // what is worth asserting is that no other sub setting can leak through it.
+    // Octave and shape are the two that would, since both change the
+    // oscillator rather than its gain.
+    const auto render = [] (int octave, int shape)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (1);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.extras.subLevel = 0.0;
+        parameters.extras.subOctave = octave;
+        parameters.extras.subShape = shape;
+        engine.setParameters (parameters);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 4096, 512);
+    };
+
+    const auto reference = render (-1, 0);
+
+    for (int octave : { -2, -1, 0 })
+        for (int shape : { 0, 1 })
+        {
+            const auto candidate = render (octave, shape);
+
+            std::size_t differing = 0;
+            for (std::size_t i = 0; i < candidate.size(); ++i)
+                if (! (candidate[i] == reference[i]))
+                    ++differing;
+
+            CHECK (differing == 0);
+        }
+}
+
+TEZLA_TEST (each_f5_stage_actually_does_something_when_asked)
+{
+    // The other half of the test above, and the half that makes it mean
+    // anything: a stage that was never wired up would pass every bit-exactness
+    // check ever written.
+    const auto render = [] (const VoiceExtras& extras)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (1);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.extras = extras;
+        engine.setParameters (parameters);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 4096, 512);
+    };
+
+    const auto rms = [] (const std::vector<double>& samples)
+    {
+        double sum = 0.0;
+        for (const double sample : samples)
+            sum += sample * sample;
+        return std::sqrt (sum / static_cast<double> (samples.size()));
+    };
+
+    const double open = rms (render (VoiceExtras {}));
+
+    VoiceExtras closed;
+    closed.cutoffHz = 120.0;   // well below the 261 Hz note
+    const double filtered = rms (render (closed));
+
+    VoiceExtras withSub;
+    withSub.subLevel = 0.8;
+    const double subbed = rms (render (withSub));
+
+    std::printf ("        [f5] rms open %.5f, filter at 120 Hz %.5f, sub at 0.8 %.5f\n",
+                 open, filtered, subbed);
+
+    CHECK (filtered < open * 0.5);    // the filter removes the note
+    CHECK (subbed > open * 1.1);      // the sub lane adds to it
 }

@@ -98,8 +98,14 @@ the six **feedback** cells on the diagonal, and a **noise** column — one share
 noise source into any operator's phase, which is the grit no amount of
 sine-on-sine will give you.
 
-Globally: **Oversampling** and **Render quality** as everywhere in the suite,
-**Voices**, **Master**, and the **Index cap**.
+Globally: **Oversampling** and **Render quality** in the header bar, as
+everywhere else in the suite, beside **Master**; **Voices** and the **Index cap**
+on the panel itself.
+
+Oversampling has **Off / ×2 / ×4 / ×8** as well as Auto, and Off is a real
+setting rather than a formality — it is the first thing to reach for if the CPU
+meter climbs, and at 176.4 or 192 kHz sessions it is what Auto picks anyway. The
+tooltip reads the session's actual rate and says what Auto is doing right now.
 
 ### The index cap, and why it is Off by default
 
@@ -112,6 +118,13 @@ It ships **Off** because the prediction it acts on is an upper bound and a loose
 one on stacks, so leaving it on would clamp patches that never needed it. Switch
 it on when a patch played high starts to sound gritty; the readout will tell you
 when it is doing work.
+
+It is also, now, genuinely cheap. Resolving it costs **4.6 µs** and happens once
+per voice every 512 internal samples, which measures as no overhead at all
+against an uncapped render. That was not true of the first build the cap shipped
+in: it cost two to three *seconds* per resolution and ran per voice per
+32-sample chunk, which froze FL Studio on the rig. `plugins/Stryda/PLAN.md` has
+the numbers and what was wrong.
 
 ### Oversampling matters more here than anywhere else in the suite
 

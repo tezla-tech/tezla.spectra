@@ -12,10 +12,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Decibels.hpp>
 #include <tezla/dsp/FmBandwidth.hpp>
+#include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/SmallRandom.hpp>
+#include <tezla/dsp/SvfFilter.hpp>
 
 #include "OperatorMatrix.hpp"
 
@@ -57,6 +61,44 @@ struct OperatorParameters
     double velIndex { 0.0 };        ///< how much it moves the modulation this operator sends
 };
 
+/// The filter, the sub lane and the unison spread. All F5.
+struct VoiceExtras
+{
+    // ---- the per-voice filter ----------------------------------------------
+
+    double cutoffHz { 20000.0 };
+    double resonance { 0.0 };
+    double morph { 0.0 };          ///< lowpass -> bandpass -> highpass
+    double keyTrack { 0.0 };       ///< 0 = fixed, 1 = follows the note exactly
+    double envAmount { 0.0 };      ///< octaves the filter envelope opens by
+    double drive { 0.0 };
+    double sing { 0.0 };
+
+    double filterAttack { 0.002 };
+    double filterDecay { 0.5 };
+    double filterSustain { 1.0 };
+    double filterRelease { 0.25 };
+
+    // ---- the protected sub lane --------------------------------------------
+
+    double subLevel { 0.0 };
+    int subOctave { -1 };          ///< -2, -1 or 0 relative to the note
+    int subShape { 0 };            ///< 0 sine, 1 triangle
+
+    double subAttack { 0.002 };
+    double subDecay { 2.0 };
+    double subSustain { 1.0 };
+    double subRelease { 0.25 };
+
+    // ---- unison -------------------------------------------------------------
+
+    /// Per-copy offsets, filled in by the engine when it spreads a note across
+    /// several voices. A lone voice gets all zeros and is unaffected.
+    double detuneCents { 0.0 };
+    double pan { 0.0 };
+    double indexOffset { 0.0 };    ///< added to every index, in cycles
+};
+
 struct VoiceParameters
 {
     std::array<OperatorParameters, OperatorMatrix::kNumOperators> operators {};
@@ -74,6 +116,8 @@ struct VoiceParameters
 
     /// What fraction of the internal Nyquist the cap aims below.
     double capCeiling { 0.9 };
+
+    VoiceExtras extras {};
 };
 
 class StrydaVoice
@@ -85,6 +129,10 @@ public:
     {
         sampleRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
         matrix_.prepare (sampleRate_);
+        filter_.prepare (sampleRate_);
+        sub_.reset();
+        filterEnvelope_.prepare (sampleRate_);
+        subEnvelope_.prepare (sampleRate_);
 
         for (auto& envelope : envelopes_)
             envelope.prepare (sampleRate_);
@@ -95,6 +143,10 @@ public:
     void reset() noexcept
     {
         matrix_.reset();
+        filter_.reset();
+        sub_.reset();
+        filterEnvelope_.reset();
+        subEnvelope_.reset();
 
         for (auto& envelope : envelopes_)
             envelope.reset();
@@ -120,6 +172,11 @@ public:
         age_ = 0;
 
         matrix_.reset();
+        filter_.reset();
+        sub_.reset();
+
+        filterEnvelope_.noteOn();
+        subEnvelope_.noteOn();
 
         for (int op = 0; op < kNumOperators; ++op)
         {
@@ -131,6 +188,9 @@ public:
     void noteOff() noexcept
     {
         held_ = false;
+
+        filterEnvelope_.noteOff();
+        subEnvelope_.noteOff();
 
         for (auto& envelope : envelopes_)
             envelope.noteOff();
@@ -181,7 +241,7 @@ public:
 
     /// Push the current settings. Called once per control chunk, never per
     /// sample, and every setter it reaches is guarded against a no-op.
-    void applyParameters (const VoiceParameters& parameters, double internalRate) noexcept
+    void applyParameters (const VoiceParameters& parameters) noexcept
     {
         parameters_ = parameters;
 
@@ -190,10 +250,15 @@ public:
             const auto& settings = parameters.operators[static_cast<std::size_t> (op)];
             const auto slot = static_cast<std::size_t> (op);
 
+            // The unison copy's detune rides on the operator's own fine tune,
+            // so a detuned copy is the same patch a few cents away rather than
+            // a differently-voiced one. A fixed-Hz operator is deliberately
+            // exempt: a formant does not detune with the note.
+            const double cents = settings.fineCents + parameters.extras.detuneCents;
+
             const double hz = settings.fixedHz > 0.0
                                 ? settings.fixedHz
-                                : frequency_ * settings.ratio
-                                    * std::pow (2.0, settings.fineCents / 1200.0);
+                                : frequency_ * settings.ratio * std::pow (2.0, cents / 1200.0);
 
             const double keyGain = keyScaleGain (settings, static_cast<double> (note_));
 
@@ -227,14 +292,89 @@ public:
                 const double sourceGain = keyScaleGain (source, static_cast<double> (note_))
                                             * velocityGain (source.velIndex, velocity_);
 
-                matrix_.setIndex (op, from,
-                                  parameters.indices[slot][static_cast<std::size_t> (from)]
-                                    * sourceGain);
+                const double cell = parameters.indices[slot][static_cast<std::size_t> (from)];
+
+                // **Index spread, and it is the thickest thing here.** Detuning
+                // a unison stack in pitch gives you the same timbre several
+                // times; offsetting each copy's modulation index gives you
+                // several *different* timbres beating against each other, which
+                // is what a reese actually is. Only cells that are already
+                // doing something are offset -- a connection at zero stays at
+                // zero, so the spread cannot switch on a path the patch never
+                // asked for.
+                const double spread = dsp::isExactlyZero (cell)
+                                        ? 0.0
+                                        : parameters.extras.indexOffset;
+
+                matrix_.setIndex (op, from, std::max (0.0, (cell + spread) * sourceGain));
             }
         }
 
-        matrix_.setIndexScale (capScaleFor (parameters, internalRate));
         matrix_.refreshQuadratureNeeds();
+
+        applyExtras (parameters.extras);
+    }
+
+    /// Resolve the index cap and install its scale.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// **Kept out of `applyParameters`, and that is not tidiness**
+    /// ---------------------------------------------------------------------------
+    ///
+    /// Everything else in `applyParameters` is arithmetic on numbers already to
+    /// hand and costs tens of nanoseconds. This one resolves a bandwidth
+    /// prediction by bisection -- `dsp::FmBandwidth::indexScaleFor`, about
+    /// **4.6 us** even with both order searches tabled, and seconds before they
+    /// were. Running it per voice per 32-sample control chunk is 16 voices at
+    /// 6000 chunks a second: 44 % of a core spent deciding how loud the
+    /// modulators are allowed to be, on top of the synthesis itself.
+    ///
+    /// So the engine calls this on its own sample-counted sub-grid instead, and
+    /// on note-on so a new voice is never briefly uncapped. The grid is
+    /// counted in control chunks, which are themselves anchored to the stream
+    /// rather than to the host's block, so the update instants -- and therefore
+    /// the output -- stay independent of the buffer size (CLAUDE.md section 7).
+    void refreshIndexCap (const VoiceParameters& parameters, double internalRate) noexcept
+    {
+        matrix_.setIndexScale (capScaleFor (parameters, internalRate));
+    }
+
+    /// The filter, the sub lane and the unison offsets.
+    void applyExtras (const VoiceExtras& extras) noexcept
+    {
+        // Key tracking is exponential in the note, so at 1 the filter follows
+        // the keyboard exactly and the timbre is constant across it -- which is
+        // what "tracking" means and what a fixed cutoff is not.
+        const double tracked = frequency_ / 440.0;
+        const double trackScale = std::pow (tracked, extras.keyTrack);
+
+        filterCutoff_ = extras.cutoffHz * trackScale;
+        filterEnvAmount_ = extras.envAmount;
+
+        filter_.setMorph (extras.morph);
+        filter_.setResonance (extras.resonance);
+        filter_.setDrive (extras.drive);
+        filter_.setSing (extras.sing);
+
+        filterEnvelope_.setAttackSeconds (extras.filterAttack);
+        filterEnvelope_.setDecaySeconds (extras.filterDecay);
+        filterEnvelope_.setSustain (extras.filterSustain);
+        filterEnvelope_.setReleaseSeconds (extras.filterRelease);
+
+        subLevel_ = extras.subLevel;
+        sub_.setShape (extras.subShape == 1 ? dsp::OscShape::triangle : dsp::OscShape::sine);
+        // `Oscillator` takes a phase increment rather than a frequency: it has
+        // no sample rate of its own, deliberately, so the same object can run
+        // at whatever rate the caller is at.
+        sub_.setIncrement (frequency_ * std::pow (2.0, static_cast<double> (extras.subOctave))
+                             / sampleRate_);
+
+        subEnvelope_.setAttackSeconds (extras.subAttack);
+        subEnvelope_.setDecaySeconds (extras.subDecay);
+        subEnvelope_.setSustain (extras.subSustain);
+        subEnvelope_.setReleaseSeconds (extras.subRelease);
+
+        unisonPan_ = extras.pan;
     }
 
     /// The scale the cap would apply. Exposed so the editor can say whether it
@@ -282,7 +422,7 @@ public:
 
         ++age_;
 
-        bool anyActive = false;
+        bool anyActive = filterEnvelope_.isActive() || subEnvelope_.isActive();
         for (int op = 0; op < kNumOperators; ++op)
         {
             const auto slot = static_cast<std::size_t> (op);
@@ -312,13 +452,64 @@ public:
         double voiceRight = 0.0;
         matrix_.process (gains_.data(), noise_.bipolar(), voiceLeft, voiceRight);
 
-        left += voiceLeft * parameters_.masterLevel * velocity_;
-        right += voiceRight * parameters_.masterLevel * velocity_;
+        // The filter, per voice, with its own envelope opening it. Skipped
+        // entirely when it is wide open and doing nothing, so a patch that does
+        // not use it pays nothing and is bit-identical to one built without it.
+        const double filterEnv = filterEnvelope_.process();
+
+        if (filterCutoff_ < kFilterBypassHz || filterEnvAmount_ > 0.0
+            || filter_.getResonance() > 0.0)
+        {
+            const double octaves = filterEnvAmount_ * filterEnv;
+            filter_.setCutoffHz (filterCutoff_ * std::pow (2.0, octaves));
+
+            voiceLeft = filter_.process (voiceLeft);
+            voiceRight = filter_.process (voiceRight);
+        }
+
+        // **The sub never goes through any of that.** Not the matrix, not the
+        // filter, and (from F7) not the mangle chain either. On a DnB rig that
+        // is the difference between a bass that survives a club system and one
+        // that collapses the moment the growl bites -- and it is why the lane
+        // exists at all rather than being another operator.
+        const double subEnv = subEnvelope_.process();
+
+        if (! dsp::isExactlyZero (subLevel_))
+        {
+            const double value = sub_.advance() * subEnv * subLevel_;
+            voiceLeft += value;
+            voiceRight += value;
+        }
+
+        // Unison pan, constant power, computed per sample only because it is
+        // two multiplies against a pair precomputed at note-on.
+        const double gain = parameters_.masterLevel * velocity_;
+
+        left += voiceLeft * gain * unisonLeftGain();
+        right += voiceRight * gain * unisonRightGain();
     }
 
     void setSeed (std::uint64_t seed) noexcept { noise_.seed (seed); }
 
 private:
+    /// Above this the filter is doing nothing a listener could hear, so it is
+    /// skipped -- and skipped means bit-identical, not nearly.
+    static constexpr double kFilterBypassHz = 19000.0;
+
+    [[nodiscard]] double unisonLeftGain() const noexcept
+    {
+        return dsp::isExactlyZero (unisonPan_)
+                 ? 1.0
+                 : std::cos (0.25 * std::numbers::pi * (unisonPan_ + 1.0)) * std::numbers::sqrt2;
+    }
+
+    [[nodiscard]] double unisonRightGain() const noexcept
+    {
+        return dsp::isExactlyZero (unisonPan_)
+                 ? 1.0
+                 : std::sin (0.25 * std::numbers::pi * (unisonPan_ + 1.0)) * std::numbers::sqrt2;
+    }
+
     double sampleRate_ { 48000.0 };
     double frequency_ { 440.0 };
     double velocity_ { 1.0 };
@@ -332,6 +523,17 @@ private:
     std::array<double, kNumOperators> gains_ {};
     VoiceParameters parameters_ {};
     dsp::SmallRandom noise_ {};
+
+    dsp::SvfFilter filter_;
+    dsp::Adsr filterEnvelope_ {};
+    double filterCutoff_ { 20000.0 };
+    double filterEnvAmount_ { 0.0 };
+
+    dsp::Oscillator sub_;
+    dsp::Adsr subEnvelope_ {};
+    double subLevel_ { 0.0 };
+
+    double unisonPan_ { 0.0 };
 };
 
 } // namespace tezla::stryda

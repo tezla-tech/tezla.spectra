@@ -8,6 +8,7 @@
 #include "TestFramework.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
@@ -737,7 +738,7 @@ TEZLA_TEST (the_predictor_is_an_upper_bound_at_every_stack_depth)
 
             rendered[i] = std::sin (kTwoPi * (p0 + item.index1 * o1));
 
-            const auto step = [&kRate] (double& phase, double hz)
+            const auto step = [] (double& phase, double hz)
             {
                 phase += hz / kRate;
                 if (phase >= 1.0)
@@ -787,4 +788,276 @@ TEZLA_TEST (the_predictor_is_an_upper_bound_at_every_stack_depth)
         // bound is welcome; letting it fall below the real edge is not.
         CHECK (predicted >= measured - binWidth);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The cost of the prediction, which is a correctness property here
+// ---------------------------------------------------------------------------
+//
+// The index cap froze FL Studio on the user's rig (2026-09-04) because two
+// order searches were quadratic in the order they were searching for. The
+// answers were right; the arithmetic to reach them was not affordable. These
+// four tests pin the replacements against the naive forms they replaced, and
+// then pin the cost itself -- because for a control that runs inside the audio
+// callback, "how long does the right answer take" is not an optimisation
+// question, it is whether the plugin works.
+
+TEZLA_TEST (the_bessel_ladder_agrees_with_the_integral_over_strydas_whole_range)
+{
+    // Miller's downward recurrence returns every order at once. It has to be
+    // the same numbers `besselJn` returns one at a time, or every threshold
+    // built on it moves.
+    double worst = 0.0;
+    double worstX = 0.0;
+    int worstOrder = 0;
+
+    std::vector<double> ladder (static_cast<std::size_t> (kBesselLadderMaxOrder) + 1, 0.0);
+
+    for (double x : { 0.0, 0.5, 1.0, 4.0, 16.0, 50.27, 100.53, 200.0 })
+    {
+        const int highest = static_cast<int> (x + 6.0 * std::cbrt (x) + 16.0) + 1;
+
+        CHECK (besselJLadder (x, highest, ladder.data()));
+
+        for (int n = 0; n <= highest; ++n)
+        {
+            const double error = std::abs (ladder[static_cast<std::size_t> (n)] - besselJn (n, x));
+
+            if (error > worst)
+            {
+                worst = error;
+                worstX = x;
+                worstOrder = n;
+            }
+        }
+    }
+
+    std::printf ("        [ladder] worst disagreement with the integral %.3e (x %.2f, order %d)\n",
+                 worst, worstX, worstOrder);
+
+    CHECK (worst < 1e-12);
+
+    // The sign rule, which the recurrence gets by fixing up odd orders.
+    CHECK (besselJLadder (-16.0, 40, ladder.data()));
+    for (int n = 0; n <= 40; ++n)
+        CHECK (std::abs (ladder[static_cast<std::size_t> (n)] - besselJn (n, -16.0)) < 1e-12);
+
+    // Out of range is refused rather than silently truncated.
+    CHECK (! besselJLadder (4.0, kBesselLadderMaxOrder + 1, ladder.data()));
+    CHECK (! besselJLadder (4.0, 4, nullptr));
+}
+
+TEZLA_TEST (the_kapteyn_coefficients_fall_monotonically_so_the_bisection_is_exact)
+{
+    // The bisection in `feedbackOrderExact` is only the same answer as counting
+    // if the sequence it searches is monotone. That is a claim about Bessel
+    // functions, so it is checked rather than asserted in a comment.
+    int violations = 0;
+    double worstRise = 1.0;
+
+    for (int b = 1; b < 100; ++b)
+    {
+        const double beta = static_cast<double> (b) / 100.0;
+        double previous = 1e300;
+
+        for (int n = 1; n <= fm::kFeedbackSearchCeiling; ++n)
+        {
+            const double nb = static_cast<double> (n) * beta;
+            const double amplitude = std::abs (2.0 * besselJn (n, nb) / nb);
+
+            // Below 1e-9 the values are far under any threshold this is used
+            // with and are down at the integral's own noise floor.
+            if (amplitude > previous && previous > 1e-9)
+            {
+                ++violations;
+                worstRise = std::max (worstRise, amplitude / previous);
+            }
+
+            previous = amplitude;
+        }
+    }
+
+    std::printf ("        [kapteyn] %d monotonicity violations above 1e-9 over 99 x %d points\n",
+                 violations, fm::kFeedbackSearchCeiling);
+
+    CHECK (violations == 0);
+    CHECK (worstRise == 1.0);
+}
+
+TEZLA_TEST (the_feedback_order_bisection_reproduces_the_counting_form_exactly)
+{
+    // The naive form, kept here rather than in the header: this is the
+    // reference the fast one is judged against, and a reference belongs in the
+    // test that uses it.
+    const auto counting = [] (double beta, double thresholdDb)
+    {
+        if (! (beta > 0.0))
+            return 1;
+
+        if (beta >= 1.0)
+            return fm::kFeedbackSearchCeiling;
+
+        const double threshold = std::pow (10.0, thresholdDb / 20.0);
+        int highest = 1;
+
+        for (int n = 1; n <= fm::kFeedbackSearchCeiling; ++n)
+        {
+            const double nb = static_cast<double> (n) * beta;
+
+            if (std::abs (2.0 * besselJn (n, nb) / nb) >= threshold)
+                highest = n;
+        }
+
+        return highest;
+    };
+
+    int mismatches = 0;
+
+    for (int b = 1; b < 100; ++b)
+    {
+        const double beta = static_cast<double> (b) / 100.0;
+
+        if (counting (beta, fm::kThresholdDb) != fm::feedbackOrderExact (beta, fm::kThresholdDb))
+            ++mismatches;
+    }
+
+    std::printf ("        [feedback] bisection vs counting over 99 betas: %d mismatches\n",
+                 mismatches);
+
+    CHECK (mismatches == 0);
+
+    // The ends, which the bisection handles before its invariant holds.
+    CHECK (fm::feedbackOrderExact (0.0, fm::kThresholdDb) == 1);
+    CHECK (fm::feedbackOrderExact (1.0, fm::kThresholdDb) == fm::kFeedbackSearchCeiling);
+    CHECK (fm::feedbackOrderExact (6.28, fm::kThresholdDb) == fm::kFeedbackSearchCeiling);
+}
+
+TEZLA_TEST (the_order_tables_never_under_estimate_the_exact_search)
+{
+    // A table lookup that rounds the wrong way is a bandwidth bound that lies,
+    // and a bound that lies low is worse than no bound. Both tables round up.
+    int significantUnder = 0;
+    double significantWorstOver = 1.0;
+
+    for (int i = 1; i <= 2000; ++i)
+    {
+        const double index = static_cast<double> (i) * 0.1;
+        const int exact = fm::significantOrderExact (index, fm::kThresholdDb);
+        const int tabled = fm::significantOrder (index);
+
+        if (tabled < exact)
+            ++significantUnder;
+
+        if (exact > 0)
+            significantWorstOver = std::max (significantWorstOver,
+                                             static_cast<double> (tabled) / exact);
+    }
+
+    int feedbackUnder = 0;
+    double feedbackWorstOver = 1.0;
+
+    for (int i = 1; i < 1000; ++i)
+    {
+        const double beta = static_cast<double> (i) / 1000.0;
+        const int exact = fm::feedbackOrderExact (beta, fm::kThresholdDb);
+        const int tabled = fm::feedbackOrder (beta);
+
+        if (tabled < exact)
+            ++feedbackUnder;
+
+        feedbackWorstOver = std::max (feedbackWorstOver, static_cast<double> (tabled) / exact);
+    }
+
+    std::printf ("        [tables] significantOrder: %d under, worst over %.4fx;"
+                 "  feedbackOrder: %d under, worst over %.4fx\n",
+                 significantUnder, significantWorstOver, feedbackUnder, feedbackWorstOver);
+
+    CHECK (significantUnder == 0);
+    CHECK (feedbackUnder == 0);
+
+    // Above the tabled range the exact form is used, so it is the answer itself.
+    CHECK (fm::significantOrder (250.0) == fm::significantOrderExact (250.0, fm::kThresholdDb));
+
+    // A non-default threshold is never served from a table built at the default.
+    CHECK (fm::significantOrder (16.0, -40.0) == fm::significantOrderExact (16.0, -40.0));
+    CHECK (fm::feedbackOrder (0.5, -40.0) == fm::feedbackOrderExact (0.5, -40.0));
+}
+
+TEZLA_TEST (resolving_the_index_cap_is_not_quadratic_in_the_sideband_order)
+{
+    // ---------------------------------------------------------------------
+    // **The assertion that would have caught the rig freeze**
+    // ---------------------------------------------------------------------
+    //
+    // A patch with feedback below one radian and a three-deep stack. Measured
+    // at 4.6 us here, and at **2.0 to 2.8 seconds** before the searches were
+    // made linear -- the bisection inside `indexScaleFor` scales beta down as
+    // it searches, so even a patch set above the one-radian early-out fell
+    // below it partway through and paid the full 512-order walk.
+    //
+    // Two bounds, because there are two separate regressions and one bound
+    // caught neither cleanly. The first version of this test used a single
+    // loose one and **passed with the table deliberately bypassed** -- a
+    // decoration, found by breaking it. What each bound actually guards, each
+    // confirmed by breaking the thing it names:
+    //
+    //   `perSearch`      the Bessel ladder. Remove it and `significantOrderExact`
+    //                    goes back to an integral per order: 1.0 us -> 5.7 ms.
+    //   `perResolution`  the feedback order table. Remove it and every
+    //                    prediction pays nine high-order Bessel integrals
+    //                    twelve times over: 4.8 us -> past 500 us.
+    //
+    // What neither bound guards, stated rather than implied: the
+    // `significantOrder` table is a further 17x on top (84.6 us without it,
+    // 4.8 us with), and no assertion here would notice its loss -- because
+    // 84.6 us per voice on a 375 Hz sub-grid is half a per cent of a core,
+    // which is affordable. It is kept because it costs 3.5 ms to build, not
+    // because anything depends on it.
+    //
+    // Both bounds sit two orders of magnitude above the measured figures, so a
+    // busy container or an emulator at 30x cannot fail them. These are not CPU
+    // budgets and deliberately do not use CHECK_CPU_BUDGET: the claim is
+    // linear-versus-quadratic, not a share of the rig's core.
+    FmBandwidth bandwidth;
+    bandwidth.setOperatorCount (6);
+
+    for (int op = 0; op < 6; ++op)
+        bandwidth.setOperatorFrequency (op, 110.0 * static_cast<double> (op + 1));
+
+    bandwidth.setIndex (1, 0, 1.2);
+    bandwidth.setIndex (2, 1, 0.7);
+    bandwidth.setIndex (3, 2, 0.5);
+    bandwidth.setFeedback (0, 0.1);   // 0.63 radians: the slow side of the boundary
+
+    // Warm the tables first, so what is timed is a resolution and not a build.
+    (void) bandwidth.indexScaleFor (0.9 * 0.5 * 192000.0);
+
+    auto start = std::chrono::steady_clock::now();
+
+    double scale = 0.0;
+    for (int i = 0; i < 20; ++i)
+        scale = bandwidth.indexScaleFor (0.9 * 0.5 * 192000.0);
+
+    const double perResolution = std::chrono::duration<double> (
+                                     std::chrono::steady_clock::now() - start).count() / 20.0;
+
+    // The exact search on its own, at an index the growl patches actually
+    // reach. 5.7 ms before the ladder, 1.5 us after it.
+    start = std::chrono::steady_clock::now();
+
+    int order = 0;
+    for (int i = 0; i < 20; ++i)
+        order = fm::significantOrderExact (64.0, fm::kThresholdDb);
+
+    const double perSearch = std::chrono::duration<double> (
+                                 std::chrono::steady_clock::now() - start).count() / 20.0;
+
+    std::printf ("        [cap] indexScaleFor with feedback: %.1f us/call (scale %.4f);"
+                 "  significantOrderExact(64) %.1f us -> order %d\n",
+                 perResolution * 1e6, scale, perSearch * 1e6, order);
+
+    CHECK (perSearch < 200e-6);        // 1.5 us measured; 5.7 ms without the ladder
+    CHECK (perResolution < 500e-6);    // 4.2 us measured; 3 ms with the tables bypassed
+    CHECK (scale > 0.0);
+    CHECK (scale < 1.0);
 }

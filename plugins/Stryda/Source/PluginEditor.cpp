@@ -185,6 +185,15 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
     header_.onSwapRequested = [this] { processor_.getAbCompare().swapSlots(); };
     header_.onCopyRequested = [this] { processor_.getAbCompare().copyToOtherSlot(); };
 
+    // Master trim, oversampling and render quality, in the header where every
+    // other plugin in the suite keeps them. They were built in F3 and simply
+    // never attached, so the panel had no way to turn oversampling off -- which
+    // is the first thing anybody reaches for when an instrument costs too much,
+    // and the first thing the user asked for from the rig. There is no dry/wet
+    // on an instrument, so the mix id is null.
+    header_.attachSuiteControls (owner.getState(), nullptr, ids::master,
+                                 ids::oversampling, ids::renderOversampling);
+
     // Six strips, one per operator, each in its own hue so the eye can find a
     // row in the matrix and the strip it belongs to without reading a number.
     // Short enough to fit the cell at the narrowest window the editor allows.
@@ -614,6 +623,12 @@ void StrydaEditor::timerCallback()
 
     if (presetBox_.getSelectedId() != processor_.getCurrentProgram() + 1)
         presetBox_.setSelectedId (processor_.getCurrentProgram() + 1, juce::dontSendNotification);
+
+    // Live, from the timer, because what Auto is *doing* depends on the host's
+    // rate and only the processor knows it (CLAUDE.md section 6: the tooltip
+    // reads the actual current rate rather than making the user work it out).
+    header_.setOversamplingTooltip (processor_.describeOversampling());
+    header_.setRenderTooltip (processor_.describeRenderQuality());
 }
 
 } // namespace tezla::stryda
