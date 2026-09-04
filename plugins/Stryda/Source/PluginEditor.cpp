@@ -17,6 +17,37 @@ constexpr int kMinStripWidth = 190;
 constexpr int kRowHeight = 74;
 constexpr int kCaptionHeight = 15;
 
+/// The F5 band under the strips: the filter, the sub and the unison stack.
+/// A shorter row than the operator strips on purpose -- these are set once and
+/// then left, where a strip control is played.
+constexpr int kBandRowHeight = 58;
+constexpr int kBandHeight = kBandRowHeight * 2 + kCaptionHeight * 2 + 30;
+
+/// The three F5 plates, split the same way in `paint` and in `resized`.
+///
+/// One function rather than two copies of the arithmetic, because the plate a
+/// control is drawn on and the plate it is laid out on drifting apart is the
+/// classic way a panel ends up with a knob half off its own background.
+struct BandPlates
+{
+    juce::Rectangle<int> filter;
+    juce::Rectangle<int> sub;
+    juce::Rectangle<int> unison;
+};
+
+[[nodiscard]] BandPlates splitBand (juce::Rectangle<int> band)
+{
+    BandPlates plates;
+
+    // The filter has eleven controls, the sub five plus two choices, unison
+    // four. The widths follow the counts rather than being equal thirds.
+    plates.filter = band.removeFromLeft (band.getWidth() * 47 / 100);
+    plates.sub = band.removeFromLeft (band.getWidth() * 55 / 100);
+    plates.unison = band;
+
+    return plates;
+}
+
 [[nodiscard]] juce::String hzText (double hz)
 {
     if (hz >= 1000.0)
@@ -323,6 +354,111 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
     indexCapAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
         owner.getState(), ids::indexCap, indexCapBox_);
 
+    // ---- F5: the filter, the sub lane and the unison stack -----------------
+
+    {
+        const auto tint = palette_.secondary;
+
+        static const char* const filterCaptions[] { "CUTOFF", "RESO", "MORPH", "KEY",
+                                                    "ENV", "DRIVE", "SING",
+                                                    "ATK", "DECAY", "SUS", "REL" };
+        const juce::String filterIds[] {
+            ids::filterCutoff, ids::filterReso, ids::filterMorph, ids::filterKeyTrack,
+            ids::filterEnv, ids::filterDrive, ids::filterSing,
+            ids::filterAttack, ids::filterDecay, ids::filterSustain, ids::filterRelease
+        };
+
+        for (int i = 0; i < 11; ++i)
+            filter_.push_back (&addControl (filterIds[i], filterCaptions[i], tint,
+                                            i == 0 ? ui::design::Emphasis::lead
+                                                   : ui::design::Emphasis::trim));
+
+        filter_[0]->knob.setTooltip (
+            "One filter per voice, after the whole operator matrix and before the sub lane.\n\n"
+            "At 20 kHz it is not merely transparent, it is SKIPPED -- bit for bit, the same "
+            "samples a build without a filter would produce. So a patch that does not want one "
+            "pays nothing for it, and an old project cannot change the day this shipped.");
+
+        filter_[2]->knob.setTooltip (
+            "Lowpass at 0, bandpass in the middle, highpass at 1, crossfaded rather than "
+            "switched -- so it can be swept and automated without a click.");
+
+        filter_[4]->knob.setTooltip (
+            "How far the filter envelope opens the cutoff, in OCTAVES, positive or negative. "
+            "This is the classic bass gesture: a fast decay on a couple of octaves is the "
+            "pluck, a slow one is the sweep.");
+
+        filter_[6]->knob.setTooltip (
+            "Sing: pushes the resonance towards self-oscillation, where the filter becomes a "
+            "sine of its own at the cutoff. On a growl it adds a formant that tracks the "
+            "filter rather than the note.");
+
+        static const char* const subCaptions[] { "LEVEL", "ATK", "DECAY", "SUS", "REL" };
+        const juce::String subIds[] { ids::subLevel, ids::subAttack, ids::subDecay,
+                                      ids::subSustain, ids::subRelease };
+
+        for (int i = 0; i < 5; ++i)
+            sub_.push_back (&addControl (subIds[i], subCaptions[i], tint,
+                                         i == 0 ? ui::design::Emphasis::lead
+                                                : ui::design::Emphasis::trim));
+
+        sub_[0]->knob.setTooltip (
+            "A sine or triangle under the patch that goes through NOTHING: not the operator "
+            "matrix, not the filter, and not the mangle chain when that arrives. It has its "
+            "own envelope and its own level.\n\n"
+            "That is the difference between a bass that survives a club system and one that "
+            "collapses the moment the growl bites -- the low end stops being something the "
+            "distortion can eat. At 0 the whole lane is skipped.\n\n"
+            "Only ONE copy of a unison stack carries it, so eight voices do not give you "
+            "eight detuned subs fighting over the same octave.");
+
+        ui::styleChoice (subOctaveBox_, palette_, tint);
+        subOctaveBox_.addItemList (choices::subOctave, 1);
+        subOctaveBox_.setTooltip ("Where the sub sits relative to the note. One octave down is "
+                                  "the usual place for a DnB bass; two is for when the patch "
+                                  "itself is already low.");
+        addAndMakeVisible (subOctaveBox_);
+        subOctaveAttachment_
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::subOctave, subOctaveBox_);
+
+        ui::styleChoice (subShapeBox_, palette_, tint);
+        subShapeBox_.addItemList (choices::subShape, 1);
+        subShapeBox_.setTooltip ("Sine is the clean fundamental. Triangle adds quiet odd "
+                                 "harmonics, which is what makes a sub audible on a phone "
+                                 "speaker that cannot reproduce the fundamental at all.");
+        addAndMakeVisible (subShapeBox_);
+        subShapeAttachment_
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::subShape, subShapeBox_);
+
+        static const char* const unisonCaptions[] { "VOICES", "DETUNE", "SPREAD", "INDEX" };
+        const juce::String unisonIds[] { ids::unison, ids::unisonDetune,
+                                         ids::unisonSpread, ids::unisonIndex };
+
+        for (int i = 0; i < 4; ++i)
+            unison_.push_back (&addControl (unisonIds[i], unisonCaptions[i], tint,
+                                            i == 0 ? ui::design::Emphasis::lead
+                                                   : ui::design::Emphasis::trim));
+
+        unison_[0]->knob.setTooltip (
+            "How many copies of the patch one note plays.\n\n"
+            "They come out of the same voice budget: at 4 voices of unison and 8 of polyphony "
+            "you get two notes. That is the cost, and it is worth knowing before a chord "
+            "steals its own notes.\n\n"
+            "At 1 the whole stack is exactly inert -- the detune, spread and index spread have "
+            "nothing to spread across, so the voice is bit-identical to unison off.");
+
+        unison_[3]->knob.setTooltip (
+            "**Index spread, and it is the thickest thing here.** Detuning a stack gives you "
+            "the same timbre several times a few cents apart. Offsetting each copy's "
+            "modulation index instead gives you several DIFFERENT timbres beating against each "
+            "other, which is what a reese actually is.\n\n"
+            "Only cells that are already doing something are offset, so this cannot switch on "
+            "a modulation path the patch never asked for. Watch the bandwidth readout: spread "
+            "pushes the loudest copy's index up as well as down.");
+    }
+
     ui::styleChoice (presetBox_, palette_, palette_.accent);
     for (int i = 0; i < owner.getNumPrograms(); ++i)
         presetBox_.addItem (owner.getProgramName (i), i + 1);
@@ -357,8 +493,13 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
     addAndMakeVisible (voices_);
 
     setResizable (true, true);
-    setResizeLimits (900, 560, 2200, 1400);
-    setSize (1120, 700);
+
+    // Taller than F4's, because the F5 band is a real row of controls rather
+    // than something squeezed into the footer. The minimum grew with it: a
+    // window that cannot show the sub lane is a window that hides the one
+    // control a DnB patch needs most.
+    setResizeLimits (980, 760, 2200, 1500);
+    setSize (1240, 900);
 
     startTimerHz (12);
 }
@@ -470,6 +611,23 @@ void StrydaEditor::paint (juce::Graphics& g)
     }
 
     area.removeFromTop (kMargin);
+
+    const auto band = splitBand (area.removeFromTop (kBandHeight));
+
+    const auto paintBandPlate = [&g, this] (juce::Rectangle<int> plate,
+                                            const char* title,
+                                            const char* subtitle)
+    {
+        ui::paintPlate (g, plate.reduced (3), palette_.panel, palette_.secondary);
+        ui::paintPlateHeading (g, palette_,
+                               plate.reduced (3).removeFromTop (ui::design::kValueHeight + 4),
+                               title, subtitle, palette_.secondary);
+    };
+
+    paintBandPlate (band.filter, "FILTER", "per voice, after the matrix");
+    paintBandPlate (band.sub, "SUB", "its own lane, through nothing");
+    paintBandPlate (band.unison, "UNISON", "copies, and how they differ");
+
     area.removeFromBottom (34 + kMargin);
 
     const int matrixWidth = juce::jlimit (420, 760, area.getWidth() * 3 / 5);
@@ -517,6 +675,53 @@ void StrydaEditor::resized()
     const int stripHeight = kRowHeight * 3 + kCaptionHeight * 3 + 56;
     auto strips = area.removeFromTop (stripHeight);
     const int stripWidth = juce::jmax (kMinStripWidth, strips.getWidth() / kNumOperators);
+
+    // The F5 band sits under the strips and above the matrix row.
+    area.removeFromTop (kMargin);
+    const auto band = splitBand (area.removeFromTop (kBandHeight));
+
+    const auto layoutPlate = [] (juce::Rectangle<int> plate,
+                                 const std::vector<Control*>& controls,
+                                 int perRow,
+                                 juce::Rectangle<int>* choicesOut)
+    {
+        plate = plate.reduced (3);
+        plate.removeFromTop (ui::design::kValueHeight + 6);
+
+        for (std::size_t i = 0; i < controls.size(); i += static_cast<std::size_t> (perRow))
+        {
+            auto line = plate.removeFromTop (kBandRowHeight + kCaptionHeight);
+            const int columnWidth = line.getWidth() / perRow;
+
+            for (int column = 0; column < perRow; ++column)
+            {
+                const std::size_t index = i + static_cast<std::size_t> (column);
+                if (index >= controls.size())
+                    break;
+
+                auto cell = line.removeFromLeft (columnWidth);
+                controls[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+                controls[index]->knob.setBounds (cell.reduced (2, 0));
+            }
+        }
+
+        if (choicesOut != nullptr)
+            *choicesOut = plate;
+    };
+
+    layoutPlate (band.filter, filter_, 6, nullptr);
+
+    juce::Rectangle<int> subChoices;
+    layoutPlate (band.sub, sub_, 5, &subChoices);
+
+    if (! subChoices.isEmpty())
+    {
+        auto row = subChoices.removeFromTop (26);
+        subOctaveBox_.setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (4, 1));
+        subShapeBox_.setBounds (row.reduced (4, 1));
+    }
+
+    layoutPlate (band.unison, unison_, 4, nullptr);
 
     for (int op = 0; op < kNumOperators; ++op)
     {

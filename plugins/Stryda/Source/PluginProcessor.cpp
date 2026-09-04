@@ -137,6 +137,52 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
 
     add (ids::master, "Master", { -60.0f, 12.0f }, 0.0f, "dB", 1);
 
+    // ---- F5, appended at schema 3 ------------------------------------------
+    //
+    // Twenty-two, and every one of them neutral by default. The filter is above
+    // its bypass corner and therefore skipped bit-exactly (StrydaVoice's
+    // kFilterBypassHz); the sub is at zero level; unison is a stack of one, at
+    // which the detune, spread and index-spread amounts have nothing to spread.
+    // A project saved at F4 reopens sounding identical, which is the whole
+    // point of appending rather than inserting (CLAUDE.md section 8).
+
+    add (ids::filterCutoff, "Filter cutoff",
+         skewed (20.0f, 20000.0f, 1200.0f), 20000.0f, "Hz", 0, kSchemaV3);
+    add (ids::filterReso, "Filter resonance", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV3);
+    add (ids::filterMorph, "Filter morph", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV3);
+    add (ids::filterKeyTrack, "Filter key track", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV3);
+    add (ids::filterEnv, "Filter envelope", { -6.0f, 6.0f }, 0.0f, "oct", 2, kSchemaV3);
+    add (ids::filterDrive, "Filter drive", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV3);
+    add (ids::filterSing, "Filter sing", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV3);
+
+    add (ids::filterAttack, "Filter attack",
+         skewed (0.0f, 4.0f, 0.05f), 0.002f, "s", 3, kSchemaV3);
+    add (ids::filterDecay, "Filter decay",
+         skewed (0.005f, 12.0f, 0.6f), 0.5f, "s", 3, kSchemaV3);
+    add (ids::filterSustain, "Filter sustain", { 0.0f, 1.0f }, 1.0f, {}, 2, kSchemaV3);
+    add (ids::filterRelease, "Filter release",
+         skewed (0.005f, 12.0f, 0.4f), 0.25f, "s", 3, kSchemaV3);
+
+    add (ids::subLevel, "Sub level", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV3);
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::subOctave, kSchemaV3), "Sub octave", choices::subOctave, 1));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::subShape, kSchemaV3), "Sub shape", choices::subShape, 0));
+
+    add (ids::subAttack, "Sub attack", skewed (0.0f, 4.0f, 0.05f), 0.002f, "s", 3, kSchemaV3);
+    add (ids::subDecay, "Sub decay", skewed (0.005f, 12.0f, 0.6f), 2.0f, "s", 3, kSchemaV3);
+    add (ids::subSustain, "Sub sustain", { 0.0f, 1.0f }, 1.0f, {}, 2, kSchemaV3);
+    add (ids::subRelease, "Sub release", skewed (0.005f, 12.0f, 0.4f), 0.25f, "s", 3, kSchemaV3);
+
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        versioned (ids::unison, kSchemaV3), "Unison", 1, StrydaEngine::kMaxVoices, 1));
+
+    add (ids::unisonDetune, "Unison detune", skewed (0.0f, 50.0f, 12.0f), 12.0f, "c", 1, kSchemaV3);
+    add (ids::unisonSpread, "Unison spread", { 0.0f, 1.0f }, 0.6f, {}, 2, kSchemaV3);
+    add (ids::unisonIndex, "Unison index spread",
+         skewed (0.0f, 2.0f, 0.3f), 0.0f, "cyc", 2, kSchemaV3);
+
     return layout;
 }
 
@@ -216,6 +262,39 @@ void StrydaProcessor::pullParameters()
     // Off / Soft / Hard, as the amount the prediction is leaned on.
     const int cap = static_cast<int> (std::lround (raw (ids::indexCap)));
     parameters_.indexCap = cap == 0 ? 0.0 : (cap == 1 ? 0.6 : 1.0);
+
+    auto& extras = parameters_.extras;
+
+    extras.cutoffHz = raw (ids::filterCutoff);
+    extras.resonance = raw (ids::filterReso);
+    extras.morph = raw (ids::filterMorph);
+    extras.keyTrack = raw (ids::filterKeyTrack);
+    extras.envAmount = raw (ids::filterEnv);
+    extras.drive = raw (ids::filterDrive);
+    extras.sing = raw (ids::filterSing);
+
+    extras.filterAttack = raw (ids::filterAttack);
+    extras.filterDecay = raw (ids::filterDecay);
+    extras.filterSustain = raw (ids::filterSustain);
+    extras.filterRelease = raw (ids::filterRelease);
+
+    extras.subLevel = raw (ids::subLevel);
+
+    // The choice stores an index into `choices::subOctave`, which is frozen:
+    // 0 is two octaves down, 1 is one, 2 is the note. Mapping it here rather
+    // than storing the octave itself is what lets the list grow later.
+    extras.subOctave = static_cast<int> (std::lround (raw (ids::subOctave))) - 2;
+    extras.subShape = static_cast<int> (std::lround (raw (ids::subShape)));
+
+    extras.subAttack = raw (ids::subAttack);
+    extras.subDecay = raw (ids::subDecay);
+    extras.subSustain = raw (ids::subSustain);
+    extras.subRelease = raw (ids::subRelease);
+
+    extras.unisonCount = static_cast<int> (std::lround (raw (ids::unison)));
+    extras.unisonDetuneCents = raw (ids::unisonDetune);
+    extras.unisonSpread = raw (ids::unisonSpread);
+    extras.unisonIndexSpread = raw (ids::unisonIndex);
 
     engine_.setPolyphony (static_cast<int> (std::lround (raw (ids::polyphony))));
     engine_.setOversamplingMode (static_cast<dsp::OversamplingMode> (
@@ -411,7 +490,12 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
             "its edge rather than its brightness.\n\n"
             "Automate Op 2's Character: at 0 the index steps through the Bessel nulls and "
             "the timbre flickers; at 1 it opens like a filter. Automate 2 -> 1 in sixteenths "
-            "against the drums. Op 1's Feedback adds teeth without another operator.",
+            "against the drums. Op 1's Feedback adds teeth without another operator.\n\n"
+            "The sub lane is doing the work below 100 Hz and goes through none of it -- not "
+            "the matrix, not the filter. That is why the growl can bite as hard as you like "
+            "without the low end going with it. Three copies of unison with a little index "
+            "spread give the top a reese that moves; turn Unison INDEX up and the copies "
+            "start differing in timbre rather than only in pitch.",
             { { ids::op (1, "Ratio"), 2.0f },
               { ids::op (2, "Ratio"), 3.0f },
               { ids::cell (0, 1), 1.2f },
@@ -423,6 +507,17 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
               { ids::op (1, "Sustain"), 0.55f },
               { ids::op (2, "Decay"), 0.9f },
               { ids::op (2, "Sustain"), 0.3f },
+              { ids::subLevel, 0.55f },
+              { ids::subOctave, 1.0f },
+              { ids::filterCutoff, 4200.0f },
+              { ids::filterMorph, 0.0f },
+              { ids::filterEnv, 1.6f },
+              { ids::filterDecay, 0.35f },
+              { ids::filterSustain, 0.35f },
+              { ids::unison, 3.0f },
+              { ids::unisonDetune, 11.0f },
+              { ids::unisonSpread, 0.7f },
+              { ids::unisonIndex, 0.35f },
               { ids::master, -4.0f } } });
 
         list.push_back ({
@@ -449,7 +544,13 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
             "nothing lands below it.\n\n"
             "This is the patch to check the Index cap on: play it four octaves up with the cap "
             "Off and then on, and the readout tells you what it had to do. Hold the modulation "
-            "index below about 2 and it will never bite at all.",
+            "index below about 2 and it will never bite at all.\n\n"
+            "And it is where to hear what the sub lane is for. Pull SUB LEVEL to zero and back "
+            "up with the growl presets loud in the same session: the lane is one oscillator "
+            "that nothing in the instrument can touch, so the fundamental stays exactly where "
+            "you put it however hard the operators are driven. One octave down on a triangle "
+            "is the setting here -- the triangle's quiet odd harmonics are what makes a sub "
+            "audible on a speaker that cannot reproduce the fundamental at all.",
             { { ids::op (1, "Ratio"), 1.0f },
               { ids::cell (0, 1), 1.1f },
               { ids::op (1, "Character"), 1.0f },
@@ -457,6 +558,10 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
               { ids::op (0, "Sustain"), 0.9f },
               { ids::op (1, "Decay"), 3.0f },
               { ids::op (1, "Sustain"), 0.5f },
+              { ids::subLevel, 0.7f },
+              { ids::subOctave, 1.0f },
+              { ids::subShape, 1.0f },
+              { ids::subDecay, 8.0f },
               { ids::master, -2.0f } } });
 
         return list;

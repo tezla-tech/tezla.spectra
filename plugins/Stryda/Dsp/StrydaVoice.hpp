@@ -92,11 +92,16 @@ struct VoiceExtras
 
     // ---- unison -------------------------------------------------------------
 
-    /// Per-copy offsets, filled in by the engine when it spreads a note across
-    /// several voices. A lone voice gets all zeros and is unaffected.
-    double detuneCents { 0.0 };
-    double pan { 0.0 };
-    double indexOffset { 0.0 };    ///< added to every index, in cycles
+    /// **These are the global amounts, not per-copy offsets.** Each voice knows
+    /// which copy of the stack it is (`setUnisonSlot`) and works out its own
+    /// share every control chunk, so turning Detune up moves the copies that
+    /// are already sounding instead of waiting for the next note. Sonitus had
+    /// the other arrangement and it shipped a bug: the spread did not apply
+    /// until the detune knob happened to move.
+    int unisonCount { 1 };
+    double unisonDetuneCents { 0.0 };
+    double unisonSpread { 0.0 };        ///< stereo, 0 = mono stack
+    double unisonIndexSpread { 0.0 };   ///< cycles added to every live index
 };
 
 struct VoiceParameters
@@ -155,6 +160,15 @@ public:
         active_ = false;
         note_ = -1;
         age_ = 0;
+
+        // Back to a stack of one, so a freed voice reused without a slot being
+        // set does not inherit the last note's detune and pan.
+        unisonCopy_ = 0;
+        unisonCount_ = 1;
+        unisonDetune_ = 0.0;
+        unisonPan_ = 0.0;
+        unisonIndex_ = 0.0;
+        unisonGain_ = 1.0;
     }
 
     [[nodiscard]] bool isActive() const noexcept { return active_; }
@@ -184,6 +198,20 @@ public:
             envelopes_[static_cast<std::size_t> (op)].noteOn();
         }
     }
+
+    /// Which copy of the unison stack this voice is, and how many there are.
+    ///
+    /// Set once at note-on. Everything derived from it -- the detune, the pan
+    /// and the index offset -- is recomputed per chunk from the current global
+    /// amounts, so this is an identity rather than a set of values.
+    void setUnisonSlot (int copy, int count) noexcept
+    {
+        unisonCount_ = std::max (1, count);
+        unisonCopy_ = std::clamp (copy, 0, unisonCount_ - 1);
+    }
+
+    /// True for the one copy that carries the sub lane.
+    [[nodiscard]] bool carriesSub() const noexcept { return unisonCopy_ == 0; }
 
     void noteOff() noexcept
     {
@@ -254,7 +282,7 @@ public:
             // so a detuned copy is the same patch a few cents away rather than
             // a differently-voiced one. A fixed-Hz operator is deliberately
             // exempt: a formant does not detune with the note.
-            const double cents = settings.fineCents + parameters.extras.detuneCents;
+            const double cents = settings.fineCents + unisonDetune_;
 
             const double hz = settings.fixedHz > 0.0
                                 ? settings.fixedHz
@@ -302,9 +330,7 @@ public:
                 // doing something are offset -- a connection at zero stays at
                 // zero, so the spread cannot switch on a path the patch never
                 // asked for.
-                const double spread = dsp::isExactlyZero (cell)
-                                        ? 0.0
-                                        : parameters.extras.indexOffset;
+                const double spread = dsp::isExactlyZero (cell) ? 0.0 : unisonIndex_;
 
                 matrix_.setIndex (op, from, std::max (0.0, (cell + spread) * sourceGain));
             }
@@ -374,7 +400,30 @@ public:
         subEnvelope_.setSustain (extras.subSustain);
         subEnvelope_.setReleaseSeconds (extras.subRelease);
 
-        unisonPan_ = extras.pan;
+        // The copy's own share of each global amount. `position` runs -1 to +1
+        // across the stack, so a lone voice sits at 0 and is untouched by all
+        // three -- which is what makes unison exactly inert at a count of one.
+        const double position = unisonCount_ > 1
+                                  ? 2.0 * static_cast<double> (unisonCopy_)
+                                        / static_cast<double> (unisonCount_ - 1)
+                                      - 1.0
+                                  : 0.0;
+
+        unisonDetune_ = extras.unisonDetuneCents * position;
+        unisonPan_ = extras.unisonSpread * position;
+
+        // **Index spread, and it is the thickest thing here.** Detuning a stack
+        // gives you the same timbre several times; offsetting each copy's
+        // modulation index gives you several *different* timbres beating
+        // against each other, which is what a reese actually is.
+        unisonIndex_ = extras.unisonIndexSpread * position;
+
+        // 1/sqrt(n), so a thicker stack is not simply a louder one. Applied to
+        // the matrix only: the sub lane below is one oscillator on one copy and
+        // stays at the level it was set to however thick the stack gets.
+        unisonGain_ = unisonCount_ > 1
+                        ? 1.0 / std::sqrt (static_cast<double> (unisonCount_))
+                        : 1.0;
     }
 
     /// The scale the cap would apply. Exposed so the editor can say whether it
@@ -422,7 +471,16 @@ public:
 
         ++age_;
 
-        bool anyActive = filterEnvelope_.isActive() || subEnvelope_.isActive();
+        // **What keeps a voice alive is what can be HEARD, not what is
+        // running.** The filter envelope shapes something that must itself be
+        // sounding, so it never justifies a voice on its own; the sub envelope
+        // only does on the one copy that carries the lane, and only while the
+        // lane has a level. Counting either unconditionally is the Sonitus
+        // zombie again in a new place -- a silent voice that still costs a
+        // voice slot and a sample loop, and that no silence-based test can
+        // see. So: assert activity, not silence (CLAUDE.md section 7).
+        bool anyActive = carriesSub() && ! dsp::isExactlyZero (subLevel_)
+                           && subEnvelope_.isActive();
         for (int op = 0; op < kNumOperators; ++op)
         {
             const auto slot = static_cast<std::size_t> (op);
@@ -467,14 +525,30 @@ public:
             voiceRight = filter_.process (voiceRight);
         }
 
+        // Applied here rather than at the end, so the sub below rides at its
+        // own level whatever the stack thickness is. Exactly 1.0 at a count of
+        // one, so a patch that does not use unison is untouched.
+        if (unisonGain_ < 1.0)
+        {
+            voiceLeft *= unisonGain_;
+            voiceRight *= unisonGain_;
+        }
+
         // **The sub never goes through any of that.** Not the matrix, not the
         // filter, and (from F7) not the mangle chain either. On a DnB rig that
         // is the difference between a bass that survives a club system and one
         // that collapses the moment the growl bites -- and it is why the lane
         // exists at all rather than being another operator.
+        //
+        // **And only one copy of the stack carries it.** Eight unison voices
+        // each adding their own sub is eight sub oscillators a few cents apart,
+        // which is a chorused mush exactly where the track needs one solid
+        // fundamental. `carriesSub()` picks copy 0 and the rest run the
+        // envelope without summing it, so the lane costs nothing on them and
+        // its state stays in step for a retrigger.
         const double subEnv = subEnvelope_.process();
 
-        if (! dsp::isExactlyZero (subLevel_))
+        if (carriesSub() && ! dsp::isExactlyZero (subLevel_))
         {
             const double value = sub_.advance() * subEnv * subLevel_;
             voiceLeft += value;
@@ -533,7 +607,12 @@ private:
     dsp::Adsr subEnvelope_ {};
     double subLevel_ { 0.0 };
 
+    int unisonCopy_ { 0 };
+    int unisonCount_ { 1 };
+    double unisonDetune_ { 0.0 };
     double unisonPan_ { 0.0 };
+    double unisonIndex_ { 0.0 };
+    double unisonGain_ { 1.0 };
 };
 
 } // namespace tezla::stryda

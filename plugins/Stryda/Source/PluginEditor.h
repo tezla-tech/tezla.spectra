@@ -105,6 +105,18 @@ private:
 
     std::vector<Control*> globals_;
 
+    /// F5: the per-voice filter, the protected sub lane and the unison stack,
+    /// each on its own plate in the band under the operator strips.
+    std::vector<Control*> filter_;
+    std::vector<Control*> sub_;
+    std::vector<Control*> unison_;
+
+    juce::ComboBox subOctaveBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> subOctaveAttachment_;
+
+    juce::ComboBox subShapeBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> subShapeAttachment_;
+
     juce::Label bandwidth_;
     juce::Label voices_;
 

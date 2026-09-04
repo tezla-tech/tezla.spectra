@@ -64,6 +64,33 @@ inline constexpr auto renderOversampling = "renderOversampling";
 inline constexpr auto polyphony          = "polyphony";
 inline constexpr auto master             = "master";
 inline constexpr auto indexCap           = "indexCap";
+
+// ---- F5, appended at schema 3 ---------------------------------------------
+
+inline constexpr auto filterCutoff   = "filterCutoff";
+inline constexpr auto filterReso     = "filterReso";
+inline constexpr auto filterMorph    = "filterMorph";
+inline constexpr auto filterKeyTrack = "filterKeyTrack";
+inline constexpr auto filterEnv      = "filterEnv";
+inline constexpr auto filterDrive    = "filterDrive";
+inline constexpr auto filterSing     = "filterSing";
+inline constexpr auto filterAttack   = "filterAttack";
+inline constexpr auto filterDecay    = "filterDecay";
+inline constexpr auto filterSustain  = "filterSustain";
+inline constexpr auto filterRelease  = "filterRelease";
+
+inline constexpr auto subLevel   = "subLevel";
+inline constexpr auto subOctave  = "subOctave";
+inline constexpr auto subShape   = "subShape";
+inline constexpr auto subAttack  = "subAttack";
+inline constexpr auto subDecay   = "subDecay";
+inline constexpr auto subSustain = "subSustain";
+inline constexpr auto subRelease = "subRelease";
+
+inline constexpr auto unison       = "unison";
+inline constexpr auto unisonDetune = "unisonDetune";
+inline constexpr auto unisonSpread = "unisonSpread";
+inline constexpr auto unisonIndex  = "unisonIndex";
 } // namespace ids
 
 /// Every parameter Stryda has ever had was born at one of these. A live
@@ -77,7 +104,13 @@ inline constexpr int kSchemaV1 = 1;
 /// from renaming it.
 inline constexpr int kSchemaV2 = 2;
 
-inline constexpr int kStateSchemaVersion = kSchemaV2;
+/// F5: the per-voice filter, the protected sub lane and unison. **Appended**,
+/// and every one of the twenty-two defaults to neutral -- the filter wide open
+/// and bypassed bit-exactly, the sub at zero level, unison at a count of one --
+/// so a project saved before F5 reopens sounding identical.
+inline constexpr int kSchemaV3 = 3;
+
+inline constexpr int kStateSchemaVersion = kSchemaV3;
 
 namespace choices
 {
@@ -89,6 +122,15 @@ inline const juce::StringArray indexCap { "Off", "Soft", "Hard" };
 /// **Append-only.** `normal` must stay index 0 so every project saved before
 /// F4 reopens with its operators unchanged.
 inline const juce::StringArray operatorMode { "Normal", "Formant" };
+
+/// **Append-only**, and the order is the stored index: 0 is two octaves down,
+/// 1 is one, 2 is the note itself. The default is 1, which is where a sub
+/// under a bass patch usually wants to sit.
+inline const juce::StringArray subOctave { "-2 oct", "-1 oct", "Unison" };
+
+/// **Append-only.** Sine first, because a sub that is not a sine is a choice
+/// rather than a default.
+inline const juce::StringArray subShape { "Sine", "Triangle" };
 } // namespace choices
 
 static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
