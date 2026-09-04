@@ -1993,3 +1993,242 @@ TEZLA_TEST (a_braid_writes_the_matrix_and_leaves_the_rest_alone)
         CHECK (braid.description != nullptr && *braid.description != 0);
     }
 }
+
+// ---------------------------------------------------------------------------
+// F7: Split, the vowel lane and the mangle chain
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (every_mangle_stage_is_skipped_bit_exactly_at_its_neutral_setting)
+{
+    // ---------------------------------------------------------------------
+    // **Six almost-identities is six chances at changing every project**
+    // ---------------------------------------------------------------------
+    //
+    // CLAUDE.md section 7: a stage permanently in the signal path needs a
+    // bit-exact bypass at its neutral setting, not merely a transparent one.
+    // This is the whole rule for this phase, so it is asserted stage by stage:
+    // set ONE stage to its neutral value and everything else to its default,
+    // and the chain must return its input unchanged to the last bit.
+    MangleChain chain;
+    chain.prepare (48000.0);
+
+    // A signal with content everywhere, so a stage that merely filters gently
+    // still shows up.
+    dsp::SmallRandom noise;
+    std::vector<double> source (4096, 0.0);
+
+    for (std::size_t i = 0; i < source.size(); ++i)
+        source[i] = 0.4 * noise.bipolar()
+                      + 0.5 * std::sin (kTwoPi * 110.0 * static_cast<double> (i) / 48000.0);
+
+    struct Case { const char* name; MangleParameters parameters; };
+
+    MangleParameters defaults;
+
+    // Each of these is a spelling of "do nothing" that is NOT the struct's own
+    // default, so the test proves the skip rather than the initialiser.
+    MangleParameters splitOff = defaults;   splitOff.splitHz = 0.0;
+    MangleParameters vowelOff = defaults;   vowelOff.vowelMix = 0.0;
+                                            vowelOff.vowelMorph = 0.8;
+                                            vowelOff.vowelTract = 0.2;
+    MangleParameters foldOff = defaults;    foldOff.fold = 0.0;
+    MangleParameters crushOff = defaults;   crushOff.crushBits = 16.0;
+                                            crushOff.crushAmount = 0.0;
+    MangleParameters rateOff = defaults;    rateOff.downsample = 1.0;
+    MangleParameters combOff = defaults;    combOff.combMix = 0.0;
+                                            combOff.combFeedback = 0.7;
+    MangleParameters phaseOff = defaults;   phaseOff.phaserMix = 0.0;
+                                            phaseOff.phaserFeedback = 0.8;
+    MangleParameters driveOff = defaults;   driveOff.drive = 0.0;
+    MangleParameters compOff = defaults;    compOff.compressRatio = 1.0;
+                                            compOff.compressThresholdDb = -30.0;
+                                            compOff.compressAttackMs = 1.0;
+
+    const Case cases[] {
+        { "defaults", defaults },   { "split off", splitOff },
+        { "vowel off", vowelOff },  { "fold off", foldOff },
+        { "crush off", crushOff },  { "rate off", rateOff },
+        { "comb off", combOff },    { "phaser off", phaseOff },
+        { "drive off", driveOff },  { "compressor at 1:1", compOff }
+    };
+
+    for (const auto& item : cases)
+    {
+        chain.reset();
+        chain.setParameters (item.parameters);
+
+        CHECK (! chain.isEngaged());
+
+        std::size_t differing = 0;
+
+        for (const double sample : source)
+        {
+            double left = sample;
+            double right = -sample;
+
+            chain.process (left, right);
+
+            if (! (left == sample) || ! (right == -sample))
+                ++differing;
+        }
+
+        std::printf ("        [mangle] %-18s : %zu of %zu samples changed\n",
+                     item.name, differing, source.size());
+
+        CHECK (differing == 0);
+    }
+}
+
+TEZLA_TEST (every_mangle_stage_does_something_when_it_is_asked_to)
+{
+    // The other half, and the half that stops the test above passing on a
+    // chain that was never wired up at all.
+    MangleChain chain;
+    chain.prepare (48000.0);
+
+    dsp::SmallRandom noise;
+    std::vector<double> source (8192, 0.0);
+
+    for (std::size_t i = 0; i < source.size(); ++i)
+        source[i] = 0.3 * noise.bipolar()
+                      + 0.6 * std::sin (kTwoPi * 220.0 * static_cast<double> (i) / 48000.0);
+
+    const auto changed = [&chain, &source] (const MangleParameters& parameters)
+    {
+        chain.reset();
+        chain.setParameters (parameters);
+
+        std::size_t differing = 0;
+
+        for (const double sample : source)
+        {
+            double left = sample;
+            double right = -sample;
+
+            chain.process (left, right);
+
+            if (! (left == sample))
+                ++differing;
+        }
+
+        return differing;
+    };
+
+    struct Case { const char* name; MangleParameters parameters; };
+
+    MangleParameters vowel;   vowel.vowelMix = 0.9;
+    MangleParameters fold;    fold.fold = 0.7;
+    MangleParameters crush;   crush.crushBits = 4.0; crush.crushAmount = 1.0;
+    MangleParameters rate;    rate.downsample = 12.0;
+    MangleParameters comb;    comb.combMix = 0.8;
+    MangleParameters phase;   phase.phaserMix = 0.8;
+    MangleParameters drive;   drive.drive = 0.8;
+    MangleParameters comp;    comp.compressRatio = 8.0; comp.compressThresholdDb = -30.0;
+
+    const Case cases[] {
+        { "vowel", vowel },   { "fold", fold },
+        { "crush", crush }, { "rate", rate },     { "comb", comb },
+        { "phaser", phase }, { "drive", drive },  { "compressor", comp }
+    };
+
+    for (const auto& item : cases)
+    {
+        const std::size_t differing = changed (item.parameters);
+
+        std::printf ("        [mangle] %-12s engaged: %zu of %zu samples changed\n",
+                     item.name, differing, source.size());
+
+        CHECK (differing > source.size() / 4);
+    }
+
+    // **Split is deliberately not in that list**, and its absence is the
+    // design rather than an oversight. A Linkwitz-Riley crossover summed
+    // straight back is an allpass, so Split with nothing after it costs phase
+    // and buys nothing -- which is exactly why F5 deferred the control to the
+    // phase that has a chain to keep out of the low end. The chain therefore
+    // does not count Split alone as "engaged" and returns its input untouched.
+    MangleParameters splitOnly;
+    splitOnly.splitHz = 200.0;
+
+    std::printf ("        [mangle] split alone: %zu samples changed (inert by design)\n",
+                 changed (splitOnly));
+
+    CHECK (changed (splitOnly) == 0);
+
+    // With something after it, Split very much changes the result -- the low
+    // band goes round the drive instead of through it.
+    MangleParameters splitDrive = drive;
+    splitDrive.splitHz = 200.0;
+
+    const std::size_t droveAlone = changed (drive);
+    const std::size_t droveSplit = changed (splitDrive);
+
+    std::printf ("        [mangle] drive alone %zu, drive with split %zu\n",
+                 droveAlone, droveSplit);
+
+    CHECK (droveSplit > source.size() / 4);
+}
+
+TEZLA_TEST (split_keeps_the_low_band_out_of_the_mangling)
+{
+    // The point of Split, stated as a measurement: with the chain destroying
+    // everything above the corner, the energy BELOW it must survive.
+    const auto lowBandEnergy = [] (double splitHz)
+    {
+        MangleChain chain;
+        chain.prepare (48000.0);
+
+        MangleParameters parameters;
+        parameters.splitHz = splitHz;
+        parameters.fold = 1.0;
+        parameters.drive = 1.0;
+        parameters.crushBits = 3.0;
+        parameters.crushAmount = 1.0;
+        chain.setParameters (parameters);
+
+        // A 50 Hz sine well under the corner, plus a 3 kHz sine well over it.
+        std::vector<double> rendered (24000, 0.0);
+
+        for (std::size_t i = 0; i < rendered.size(); ++i)
+        {
+            const double t = static_cast<double> (i) / 48000.0;
+
+            double left = 0.45 * std::sin (kTwoPi * 50.0 * t)
+                            + 0.45 * std::sin (kTwoPi * 3000.0 * t);
+            double right = left;
+
+            chain.process (left, right);
+            rendered[i] = left;
+        }
+
+        // The 50 Hz component, by correlation -- which reads the fundamental
+        // whatever the mangling did above it.
+        double real = 0.0;
+        double imaginary = 0.0;
+
+        for (std::size_t i = 0; i < rendered.size(); ++i)
+        {
+            const double phase = kTwoPi * 50.0 * static_cast<double> (i) / 48000.0;
+
+            real += rendered[i] * std::cos (phase);
+            imaginary += rendered[i] * std::sin (phase);
+        }
+
+        const double scale = 2.0 / static_cast<double> (rendered.size());
+
+        return std::sqrt (real * real + imaginary * imaginary) * scale;
+    };
+
+    const double unsplit = lowBandEnergy (0.0);
+    const double split = lowBandEnergy (300.0);
+
+    std::printf ("        [split] 50 Hz component through a destroyed chain: "
+                 "%.4f unsplit, %.4f split (asked for 0.4500)\n", unsplit, split);
+
+    // Split, the fundamental comes through close to as it went in.
+    CHECK (split > 0.40);
+    CHECK (split < 0.50);
+
+    // Unsplit, the folder and the crusher have had it.
+    CHECK (std::abs (unsplit - 0.45) > 0.05);
+}

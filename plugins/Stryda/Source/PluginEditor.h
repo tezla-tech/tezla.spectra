@@ -77,6 +77,7 @@ public:
         pageMatrix,
         pageVoice,
         pageSequencer,
+        pageMangle,
         pageTuning,
         pageCount
     };
@@ -91,11 +92,13 @@ private:
     void layoutMatrix (juce::Rectangle<int> area);
     void layoutVoice (juce::Rectangle<int> area);
     void layoutSequencer (juce::Rectangle<int> area);
+    void layoutMangle (juce::Rectangle<int> area);
 
     void paintOperators (juce::Graphics& g, juce::Rectangle<int> area);
     void paintMatrix (juce::Graphics& g, juce::Rectangle<int> area);
     void paintVoice (juce::Graphics& g, juce::Rectangle<int> area);
     void paintSequencer (juce::Graphics& g, juce::Rectangle<int> area);
+    void paintMangle (juce::Graphics& g, juce::Rectangle<int> area);
 
     /// Everything the current page does not own is hidden rather than laid out
     /// off-screen: a control that is merely somewhere else still takes the
@@ -172,6 +175,17 @@ private:
     /// The shared microtuning panel. The processor is its host, exactly as it
     /// is for Malleus, Sonitus, Svarayantra and Ictus.
     std::unique_ptr<ui::TuningPanel> tuningPage_;
+
+    /// F7: Split, the vowel lane with its own pattern, and the mangle chain.
+    std::vector<Control*> vowel_;
+    std::vector<Control*> vowelSteps_;
+    std::vector<Control*> mangle_;
+
+    ui::LampButton vowelSeqButton_ { "TALK" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> vowelSeqAttachment_;
+
+    juce::ComboBox vowelDivisionBox_;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> vowelDivisionAttachment_;
 
     juce::Label bandwidth_;
     juce::Label voices_;

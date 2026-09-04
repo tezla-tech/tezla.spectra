@@ -354,7 +354,7 @@ first `pending` row.**
 | **FIX** index cap hung the audio thread; oversampling control attached | done — see "The rig freeze" below |
 | F5 sub lane, per-voice filter, unison index spread | done — **Split deferred to F7**, see below. Not yet played on the rig |
 | F6 microtuning at the ratio, ratio sequencer, named braids | done — and the panel is **paged**, at the user's request. Not yet played on the rig |
-| F7 vowel lane + mangle chain | pending |
+| F7 vowel lane + mangle chain, and Split arrives | done — not yet played on the rig |
 | F8 modulation layer + dice gate | pending |
 | F9 editor + close-out | pending |
 
@@ -377,6 +377,45 @@ is measured is the mathematics the predictor claims to predict):
 | Character 0 -> 1 at index 5: spectral centroid | 4.14 -> **2.69** harmonics |
 | Character 0 -> 1: partial-order reversals (the Bessel oscillation) | 2 -> **0** |
 | index needed at Character 1 to match Character 0's centroid | 11.12 vs 5.00 — **+122 %** |
+
+### F7, and what "bit-exact at neutral" costs to actually check
+
+Delivered: **Split** (the deferral from F5), the **vowel lane** with its own
+sixteen-step pattern and division, and the **mangle chain** — fold, crush,
+downsample, comb, phaser, drive, compressor. Thirty-two parameters at
+`kSchemaV5`, and a MANGLE page.
+
+**Split arrives now because now there is something to keep out of the low
+band.** A Linkwitz–Riley crossover summed straight back is an *allpass*, not an
+identity, so the chain deliberately does **not** count Split alone as engaged —
+with nothing after it, it would cost phase and buy nothing. The test asserts
+that inertness as the design rather than treating it as a failure.
+
+Measured, and it is the number the whole lane exists for: a 50 Hz sine and a
+3 kHz sine through a chain running the folder at full, drive at full and a
+3-bit crusher —
+
+| | 50 Hz component out |
+|---|---|
+| asked for | 0.4500 |
+| Split at 300 Hz | **0.4489** |
+| Split off | 0.0145 |
+
+The fundamental survives essentially untouched with Split on, and is destroyed
+without it.
+
+**Where the chain runs, and why.** After the decimator, at the **host rate**,
+not inside the oversampled section. Crush and downsample are CLAUDE.md §7's
+documented aliasing exception — their whole character is folded-back images, so
+oversampling them would remove the effect rather than clean it up. The fold and
+the drive are ADAA, which band-limits them where they are.
+
+**The rule, checked stage by stage.** Ten spellings of "do nothing" — each one
+*not* the struct's own default, so the test proves the skip rather than the
+initialiser — and every one returns its input to the last bit across 4096
+samples of noise plus a sine. Then the same nine stages engaged, each changing
+more than a quarter of the samples, because a chain that was never wired up
+would pass every bit-exactness check ever written.
 
 ### F6, the paged panel, and a sequencer that was silently inert
 

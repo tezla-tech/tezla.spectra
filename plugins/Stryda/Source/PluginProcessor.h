@@ -110,6 +110,46 @@ inline constexpr auto seqTarget   = "seqTarget";
 inline constexpr auto seqLength   = "seqLength";
 inline constexpr auto seqDivision = "seqDivision";
 inline constexpr auto seqGlide    = "seqGlide";
+
+// ---- F7, appended at schema 5 ---------------------------------------------
+
+inline constexpr auto split = "split";
+
+inline constexpr auto vowelMix       = "vowelMix";
+inline constexpr auto vowelMorph     = "vowelMorph";
+inline constexpr auto vowelTract     = "vowelTract";
+inline constexpr auto vowelSharp     = "vowelSharp";
+inline constexpr auto vowelSeqOn     = "vowelSeqOn";
+inline constexpr auto vowelSeqLength = "vowelSeqLength";
+inline constexpr auto vowelSeqDiv    = "vowelSeqDiv";
+inline constexpr auto vowelSeqGlide  = "vowelSeqGlide";
+
+/// A vowel step, `v<n>` with n from 1 to 16. Same frozen rule as `step`.
+[[nodiscard]] inline juce::String vowelStep (int index)
+{
+    return "v" + juce::String (index + 1);
+}
+
+inline constexpr auto fold        = "mangleFold";
+inline constexpr auto crushBits   = "crushBits";
+inline constexpr auto crushAmount = "crushAmount";
+inline constexpr auto downsample  = "downsample";
+
+inline constexpr auto combMix      = "combMix";
+inline constexpr auto combHz       = "combHz";
+inline constexpr auto combFeedback = "combFeedback";
+
+inline constexpr auto phaserMix      = "phaserMix";
+inline constexpr auto phaserHz       = "phaserHz";
+inline constexpr auto phaserFeedback = "phaserFeedback";
+
+inline constexpr auto mangleDrive = "mangleDrive";
+
+inline constexpr auto compThreshold = "compThreshold";
+inline constexpr auto compRatio     = "compRatio";
+inline constexpr auto compAttack    = "compAttack";
+inline constexpr auto compRelease   = "compRelease";
+inline constexpr auto compMakeup    = "compMakeup";
 } // namespace ids
 
 /// Every parameter Stryda has ever had was born at one of these. A live
@@ -135,7 +175,12 @@ inline constexpr int kSchemaV3 = 3;
 /// untouched.
 inline constexpr int kSchemaV4 = 4;
 
-inline constexpr int kStateSchemaVersion = kSchemaV4;
+/// F7: Split, the vowel lane and the mangle chain. Appended, and every one of
+/// the thirty-two is at a value the stage is SKIPPED at -- not merely
+/// transparent at. An F6 project is bit-identical.
+inline constexpr int kSchemaV5 = 5;
+
+inline constexpr int kStateSchemaVersion = kSchemaV5;
 
 namespace choices
 {

@@ -244,6 +244,56 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
         add (ids::step (i), "Step " + juce::String (i + 1),
              skewed (0.25f, 32.0f, 4.0f), 1.0f, {}, 2, kSchemaV4);
 
+    // ---- F7, appended at schema 5 ------------------------------------------
+    //
+    // Thirty-two, and every default is a value the stage is SKIPPED at rather
+    // than merely transparent at -- Split off, vowel mix 0, fold 0, 16 bits,
+    // downsample 1, comb and phaser mix 0, drive 0, compressor ratio 1 (which
+    // is `CompressorCore::isIdentity`). An F6 project is bit-identical.
+
+    add (ids::split, "Split", skewed (0.0f, 800.0f, 140.0f), 0.0f, "Hz", 0, kSchemaV5);
+
+    add (ids::vowelMix, "Vowel mix", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::vowelMorph, "Vowel", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::vowelTract, "Vowel tract", { 0.0f, 1.0f }, 0.5f, {}, 2, kSchemaV5);
+    add (ids::vowelSharp, "Vowel sharpness", { 0.0f, 1.0f }, 0.5f, {}, 2, kSchemaV5);
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        versioned (ids::vowelSeqOn, kSchemaV5), "Vowel sequencer", false));
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        versioned (ids::vowelSeqLength, kSchemaV5), "Vowel steps",
+        1, RatioSequencer::kMaxSteps, 8));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::vowelSeqDiv, kSchemaV5), "Vowel division", divisionNames(), 6));
+
+    add (ids::vowelSeqGlide, "Vowel glide", { 0.0f, 1.0f }, 0.3f, {}, 2, kSchemaV5);
+
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        add (ids::vowelStep (i), "Vowel step " + juce::String (i + 1),
+             { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::fold, "Fold", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::crushBits, "Crush bits", { 2.0f, 16.0f }, 16.0f, "bit", 1, kSchemaV5);
+    add (ids::crushAmount, "Crush", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::downsample, "Downsample", skewed (1.0f, 64.0f, 8.0f), 1.0f, "x", 1, kSchemaV5);
+
+    add (ids::combMix, "Comb mix", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::combHz, "Comb", skewed (20.0f, 4000.0f, 220.0f), 220.0f, "Hz", 0, kSchemaV5);
+    add (ids::combFeedback, "Comb feedback", { -0.95f, 0.95f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::phaserMix, "Phaser mix", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::phaserHz, "Phaser", skewed (60.0f, 8000.0f, 600.0f), 600.0f, "Hz", 0, kSchemaV5);
+    add (ids::phaserFeedback, "Phaser feedback", { 0.0f, 0.95f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::mangleDrive, "Drive", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::compThreshold, "Comp threshold", { -48.0f, 0.0f }, 0.0f, "dB", 1, kSchemaV5);
+    add (ids::compRatio, "Comp ratio", skewed (1.0f, 20.0f, 4.0f), 1.0f, ": 1", 2, kSchemaV5);
+    add (ids::compAttack, "Comp attack", skewed (0.1f, 200.0f, 10.0f), 10.0f, "ms", 1, kSchemaV5);
+    add (ids::compRelease, "Comp release",
+         skewed (5.0f, 2000.0f, 150.0f), 120.0f, "ms", 0, kSchemaV5);
+    add (ids::compMakeup, "Comp makeup", { 0.0f, 24.0f }, 0.0f, "dB", 1, kSchemaV5);
+
     return layout;
 }
 
@@ -373,6 +423,46 @@ void StrydaProcessor::pullParameters()
 
     for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
         sequencer.setStep (i, raw (ids::step (i)));
+
+    MangleParameters mangle;
+
+    mangle.splitHz = raw (ids::split);
+
+    mangle.vowelMix = raw (ids::vowelMix);
+    mangle.vowelMorph = raw (ids::vowelMorph);
+    mangle.vowelTract = raw (ids::vowelTract);
+    mangle.vowelSharpness = raw (ids::vowelSharp);
+
+    mangle.fold = raw (ids::fold);
+    mangle.crushBits = raw (ids::crushBits);
+    mangle.crushAmount = raw (ids::crushAmount);
+    mangle.downsample = raw (ids::downsample);
+
+    mangle.combMix = raw (ids::combMix);
+    mangle.combHz = raw (ids::combHz);
+    mangle.combFeedback = raw (ids::combFeedback);
+
+    mangle.phaserMix = raw (ids::phaserMix);
+    mangle.phaserHz = raw (ids::phaserHz);
+    mangle.phaserFeedback = raw (ids::phaserFeedback);
+
+    mangle.drive = raw (ids::mangleDrive);
+
+    mangle.compressThresholdDb = raw (ids::compThreshold);
+    mangle.compressRatio = raw (ids::compRatio);
+    mangle.compressAttackMs = raw (ids::compAttack);
+    mangle.compressReleaseMs = raw (ids::compRelease);
+    mangle.compressMakeupDb = raw (ids::compMakeup);
+
+    engine_.setMangleParameters (mangle);
+
+    engine_.setVowelSequence (raw (ids::vowelSeqOn) > 0.5f,
+                              static_cast<int> (std::lround (raw (ids::vowelSeqLength))),
+                              static_cast<int> (std::lround (raw (ids::vowelSeqDiv))),
+                              raw (ids::vowelSeqGlide));
+
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        engine_.setVowelStep (i, raw (ids::vowelStep (i)));
 
     engine_.setPolyphony (static_cast<int> (std::lround (raw (ids::polyphony))));
     engine_.setOversamplingMode (static_cast<dsp::OversamplingMode> (

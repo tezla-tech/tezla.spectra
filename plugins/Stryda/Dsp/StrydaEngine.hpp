@@ -30,6 +30,7 @@
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Tuning.hpp>
 
+#include "MangleChain.hpp"
 #include "RatioSequencer.hpp"
 #include "StrydaVoice.hpp"
 
@@ -78,6 +79,14 @@ public:
 
         sequencer_.prepare (internalRate_);
 
+        // **At the HOST rate, not the internal one.** Crush and downsample are
+        // the documented aliasing exception (CLAUDE.md section 7): their whole
+        // character is folded-back images, so running them oversampled would
+        // remove the effect rather than clean it up. The fold and the drive are
+        // ADAA, which band-limits them where they are.
+        mangle_.prepare (hostRate_);
+        vowelSteps_.prepare (hostRate_);
+
         reset();
     }
 
@@ -98,6 +107,9 @@ public:
 
         sequencer_.reset();
         stepEdge_ = false;
+
+        mangle_.reset();
+        vowelSteps_.reset();
     }
 
     void setOversamplingMode (dsp::OversamplingMode mode) noexcept { mode_ = mode; }
@@ -161,6 +173,38 @@ public:
         }
     }
 
+    /// The post chain. Its parameters are pushed whole once per block: it runs
+    /// after the voices are summed and decimated, so it has no per-voice state
+    /// and nothing to chunk.
+    void setMangleParameters (const MangleParameters& parameters) noexcept
+    {
+        mangleParameters_ = parameters;
+        mangle_.setParameters (mangleParameters_);
+    }
+
+    [[nodiscard]] const MangleChain& getMangle() const noexcept { return mangle_; }
+
+    /// The vowel lane's own pattern: sixteen steps of vowel position, on its
+    /// own division, so the bass can talk in time without the ratio sequencer
+    /// having to agree with it.
+    void setVowelSequence (bool enabled, int length, int division, double glide) noexcept
+    {
+        vowelSequenced_ = enabled;
+        vowelSteps_.setLength (length);
+        vowelSteps_.setGlide (glide);
+        vowelDivision_ = division;
+    }
+
+    void setVowelStep (int index, double morph) noexcept
+    {
+        // The pattern's own range is -1..1 and the morph's is 0..1, so the map
+        // is written here rather than left to the caller -- one place, and the
+        // panel and the audio cannot disagree about it.
+        vowelSteps_.setStep (index, std::clamp (morph, 0.0, 1.0) * 2.0 - 1.0);
+    }
+
+    [[nodiscard]] int getVowelStepIndex() const noexcept { return vowelSteps_.getStepIndex(); }
+
     [[nodiscard]] RatioSequencer& getSequencer() noexcept { return sequencer_; }
     [[nodiscard]] const RatioSequencer& getSequencer() const noexcept { return sequencer_; }
 
@@ -177,6 +221,14 @@ public:
             sequencer_.anchorToPpq (ppqPosition, bpm_, division_);
         else
             sequencer_.setDivision (division_, bpm_);
+
+        vowelSteps_.setRateHz (bpm_ > 0.0 ? dsp::divisionRateHz (vowelDivision_, bpm_) : 0.0);
+
+        if (playing && vowelSequenced_)
+        {
+            const double stepsPerBeat = dsp::divisionRateHz (vowelDivision_, bpm_) * 60.0 / bpm_;
+            (void) vowelSteps_.setPhaseFromPpq (ppqPosition, stepsPerBeat);
+        }
     }
 
     void setSequencerDivision (int index) noexcept { division_ = index; }
@@ -369,6 +421,25 @@ public:
 
         double* outputs[2] { left, right };
         oversampler_.downsample (outputs, numSamples);
+
+        // The post chain, at the host rate, after the decimator. Its vowel
+        // morph is driven per sample when the lane is sequenced -- it is one
+        // filter bank rather than a per-voice graph, so there is nothing to
+        // chunk and no reason not to.
+        if (! mangle_.isEngaged() && ! vowelSequenced_)
+            return;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (vowelSequenced_)
+            {
+                // -1..1 back to 0..1, the inverse of `setVowelStep`.
+                mangleParameters_.vowelMorph = 0.5 * (vowelSteps_.advance (1) + 1.0);
+                mangle_.setParameters (mangleParameters_);
+            }
+
+            mangle_.process (left[i], right[i]);
+        }
     }
 
 private:
@@ -473,6 +544,12 @@ private:
     double bpm_ { 120.0 };
     int division_ { 7 };          ///< 1/16 in `dsp::divisions`
     bool stepEdge_ { false };
+
+    MangleChain mangle_;
+    MangleParameters mangleParameters_ {};
+    dsp::StepSequencer vowelSteps_;
+    int vowelDivision_ { 6 };          ///< 1/8 in dsp::divisions
+    bool vowelSequenced_ { false };
 
     dsp::OversamplingMode mode_ { dsp::OversamplingMode::Auto };
     dsp::RenderOversampling render_ { dsp::RenderOversampling::sameAsLive };

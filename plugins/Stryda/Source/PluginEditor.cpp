@@ -576,6 +576,112 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
         }
     }
 
+    // ---- F7: Split, the vowel lane and the mangle chain ---------------------
+
+    {
+        const auto tint = ui::design::tintFor (palette_.accent, 4);
+
+        static const char* const vowelCaptions[] { "SPLIT", "MIX", "VOWEL",
+                                                   "TRACT", "SHARP", "GLIDE", "STEPS" };
+        const juce::String vowelIds[] { ids::split, ids::vowelMix, ids::vowelMorph,
+                                        ids::vowelTract, ids::vowelSharp,
+                                        ids::vowelSeqGlide, ids::vowelSeqLength };
+
+        for (int i = 0; i < 7; ++i)
+            vowel_.push_back (&addControl (vowelIds[i], vowelCaptions[i], tint,
+                                           i <= 1 ? ui::design::Emphasis::lead
+                                                  : ui::design::Emphasis::normal));
+
+        vowel_[0]->knob.setTooltip (
+            "SPLIT keeps the bottom of the sound out of everything on this page. Below the "
+            "corner the signal goes round the vowel lane and the whole mangle chain untouched, "
+            "so a growl can be destroyed above 150 Hz while the fundamental stays exactly "
+            "where the sub lane put it.\n\n"
+            "At 0 it is not merely flat, it is SKIPPED -- which matters, because a "
+            "Linkwitz-Riley crossover summed back together is an allpass rather than an "
+            "identity. That is why this control did not ship a phase earlier: with nothing "
+            "between the two bands it would have cost phase and bought nothing.");
+
+        vowel_[1]->knob.setTooltip (
+            "The vowel lane: three resonances placed where a vocal tract puts them, swept by "
+            "VOWEL through ee - eh - ah - oh - oo. This is what makes an FM growl sound like "
+            "it is saying something rather than merely buzzing.\n\n"
+            "At mix 0 the whole lane is skipped. TRACT is the length of the throat -- short "
+            "is a child, long is a cathedral -- and SHARP is how resonant each formant is.");
+
+        for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+            vowelSteps_.push_back (&addControl (ids::vowelStep (i), juce::String (i + 1),
+                                                tint, ui::design::Emphasis::trim));
+
+        vowelSteps_[0]->knob.setTooltip (
+            "Sixteen steps of VOWEL position, on their own division, so the bass can talk in "
+            "time without the ratio sequencer having to agree with it.\n\n"
+            "Glide slides between vowels rather than cutting, which is the difference between "
+            "a word and a stutter.");
+
+        vowelSeqButton_.setClickingTogglesState (true);
+        vowelSeqButton_.setTooltip ("Runs the vowel pattern, locked to the transport.");
+        addAndMakeVisible (vowelSeqButton_);
+        vowelSeqAttachment_
+            = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+                owner.getState(), ids::vowelSeqOn, vowelSeqButton_);
+
+        ui::styleChoice (vowelDivisionBox_, palette_, tint);
+        for (int i = 0; i < dsp::numDivisions; ++i)
+            vowelDivisionBox_.addItem (dsp::divisions[static_cast<std::size_t> (i)].name, i + 1);
+        vowelDivisionBox_.setTooltip ("How long a vowel step lasts.");
+        addAndMakeVisible (vowelDivisionBox_);
+        vowelDivisionAttachment_
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::vowelSeqDiv, vowelDivisionBox_);
+
+        static const char* const mangleCaptions[] {
+            "FOLD", "BITS", "CRUSH", "RATE",
+            "COMB", "COMB Hz", "C FBK",
+            "PHASE", "PHS Hz", "P FBK",
+            "DRIVE",
+            "THRESH", "RATIO", "ATK", "REL", "MAKEUP"
+        };
+        const juce::String mangleIds[] {
+            ids::fold, ids::crushBits, ids::crushAmount, ids::downsample,
+            ids::combMix, ids::combHz, ids::combFeedback,
+            ids::phaserMix, ids::phaserHz, ids::phaserFeedback,
+            ids::mangleDrive,
+            ids::compThreshold, ids::compRatio, ids::compAttack,
+            ids::compRelease, ids::compMakeup
+        };
+
+        for (int i = 0; i < 16; ++i)
+            mangle_.push_back (&addControl (mangleIds[i], mangleCaptions[i],
+                                            palette_.secondary,
+                                            ui::design::Emphasis::trim));
+
+        mangle_[0]->knob.setTooltip (
+            "A sine wavefolder: past the first fold the curve turns back on itself and each "
+            "extra bit of level adds another crease rather than more loudness. Antialiased "
+            "(ADAA), so it does not spray images the way a naive folder does. Exactly the "
+            "identity at 0.");
+
+        mangle_[1]->knob.setTooltip (
+            "BITS and CRUSH and RATE are the ONE place in this plugin where aliasing is the "
+            "instrument rather than a defect, so they run at the host rate with no "
+            "oversampling and no antialiasing at all -- the folded-back images ARE the sound "
+            "(CLAUDE.md's documented exception).\n\n"
+            "16 bits and rate 1 are skipped outright.");
+
+        mangle_[10]->knob.setTooltip (
+            "A biased tanh, antialiased, with an auto-trim so the knob changes tone rather "
+            "than loudness -- loudness sells distortion and we do not want to be fooled. The "
+            "bias arrives with the drive, so the even harmonics come in with it rather than "
+            "being there from the start. A 12 Hz first-order blocker after it stops the bias's "
+            "DC reaching a sub.");
+
+        mangle_[12]->knob.setTooltip (
+            "At 1 : 1 the compressor is the identity function and is SKIPPED -- not run with "
+            "a ratio that happens to do nothing. Above it, this is the glue that makes a "
+            "mangled growl sit still enough to sit in a mix.");
+    }
+
     tuningPage_ = std::make_unique<ui::TuningPanel> (owner, palette_,
         "Notes play through this scale, as everywhere in the suite. What is different is that "
         "an operator's RATIO can snap to it too -- set an operator's Ratio mode to Scale on the "
@@ -591,7 +697,8 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
     addChildComponent (*tuningPage_);
 
     // The tabs. Built last so every page's controls exist to be hidden.
-    static const char* const tabNames[] { "OPERATORS", "MATRIX", "VOICE", "SEQ", "TUNING" };
+    static const char* const tabNames[] { "OPERATORS", "MATRIX", "VOICE", "SEQ",
+                                         "MANGLE", "TUNING" };
 
     for (int i = 0; i < pageCount; ++i)
     {
@@ -805,6 +912,24 @@ void StrydaEditor::applyPageVisibility()
     for (auto& button : braidButtons_)
         button.setVisible (sequencer);
 
+    const bool mangling = currentPage_ == pageMangle;
+
+    const auto showList = [mangling] (const std::vector<Control*>& controls)
+    {
+        for (auto* control : controls)
+        {
+            control->knob.setVisible (mangling);
+            control->caption.setVisible (mangling);
+        }
+    };
+
+    showList (vowel_);
+    showList (vowelSteps_);
+    showList (mangle_);
+
+    vowelSeqButton_.setVisible (mangling);
+    vowelDivisionBox_.setVisible (mangling);
+
     if (tuningPage_ != nullptr)
     {
         const bool tuning = currentPage_ == pageTuning;
@@ -832,6 +957,7 @@ void StrydaEditor::paint (juce::Graphics& g)
         case pageMatrix:    paintMatrix (g, area);    break;
         case pageVoice:     paintVoice (g, area);     break;
         case pageSequencer: paintSequencer (g, area); break;
+        case pageMangle:    paintMangle (g, area);    break;
         default: break;   // the tuning page paints itself
     }
 }
@@ -942,6 +1068,7 @@ void StrydaEditor::resized()
         case pageMatrix:    layoutMatrix (area);    break;
         case pageVoice:     layoutVoice (area);     break;
         case pageSequencer: layoutSequencer (area);  break;
+        case pageMangle:    layoutMangle (area);     break;
 
         case pageTuning:
             if (tuningPage_ != nullptr)
@@ -1096,6 +1223,90 @@ void StrydaEditor::layoutSequencer (juce::Rectangle<int> area)
             auto cell = line.removeFromLeft (columnWidth);
             steps_[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
             steps_[index]->knob.setBounds (cell.reduced (2, 0));
+        }
+    }
+}
+
+void StrydaEditor::paintMangle (juce::Graphics& g, juce::Rectangle<int> area)
+{
+    auto top = area.removeFromTop (area.getHeight() * 52 / 100);
+    area.removeFromTop (kMargin);
+
+    ui::paintPlate (g, top, palette_.panel, ui::design::tintFor (palette_.accent, 4));
+    ui::paintPlateHeading (g, palette_, top.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+                           "SPLIT + VOWEL",
+                           "the low band goes round everything; the top talks",
+                           ui::design::tintFor (palette_.accent, 4));
+
+    ui::paintPlate (g, area, palette_.panel, palette_.secondary);
+    ui::paintPlateHeading (g, palette_, area.reduced (6).removeFromTop (ui::design::kValueHeight + 4),
+                           "MANGLE", "fold, crush, comb, phase, drive, glue -- each skipped at neutral",
+                           palette_.secondary);
+}
+
+void StrydaEditor::layoutMangle (juce::Rectangle<int> area)
+{
+    auto top = area.removeFromTop (area.getHeight() * 52 / 100).reduced (6);
+    area.removeFromTop (kMargin);
+
+    top.removeFromTop (ui::design::kValueHeight + 6);
+
+    // Split and the four vowel controls, then the pattern's own switch and
+    // division, then sixteen steps in two rows of eight.
+    const int rowHeight = juce::jmax (30, (top.getHeight() - 30) / 3 - kCaptionHeight);
+
+    auto controlRow = top.removeFromTop (rowHeight + kCaptionHeight);
+    const int columnWidth = controlRow.getWidth() / 9;
+
+    for (auto* control : vowel_)
+    {
+        auto cell = controlRow.removeFromLeft (columnWidth);
+        control->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+        control->knob.setBounds (cell.reduced (2, 0));
+    }
+
+    vowelSeqButton_.setBounds (controlRow.removeFromLeft (columnWidth).reduced (3, 8));
+    vowelDivisionBox_.setBounds (controlRow.reduced (3, 12));
+
+    for (int row = 0; row < 2; ++row)
+    {
+        auto line = top.removeFromTop (rowHeight + kCaptionHeight);
+        const int stepWidth = line.getWidth() / 8;
+
+        for (int column = 0; column < 8; ++column)
+        {
+            const auto index = static_cast<std::size_t> (row * 8 + column);
+
+            if (index >= vowelSteps_.size())
+                break;
+
+            auto cell = line.removeFromLeft (stepWidth);
+            vowelSteps_[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+            vowelSteps_[index]->knob.setBounds (cell.reduced (2, 0));
+        }
+    }
+
+    auto plate = area.reduced (6);
+    plate.removeFromTop (ui::design::kValueHeight + 6);
+
+    // Sixteen mangle controls in two rows of eight, in chain order.
+    const int mangleRow = juce::jmax (30, plate.getHeight() / 2 - kCaptionHeight);
+
+    for (int row = 0; row < 2; ++row)
+    {
+        auto line = plate.removeFromTop (mangleRow + kCaptionHeight);
+        const int width = line.getWidth() / 8;
+
+        for (int column = 0; column < 8; ++column)
+        {
+            const auto index = static_cast<std::size_t> (row * 8 + column);
+
+            if (index >= mangle_.size())
+                break;
+
+            auto cell = line.removeFromLeft (width);
+            mangle_[index]->caption.setBounds (cell.removeFromTop (kCaptionHeight));
+            mangle_[index]->knob.setBounds (cell.reduced (2, 0));
         }
     }
 }

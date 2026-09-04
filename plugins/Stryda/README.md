@@ -196,6 +196,37 @@ F7, because a crossover with nothing between its two bands is an allpass: it
 would cost phase and buy nothing until there is a stage to keep out of the low
 end.
 
+### Split, the vowel lane and the mangle chain
+
+**SPLIT** keeps the bottom of the sound out of everything on the MANGLE page.
+Below the corner the signal goes round the vowel lane and the whole chain
+untouched, so a growl can be destroyed above 150 Hz while the fundamental stays
+exactly where the sub lane put it. Measured: a 50 Hz sine through a chain
+running the folder at full, drive at full and a 3-bit crusher comes out at
+**0.4489** of the 0.4500 it went in as with Split at 300 Hz — and at **0.0145**
+without it.
+
+**VOWEL** places three resonances where a vocal tract puts them and sweeps them
+through ee → eh → ah → oh → oo. It has its own sixteen-step pattern on its own
+division, so the bass can talk in time without the ratio sequencer having to
+agree with it. This is what makes an FM growl sound like it is *saying*
+something rather than merely buzzing.
+
+**MANGLE** is fold → crush → downsample → comb → phaser → drive → compressor,
+in that order. The genre's basses are made by resampling and reprocessing
+rather than in one synth pass; having the chain inside the instrument doesn't
+replace that, it removes the three most common round trips.
+
+Two things about it are worth knowing:
+
+- **Every stage is skipped at neutral, bit for bit** — not run with a
+  coefficient that happens to be the identity. Ten different spellings of "do
+  nothing" are tested sample by sample, because six almost-identities in series
+  is six chances at changing every project the day the plugin updates.
+- **Crush and downsample alias on purpose.** They run at the host rate with no
+  oversampling and no antialiasing at all: the folded-back images *are* the
+  sound. Everything else that generates harmonics is antialiased.
+
 ### The index cap, and why it is Off by default
 
 The cap scales every index down until the predicted top sits under the internal
