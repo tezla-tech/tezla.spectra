@@ -26,9 +26,9 @@ namespace {
     return range;
 }
 
-[[nodiscard]] juce::ParameterID versioned (const juce::String& id)
+[[nodiscard]] juce::ParameterID versioned (const juce::String& id, int schema = kSchemaV1)
 {
-    return { id, kSchemaV1 };
+    return { id, schema };
 }
 
 } // namespace
@@ -51,10 +51,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
                                 juce::NormalisableRange<float> range,
                                 float defaultValue,
                                 const juce::String& suffix = {},
-                                int places = 2)
+                                int places = 2,
+                                int schema = kSchemaV1)
     {
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            versioned (id), name, range, defaultValue,
+            versioned (id, schema), name, range, defaultValue,
             juce::AudioParameterFloatAttributes()
                 .withLabel (suffix)
                 .withStringFromValueFunction (
@@ -87,6 +88,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
         add (ids::op (op, "Decay"), label + "Decay", skewed (0.005f, 12.0f, 0.6f), 1.5f, "s", 3);
         add (ids::op (op, "Sustain"), label + "Sustain", { 0.0f, 1.0f }, 1.0f);
         add (ids::op (op, "Release"), label + "Release", skewed (0.005f, 12.0f, 0.4f), 0.25f, "s", 3);
+
+        // ---- F4, appended at schema 2 --------------------------------------
+
+        add (ids::op (op, "Fold"), label + "Fold", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV2);
+
+        add (ids::op (op, "Formant"), label + "Formant",
+             skewed (50.0f, 8000.0f, 900.0f), 800.0f, "Hz", 0, kSchemaV2);
+        add (ids::op (op, "Width"), label + "Formant width",
+             skewed (0.0f, 8.0f, 1.0f), 1.0f, "cyc", 2, kSchemaV2);
+
+        add (ids::op (op, "KeyBreak"), label + "Key break",
+             { 21.0f, 108.0f }, 60.0f, {}, 0, kSchemaV2);
+        add (ids::op (op, "KeyLeft"), label + "Key below", { -1.0f, 1.0f }, 0.0f, {}, 2, kSchemaV2);
+        add (ids::op (op, "KeyRight"), label + "Key above", { -1.0f, 1.0f }, 0.0f, {}, 2, kSchemaV2);
+
+        add (ids::op (op, "VelLevel"), label + "Vel level", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV2);
+        add (ids::op (op, "VelIndex"), label + "Vel index", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV2);
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::op (op, "Mode"), kSchemaV2), label + "Mode",
+            choices::operatorMode, 0));
     }
 
     // The thirty off-diagonal cells. The diagonal is Feedback, above.
@@ -162,6 +184,18 @@ void StrydaProcessor::pullParameters()
         settings.decay = raw (ids::op (op, "Decay"));
         settings.sustain = raw (ids::op (op, "Sustain"));
         settings.release = raw (ids::op (op, "Release"));
+
+        settings.fold = raw (ids::op (op, "Fold"));
+        settings.mode = static_cast<int> (std::lround (raw (ids::op (op, "Mode"))));
+        settings.formantHz = raw (ids::op (op, "Formant"));
+        settings.formantDepth = raw (ids::op (op, "Width"));
+
+        settings.keyBreak = raw (ids::op (op, "KeyBreak"));
+        settings.keyLeft = raw (ids::op (op, "KeyLeft"));
+        settings.keyRight = raw (ids::op (op, "KeyRight"));
+
+        settings.velLevel = raw (ids::op (op, "VelLevel"));
+        settings.velIndex = raw (ids::op (op, "VelIndex"));
 
         for (int from = 0; from < kNumOperators; ++from)
             parameters_.indices[static_cast<std::size_t> (op)][static_cast<std::size_t> (from)]

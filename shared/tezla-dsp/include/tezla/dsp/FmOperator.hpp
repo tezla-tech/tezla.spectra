@@ -69,12 +69,21 @@
 #include <cmath>
 #include <numbers>
 
+#include <tezla/dsp/PhaseShaper.hpp>
+
 namespace tezla::dsp
 {
 
 class FmOperator
 {
 public:
+    /// **Append-only**: a choice parameter stores an index, not a name.
+    enum class Mode
+    {
+        normal = 0,   ///< a carrier or modulator like any other
+        formant       ///< a self-contained resonant peak at a settable frequency
+    };
+
     /// Matching `Oscillator::kMaxFeedback` -- one whole cycle of self-deviation.
     /// Note that this is 6.28 radians, six times past the point where the
     /// Kapteyn closed form in `FmBandwidth.hpp` still describes the loop. The
@@ -135,6 +144,23 @@ public:
 
     [[nodiscard]] double getTilt() const noexcept { return tilt_; }
 
+    void setMode (Mode mode) noexcept { mode_ = mode; }
+    [[nodiscard]] Mode getMode() const noexcept { return mode_; }
+
+    /// Phase distortion, 0 to 1. Exactly the identity at 0 -- see PhaseShaper.
+    void setFold (double amount) noexcept { fold_.setAmount (amount); }
+    [[nodiscard]] double getFold() const noexcept { return fold_.getAmount(); }
+
+    /// Where the formant sits, in Hz, when the mode is `formant`.
+    void setFormantHz (double hz) noexcept { formantHz_ = hz > 0.0 ? hz : 0.0; }
+
+    /// How wide the formant is, as the ModFM index `k` in cycles. Larger is
+    /// wider and brighter; 0 collapses it to a single partial.
+    void setFormantDepth (double cycles) noexcept
+    {
+        formantDepth_ = std::clamp (cycles, 0.0, 16.0);
+    }
+
     /// Self-modulation in cycles. Bounded structurally: phase modulation is
     /// applied to the *reading* of a bounded shape, so the loop gain on
     /// amplitude is zero and a bigger feedback makes a differently-shaped
@@ -183,16 +209,28 @@ public:
                               ? feedback_ * 0.5 * (history_[0] + history_[1])
                               : 0.0;
 
-        const double theta = kTwoPi * (phase_ + tilt_ * pmCycles + self);
+        // Phase distortion, applied to the accumulator's own phase before
+        // anything else reads it -- which is what makes it a *distortion of the
+        // ramp* rather than another modulator. Exactly the identity at 0.
+        const double shaped = fold_.getAmount() > 0.0 ? fold_.map (phase_) : phase_;
 
-        // Branched so Character 0 is the classic operator bit for bit, and
-        // pays nothing for the other half of the equation existing.
-        const double envelope = character_ > 0.0
-                                  ? std::exp (kTwoPi * character_ * (amCycles - normCycles))
-                                  : 1.0;
+        if (mode_ == Mode::formant)
+        {
+            advanceFormant (shaped, pmCycles);
+        }
+        else
+        {
+            const double theta = kTwoPi * (shaped + tilt_ * pmCycles + self);
 
-        out_ = envelope * std::sin (theta);
-        quadrature_ = needsQuadrature_ ? envelope * std::cos (theta) : 0.0;
+            // Branched so Character 0 is the classic operator bit for bit, and
+            // pays nothing for the other half of the equation existing.
+            const double envelope = character_ > 0.0
+                                      ? std::exp (kTwoPi * character_ * (amCycles - normCycles))
+                                      : 1.0;
+
+            out_ = envelope * std::sin (theta);
+            quadrature_ = needsQuadrature_ ? envelope * std::cos (theta) : 0.0;
+        }
 
         history_[1] = history_[0];
         history_[0] = out_;
@@ -215,6 +253,47 @@ public:
     [[nodiscard]] double getQuadrature() const noexcept { return quadrature_; }
 
 private:
+    /// The phase-synchronous ModFM formant operator, Lazzarini & Timoney
+    /// (JAES 58(6), 2010), their Eq (13)/(14):
+    ///
+    ///     s(t) = e^(k cos(w0 t) - k) * [ (1-a) sin(n w0 t) + a sin((n+1) w0 t) ]
+    ///
+    /// with `n = int(f_f / f_0)` and `a = f_f/f_0 - n`.
+    ///
+    /// The two carriers are the whole point. A single carrier can only sit on a
+    /// harmonic of the fundamental, so the resonance would jump from partial to
+    /// partial as the note changed; crossfading between the two nearest
+    /// harmonics by the fractional part **places the peak anywhere between
+    /// them**, continuously, while the spectrum stays strictly harmonic. The
+    /// paper: "the second carrier, tuned to an adjacent harmonic (of fm), will
+    /// allow the formant to be centered anywhere between the frequencies of
+    /// these two carriers, as their output is cross-faded for this effect."
+    ///
+    /// This is a whole two-operator ModFM pair collapsed into one operator, so
+    /// a formant costs one slot rather than two -- which is what makes a
+    /// three-formant vowel reachable on a six-operator instrument.
+    void advanceFormant (double shapedPhase, double pmCycles) noexcept
+    {
+        const double ratio = frequency_ > 0.0 ? formantHz_ / frequency_ : 0.0;
+        const double lower = std::floor (ratio);
+        const double blend = ratio - lower;
+
+        const double k = kTwoPi * formantDepth_;
+        const double envelope = formantDepth_ > 0.0
+                                  ? std::exp (k * (std::cos (kTwoPi * shapedPhase) - 1.0))
+                                  : 1.0;
+
+        const double base = kTwoPi * (shapedPhase + pmCycles);
+
+        out_ = envelope * ((1.0 - blend) * std::sin (lower * base)
+                             + blend * std::sin ((lower + 1.0) * base));
+
+        quadrature_ = needsQuadrature_
+                        ? envelope * ((1.0 - blend) * std::cos (lower * base)
+                                        + blend * std::cos ((lower + 1.0) * base))
+                        : 0.0;
+    }
+
     static constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
     double sampleRate_ { 48000.0 };
@@ -225,6 +304,11 @@ private:
     double character_ { 0.0 };
     double tilt_ { 1.0 };
     double feedback_ { 0.0 };
+
+    Mode mode_ { Mode::normal };
+    PhaseShaper fold_;
+    double formantHz_ { 800.0 };
+    double formantDepth_ { 1.0 };
 
     bool needsQuadrature_ { true };
     double out_ { 0.0 };

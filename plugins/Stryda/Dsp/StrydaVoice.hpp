@@ -39,6 +39,22 @@ struct OperatorParameters
     double decay { 0.5 };
     double sustain { 1.0 };
     double release { 0.2 };
+
+    // ---- F4 -----------------------------------------------------------------
+
+    double fold { 0.0 };            ///< phase distortion, 0 = identity
+    int mode { 0 };                 ///< 0 normal, 1 formant
+    double formantHz { 800.0 };
+    double formantDepth { 1.0 };    ///< the ModFM index k, in cycles
+
+    /// Key scaling, in the shape the DX7 documents: a break point, and a signed
+    /// depth on each side of it. Positive means louder or brighter that way.
+    double keyBreak { 60.0 };       ///< MIDI note
+    double keyLeft { 0.0 };         ///< -1 .. 1, per octave below the break
+    double keyRight { 0.0 };        ///< -1 .. 1, per octave above it
+
+    double velLevel { 0.0 };        ///< how much velocity moves the output level
+    double velIndex { 0.0 };        ///< how much it moves the modulation this operator sends
 };
 
 struct VoiceParameters
@@ -122,6 +138,47 @@ public:
 
     void kill() noexcept { reset(); }
 
+    /// The key-scaling gain for one operator at one note.
+    ///
+    /// **The two directions are separate controls and that is the point.** A
+    /// real instrument does not simply get brighter or duller uniformly; it
+    /// does one thing below its centre and another above it. The DX7 article
+    /// read for this puts it plainly: applied to a carrier you hear a volume
+    /// change, applied to a modulator you hear a timbral one -- which is why
+    /// this gain is used in both places below, on the level and on the indices
+    /// the operator sends, rather than only on one.
+    ///
+    /// A depth of 0 gives `pow (2, 0)` = **exactly 1.0**, so a flat curve is
+    /// bit-exactly no curve.
+    ///
+    /// Simplified from the four-curve original: the DX7 offers linear and
+    /// exponential shapes independently on each side, and this offers the
+    /// exponential one with a signed depth. That is the shape that does the
+    /// musical work -- little change for an octave or so, then increasingly
+    /// drastic -- and the linear variants are a roadmap item rather than a
+    /// silent omission.
+    [[nodiscard]] static double keyScaleGain (const OperatorParameters& settings,
+                                              double note) noexcept
+    {
+        const double octaves = (note - settings.keyBreak) / 12.0;
+        const double depth = octaves >= 0.0 ? settings.keyRight : settings.keyLeft;
+
+        // A flat curve must be bit-exactly no curve, so the guard compares
+        // against zero rather than a tolerance. -Wfloat-equal forbids the
+        // direct form; this is the same test written as two inequalities.
+        if (! (depth < 0.0) && ! (depth > 0.0))
+            return 1.0;
+
+        return std::pow (2.0, depth * std::abs (octaves));
+    }
+
+    /// The Malleus velocity form, `x * ((1 - a) + a * v)`: at amount 0 the
+    /// control is exactly 1 and velocity does nothing at all.
+    [[nodiscard]] static double velocityGain (double amount, double velocity) noexcept
+    {
+        return amount <= 0.0 ? 1.0 : (1.0 - amount) + amount * velocity;
+    }
+
     /// Push the current settings. Called once per control chunk, never per
     /// sample, and every setter it reaches is guarded against a no-op.
     void applyParameters (const VoiceParameters& parameters, double internalRate) noexcept
@@ -138,11 +195,22 @@ public:
                                 : frequency_ * settings.ratio
                                     * std::pow (2.0, settings.fineCents / 1200.0);
 
+            const double keyGain = keyScaleGain (settings, static_cast<double> (note_));
+
             matrix_.setFrequency (op, hz);
             matrix_.setCharacter (op, settings.character);
             matrix_.setFeedback (op, settings.feedback);
-            matrix_.setOutputLevel (op, settings.level);
+            matrix_.setFold (op, settings.fold);
+            matrix_.setMode (op, settings.mode == 1 ? dsp::FmOperator::Mode::formant
+                                                    : dsp::FmOperator::Mode::normal);
+            matrix_.setFormant (op, settings.formantHz, settings.formantDepth);
             matrix_.setPan (op, settings.pan);
+
+            // Key scaling and velocity reach the output level and the outgoing
+            // modulation independently, because on a carrier they are a volume
+            // and on a modulator they are a timbre.
+            matrix_.setOutputLevel (op, settings.level * keyGain
+                                          * velocityGain (settings.velLevel, velocity_));
 
             auto& envelope = envelopes_[slot];
             envelope.setAttackSeconds (settings.attack);
@@ -154,8 +222,15 @@ public:
             matrix_.setNoiseIndex (op, parameters.noiseIndices[slot]);
 
             for (int from = 0; from < kNumOperators; ++from)
+            {
+                const auto& source = parameters.operators[static_cast<std::size_t> (from)];
+                const double sourceGain = keyScaleGain (source, static_cast<double> (note_))
+                                            * velocityGain (source.velIndex, velocity_);
+
                 matrix_.setIndex (op, from,
-                                  parameters.indices[slot][static_cast<std::size_t> (from)]);
+                                  parameters.indices[slot][static_cast<std::size_t> (from)]
+                                    * sourceGain);
+            }
         }
 
         matrix_.setIndexScale (capScaleFor (parameters, internalRate));
