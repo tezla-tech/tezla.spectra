@@ -303,6 +303,24 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             continue;
         }
 
+        // "preset:<n>" loads a factory program while the editor is open, which
+        // is the only way to photograph a page whose content follows the loaded
+        // preset. `id=value` cannot do it -- a program is not a parameter --
+        // and the audio-render mode's own `preset=N` never builds an editor.
+        //
+        // No tick of its own: an editor that follows the program does so on its
+        // timer, so the caller ticks afterwards and can see whether it caught up.
+        if (id.startsWith ("preset:"))
+        {
+            const int index = id.fromFirstOccurrenceOf ("preset:", false, false).getIntValue();
+
+            processor.setCurrentProgram (index);
+
+            std::printf ("  preset %d (%s)\n", index,
+                         processor.getProgramName (index).toRawUTF8());
+            continue;
+        }
+
         // "tick:<n>" lets the editor's own timer fire n times. Real time has to
         // pass for a Timer to be due, so this sleeps -- which is the price of
         // driving a display that updates on a clock rather than on demand.

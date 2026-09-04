@@ -350,6 +350,23 @@ them, so there is no route to it from one instance.
 That reproduces the structure exactly: everything starts in one band, everything
 ends where it belongs, and the arrival is simultaneous.
 
+### The NOTES page (new)
+
+**What it is.** An eighth tab. It shows what the loaded preset is, how to play
+it, what is worth automating, and where the sound comes from — and it follows
+the preset, so changing program changes the page.
+
+**How to use it.** Open it when a preset does something you like and you want to
+know *why*, or when you have loaded one and are not sure what to hold down. Each
+one says what to reach for first and what is worth an automation lane.
+
+Below the preset's own notes is a **glossary** of the terms the panel uses
+without stopping to explain them — Shepard tone, shear, phase pan, retrigger,
+stack, origin, kargyraa, formant, tract, sag, sing, drift, reese, ADAA,
+oversampling, render quality, just intonation, Bohlen–Pierce, phase modulation
+and hard sync. This document and that page overlap on purpose: this one is for
+reading away from the rig, that one is for reading while the sound is playing.
+
 ---
 
 ## Ictus — the drum synthesiser

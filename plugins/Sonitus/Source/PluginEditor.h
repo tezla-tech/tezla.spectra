@@ -784,6 +784,63 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TuningPage)
 };
 
+/// The NOTES page: what the loaded preset is, how to play it, what is worth
+/// automating, and where the sound came from -- plus a glossary of the terms
+/// the rest of the panel uses without explaining.
+///
+/// **Why a page rather than a tooltip.** Tooltips answer "what does this knob
+/// do"; this answers "what is this patch for and why does it sound like that",
+/// which is a paragraph and sometimes a century of history. The two do not fit
+/// in the same place.
+///
+/// The text comes from `SonitusProcessor::getProgramNotes`, so it lives beside
+/// the preset it describes and cannot drift from it.
+class NotesPage final : public Page
+{
+public:
+    NotesPage (SonitusProcessor& processorToUse, ui::Palette palette);
+
+    /// Rebuilds the layout for a new preset. Cheap enough to call on a change
+    /// and far too expensive to call every frame, which is why the editor
+    /// compares the index first.
+    void setProgram (int index);
+
+    [[nodiscard]] int getPreferredHeight() const override { return height_; }
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    /// One paragraph, heading, bullet or rule, already wrapped to the current
+    /// width. Held laid out rather than as text so `paint` does no measuring.
+    struct Block
+    {
+        enum class Kind { title, heading, body, rule };
+
+        Kind kind { Kind::body };
+        juce::String text;
+        juce::TextLayout layout;
+        int height { 0 };
+    };
+
+    /// Turns the little markup into blocks: `# ` is a heading, a blank line
+    /// separates paragraphs, `**text**` is bold.
+    void build (int width);
+
+    void addBlock (Block::Kind kind, const juce::String& text, int width);
+
+    SonitusProcessor& sonitus_;
+    ui::Palette palette_;
+
+    int program_ { -1 };
+    int builtWidth_ { 0 };
+    int height_ { 400 };
+
+    std::vector<Block> blocks_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NotesPage)
+};
+
 class SonitusEditor final : public juce::AudioProcessorEditor,
                             private juce::Timer
 {
@@ -841,7 +898,7 @@ private:
 
     std::unique_ptr<ui::HeaderBar> header_;
 
-    static constexpr int kNumPages = 7;
+    static constexpr int kNumPages = 8;
 
     /// The MOD page is the one with the step strip under its grid, and the ENV
     /// page is the bespoke one, so both are named rather than numbered where
@@ -852,7 +909,8 @@ private:
     static constexpr int kModPage    = 3;
     static constexpr int kManglePage = 4;
     static constexpr int kTuningPage = 5;
-    static constexpr int kDicePage   = 6;
+    static constexpr int kNotesPage  = 6;
+    static constexpr int kDicePage   = 7;
 
     /// One look and feel per page, so each wears its own accent. JUCE resolves
     /// one by walking *up* the tree, so setting it on a page colours every
@@ -867,6 +925,10 @@ private:
     std::array<std::unique_ptr<Page>, kNumPages> pages_;
     std::array<juce::TextButton, kNumPages> tabs_;
     int currentPage_ { 0 };
+
+    /// Which preset the NOTES page is currently showing, so the page is rebuilt
+    /// when the host or the header changes program and not once a frame.
+    int shownProgram_ { -1 };
 
     /// Pages scroll rather than squash. A knob compressed to nothing is
     /// unusable in a way a scroll bar is not, so the grid keeps its row height

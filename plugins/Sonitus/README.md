@@ -1043,6 +1043,35 @@ inside the loop without iterating.
 
 ### Unreleased
 
+### A NOTES page
+
+**An eighth tab**, between TUNING and DICEROLL, carrying what a tooltip cannot:
+what the loaded preset *is*, how to play it, what is worth automating, and where
+the sound comes from. It follows the loaded preset — change program from the
+host, from an automation lane or with DICEROLL and the page changes with it.
+
+All 46 presets have notes. They live in the preset table beside the settings
+they describe, so they cannot drift from it, and **a preset without notes does
+not compile**: the settings list cannot initialise the `const char*`, so the
+error lands on the preset's own line rather than as a blank page discovered
+later.
+
+The page also carries a **glossary** of the twenty terms the panel uses without
+explaining — Shepard tone, shear, phase pan, retrigger, stack, origin, kargyraa,
+formant, tract, sag, sing, drift, reese, ADAA, oversampling, render quality,
+just intonation, Bohlen–Pierce, phase modulation, hard sync — each with what it
+means and, where there is one, where it came from.
+
+A small markup does the formatting: `# ` opens a subheading, a blank line ends a
+paragraph, `**bold**` and `*italic*` work inline. The reader is about fifty lines
+and deliberately not markdown.
+
+`tezla-render editor` gained a **`preset:N`** verb, because a page whose content
+follows the loaded program cannot be photographed without one — `id=value`
+cannot change a program, and the audio-render mode's `preset=N` never builds an
+editor.
+
+
 ### Shepard retrigger, DICEROLL's twenty-one blind spots, and a converging riser
 
 **Shepard *Retrigger*** (`shepardRetrig`, schema V10, off by default and

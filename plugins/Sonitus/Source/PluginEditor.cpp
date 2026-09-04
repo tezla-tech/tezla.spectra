@@ -100,6 +100,9 @@ const ui::Palette kPalette {
 /// different apparent jump on a dark colour than on a light one.
 const juce::Colour kGroupPanel { 0xff34373a };
 
+/// The NOTES page's margin. Text wants more air than a knob grid does.
+constexpr int kNotesMargin = 22;
+
 /// The three stops the brushed metal is built from: the specular band, the
 /// shoulder below it, and the shadow at both ends.
 ///
@@ -139,6 +142,7 @@ const PageAccent kPageAccents[] {
     { juce::Colour { 0xfffc854d }, juce::Colour { 0xfffecbb5 } },   // MOD     orange  H  45
     { juce::Colour { 0xfffc75b7 }, juce::Colour { 0xfffec5dc } },   // MANGLE  pink    H 352
     { juce::Colour { 0xff83c11b }, juce::Colour { 0xffa6f326 } },   // TUNING  lime    H 130
+    { juce::Colour { 0xffd8b45c }, juce::Colour { 0xfff0d79a } },   // NOTES   amber   H  75
 
     // DICEROLL has no fixed accent -- the tab cycles the whole wheel, and
     // this is only what a still frame falls back to.
@@ -3387,6 +3391,364 @@ void StepStrip::resized()
 // SonitusEditor
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// NotesPage
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// The terms the panel uses without stopping to explain them.
+///
+/// **Written for a player, not a manual.** Each entry says what the word means
+/// and, where there is one, where it comes from -- because half of these are
+/// older than the instrument and knowing the history is usually faster than
+/// turning the knob at random.
+struct GlossaryEntry
+{
+    const char* term;
+    const char* meaning;
+};
+
+const GlossaryEntry kGlossary[] {
+    { "Shepard tone",
+      "A pitch that seems to rise or fall forever without ever getting anywhere. "
+      "Copies an octave apart all slide in the same direction, each fading in at "
+      "the bottom of its octave as another fades out at the top, so there is "
+      "always something arriving and something leaving and no edge to hear. "
+      "Roger Shepard described it in 1964 to show that pitch has a circular "
+      "component -- a note's *chroma* is separable from its *height* -- and "
+      "Jean-Claude Risset made the discrete version a continuous glissando in "
+      "1969. Film scoring took it up as the sound of dread that never resolves; "
+      "it works as a drum and bass build for the same reason." },
+
+    { "Shear",
+      "How far oscillator B's Shepard climb runs against A's. Zero locks them "
+      "together, half holds B still while A climbs, full makes B fall exactly as "
+      "fast as A rises. Two endless glissandi passing through each other never "
+      "finish passing." },
+
+    { "Phase pan",
+      "Panning a Shepard copy by where it is in its climb rather than by its "
+      "rank. The result is the opposite of what it sounds like: because phase "
+      "sets a copy's pitch, its loudness and its position together, one copy "
+      "always arrives where another leaves, so the *image* stops moving and "
+      "becomes a fixed fan -- low at one side, high at the other -- that the "
+      "tones climb through. Off, position and pitch are out of step and the "
+      "picture churns." },
+
+    { "Retrigger (Shepard)",
+      "Whether a note starts its own climb or joins the one already running. Off "
+      "is one clock for the instrument, so a chord climbs as a single gesture. On, "
+      "each note begins at the bottom of the octave -- useful for landing a riser "
+      "on a bar line. Notes already sounding are never disturbed." },
+
+    { "Stack",
+      "Where the unison copies go. *Detune* is cents, symmetric, and is what the "
+      "Detune knob has always done. The rest place copies at intervals -- octaves, "
+      "fifths, tritones, clusters -- or on the loaded tuning's degrees. Exactly "
+      "one copy always sits on the played pitch, so turning Unison up adds notes "
+      "around the note rather than moving it." },
+
+    { "Origin",
+      "Which side of the played note a stack builds on: centred, all above, or "
+      "all below. It moves the stack's weight and never its tuning. *Up* keeps "
+      "the low end one note wide, which is what makes room for a sub under a wide "
+      "chord." },
+
+    { "Kargyraa",
+      "A style of Tuvan and Mongolian throat singing in which the ventricular "
+      "folds -- the false vocal cords, sitting above the real ones -- vibrate at "
+      "half the rate of the vocal folds. The result is a note an octave below the "
+      "one being sung, with a stack of overtones above it. The control here is "
+      "the same arithmetic, not a model of a throat: the waveform repeats every "
+      "second cycle, so an octave appears without an oscillator playing it." },
+
+    { "Formant",
+      "A resonant peak in a spectrum, put there by the shape of a cavity rather "
+      "than by the source. Vowels *are* formants: the same vocal folds make "
+      "\"ah\" and \"ee\", and only the mouth's shape differs. Three peaks is "
+      "enough to be recognisable as speech." },
+
+    { "Tract",
+      "The length of the throat the vowel filter is modelling, as one ratio on "
+      "all three of its formants. A uniform tube closed at one end resonates at "
+      "odd multiples of c/4L, so every formant scales with one over the length -- "
+      "a 17.5 cm adult tract puts the first near 500 Hz. The vowel stays the same "
+      "vowel; the head saying it does not, which is why a low value reads as a "
+      "large creature rather than as a different sound." },
+
+    { "Sag",
+      "One slow instability shared by every voice: pitch, cutoff and level all "
+      "wander together. That is what an analogue polysynth does when a loud chord "
+      "pulls its supply rails down, and because everything runs off the same rail "
+      "the movement is common-mode -- which is why it reads as one machine rather "
+      "than as chorus. A little is why old gear sounds alive; a lot is a machine "
+      "in trouble." },
+
+    { "Sing",
+      "The filter driven past its own damping until it oscillates on its own, at "
+      "the cutoff frequency. Any filter with enough positive feedback becomes an "
+      "oscillator, and players found this the moment resonance knobs went past "
+      "about 90%. It was a technique by the 1960s: a self-oscillating filter is a "
+      "free sine oscillator that tracks the keyboard, which mattered when every "
+      "VCO was already busy. Turn Resonance up first -- Sing has to cancel the "
+      "damping that is there before it can go past it." },
+
+    { "Drift",
+      "Slow random wander in cents, per oscillator copy and per voice card. "
+      "Component tolerance and thermal drift, which is what separate VCOs do "
+      "because they are separate. The relative motion is what the ear hears as "
+      "\"analogue\"; one global drift would just be a tuning error." },
+
+    { "Reese",
+      "Two detuned saws through a lowpass, played low and long. Named after a "
+      "bassline on a 1988 Detroit techno record; the technique is older, but the "
+      "*reese* is specifically this -- close enough to beat, filtered dark, and "
+      "the movement is the beating rather than an LFO." },
+
+    { "ADAA",
+      "Antiderivative antialiasing. Distorting a signal makes harmonics above "
+      "half the sample rate, which fold back as inharmonic noise. Rather than "
+      "running everything faster, ADAA integrates the shaping curve and takes a "
+      "difference, which band-limits the result at source. It is why the drive "
+      "and fold here stay clean where naive versions do not." },
+
+    { "Oversampling",
+      "Running the nonlinear parts of the instrument faster than the session, so "
+      "the harmonics they make land above the audible band instead of folding "
+      "into it. *Auto* picks the factor from the host rate to reach roughly "
+      "176-192 kHz internally, which is why a patch sounds the same at 48 and at "
+      "192 kHz. It costs CPU and it declares its latency to the host." },
+
+    { "Render quality",
+      "A separate oversampling factor used only while the host bounces offline. "
+      "The oldest trick in rendering: quality you cannot afford in real time but "
+      "can afford when time is not the constraint. *Same as live* changes "
+      "nothing." },
+
+    { "Just intonation",
+      "Tuning intervals as small whole-number ratios -- 3:2 for a fifth, 5:4 for "
+      "a major third -- so they beat not at all. Equal temperament fudges every "
+      "interval so that every key works equally badly, which is the trade that "
+      "made keyboards playable in all twelve. A comb filter is one of the few "
+      "things that can hear the difference." },
+
+    { "Bohlen-Pierce",
+      "A scale devised in the 1970s around the *tritave* -- a 3:1 ratio -- "
+      "instead of the octave. Everything you know about consonance is slightly "
+      "wrong in it, which is the point." },
+
+    { "Phase modulation",
+      "Modulating an oscillator's phase with another oscillator, which for a sine "
+      "carrier sounds identical to frequency modulation but is stable and does "
+      "not drift with pitch. The famous 1980s \"FM\" synthesisers were all doing "
+      "PM. Whole-number ratios stay tonal; the ratios between them are bells." },
+
+    { "Hard sync",
+      "Resetting one oscillator's phase every time another's cycle comes round. "
+      "The slave's own pitch stops being a pitch and becomes a formant -- a peak "
+      "in the spectrum -- so sweeping it sweeps timbre rather than note." }
+};
+} // namespace
+
+NotesPage::NotesPage (SonitusProcessor& processorToUse, ui::Palette palette)
+    : sonitus_ (processorToUse), palette_ (palette)
+{
+    setInterceptsMouseClicks (false, false);
+}
+
+void NotesPage::setProgram (int index)
+{
+    if (index == program_)
+        return;
+
+    program_ = index;
+    builtWidth_ = 0;              // force a rebuild at the next resize or paint
+
+    if (getWidth() > 0)
+        build (getWidth());
+
+    repaint();
+}
+
+void NotesPage::resized()
+{
+    if (getWidth() > 0 && getWidth() != builtWidth_)
+        build (getWidth());
+}
+
+void NotesPage::addBlock (Block::Kind kind, const juce::String& text, int width)
+{
+    Block block;
+
+    block.kind = kind;
+    block.text = text;
+
+    if (kind == Block::Kind::rule)
+    {
+        block.height = 22;
+        blocks_.push_back (std::move (block));
+        return;
+    }
+
+    // **Bold spans are split at the `**` markers** rather than being drawn
+    // twice, so a bold run in the middle of a sentence flows with the rest of
+    // it instead of starting a new line. `AttributedString` is what makes that
+    // one object rather than three.
+    juce::AttributedString attributed;
+
+    const float size = kind == Block::Kind::title ? 20.0f
+                     : kind == Block::Kind::heading ? 13.0f
+                     : 14.0f;
+
+    const auto colour = kind == Block::Kind::title ? palette_.accent
+                      : kind == Block::Kind::heading ? palette_.accent.withMultipliedSaturation (0.7f)
+                      : juce::Colour { 0xffd3d0ca };
+
+    auto remaining = text;
+    bool bold = false;
+    bool italic = false;
+
+    while (remaining.isNotEmpty())
+    {
+        // `**` is checked first, because it starts with `*` and a single-marker
+        // search would split it in half and leave a stray asterisk on screen.
+        const auto strong = remaining.indexOf ("**");
+        const auto light = remaining.indexOfChar ('*');
+
+        const bool takeStrong = strong >= 0 && (light < 0 || strong <= light);
+        const auto marker = takeStrong ? strong : light;
+
+        const auto piece = marker >= 0 ? remaining.substring (0, marker) : remaining;
+
+        if (piece.isNotEmpty())
+        {
+            const bool heavy = bold || kind != Block::Kind::body;
+
+            attributed.append (piece,
+                               juce::Font (juce::FontOptions { size }.withStyle (
+                                   heavy && italic ? "Bold Italic"
+                                   : heavy ? "Bold"
+                                   : italic ? "Italic"
+                                   : "Regular")),
+                               colour);
+        }
+
+        if (marker < 0)
+            break;
+
+        remaining = remaining.substring (marker + (takeStrong ? 2 : 1));
+
+        if (takeStrong)
+            bold = ! bold;
+        else
+            italic = ! italic;
+    }
+
+    attributed.setLineSpacing (kind == Block::Kind::body ? 2.0f : 0.0f);
+
+    const auto textWidth = static_cast<float> (juce::jmax (60, width - 2 * kNotesMargin));
+
+    block.layout.createLayout (attributed, textWidth);
+    block.height = static_cast<int> (std::ceil (block.layout.getHeight()))
+                 + (kind == Block::Kind::title ? 10 : kind == Block::Kind::heading ? 4 : 8);
+
+    blocks_.push_back (std::move (block));
+}
+
+void NotesPage::build (int width)
+{
+    builtWidth_ = width;
+    blocks_.clear();
+
+    addBlock (Block::Kind::title, sonitus_.getProgramName (program_), width);
+    addBlock (Block::Kind::rule, {}, width);
+
+    // The preset's own notes, in the little markup the `Preset::notes` comment
+    // describes: `# ` opens a heading, a blank line ends a paragraph.
+    const auto notes = sonitus_.getProgramNotes (program_);
+
+    juce::StringArray lines;
+    lines.addLines (notes);
+
+    juce::String paragraph;
+
+    const auto flush = [&]
+    {
+        if (paragraph.isNotEmpty())
+        {
+            addBlock (Block::Kind::body, paragraph.trim(), width);
+            paragraph.clear();
+        }
+    };
+
+    for (const auto& line : lines)
+    {
+        if (line.trim().isEmpty())
+        {
+            flush();
+            continue;
+        }
+
+        if (line.startsWith ("# "))
+        {
+            flush();
+            addBlock (Block::Kind::heading, line.substring (2).toUpperCase(), width);
+            continue;
+        }
+
+        paragraph += (paragraph.isEmpty() ? "" : " ") + line.trim();
+    }
+
+    flush();
+
+    // And the glossary, which is the same for every preset and is why this page
+    // is worth opening even when the notes are short.
+    addBlock (Block::Kind::rule, {}, width);
+    addBlock (Block::Kind::title, "GLOSSARY", width);
+    addBlock (Block::Kind::rule, {}, width);
+
+    for (const auto& entry : kGlossary)
+    {
+        addBlock (Block::Kind::heading, juce::String (entry.term).toUpperCase(), width);
+        addBlock (Block::Kind::body, entry.meaning, width);
+    }
+
+    int total = kNotesMargin;
+
+    for (const auto& block : blocks_)
+        total += block.height;
+
+    height_ = total + kNotesMargin;
+}
+
+void NotesPage::paint (juce::Graphics& g)
+{
+    if (getWidth() > 0 && getWidth() != builtWidth_)
+        build (getWidth());
+
+    auto y = kNotesMargin;
+
+    for (const auto& block : blocks_)
+    {
+        if (block.kind == Block::Kind::rule)
+        {
+            g.setColour (palette_.accent.withAlpha (0.35f));
+            g.fillRect (kNotesMargin, y + block.height / 2,
+                        getWidth() - 2 * kNotesMargin, 1);
+        }
+        else
+        {
+            block.layout.draw (g, juce::Rectangle<float> (
+                static_cast<float> (kNotesMargin), static_cast<float> (y),
+                static_cast<float> (getWidth() - 2 * kNotesMargin),
+                static_cast<float> (block.height)));
+        }
+
+        y += block.height;
+    }
+}
+
 SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     : juce::AudioProcessorEditor (&processorToUse),
       sonitus_ (processorToUse),
@@ -3463,7 +3825,7 @@ SonitusEditor::SonitusEditor (SonitusProcessor& processorToUse)
     addAndMakeVisible (*steps_);
 
     static const char* tabNames[kNumPages] { "OSC", "FILTER", "ENV", "MOD", "MANGLE",
-                                             "TUNING", "DICEROLL" };
+                                             "TUNING", "NOTES", "DICEROLL" };
 
     for (int i = 0; i < kNumPages; ++i)
     {
@@ -4251,6 +4613,7 @@ void SonitusEditor::buildPages()
     // neither before: it was a component the editor parented by hand, and the
     // hand-parenting is what got forgotten.
     pages_[kTuningPage] = std::make_unique<TuningPage> (sonitus_, paletteForPage (kTuningPage));
+    pages_[kNotesPage] = std::make_unique<NotesPage> (sonitus_, paletteForPage (kNotesPage));
     pages_[kDicePage] = std::make_unique<DicePage> (sonitus_, paletteForPage (kDicePage));
 
     // Each page wears its own accent, and the look and feel is how that reaches
@@ -4475,6 +4838,9 @@ void SonitusEditor::updateForSwitches()
 
     notes_[kManglePage] = sonitus_.describeComb() + "  " + sonitus_.describeOversampling();
 
+    notes_[kNotesPage] = "What the loaded preset is, how to play it, and what the words mean. "
+                         "It follows the preset -- change program and this page changes with it.";
+
     // The header's two oversampling boxes get the live descriptions -- what
     // Auto is doing at the session's actual rate, and whether a bounce is
     // running at the render setting right now -- which only the processor
@@ -4589,6 +4955,27 @@ juce::String SonitusEditor::ratioReadout() const
 void SonitusEditor::timerCallback()
 {
     refreshDiceTab();
+
+    // **The NOTES page follows the loaded preset**, whether it was changed from
+    // the host's program list, from a DAW automation lane, or by DICEROLL. There
+    // is no callback for "the program changed" that reaches an editor, so the
+    // index is polled -- and compared, because rebuilding forty paragraphs of
+    // wrapped text thirty times a second would be absurd.
+    if (const int program = sonitus_.getCurrentProgram(); program != shownProgram_)
+    {
+        shownProgram_ = program;
+
+        if (auto* page = dynamic_cast<NotesPage*> (pages_[kNotesPage].get()))
+        {
+            page->setProgram (program);
+
+            // The page's height changes with the preset's notes, so the
+            // viewport has to be told -- otherwise a long preset scrolls to
+            // where a short one ended.
+            if (currentPage_ == kNotesPage)
+                resized();
+        }
+    }
 
     // The ratio readout, on the page that owns the pitch controls. Only while
     // that page is on screen -- the string is cheap, but `setGroupDetail`
