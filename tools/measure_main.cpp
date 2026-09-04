@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+#include <tezla/dsp/FmBandwidth.hpp>
+#include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Ratio.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/Oscillator.hpp>
@@ -5786,6 +5788,515 @@ int runIctus (const Args& args)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// stryda -- the FM synthesiser's four tables, measured before the design is
+// frozen. Nothing here uses Stryda's own code: the operator is written out as
+// plain arithmetic from the published closed form, so what is measured is the
+// mathematics the predictor claims to predict. F2's implementation is then
+// checked against these numbers rather than against itself.
+// ---------------------------------------------------------------------------
+
+namespace strydaMeasure
+{
+using namespace tezla::dsp;
+using namespace tezla::measure;
+
+constexpr double kTwoPi = 2.0 * std::numbers::pi;
+
+/// The reference operator, straight from Lazzarini & Timoney's Eq (19):
+///
+///     x(t) = e^(r k cos(w_m t) - r k) * sin(w_c t + s k sin(w_m t))
+///
+/// `r = 0, s = 1` is classic phase modulation; `r = 1, s = 0` is ModFM. The
+/// paper writes a cosine carrier and this writes a sine, which is a 90 degree
+/// rotation and changes no magnitude spectrum.
+///
+/// Two outputs, because the two halves of the formula need the modulator in
+/// quadrature: the phase term wants its sine and the exponential wants its
+/// cosine. For a sine operator that is free.
+struct RefOp
+{
+    double phase { 0.0 };
+    double inc { 0.0 };
+    double out { 0.0 };    ///< the operator's output; what a PM input reads
+    double quad { 0.0 };   ///< its quadrature partner; what the exponential reads
+
+    void setFrequency (double hz, double sampleRate) noexcept { inc = hz / sampleRate; }
+
+    void reset() noexcept { phase = 0.0; out = 0.0; quad = 0.0; }
+
+    /// `pmRadians` is the summed phase-modulation input in radians;
+    /// `amRadians` the summed quadrature input for the exponential;
+    /// `normRadians` the sum of the indices, which is what makes the peak 1.
+    double advance (double pmRadians, double amRadians, double normRadians,
+                    double r, double s) noexcept
+    {
+        const double theta = kTwoPi * phase + s * pmRadians;
+
+        // Branched, not multiplied: at r = 0 this must be the classic operator
+        // bit for bit, and `std::exp (0.0)` being exactly 1.0 is not something
+        // to rely on across libraries when a branch says it outright.
+        const double envelope = (r > 0.0) ? std::exp (r * (amRadians - normRadians)) : 1.0;
+
+        out = envelope * std::sin (theta);
+        quad = envelope * std::cos (theta);
+
+        phase += inc;
+        if (phase >= 1.0)
+            phase -= 1.0;
+
+        return out;
+    }
+};
+
+struct PairSpec
+{
+    double carrierHz { 110.0 };
+    double modulatorHz { 110.0 };
+    double indexRadians { 4.0 };
+    double character { 0.0 };   ///< r
+    double tilt { 1.0 };        ///< s
+    double feedbackRadians { 0.0 };
+};
+
+/// Render a two-operator pair at `factor` times `hostRate` and decimate back,
+/// which is exactly the path Stryda's engine will take.
+///
+/// **The first samples out of the decimator are not signal.** Its halfband FIR
+/// has to fill before its output means anything: at x2 that is 47 host samples,
+/// and 47 samples of full-scale ramp inside a 65536-point transform is
+/// 10*log10(47/65536) = -31.4 dB of broadband energy. That is not a small
+/// error to leave in -- it read as a *uniform* -31 dB alias floor at every
+/// factor and every rate, which looks exactly like a real result and would
+/// have been quoted as one. So the render throws away `kWarmupFrames` host
+/// samples before the analysed block starts.
+[[nodiscard]] std::vector<double> renderPair (const PairSpec& spec,
+                                              double hostRate,
+                                              int factor,
+                                              std::size_t frames)
+{
+    constexpr std::size_t kWarmupFrames = 4096;
+
+    const double internalRate = hostRate * static_cast<double> (factor);
+    const std::size_t total = frames + kWarmupFrames;
+
+    Oversampler oversampler;
+    oversampler.prepare (static_cast<int> (total), 1, factor);
+    oversampler.reset();
+
+    RefOp carrier;
+    RefOp modulator;
+    carrier.setFrequency (spec.carrierHz, internalRate);
+    modulator.setFrequency (spec.modulatorHz, internalRate);
+
+    std::vector<double> host (total, 0.0);
+    double* hostPtr = host.data();
+
+    double* const* internal = oversampler.internalBuffers();
+    const auto internalFrames = total * static_cast<std::size_t> (factor);
+
+    double feedbackState1 = 0.0;
+    double feedbackState2 = 0.0;
+
+    for (std::size_t i = 0; i < internalFrames; ++i)
+    {
+        const double modulatorOut = modulator.advance (0.0, 0.0, 0.0, 0.0, 1.0);
+
+        // The modulator's contribution, scaled by the index.
+        const double pm = spec.indexRadians * modulatorOut;
+        const double am = spec.indexRadians * modulator.quad;
+
+        // Self-feedback on the carrier, in the two-sample-averaged form
+        // Oscillator uses (Tomisawa).
+        const double self = spec.feedbackRadians * 0.5 * (feedbackState1 + feedbackState2);
+
+        const double value = carrier.advance (pm + self, am, spec.indexRadians,
+                                              spec.character, spec.tilt);
+
+        feedbackState2 = feedbackState1;
+        feedbackState1 = value;
+
+        internal[0][i] = value;
+    }
+
+    oversampler.downsample (&hostPtr, static_cast<int> (total));
+
+    return std::vector<double> (host.begin() + static_cast<std::ptrdiff_t> (kWarmupFrames),
+                                host.end());
+}
+
+/// Everything that is not a sideband the closed form puts there, relative to
+/// the strongest component that is.
+///
+/// **`analyseHarmonics` is the wrong instrument for this and the failure is
+/// instructive.** It measures against a stated fundamental, and for a c:m ratio
+/// of 2:7 the true fundamental -- f_c/2 = 220 Hz for a 440 Hz carrier -- has
+/// *no energy in it at all*: the partials land at 440, 1100, 1980, ... , every
+/// odd multiple of 220 and none of the even ones. Dividing by a fundamental
+/// that is not there produced alias figures of +160 and +327 dB, which is at
+/// least obviously wrong; a subtler ratio would have produced a plausible
+/// number instead.
+///
+/// So the sideband set is generated rather than assumed: components sit at
+/// `|f_c + n*f_m|` for every integer n, the negative ones reflected around
+/// zero exactly as Chowning describes. Anything in another bin is folded.
+[[nodiscard]] double foldedAliasingDb (const std::vector<double>& signal,
+                                       double sampleRate,
+                                       double carrierHz,
+                                       double modulatorHz,
+                                       double audibleUpperHz = kAudibleUpperHz)
+{
+    const auto spectrum = fftOfReal (signal);
+    const std::size_t half = signal.size() / 2;
+    const double binWidth = sampleRate / static_cast<double> (signal.size());
+
+    std::vector<bool> isSideband (half, false);
+
+    // One bin either side, matching analyseHarmonics' skirt: a bin-exact tone
+    // still spills a little through rounding.
+    const auto mark = [&] (double hz)
+    {
+        if (hz < 0.0)
+            hz = -hz;
+
+        const auto centre = static_cast<std::ptrdiff_t> (std::llround (hz / binWidth));
+        for (std::ptrdiff_t k = centre - 1; k <= centre + 1; ++k)
+            if (k >= 0 && k < static_cast<std::ptrdiff_t> (half))
+                isSideband[static_cast<std::size_t> (k)] = true;
+    };
+
+    // DC is never a sideband but an asymmetric spectrum can put energy there.
+    mark (0.0);
+
+    const auto orders = static_cast<int> (0.5 * sampleRate / std::max (1.0, modulatorHz)) + 2;
+    for (int n = -orders; n <= orders; ++n)
+        mark (carrierHz + static_cast<double> (n) * modulatorHz);
+
+    double signalPower = 0.0;
+    double aliasPower = 0.0;
+
+    for (std::size_t k = 1; k < half; ++k)
+    {
+        const double power = std::norm (spectrum[k]);
+
+        if (isSideband[k])
+            signalPower += power;
+        else if (static_cast<double> (k) * binWidth <= audibleUpperHz)
+            aliasPower += power;
+    }
+
+    if (signalPower <= 0.0)
+        return 0.0;
+
+    return 10.0 * std::log10 (std::max (aliasPower / signalPower, 1.0e-30));
+}
+
+/// The highest frequency still within `floorDb` of the spectral peak.
+[[nodiscard]] double measuredEdgeHz (const std::vector<double>& signal,
+                                     double sampleRate,
+                                     double floorDb)
+{
+    const auto spectrum = fftOfReal (signal);
+    const std::size_t half = signal.size() / 2;
+
+    double peak = 0.0;
+    for (std::size_t k = 1; k < half; ++k)
+        peak = std::max (peak, std::norm (spectrum[k]));
+
+    if (peak <= 0.0)
+        return 0.0;
+
+    const double threshold = peak * std::pow (10.0, floorDb / 10.0);
+    const double binWidth = sampleRate / static_cast<double> (signal.size());
+
+    std::size_t highest = 0;
+    for (std::size_t k = 1; k < half; ++k)
+        if (std::norm (spectrum[k]) >= threshold)
+            highest = k;
+
+    return static_cast<double> (highest) * binWidth;
+}
+
+/// The lowest terms of a ratio, so the analysis fundamental is the real one.
+void lowestTerms (double ratio, int& p, int& q)
+{
+    // Every ratio this tool uses is a small rational; searching is exact and
+    // avoids a floating-point continued fraction.
+    for (q = 1; q <= 16; ++q)
+    {
+        const double candidate = ratio * static_cast<double> (q);
+        const auto rounded = static_cast<int> (std::llround (candidate));
+        if (std::abs (candidate - static_cast<double> (rounded)) < 1.0e-9)
+        {
+            p = rounded;
+            return;
+        }
+    }
+
+    p = static_cast<int> (std::llround (ratio));
+    q = 1;
+}
+} // namespace strydaMeasure
+
+int runStryda (const Args& args)
+{
+    using namespace strydaMeasure;
+    using namespace tezla::measure;
+
+    constexpr std::size_t kFrames = 1u << 16;
+    const double floorDb = -80.0;
+
+    // -----------------------------------------------------------------------
+    std::printf ("tezla-measure stryda -- table 1, the aliasing floor\n\n");
+    std::printf ("A two-operator classic PM pair, sine both ends, rendered at the host\n");
+    std::printf ("rate times the factor and decimated back. The analysis fundamental is\n");
+    std::printf ("f_c / N1 with c:m = N1:N2 in lowest terms (Chowning), so every real\n");
+    std::printf ("sideband is a harmonic of it and everything else is folded.\n\n");
+
+    std::printf ("  index  ratio     rate      x1       x2       x4       x8   (audible inharmonic, dBc)\n");
+    std::printf ("  -----  -----  --------  -------  -------  -------  -------\n");
+
+    for (double indexRadians : { 4.0, 16.0, 64.0 })
+    {
+        for (double ratio : { 1.0, 3.5, 7.0 })
+        {
+            int p = 1;
+            int q = 1;
+            lowestTerms (ratio, p, q);
+
+            for (double hostRate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+            {
+                std::printf ("  %5.0f  %5.2f  %8.0f", indexRadians, ratio, hostRate);
+
+                for (int factor : { 1, 2, 4, 8 })
+                {
+                    // Bin-exact by construction: pick f0 on a bin, then the
+                    // carrier and modulator are whole multiples of it.
+                    const double f0 = binExactFrequency (440.0 / static_cast<double> (q),
+                                                                  hostRate, kFrames);
+                    PairSpec spec;
+                    spec.carrierHz = f0 * static_cast<double> (q);
+                    spec.modulatorHz = f0 * static_cast<double> (p);
+                    spec.indexRadians = indexRadians;
+
+                    const auto rendered = renderPair (spec, hostRate, factor, kFrames);
+
+                    std::printf ("  %7.1f", foldedAliasingDb (rendered, hostRate,
+                                                              spec.carrierHz, spec.modulatorHz));
+                }
+
+                std::printf ("\n");
+            }
+        }
+        std::printf ("\n");
+    }
+
+    // -----------------------------------------------------------------------
+    std::printf ("\ntezla-measure stryda -- table 2, the predictor against the spectrum\n\n");
+    std::printf ("Predicted top sideband (dsp::FmBandwidth, -80 dB) against the measured\n");
+    std::printf ("-80 dB edge of a render with enough headroom that nothing folds. A\n");
+    std::printf ("positive error means the predictor is conservative, which is the safe\n");
+    std::printf ("direction and the only acceptable one.\n\n");
+
+    std::printf ("  carrier  ratio  index(rad)   predicted     measured      error\n");
+    std::printf ("  -------  -----  ----------  -----------  -----------  ---------\n");
+
+    double worstUnderestimate = 0.0;
+
+    for (double carrierHz : { 55.0, 220.0, 880.0 })
+    {
+        for (double ratio : { 1.0, 3.0, 7.0 })
+        {
+            for (double indexRadians : { 1.0, 4.0, 16.0 })
+            {
+                // Render far above the band of interest so the measured edge is
+                // the real spectrum, not a folded one.
+                constexpr double kHeadroomRate = 768000.0;
+
+                const double f0 = binExactFrequency (carrierHz, kHeadroomRate, kFrames);
+
+                PairSpec spec;
+                spec.carrierHz = f0;
+                spec.modulatorHz = f0 * ratio;
+                spec.indexRadians = indexRadians;
+
+                const auto rendered = renderPair (spec, kHeadroomRate, 1, kFrames);
+                const double measured = measuredEdgeHz (rendered, kHeadroomRate, floorDb);
+
+                FmBandwidth bandwidth;
+                bandwidth.setOperatorCount (2);
+                bandwidth.setOperatorFrequency (0, spec.carrierHz);
+                bandwidth.setOperatorFrequency (1, spec.modulatorHz);
+                bandwidth.setIndex (1, 0, indexRadians / kTwoPi);
+
+                const double predicted = bandwidth.topSidebandHz();
+                const double error = predicted - measured;
+
+                if (error < worstUnderestimate)
+                    worstUnderestimate = error;
+
+                std::printf ("  %7.0f  %5.1f  %10.1f  %9.0f Hz  %9.0f Hz  %+8.0f\n",
+                             carrierHz, ratio, indexRadians, predicted, measured, error);
+            }
+        }
+    }
+
+    std::printf ("\n  worst under-estimate across the sweep: %+.0f Hz  %s\n",
+                 worstUnderestimate,
+                 worstUnderestimate < 0.0 ? "(the predictor is NOT safe here)"
+                                          : "(the predictor never under-estimates)");
+
+    // -----------------------------------------------------------------------
+    std::printf ("\n\ntezla-measure stryda -- table 3, feedback and the one-radian boundary\n\n");
+    std::printf ("The Kapteyn closed form is exact below beta = 1 radian and has nothing to\n");
+    std::printf ("describe above it. This is what the operator actually does either side.\n\n");
+
+    std::printf ("  beta(rad)  predicted order   measured edge   partials >-40 dBc   peak\n");
+    std::printf ("  ---------  ---------------  --------------  ------------------  ------\n");
+
+    for (double betaRadians : { 0.0, 0.25, 0.5, 0.9, 1.0, 2.0, 4.0, 6.28 })
+    {
+        constexpr double kRate = 192000.0;
+        const double f0 = binExactFrequency (440.0, kRate, kFrames);
+
+        PairSpec spec;
+        spec.carrierHz = f0;
+        spec.modulatorHz = f0;
+        spec.indexRadians = 0.0;
+        spec.feedbackRadians = betaRadians;
+
+        const auto rendered = renderPair (spec, kRate, 1, kFrames);
+        const double measured = measuredEdgeHz (rendered, kRate, floorDb);
+
+        const auto report = analyseHarmonics (rendered, kRate, f0, 64);
+
+        int strongPartials = 0;
+        for (double db : report.harmonicsDb)
+            if (db > -40.0)
+                ++strongPartials;
+
+        double peak = 0.0;
+        for (double v : rendered)
+            peak = std::max (peak, std::abs (v));
+
+        const int predicted = fm::feedbackOrder (betaRadians, floorDb);
+
+        std::printf ("  %9.2f  %15d  %11.0f Hz  %18d  %6.3f%s\n",
+                     betaRadians, predicted, measured, strongPartials, peak,
+                     betaRadians >= 1.0 ? "   [model saturated]" : "");
+    }
+
+    // -----------------------------------------------------------------------
+    std::printf ("\n\ntezla-measure stryda -- table 4, Character from classic FM to ModFM\n\n");
+    std::printf ("One knob, r = Character and s = 1 - Character, at a fixed index. The\n");
+    std::printf ("paper claims ModFM needs about 50%% more index for the same steady-state\n");
+    std::printf ("brightness, and that its partials fall away without the oscillation\n");
+    std::printf ("classic FM shows. Both are checked here rather than repeated.\n\n");
+
+    std::printf ("  character  centroid    partials  reversals  edge(-80dB)\n");
+    std::printf ("  ---------  ---------  ---------  ---------  -----------\n");
+
+    constexpr double kCharacterRate = 192000.0;
+    const double characterF0 = binExactFrequency (440.0, kCharacterRate, kFrames);
+
+    for (double character : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        PairSpec spec;
+        spec.carrierHz = characterF0;
+        spec.modulatorHz = characterF0;
+        spec.indexRadians = 5.0;
+        spec.character = character;
+        spec.tilt = 1.0 - character;
+
+        const auto rendered = renderPair (spec, kCharacterRate, 1, kFrames);
+        const auto report = analyseHarmonics (rendered, kCharacterRate, characterF0, 40);
+
+        // Spectral centroid over the harmonic series, in harmonic numbers.
+        double weighted = 0.0;
+        double total = 1.0;
+        int strong = 1;
+        int reversals = 0;
+        double previous = 0.0;
+        bool falling = true;
+
+        for (std::size_t h = 0; h < report.harmonicsDb.size(); ++h)
+        {
+            const double amplitude = std::pow (10.0, report.harmonicsDb[h] / 20.0);
+            weighted += amplitude * static_cast<double> (h + 2);
+            total += amplitude;
+
+            if (report.harmonicsDb[h] > -40.0)
+                ++strong;
+
+            // A "reversal" is a partial louder than the one below it after the
+            // series has started to fall -- the Bessel oscillation the paper
+            // says ModFM does not have.
+            if (h > 0)
+            {
+                const bool rising = amplitude > previous;
+                if (falling && rising)
+                    ++reversals;
+                falling = ! rising;
+            }
+            previous = amplitude;
+        }
+
+        const double edge = measuredEdgeHz (rendered, kCharacterRate, floorDb);
+
+        std::printf ("  %9.2f  %9.2f  %9d  %9d  %9.0f Hz\n",
+                     character, weighted / total, strong, reversals, edge);
+    }
+
+    std::printf ("\n  Index needed at each Character for a matched centroid:\n");
+    std::printf ("  character   index   centroid\n");
+    std::printf ("  ---------  ------  ---------\n");
+
+    // Find the index at Character 1 that matches Character 0's centroid at 5.0.
+    const auto centroidFor = [&] (double character, double indexRadians)
+    {
+        PairSpec spec;
+        spec.carrierHz = characterF0;
+        spec.modulatorHz = characterF0;
+        spec.indexRadians = indexRadians;
+        spec.character = character;
+        spec.tilt = 1.0 - character;
+
+        const auto rendered = renderPair (spec, kCharacterRate, 1, kFrames);
+        const auto report = analyseHarmonics (rendered, kCharacterRate, characterF0, 40);
+
+        double weighted = 0.0;
+        double total = 1.0;
+        for (std::size_t h = 0; h < report.harmonicsDb.size(); ++h)
+        {
+            const double amplitude = std::pow (10.0, report.harmonicsDb[h] / 20.0);
+            weighted += amplitude * static_cast<double> (h + 2);
+            total += amplitude;
+        }
+        return weighted / total;
+    };
+
+    const double target = centroidFor (0.0, 5.0);
+    std::printf ("  %9.2f  %6.2f  %9.2f   (the target)\n", 0.0, 5.0, target);
+
+    double low = 1.0;
+    double high = 40.0;
+    for (int i = 0; i < 40; ++i)
+    {
+        const double mid = 0.5 * (low + high);
+        if (centroidFor (1.0, mid) < target)
+            low = mid;
+        else
+            high = mid;
+    }
+
+    std::printf ("  %9.2f  %6.2f  %9.2f   (%.0f%% more index)\n",
+                 1.0, low, centroidFor (1.0, low), 100.0 * (low / 5.0 - 1.0));
+
+    (void) args;
+    return 0;
+}
+
+
 void printUsage()
 {
     std::printf ("tezla-measure (tezla-dsp %s)\n\n", tezla::dsp::kVersionString);
@@ -5811,6 +6322,8 @@ void printUsage()
     std::printf ("  phonoss          [--fs --out FILE]  de-ess level independence, ratios, gate, CPU\n");
     std::printf ("  membrana        [--fs --out FILE]  proximity, sphere limits, fit, curves, CPU\n");
     std::printf ("  ictus           [--fs --out FILE]  kick pitch at four rates, DC, aliasing; snare modes, drop, wires,\n");
+    std::printf ("  stryda          [--fs]  FM aliasing floor per factor, the bandwidth predictor against the\n");
+    std::printf ("                          spectrum, feedback past one radian, Character from FM to ModFM\n");
     std::printf ("                          rattle; hat ratio sets, morph, alias floor, colour; clap bursts; CPU\n");
 }
 
@@ -5848,6 +6361,7 @@ int main (int argc, char** argv)
     if (command == "phonoss")          return runPhonoss (args);
     if (command == "membrana")        return runMembrana (args);
     if (command == "ictus")           return runIctus (args);
+    if (command == "stryda")          return runStryda (args);
 
     printUsage();
     return 1;

@@ -330,3 +330,60 @@ envelope exactly. Amplitude then reads **0.800000** and frequency error
 **0.0000%** at every rate, cutoff and resonance. Derivation in `SvfFilter.hpp`.
 
 **What would unpark item 4:** the user saying so.
+
+---
+
+## 12. Stryda — ideas parked at the plan stage
+
+**Parked 2026-09-04 while the plan was written**, so that the first build is the
+plan and not the plan plus its afterthoughts. Each is a contained addition to
+the FM synthesiser described in `plugins/Stryda/PLAN.md`; none is a change to
+anything already decided.
+
+1. **Higher-order FM as a seventh character.** Lazzarini et al., "Theory and
+   practice of higher-order frequency modulation synthesis" (JNMR 2024) was
+   **read first-hand** on 2026-09-04 — it defines true frequency (not phase)
+   modulation at second order and above, with an operator formulation that
+   composes into arbitrary topologies including feedback, and it ships a
+   reference implementation. It is parked because **Character already spans the
+   two flavours the brief asked for** (classic PM and ModFM), and a third axis
+   on every operator is six more parameters and a third bandwidth criterion for
+   a sound nobody has yet asked to hear. Would change: `dsp::FmOperator` gains
+   an order control and `dsp::FmBandwidth` a fourth criterion.
+   **What would unpark it:** the user wanting a spectrum a single operator
+   cannot currently reach — or F1's CPU table showing that one higher-order
+   operator is cheaper than the two it would replace.
+
+2. **A resample / freeze lane.** Every neurofunk source read (MusicRadar ×2,
+   BassGorilla) says the same thing: the genre's basses are made by *resampling
+   and reprocessing*, not in one synth pass. A lane that captures a bar of the
+   current patch and plays it back as an oscillator would build that in. It is
+   parked because it is large — a capture buffer, a loop editor, a player and a
+   state story for the audio — and because **Ictus's Render-pad-to-WAV (I8b)
+   should land first**: it solves the same file-and-ownership problem, and doing
+   it twice differently would be the wrong order. **What would unpark it:**
+   Ictus I8 shipping, or the user asking for it directly.
+
+3. **Per-operator ADV envelopes.** Stryda ships **two** shared sixteen-point
+   `MultiEnvelope`s that any operator can select as its envelope source. Six
+   private ones would be 288 parameters for a feature used on two operators at a
+   time, and the parameter list is already ≈425. **What would unpark it:** the
+   user finding in practice that two are not enough — which is a real
+   possibility on a patch where three operators each want their own pattern, and
+   is exactly the kind of thing only playing it reveals.
+
+4. **An eighth and ninth operator.** Two more than the era ever had, and more
+   stacking room for layered patches. Parked because the matrix becomes 8×8 = 64
+   cells to display and modulate and the per-voice cost rises about a third,
+   which is better spent on the mangle chain. **What would unpark it:** F3's rig
+   test showing headroom to spare, plus a patch the user wanted and could not
+   build with six.
+
+5. **Sonitus and Svarayantra adopting `FmBandwidth`'s readout.** Sonitus has PM
+   between two oscillators, operator feedback and a reverse path, and no way to
+   see where its spectrum ends; Svarayantra pitches samples up with no warning
+   about where the images land. The predictor built for Stryda answers both.
+   Parked because it is a change to two shipped plugins for a display, and
+   §7's bit-exactness rules mean touching them is never free. **What would
+   unpark it:** F1 confirming the predictor's accuracy, and the user wanting it
+   there.
