@@ -529,12 +529,26 @@ CLAUDE.md.
 | I4 hat + clap engines, choke | done in code; not yet played on the rig |
 | I4.1 the rig's verdict on the hats: depth, and the noise made part of the metal | **played on the rig**; the round's findings are the I4.2 row |
 | I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
+| **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** | — |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
 | I7 multi-out buses | pending |
 | I8a sample DSP (WavFile, upsample2x, SincInterpolator, SampleVoice) | pending |
 | I8b sample loader (slots, Align, Render, pad UI) | pending |
 | I9 editor close-out | pending |
+
+**Paused at I4.1, 2026-09-04.** The user asked for the FM synthesiser next, so
+Ictus stops here and this file is the handoff — the same precedent as Phonoss,
+paused at V2 while Crossbar was built and resumed at V3 with nothing lost.
+Nothing is abandoned and nothing is half-applied: the tree is green, the
+validator passes 47/47, and every phase through I4.2 is committed. **The resume
+point is I5** (the per-pad punch chain), and the rows below it are untouched.
+
+What is worth knowing on resuming, beyond the table: **I2.1, I3, the rounds
+after I3, I4 and I4.2 are done in code but have not been played on the rig**, so
+the first thing an ear round should cover is everything after the hats. The six
+presets still ship Drive at 20–55 % and were voiced through the broken Drive
+stage that I4.2 fixed, so they need re-voicing before they mean anything.
 
 **Measured at I1** (`tezla-measure ictus` and `tezla-tests kick`, 48 kHz
 host unless said; the container's CPU figures are noisy, quoted as a range):

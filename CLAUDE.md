@@ -857,10 +857,20 @@ Anything taken is attributed **twice**: in a comment at the point of use, and in
   positions); **Membrana is complete through MB7** — the microphone stage
   (`Tzmb`, before Phonoss in the vocal chain), `plugins/Membrana/PLAN.md` is
   the worked example of a plan whose three source papers were user-supplied
-  PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). **Ictus is in
-  flight** — the drum synthesiser (`Tzic`), `plugins/Ictus/PLAN.md`, resumed
-  from its first `pending` phase; its thirteen sources are user-supplied PDFs
-  in `technical references/drumsynth/`, read first-hand on 2026-09-02. Prism remains parked at the user's request.
+  PDFs read first-hand (statuses in `docs/DSP-REFERENCES.md`). **Ictus is
+  paused at I4.1** at the user's request (2026-09-04) — the drum synthesiser
+  (`Tzic`), `plugins/Ictus/PLAN.md`, playable and validating, **resume at I5**;
+  its thirteen sources are user-supplied PDFs in
+  `technical references/drumsynth/`, read first-hand on 2026-09-02. **Stryda is
+  in flight** — the FM synthesiser (`Tzst`), `plugins/Stryda/PLAN.md`, resumed
+  from its first `pending` phase; its nine sources are user-supplied PDFs in
+  `technical references/stryda/`, read first-hand on 2026-09-04 after the proxy
+  refused ten domains *and* Google Drive on all four of its hosts. Its design
+  turns on two of them: the ModFM paper's `exp(r k cos)` extension, which makes
+  classic FM and ModFM the two ends of one continuous **Character** control
+  rather than a mode switch, and the identity that phase distortion is phase
+  modulation with a knee-shaped modulator — a transfer function, not an engine.
+  Prism remains parked at the user's request.
 - **What is parked lives in `docs/ROADMAP.md`** — the other half of the PLAN.md
   rule. A plan tracks work in flight; the roadmap tracks work deliberately not
   started, and each item names the reason it was parked and the specific thing
