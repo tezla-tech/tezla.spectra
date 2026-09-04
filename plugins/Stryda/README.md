@@ -7,10 +7,11 @@ matrix with feedback on the diagonal and a noise row, where every operator
 carries one **Character** control that runs continuously from classic phase
 modulation to ModFM.
 
-> **Status: F3.** The engine, the matrix and a playable panel. Not yet built:
-> the protected sub lane, the ratio sequencer, the vowel lane, the mangle
-> chain, the modulation layer, and microtuning at the ratio. Plan and phase
-> table: [`PLAN.md`](PLAN.md).
+> **Status: F4.** The engine, the matrix, a playable panel, phase distortion,
+> the formant operator, key scaling and velocity. Not yet built: the protected
+> sub lane, the ratio sequencer, the vowel lane, the mangle chain, the
+> modulation layer, and microtuning at the ratio. Plan and phase table:
+> [`PLAN.md`](PLAN.md).
 
 ---
 
@@ -58,9 +59,36 @@ design statement rather than a bug, and the tooltip says so.
 
 ## Controls
 
+**Fold** is phase distortion: it bends the phase ramp so the waveform races
+through part of its cycle and crawls through the rest, which grows a leading
+edge on a sine and turns it saw-like. It is a filter-sweep gesture from one
+oscillator and no filter. Per Electric Druid's analysis, phase distortion *is*
+phase modulation with a piecewise modulator locked to the operator's own cycle —
+which is why it costs a transfer function here rather than an operator. Exactly
+the identity at 0; measured, it adds upper-harmonic energy monotonically from
+−300 to −10.4 dBc across its travel.
+
+**Formant mode** turns an operator into a self-contained resonance at a settable
+frequency, whatever note is played. Two carriers on adjacent harmonics,
+crossfaded by the fractional part, place the peak *between* them rather than
+snapping to one — the paper's phase-synchronous ModFM. That is a whole
+two-operator pair collapsed into one slot, which is what makes a three-formant
+vowel reachable on six operators. It needs room: about eight harmonics above the
+note, and ten to be exact, because below that the resonance skirt folds through
+DC and drags the centre sharp. Measured placement: 0 cents at eleven harmonics
+of room, 20 at eight.
+
+**Key scaling** is the eighties mechanism — a break point with a signed depth on
+each side. Applied to a carrier you hear a volume change; applied to a modulator
+you hear a timbral one, which is what makes a patch behave like an instrument
+across the keyboard rather than like one sound transposed. Two octaves above the
+break at depth +0.5 measures exactly 2×. Flat is bit-exactly flat.
+
 Per operator: **Ratio** and **Fine** (its frequency as a multiple of the note),
-**Character**, **Level**, **Pan**, and an AHDSR — **Attack**, **Decay**,
-**Sustain**, **Release**. The envelope scales the operator's **output**, so it
+**Character**, **Fold**, **Level**, **Pan**, **Formant** and its **Width**, a
+**Mode** switch, an AHDSR — **Attack**, **Decay**, **Sustain**, **Release** —
+and, on the SCALING plate, **Break**, **Below**, **Above**, **Vel level** and
+**Vel index**. The envelope scales the operator's **output**, so it
 scales the modulation depth of everything that operator feeds as well as its own
 place in the mix. That is what FM is: the modulator's envelope *is* the timbre
 envelope.

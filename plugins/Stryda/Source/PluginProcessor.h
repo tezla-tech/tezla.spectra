@@ -22,6 +22,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/FmBandwidth.hpp>
+#include <tezla/dsp/FmOperator.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/ui/AbCompare.hpp>
 
@@ -69,7 +70,14 @@ inline constexpr auto indexCap           = "indexCap";
 /// parameter keeps its version forever: the hint feeds the VST3 parameter ID,
 /// and bumping it on an existing control is indistinguishable from renaming it.
 inline constexpr int kSchemaV1 = 1;
-inline constexpr int kStateSchemaVersion = kSchemaV1;
+
+/// F4: Fold, the formant mode, key scaling and velocity. **Appended**, never
+/// inserted, and every parameter born at V1 keeps V1 forever -- the hint feeds
+/// the VST3 parameter ID, so bumping it on a live control is indistinguishable
+/// from renaming it.
+inline constexpr int kSchemaV2 = 2;
+
+inline constexpr int kStateSchemaVersion = kSchemaV2;
 
 namespace choices
 {
@@ -77,6 +85,10 @@ namespace choices
 inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 inline const juce::StringArray render { "Same as live", "Auto", "x2", "x4", "x8" };
 inline const juce::StringArray indexCap { "Off", "Soft", "Hard" };
+
+/// **Append-only.** `normal` must stay index 0 so every project saved before
+/// F4 reopens with its operators unchanged.
+inline const juce::StringArray operatorMode { "Normal", "Formant" };
 } // namespace choices
 
 static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
@@ -85,6 +97,10 @@ static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
                  && static_cast<int> (dsp::OversamplingMode::X4) == 3
                  && static_cast<int> (dsp::OversamplingMode::X8) == 4,
                "choices::oversampling must match dsp::OversamplingMode, index for index");
+
+static_assert (static_cast<int> (dsp::FmOperator::Mode::normal) == 0
+                 && static_cast<int> (dsp::FmOperator::Mode::formant) == 1,
+               "choices::operatorMode must match dsp::FmOperator::Mode, index for index");
 
 static_assert (static_cast<int> (dsp::RenderOversampling::sameAsLive) == 0
                  && static_cast<int> (dsp::RenderOversampling::Auto) == 1

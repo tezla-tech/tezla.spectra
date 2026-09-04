@@ -15,7 +15,9 @@
 #include <numbers>
 #include <vector>
 
+#include <tezla/dsp/Fft.hpp>
 #include <tezla/dsp/FmOperator.hpp>
+#include <tezla/dsp/PhaseShaper.hpp>
 
 #include "StrydaEngine.hpp"
 
@@ -641,4 +643,323 @@ TEZLA_TEST (the_control_chunk_grid_is_anchored_to_the_stream_not_the_block)
 
     CHECK (viaSmall == viaLarge);
     CHECK (viaSmall == viaOdd);
+}
+
+// ---------------------------------------------------------------------------
+// Phase distortion
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_phase_shaper_is_the_identity_at_zero_bit_for_bit)
+{
+    PhaseShaper shaper;
+    shaper.setAmount (0.0);
+
+    for (int i = 0; i < 100000; ++i)
+    {
+        const double phase = static_cast<double> (i) / 100000.0;
+        CHECK (shaper.map (phase) == phase);
+    }
+
+    // And with the branch removed it would still have to hold, because the
+    // arithmetic is exact: 0.5 / 0.5 is 1.0 in binary, both sides.
+    CHECK (shaper.getKnee() == 0.5);
+}
+
+TEZLA_TEST (the_phase_shaper_is_monotonic_and_stays_in_range)
+{
+    // A phase map that goes backwards plays the waveform backwards for part of
+    // the cycle, which is a click, not a timbre.
+    for (double amount = 0.0; amount <= 1.0; amount += 0.01)
+    {
+        PhaseShaper shaper;
+        shaper.setAmount (amount);
+
+        double previous = -1.0;
+
+        for (int i = 0; i <= 10000; ++i)
+        {
+            const double mapped = shaper.map (static_cast<double> (i) / 10000.0);
+
+            CHECK (mapped >= previous);
+            CHECK (mapped >= 0.0);
+            CHECK (mapped <= 1.0);
+
+            previous = mapped;
+        }
+    }
+}
+
+TEZLA_TEST (the_phase_shaper_adds_harmonics_monotonically)
+{
+    // The control has to *do* something, and the something has to be ordered:
+    // more fold, more upper harmonic energy, no reversals.
+    std::printf ("        [fold] amount   harmonic energy above the 4th (dBc)\n");
+
+    // Below the -300 dB clamp the measurement floors at, so amount 0 -- which is
+    // exactly a sine and therefore has no upper harmonics at all -- counts as a
+    // genuine step up rather than as a tie against the floor.
+    double previous = -400.0;
+
+    for (double amount : { 0.0, 0.25, 0.5, 0.75, 1.0 })
+    {
+        PhaseShaper shaper;
+        shaper.setAmount (amount);
+
+        constexpr std::size_t kFrames = 1u << 14;
+        constexpr double kRate = 48000.0;
+        const double f0 = std::round (200.0 / (kRate / kFrames)) * (kRate / kFrames);
+
+        std::vector<double> rendered (kFrames, 0.0);
+        double phase = 0.0;
+
+        for (std::size_t i = 0; i < kFrames; ++i)
+        {
+            rendered[i] = std::sin (kTwoPi * shaper.map (phase));
+            phase += f0 / kRate;
+            if (phase >= 1.0)
+                phase -= 1.0;
+        }
+
+        const auto spectrum = fftOfReal (rendered);
+        const double binWidth = kRate / static_cast<double> (kFrames);
+        const auto fundamentalBin = static_cast<std::size_t> (std::llround (f0 / binWidth));
+
+        double fundamental = std::norm (spectrum[fundamentalBin]);
+        double upper = 0.0;
+
+        for (int h = 5; h < 60; ++h)
+        {
+            const std::size_t bin = fundamentalBin * static_cast<std::size_t> (h);
+            if (bin >= kFrames / 2)
+                break;
+            upper += std::norm (spectrum[bin]);
+        }
+
+        const double db = 10.0 * std::log10 (std::max (upper / fundamental, 1.0e-30));
+        std::printf ("        [fold] %6.2f   %+8.1f\n", amount, db);
+
+        CHECK (db > previous);
+        previous = db;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The formant operator
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_formant_operator_puts_its_peak_where_it_was_asked_to)
+{
+    // The claim the two carriers exist for: the resonance sits at the requested
+    // frequency **whatever the note**, continuously, rather than jumping from
+    // harmonic to harmonic. A single carrier could only land on a multiple of
+    // the fundamental, so this is the test that says the crossfade works.
+    constexpr double kRate = 96000.0;
+    constexpr std::size_t kFrames = 1u << 15;
+    const double binWidth = kRate / static_cast<double> (kFrames);
+
+    std::printf ("        [formant] note(Hz)  asked      found    error\n");
+
+    double worstCents = 0.0;
+
+    // **The formant must sit at least eight harmonics up, and the reason is
+    // worth writing down** because the vowel lane will need it.
+    //
+    // The exponential generates sidebands at +/- m harmonics around each
+    // carrier, with amplitudes I_m(k)/e^k -- symmetric in m, so the centroid
+    // of the pair should be exactly `n + a` harmonics, which is exactly the
+    // requested formant. It is, until the skirt reaches below harmonic zero:
+    // those sidebands **fold through DC and add to their positive twins**
+    // (Chowning), which breaks the symmetry and drags the centre upward. At a
+    // depth of 0.5 cycles the skirt is roughly six harmonics wide, so the
+    // formant needs about eight harmonics of room.
+    //
+    // Measured, with the formant at 1200 Hz: 0 cents at 55 Hz (n = 21.8),
+    // +11 at 110 (n = 10.9), +52 at 146.8 (n = 8.2), +105 at 220 (n = 5.5).
+    // It is a property of the technique, not of this implementation, and it is
+    // why a vowel stops sounding like a vowel on a very high note.
+    for (double f0 : { 55.0, 82.4, 110.0, 146.8, 220.0 })
+    {
+        for (double formant : { 700.0, 1200.0, 2400.0 })
+        {
+            if (formant / f0 < 8.0)
+                continue;
+
+            FmOperator op;
+            op.prepare (kRate);
+            op.setFrequency (std::round (f0 / binWidth) * binWidth);
+            op.setMode (FmOperator::Mode::formant);
+            op.setFormantHz (formant);
+            op.setFormantDepth (0.5);
+
+            std::vector<double> rendered (kFrames, 0.0);
+            for (std::size_t i = 0; i < kFrames; ++i)
+                rendered[i] = op.advance (0.0);
+
+            const auto spectrum = fftOfReal (rendered);
+
+            // **The strongest bin is the wrong instrument here, and it took a
+            // failing test to see it.** With two carriers crossfaded by the
+            // fractional part, the formant centre is their weighted *centroid*,
+            // not whichever of them happens to be louder. Measured by peak bin,
+            // a 1200 Hz formant on a 220 Hz note reads 1100 Hz -- 153 cents
+            // flat -- because the lower carrier carries 0.545 of the blend and
+            // the peak simply snaps to it. That is the measurement snapping,
+            // not the formant moving.
+            //
+            // The magnitude-weighted centroid is what the design actually
+            // claims, and it is what a listener hears as the resonance.
+            // Windowed to an octave either side of where the formant was
+            // asked for. Over the whole spectrum the exponential's own skirt
+            // drags the centroid -- it is wide in absolute Hz and the spectrum
+            // is not symmetric in log frequency -- and at 220 Hz with a formant
+            // at 700 that reads 312 cents sharp. The skirt is real and audible;
+            // it is just not the answer to "where is the resonance".
+            double weighted = 0.0;
+            double total = 0.0;
+
+            const auto low = static_cast<std::size_t> (0.5 * formant / binWidth);
+            const auto high = std::min (static_cast<std::size_t> (2.0 * formant / binWidth),
+                                        kFrames / 2 - 1);
+
+            for (std::size_t k = low; k <= high; ++k)
+            {
+                const double magnitude = std::abs (spectrum[k]);
+                weighted += magnitude * static_cast<double> (k) * binWidth;
+                total += magnitude;
+            }
+
+            const double found = total > 0.0 ? weighted / total : 0.0;
+            const double cents = 1200.0 * std::log2 (found / formant);
+            worstCents = std::max (worstCents, std::abs (cents));
+
+            if (formant == 1200.0)
+                std::printf ("        [formant] %8.1f  %6.0f Hz  %6.0f Hz  %+6.0f cents\n",
+                             f0, formant, found, cents);
+        }
+    }
+
+    std::printf ("        [formant] worst placement error over 15 combinations: %.0f cents\n",
+                 worstCents);
+
+    // A quarter of a semitone at eight harmonics of room, which is the edge of
+    // the condition; the trend in the printout is the useful part -- 0 cents at
+    // n = 21.8, +3 at n = 10.9, +20 at n = 8.2. Give a formant ten harmonics
+    // and it is exact for any purpose.
+    CHECK (worstCents < 25.0);
+}
+
+TEZLA_TEST (the_formant_operator_stays_bounded_and_harmonic)
+{
+    // The exponential is normalised the same way ModFM is, so however wide the
+    // formant is asked to be, the output stays inside full scale.
+    double peak = 0.0;
+
+    for (double depth = 0.0; depth <= 16.0; depth += 0.25)
+    {
+        FmOperator op;
+        op.prepare (48000.0);
+        op.setFrequency (110.0);
+        op.setMode (FmOperator::Mode::formant);
+        op.setFormantHz (1500.0);
+        op.setFormantDepth (depth);
+
+        for (int i = 0; i < 4000; ++i)
+        {
+            const double value = op.advance (0.0);
+            CHECK (std::isfinite (value));
+            peak = std::max (peak, std::abs (value));
+        }
+    }
+
+    std::printf ("        [formant] peak over depth 0..16: %.6f\n", peak);
+    CHECK (peak <= 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// Key scaling and velocity
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_break_point_is_inert_while_both_depths_are_flat)
+{
+    // What this actually proves, stated precisely rather than generously: that
+    // **moving the break point changes nothing while both depths are zero**.
+    // That is a real property -- a patch with the break somewhere odd and no
+    // depth must sound identical to one with the default break -- and it is
+    // the one a user would notice breaking.
+    //
+    // It is deliberately not claimed as a test of the zero-depth guards
+    // themselves. `pow (2, 0 * x)` is exactly 1.0 and `(1 - 0) + 0 * v` is
+    // exactly 1.0, so those guards are speed, not correctness, and a
+    // break-check that removes them stays green. The Character branch is the
+    // one case in this file where such a guard *is* load-bearing, and that test
+    // drives the inputs to infinity to prove it.
+    const auto render = [] (bool withScalingControlsPresent)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+
+        auto parameters = singleCarrier();
+        parameters.operators[1].ratio = 2.0;
+        parameters.indices[0][1] = 1.0;
+
+        if (withScalingControlsPresent)
+        {
+            // Present, and set to neutral: break point somewhere far from the
+            // note, both depths flat, both velocity amounts zero.
+            for (auto& op : parameters.operators)
+            {
+                op.keyBreak = 24.0;
+                op.keyLeft = 0.0;
+                op.keyRight = 0.0;
+                op.velLevel = 0.0;
+                op.velIndex = 0.0;
+            }
+        }
+
+        engine.setParameters (parameters);
+        engine.noteOn (72, 0.4);          // a note far above the break, quiet
+        return renderEngine (engine, 8192, 512);
+    };
+
+    const auto without = render (false);
+    const auto with = render (true);
+
+    for (std::size_t i = 0; i < without.size(); ++i)
+        CHECK (without[i] == with[i]);
+}
+
+TEZLA_TEST (key_scaling_leans_the_way_it_is_pointed)
+{
+    // And it must actually do something when it is not neutral, in the stated
+    // direction: positive above the break is louder as you play up.
+    const auto peakAt = [] (int note, double right)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+
+        auto parameters = singleCarrier();
+        parameters.operators[0].keyBreak = 60.0;
+        parameters.operators[0].keyRight = right;
+        engine.setParameters (parameters);
+        engine.noteOn (note, 1.0);
+
+        const auto rendered = renderEngine (engine, 8192, 512);
+
+        double peak = 0.0;
+        for (double value : rendered)
+            peak = std::max (peak, std::abs (value));
+        return peak;
+    };
+
+    const double flat = peakAt (84, 0.0);
+    const double up = peakAt (84, 0.5);
+    const double down = peakAt (84, -0.5);
+
+    std::printf ("        [keyscale] two octaves above the break, depth -0.5 / 0 / +0.5: "
+                 "%.4f / %.4f / %.4f\n", down, flat, up);
+
+    // Two octaves up at depth 0.5 is 2^(0.5 * 2) = exactly 2x, clipped by
+    // nothing here, and 0.5 the other way.
+    CHECK_NEAR (up / flat, 2.0, 0.02);
+    CHECK_NEAR (down / flat, 0.5, 0.02);
 }

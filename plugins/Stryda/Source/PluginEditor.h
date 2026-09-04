@@ -94,6 +94,15 @@ private:
 
     /// Per operator, in the order they are laid out down a strip.
     std::array<std::vector<Control*>, kNumOperators> strips_ {};
+
+    /// Key scaling and velocity, five per operator, on their own plate.
+    std::array<std::vector<Control*>, kNumOperators> scaling_ {};
+
+    /// One per operator: Normal or Formant.
+    std::array<std::unique_ptr<juce::ComboBox>, kNumOperators> modeBoxes_ {};
+    std::array<std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>,
+               kNumOperators> modeAttachments_ {};
+
     std::vector<Control*> globals_;
 
     juce::Label bandwidth_;

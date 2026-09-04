@@ -350,7 +350,7 @@ first `pending` row.**
 | F1 `FmBandwidth` + `tezla-measure stryda`, four tables | done |
 | F2 `FmOperator` + `OperatorMatrix` + voice + engine + index cap | done |
 | F3 minimal JUCE layer, rig build + ear round | pending |
-| F4 `PhaseShaper`, exponential cells, formant operator, key scaling | pending |
+| F4 `PhaseShaper`, formant operator, key scaling, velocity | done in code; not yet played on the rig. **Exponential-FM cells deferred** — see below |
 | F5 sub lane, Split, per-voice filter, unison index spread | pending |
 | F6 microtuning at the ratio, ratio sequencer, named braids | pending |
 | F7 vowel lane + mangle chain | pending |
@@ -518,6 +518,46 @@ normalisation and JUCE printed it in full — fixed at the parameter, so the
 host's automation lane reads correctly too; and the bandwidth readout was blank
 until audio ran, which made the panel's most important number invisible with the
 transport stopped. It is computed on the message thread now.
+
+---
+
+**Measured at F4:**
+
+| claim | figure |
+|---|---|
+| `PhaseShaper` at amount 0 against its input, 100000 phases | **bit-identical** |
+| phase map monotonic and in range, amount 0→1 in 0.01 steps | holds everywhere |
+| Fold 0 → 1: harmonic energy above the 4th | −300 → −34.8 → −28.1 → −13.4 → **−10.4 dBc**, monotonic |
+| formant placement, magnitude-weighted centroid, 10 combinations with ≥8 harmonics of room | **≤20 cents**; 0 at n = 21.8, +3 at n = 10.9, +20 at n = 8.2 |
+| formant peak over depth 0→16 cycles | **0.998**, never above full scale |
+| key scaling two octaves above the break at −0.5 / 0 / +0.5 | 0.5001 / 1.0001 / **2.0002** |
+| break point moved while both depths are flat | **bit-identical output** |
+| parameters | 155, the new 54 at `kSchemaV2` |
+
+**What the formant operator taught, and the vowel lane will need.** The two
+carriers place the resonance between adjacent harmonics, and the centroid is
+exact — until the exponential's skirt reaches below harmonic zero. Those
+sidebands **fold through DC and add to their positive twins** (Chowning's
+reflection, in a new place), which breaks the symmetry and drags the centre
+sharp: at a depth of 0.5 cycles the formant needs about **eight harmonics of
+room**, and ten to be exact for any purpose. That is a property of the
+technique, not of this implementation, and it is why a vowel stops sounding
+like a vowel on a very high note.
+
+**The instrument was wrong twice before the number was.** Measuring the formant
+by its **strongest bin** read 153 cents flat at 220 Hz — because with two
+carriers crossfaded 0.545/0.455 the peak simply snaps to the louder one. That is
+the measurement snapping, not the formant moving. Measuring by the
+**whole-spectrum centroid** then read 312 cents sharp, because the skirt is wide
+in absolute Hz and the spectrum is not symmetric in log frequency. The windowed
+centroid is the instrument that answers the question actually asked.
+
+**Deferred from F4, deliberately: the exponential-FM cell switch.** The DAFx-11
+criterion is implemented and tested (`fm::exponentialBandwidthHz`), so the risky
+half is done; what is not built is the operator mode and the per-cell switch.
+It is the least musical of F4's four items — a novelty flavour rather than
+something the brief asked for — and F4 was already the largest parameter
+addition in the plugin. Roadmap, with the criterion waiting for it.
 
 ---
 

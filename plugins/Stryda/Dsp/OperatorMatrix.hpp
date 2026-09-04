@@ -112,6 +112,27 @@ public:
             operators_[index (op)].setTilt (tilt);
     }
 
+    void setFold (int op, double amount) noexcept
+    {
+        if (inRange (op))
+            operators_[index (op)].setFold (amount);
+    }
+
+    void setMode (int op, dsp::FmOperator::Mode mode) noexcept
+    {
+        if (inRange (op))
+            operators_[index (op)].setMode (mode);
+    }
+
+    void setFormant (int op, double hz, double depth) noexcept
+    {
+        if (inRange (op))
+        {
+            operators_[index (op)].setFormantHz (hz);
+            operators_[index (op)].setFormantDepth (depth);
+        }
+    }
+
     void setFeedback (int op, double cycles) noexcept
     {
         if (inRange (op))

@@ -13,7 +13,7 @@ namespace {
 
 constexpr int kHeaderHeight = 46;
 constexpr int kMargin = 12;
-constexpr int kMinStripWidth = 150;
+constexpr int kMinStripWidth = 190;
 constexpr int kRowHeight = 74;
 constexpr int kCaptionHeight = 15;
 
@@ -189,22 +189,82 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
     // row in the matrix and the strip it belongs to without reading a number.
     // Short enough to fit the cell at the narrowest window the editor allows.
     // A truncated caption reads as a bug, and "CHARA..." was exactly that.
-    static const char* const captions[] { "RATIO", "FINE", "CHAR", "LEVEL",
-                                          "PAN", "ATK", "DECAY", "SUS", "REL" };
-    static const char* const names[] { "Ratio", "Fine", "Character", "Level",
-                                       "Pan", "Attack", "Decay", "Sustain", "Release" };
+    //
+    // Three rows of four: what the operator IS, where it SITS, and how it
+    // MOVES. Key scaling and velocity are on their own plate, because they are
+    // set once per patch and then never touched.
+    static const char* const captions[] { "RATIO", "FINE", "CHAR", "FOLD",
+                                          "LEVEL", "PAN", "FORMANT", "WIDTH",
+                                          "ATK", "DECAY", "SUS", "REL" };
+    static const char* const names[] { "Ratio", "Fine", "Character", "Fold",
+                                       "Level", "Pan", "Formant", "Width",
+                                       "Attack", "Decay", "Sustain", "Release" };
 
     for (int op = 0; op < kNumOperators; ++op)
     {
         const auto tint = ui::design::tintFor (palette_.accent, op);
 
-        for (int i = 0; i < 9; ++i)
+        for (int i = 0; i < 12; ++i)
         {
             auto& control = addControl (ids::op (op, names[i]), captions[i], tint,
-                                        i == 0 || i == 3 ? ui::design::Emphasis::lead
+                                        i == 0 || i == 4 ? ui::design::Emphasis::lead
                                                          : ui::design::Emphasis::normal);
             strips_[static_cast<std::size_t> (op)].push_back (&control);
         }
+
+        auto box = std::make_unique<juce::ComboBox>();
+        ui::styleChoice (*box, palette_, tint);
+        box->addItemList (choices::operatorMode, 1);
+        box->setTooltip (
+            "Normal is an operator like any other.\n\n"
+            "Formant makes it a self-contained resonance at the Formant frequency, whatever "
+            "note is played -- two carriers on adjacent harmonics, crossfaded by the fractional "
+            "part, so the peak sits between them rather than snapping to one. That is a whole "
+            "two-operator ModFM pair collapsed into one slot, which is what makes a three-formant "
+            "vowel reachable on six operators.\n\n"
+            "It needs room: the formant has to sit about ten harmonics above the note, or the "
+            "resonance skirt folds through DC and drags the centre sharp. Measured, at eight "
+            "harmonics it is 20 cents out; at eleven, 3.");
+
+        modeAttachments_[static_cast<std::size_t> (op)]
+            = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+                owner.getState(), ids::op (op, "Mode"), *box);
+
+        addAndMakeVisible (*box);
+        modeBoxes_[static_cast<std::size_t> (op)] = std::move (box);
+
+        // Key scaling and velocity, on their own plate.
+        static const char* const scalingCaptions[] { "BREAK", "BELOW", "ABOVE",
+                                                     "VEL LVL", "VEL IDX" };
+        static const char* const scalingNames[] { "KeyBreak", "KeyLeft", "KeyRight",
+                                                  "VelLevel", "VelIndex" };
+
+        for (int i = 0; i < 5; ++i)
+        {
+            // No per-control caption: the column heading is drawn once by
+            // paint(). Six repeats of the same five words is six times the ink
+            // for the same information, and it is what pushed the first version
+            // of this grid out of alignment.
+            auto& control = addControl (ids::op (op, scalingNames[i]), {},
+                                        tint, ui::design::Emphasis::trim);
+            control.caption.setVisible (false);
+            scaling_[static_cast<std::size_t> (op)].push_back (&control);
+        }
+
+        juce::ignoreUnused (scalingCaptions);
+
+        scaling_[static_cast<std::size_t> (op)][1]->knob.setTooltip (
+            "How operator " + juce::String (op + 1) + " changes as you play BELOW the break "
+            "point, per octave. Positive is louder and brighter, negative is quieter and "
+            "duller; 0 is exactly flat.\n\n"
+            "On a carrier you hear a volume change; on a modulator you hear a timbral one. "
+            "That is what makes a patch behave like an instrument across the keyboard instead "
+            "of like the same sound transposed.");
+
+        scaling_[static_cast<std::size_t> (op)][2]->knob.setTooltip (
+            "The same, ABOVE the break point. Pulling a modulator down as you go up the "
+            "keyboard is the classic use: it stops high notes turning to gravel, and it is "
+            "the hand-dialled ancestor of the Index cap.");
     }
 
     // Tooltips that say what the two unusual controls actually do.
@@ -216,6 +276,14 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
             "whole multiples of the modulator, so a simple ratio fuses into one instrument "
             "and an awkward one becomes a bell. 1, 2 and 3 are harmonic; 3.5 is the classic "
             "bell; 11 and above is metal.");
+
+        strips_[static_cast<std::size_t> (op)][3]->knob.setTooltip (
+            "Phase distortion: bends the phase ramp so the waveform races through part of its "
+            "cycle and crawls through the rest. A sine grows a leading edge and turns saw-like, "
+            "which is a filter-sweep gesture from one oscillator and no filter.\n\n"
+            "It is phase modulation with a piecewise modulator locked to this operator's own "
+            "cycle, which is why it costs a transfer function rather than an operator. Exactly "
+            "the identity at 0.");
 
         strips_[static_cast<std::size_t> (op)][2]->knob.setTooltip (
             "One knob from classic FM to ModFM.\n\n"
@@ -379,7 +447,7 @@ void StrydaEditor::paint (juce::Graphics& g)
     area.removeFromTop (kHeaderHeight);
     area = area.reduced (kMargin);
 
-    auto strips = area.removeFromTop (kRowHeight * 3 + kCaptionHeight * 3 + 30);
+    auto strips = area.removeFromTop (kRowHeight * 3 + kCaptionHeight * 3 + 56);
     const int stripWidth = juce::jmax (kMinStripWidth, strips.getWidth() / kNumOperators);
 
     for (int op = 0; op < kNumOperators; ++op)
@@ -391,6 +459,44 @@ void StrydaEditor::paint (juce::Graphics& g)
         ui::paintPlateHeading (g, palette_, strip.reduced (3).removeFromTop (ui::design::kValueHeight + 4),
                                "OP " + juce::String (op + 1), {}, tint);
     }
+
+    area.removeFromTop (kMargin);
+    area.removeFromBottom (34 + kMargin);
+
+    const int matrixWidth = juce::jlimit (420, 760, area.getWidth() * 3 / 5);
+    area.removeFromLeft (matrixWidth);
+    area.removeFromLeft (kMargin);
+    area.removeFromTop (74 + 6);
+
+    ui::paintPlate (g, area, palette_.panel, palette_.secondary);
+
+    auto heading = area.reduced (6);
+    ui::paintPlateHeading (g, palette_, heading.removeFromTop (ui::design::kValueHeight + 4),
+                           "SCALING", "how each operator answers the key and the touch",
+                           palette_.secondary);
+
+    auto headings = heading.removeFromTop (kCaptionHeight);
+    headings.removeFromLeft (30);
+
+    g.setColour (palette_.dimText);
+    g.setFont (juce::FontOptions (10.0f));
+
+    static const char* const columns[] { "BREAK", "BELOW", "ABOVE", "VEL LVL", "VEL IDX" };
+    const int headingWidth = headings.getWidth() / 5;
+
+    for (const auto* column : columns)
+        g.drawText (column, headings.removeFromLeft (headingWidth),
+                    juce::Justification::centred);
+
+    const int scaleRow = heading.getHeight() / kNumOperators;
+
+    for (int op = 0; op < kNumOperators; ++op)
+    {
+        auto row = heading.removeFromTop (scaleRow);
+        g.setColour (ui::design::tintFor (palette_.accent, op));
+        g.drawText (juce::String (op + 1), row.removeFromLeft (30),
+                    juce::Justification::centred);
+    }
 }
 
 void StrydaEditor::resized()
@@ -399,7 +505,7 @@ void StrydaEditor::resized()
     header_.setBounds (area.removeFromTop (kHeaderHeight));
     area = area.reduced (kMargin);
 
-    const int stripHeight = kRowHeight * 3 + kCaptionHeight * 3 + 30;
+    const int stripHeight = kRowHeight * 3 + kCaptionHeight * 3 + 56;
     auto strips = area.removeFromTop (stripHeight);
     const int stripWidth = juce::jmax (kMinStripWidth, strips.getWidth() / kNumOperators);
 
@@ -410,14 +516,17 @@ void StrydaEditor::resized()
 
         auto& controls = strips_[static_cast<std::size_t> (op)];
 
+        auto modeRow = strip.removeFromBottom (26);
+        modeBoxes_[static_cast<std::size_t> (op)]->setBounds (modeRow.reduced (6, 2));
+
         for (std::size_t row = 0; row < 3; ++row)
         {
             auto line = strip.removeFromTop (kRowHeight + kCaptionHeight);
-            const int columnWidth = line.getWidth() / 3;
+            const int columnWidth = line.getWidth() / 4;
 
-            for (std::size_t column = 0; column < 3; ++column)
+            for (std::size_t column = 0; column < 4; ++column)
             {
-                const std::size_t i = row * 3 + column;
+                const std::size_t i = row * 4 + column;
                 if (i >= controls.size())
                     continue;
 
@@ -453,7 +562,25 @@ void StrydaEditor::resized()
     matrix_.setBounds (area.removeFromLeft (matrixWidth));
 
     area.removeFromLeft (kMargin);
-    bandwidth_.setBounds (area.removeFromTop (86).reduced (12, 8));
+    bandwidth_.setBounds (area.removeFromTop (74).reduced (12, 8));
+
+    area.removeFromTop (6);
+    auto plate = area.reduced (6);
+    plate.removeFromTop (ui::design::kValueHeight + 6);
+    plate.removeFromTop (kCaptionHeight);   // the column headings paint() draws
+    plate.removeFromLeft (30);
+
+    const int scaleRow = plate.getHeight() / kNumOperators;
+    const int scaleColumn = plate.getWidth() / 5;
+
+    for (int op = 0; op < kNumOperators; ++op)
+    {
+        auto row = plate.removeFromTop (scaleRow);
+
+        for (std::size_t i = 0; i < scaling_[static_cast<std::size_t> (op)].size(); ++i)
+            scaling_[static_cast<std::size_t> (op)][i]
+                ->knob.setBounds (row.removeFromLeft (scaleColumn).reduced (4, 1));
+    }
 }
 
 void StrydaEditor::timerCallback()
@@ -465,17 +592,17 @@ void StrydaEditor::timerCallback()
     const double top = predictedTop();
     const double nyquist = processor_.getInternalNyquistHz();
 
-    juce::String text = "BANDWIDTH  \xe2\x80\x94  upper bound at A4\nup to " + hzText (top)
+    juce::String text = "BANDWIDTH (upper bound, at A4)\n" + hzText (top)
                           + " of " + hzText (nyquist) + " internal";
 
     if (top > nyquist)
-        text += "\nover the edge \xe2\x80\x94 but on a stack this bound over-estimates";
+        text += "   OVER";
     else if (capBiting_)
-        text += "\nthe cap is holding it there";
+        text += "   capped";
     else if (top > 0.8 * nyquist)
-        text += "\nclose to the edge";
+        text += "   close";
     else
-        text += "\nclear";
+        text += "   clear";
 
     bandwidth_.setText (text, juce::dontSendNotification);
     bandwidth_.setColour (juce::Label::textColourId,

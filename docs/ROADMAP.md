@@ -379,7 +379,18 @@ anything already decided.
    test showing headroom to spare, plus a patch the user wanted and could not
    build with six.
 
-5. **Sonitus and Svarayantra adopting `FmBandwidth`'s readout.** Sonitus has PM
+5. **Exponential FM as a per-cell switch.** Deferred out of Stryda F4. The hard
+   half is already done and tested: `fm::exponentialBandwidthHz` implements
+   Timoney & Lazzarini's DAFx-11 Eq (16), so the bound that makes it safe to
+   ship exists. What is missing is the operator mode and the switch. It is the
+   analogue cross-modulation sound — clangorous, and its carrier frequency
+   moves with the modulation depth, which linear FM's does not — and it is in
+   none of the reference instruments. Parked because it is a novelty flavour
+   rather than anything the brief asked for, and F4 was already the largest
+   parameter addition in the plugin. **What would unpark it:** the user wanting
+   that specific sound, or a spare six parameters at a later schema.
+
+6. **Sonitus and Svarayantra adopting `FmBandwidth`'s readout.** Sonitus has PM
    between two oscillators, operator feedback and a reverse path, and no way to
    see where its spectrum ends; Svarayantra pitches samples up with no warning
    about where the images land. The predictor built for Stryda answers both.
