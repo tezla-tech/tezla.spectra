@@ -449,9 +449,15 @@ TEZLA_TEST (six_operators_at_eight_voices_fit_the_budget)
         for (int v = 0; v < 8; ++v)
             engine.noteOn (48 + v * 3, 1.0);
 
-        const auto start = std::chrono::steady_clock::now();
-        renderEngine (engine, 48000 * 2, 512);
-        outElapsed = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
+        // **The fastest of three, not one.** A single reading measures the
+        // code plus whatever else this shared container was doing, and those
+        // do not separate afterwards. Measured: 1.178 s quiet, 1.803 s with the
+        // cores busy, against a 1.600 s budget -- two failures in five runs
+        // with nothing deliberately loading the machine. See `fastestOf`.
+        outElapsed = tezla::test::fastestOf (3, [&engine] {
+            renderEngine (engine, 48000 * 2, 512);
+        });
+
         outFactor = engine.getFactor();
     };
 
@@ -482,7 +488,9 @@ TEZLA_TEST (six_operators_at_eight_voices_fit_the_budget)
     //
     // The budgets therefore sit well above the observed range: tight enough
     // that doubling the per-sample work fails, loose enough that a busy
-    // container does not.
+    // container does not -- and the figure asserted is now the fastest of
+    // three runs rather than a single one, so contention has to be sustained
+    // across all three to reach the budget at all.
     CHECK_CPU_BUDGET (classicSeconds, 1.60, "8 Stryda voices, 6 classic FM operators");
     CHECK_CPU_BUDGET (modfmSeconds, 1.60, "8 Stryda voices, 6 operators at half ModFM");
 }
@@ -655,20 +663,89 @@ TEZLA_TEST (the_cap_sub_grid_is_anchored_to_the_stream_not_the_block)
     CHECK (odd == large);
 }
 
+TEZLA_TEST (the_silent_path_takes_every_quiet_sample_and_no_sounding_one)
+{
+    // The engine skips the per-sample voice loop when no voice is sounding and
+    // writes the silence instead. That is bit-exact **by construction** --
+    // `StrydaVoice::process` returns without touching its arguments when the
+    // voice is inactive, so sixteen inactive voices sum to exactly 0.0 -- and
+    // the only way it can be wrong is by firing while something IS sounding.
+    // A wall clock cannot assert "only", so count the skip directly, the way
+    // `getCapResolutionCount` counts the cap.
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setParameters (singleCarrier());
+
+    const int factor = engine.getFactor();
+
+    // 1. Before any note, every internal sample goes through the silent path
+    //    and the output is exactly zero -- not small, zero.
+    const auto beforeNote = renderEngine (engine, 4800, 512);
+    const long long quiet = engine.getSilentSamples();
+
+    CHECK (quiet == static_cast<long long> (4800 * factor));
+
+    for (const double sample : beforeNote)
+        CHECK (dsp::isExactlyZero (sample));
+
+    // 2. While the note sounds, the path is not taken once. If the skip's
+    //    condition inverted, this is what would catch it.
+    engine.noteOn (45, 1.0);
+
+    const auto sounding = renderEngine (engine, 24000, 512);
+
+    CHECK (engine.getSilentSamples() == quiet);
+
+    double loudest = 0.0;
+    for (const double sample : sounding)
+        loudest = std::max (loudest, std::abs (sample));
+
+    CHECK (loudest > 0.1);
+
+    // 3. Released and left alone, the voice retires and the path resumes --
+    //    and the last second of the render is exactly zero, which is what says
+    //    the fill covered its whole run rather than part of it.
+    engine.noteOff (45);
+
+    const auto tail = renderEngine (engine, 48000 * 3, 512);
+    const long long resumed = engine.getSilentSamples() - quiet;
+
+    std::printf ("        [silent] %lld internal samples skipped in the 3 s tail\n", resumed);
+
+    CHECK (resumed > 0);
+    CHECK (engine.getActiveVoiceCount() == 0);
+
+    for (std::size_t i = tail.size() - 48000; i < tail.size(); ++i)
+        CHECK (dsp::isExactlyZero (tail[i]));
+}
+
 TEZLA_TEST (an_idle_instrument_costs_almost_nothing)
 {
     StrydaEngine engine;
     engine.prepare (48000.0, 512);
     engine.setParameters (singleCarrier());
 
-    const auto start = std::chrono::steady_clock::now();
-    renderEngine (engine, 48000 * 4, 512);
-    const auto elapsed = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
+    // Fastest of three, same reason as the voice budget above.
+    const auto elapsed = tezla::test::fastestOf (3, [&engine] {
+        renderEngine (engine, 48000 * 4, 512);
+    });
 
     std::printf ("        [cpu] idle, 4 s of audio in %.4f s (%.3f %% of a core)\n",
                  elapsed, 100.0 * elapsed / 4.0);
 
-    CHECK_CPU_BUDGET (elapsed, 0.08, "idle Stryda");
+    // 0.06, not the 0.08 this budget carried until the silent path existed.
+    // A budget is only a guard while it is tighter than the thing it guards
+    // against: idle measures 0.0431 s here and measured 0.0785 s before the
+    // skip, so 0.08 would now pass the *old* code -- it had stopped asserting
+    // anything and had become a coin flip besides, red about two runs in five.
+    // 0.06 has 39 % of headroom over the measurement and still fails the
+    // moment the skip stops firing.
+    //
+    // What is left is the decimator, which runs the halfband FIRs over
+    // silence because a flushed filter is the only one whose output is
+    // provably zero. Parked in `docs/ROADMAP.md`: it is a shared-DSP change
+    // and belongs in its own commit, not a close-out.
+    CHECK_CPU_BUDGET (elapsed, 0.06, "idle Stryda");
 }
 
 // ---------------------------------------------------------------------------

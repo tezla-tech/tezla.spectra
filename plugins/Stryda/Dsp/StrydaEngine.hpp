@@ -104,6 +104,7 @@ public:
         // left over from the last stream.
         capChunksLeft_ = 1;
         capResolutions_ = 0;
+        silentSamples_ = 0;
 
         sequencer_.reset();
         stepEdge_ = false;
@@ -317,6 +318,15 @@ public:
     /// guards the rig freeze is exact rather than statistical.
     [[nodiscard]] long long getCapResolutionCount() const noexcept { return capResolutions_; }
 
+    /// How many internal samples have been filled by the silent path since
+    /// `prepare`.
+    ///
+    /// Same reason as the two above: the skip's correctness is that it fires
+    /// **only** when no voice is sounding, and a wall clock cannot assert
+    /// "only". This counts it directly, so the test can say the path took
+    /// every sample of a silent stretch and not one sample of a sounding one.
+    [[nodiscard]] long long getSilentSamples() const noexcept { return silentSamples_; }
+
     [[nodiscard]] int getActiveVoiceCount() const noexcept
     {
         int count = 0;
@@ -405,16 +415,39 @@ public:
                 }
             }
 
-            for (int i = 0; i < run; ++i)
+            // Nothing sounding: write the silence rather than summing sixteen
+            // early-outs for it. **Bit-exact by construction, not by
+            // measurement** -- `StrydaVoice::process` returns without touching
+            // its arguments when the voice is inactive, so an all-inactive
+            // stack contributes exactly 0.0, and a voice can only *become*
+            // active in `noteOn`, which is called between blocks. So the scan
+            // is valid for the whole run segment: a voice may retire inside it,
+            // never start.
+            bool anySounding = false;
+
+            for (auto& voice : voices_)
+                anySounding = anySounding || voice.isActive();
+
+            if (! anySounding)
             {
-                double l = 0.0;
-                double r = 0.0;
+                std::fill (internal[0] + written, internal[0] + written + run, 0.0);
+                std::fill (internal[1] + written, internal[1] + written + run, 0.0);
 
-                for (auto& voice : voices_)
-                    voice.process (l, r);
+                silentSamples_ += run;
+            }
+            else
+            {
+                for (int i = 0; i < run; ++i)
+                {
+                    double l = 0.0;
+                    double r = 0.0;
 
-                internal[0][written + i] = l;
-                internal[1][written + i] = r;
+                    for (auto& voice : voices_)
+                        voice.process (l, r);
+
+                    internal[0][written + i] = l;
+                    internal[1][written + i] = r;
+                }
             }
 
             written += run;
@@ -543,6 +576,7 @@ private:
     int chunkCountdown_ { 0 };
     int capChunksLeft_ { 1 };
     long long capResolutions_ { 0 };
+    long long silentSamples_ { 0 };
 
     RatioSequencer sequencer_;
     std::array<double, StrydaVoice::kNumOperators> patchRatios_ {};
