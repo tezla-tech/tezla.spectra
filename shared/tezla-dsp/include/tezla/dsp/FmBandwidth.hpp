@@ -435,6 +435,44 @@ inline constexpr double kThresholdDb = -80.0;
 /// one-sample-old modulator is still a modulator.
 ///
 /// Self-modulation on the diagonal uses `fm::feedbackOrder`, which is exact.
+///
+/// ---------------------------------------------------------------------------
+/// **How much this is worth, measured, and where it stops being tight**
+/// ---------------------------------------------------------------------------
+///
+/// For a **two-operator pair the prediction is exact** -- +0 Hz against the
+/// rendered -80 dB edge on 27 combinations in `tezla-measure stryda` table 2
+/// and 18 more in `tests/test_FmBandwidth.cpp`, across three carriers, three
+/// ratios and three indices.
+///
+/// For a **stack it is an upper bound and a loose one**, and the numbers are
+/// worth stating rather than implying. Rendered against the same -80 dB edge,
+/// 440 Hz carrier:
+///
+///     depth  indices (cycles)  predicted     measured    over by
+///     1      1.2                  13392 Hz     13392 Hz      1.0x
+///     2      1.2 / 0.7           227232 Hz     96768 Hz      2.3x
+///     3      1.2 / 0.7 / 0.5    3434832 Hz    496368 Hz      6.9x
+///     2      2.4 / 1.6           637632 Hz    322704 Hz      2.0x
+///     3      2.4 / 1.6 / 1.0  15001632 Hz    786288 Hz     19.1x
+///
+/// The cause is structural: each stage multiplies the modulator's **whole top
+/// frequency** by the sideband order, and a modulator that is itself spread has
+/// already had that widening applied once. So the factor compounds -- roughly
+/// 2*pi per stage, which is the ratio between consecutive rows above.
+///
+/// It is left conservative deliberately, because **for a cap that is the safe
+/// direction**: clamping a patch that did not need it is a quieter failure than
+/// letting one alias. But it is the wrong number to *display* as a fact, so
+/// Stryda's panel labels it an upper bound, and the index cap defaults to Off
+/// rather than clamping patches on a bound this loose.
+///
+/// Tightening it means composing in frequency **deviation** rather than in top
+/// frequency -- Carson's `D + W` shape -- with the Bessel widening applied once
+/// at the end instead of at every stage. Both obvious forms of that were tried
+/// against the table above and one under-estimated at depth 2, which is the one
+/// direction a bound may not err in, so it is written down as work rather than
+/// guessed at. `plugins/Stryda/PLAN.md`, risk 1.
 class FmBandwidth
 {
 public:

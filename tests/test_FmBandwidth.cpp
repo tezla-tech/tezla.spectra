@@ -691,3 +691,100 @@ TEZLA_TEST (the_predictor_never_under_estimates_a_rendered_spectrum)
     std::printf ("        [predict] worst error across the sweep: %+.0f Hz (bin width %.1f Hz)\n",
                  worst, binWidth);
 }
+
+TEZLA_TEST (the_predictor_is_an_upper_bound_at_every_stack_depth)
+{
+    // The pair case is exact; a stack is not, and the point of this test is
+    // that it errs in the one direction a bandwidth bound may. The measured
+    // over-estimation is printed so a change to the composition rule shows up
+    // as a number rather than as a pass.
+    constexpr double kRate = 1572864.0;          // 24 x 65536, so bins are exact
+    constexpr std::size_t kFrames = 1u << 16;
+    const double binWidth = kRate / static_cast<double> (kFrames);
+
+    struct Case
+    {
+        int depth;
+        double ratio1, ratio2, ratio3;
+        double index1, index2, index3;
+    };
+
+    const Case cases[] = {
+        { 1, 2.0, 0.0, 0.0, 1.2, 0.0, 0.0 },
+        { 2, 2.0, 3.0, 0.0, 1.2, 0.7, 0.0 },
+        { 3, 2.0, 3.0, 5.0, 1.2, 0.7, 0.5 },
+        { 2, 2.0, 3.0, 0.0, 2.4, 1.6, 0.0 },
+        { 3, 2.0, 3.0, 5.0, 2.4, 1.6, 1.0 },
+    };
+
+    std::printf ("        [stack] depth   predicted     measured   over by\n");
+
+    for (const auto& item : cases)
+    {
+        const double f0 = std::round (440.0 / binWidth) * binWidth;
+        const double f1 = f0 * item.ratio1;
+        const double f2 = f0 * item.ratio2;
+        const double f3 = f0 * item.ratio3;
+
+        std::vector<double> rendered (kFrames, 0.0);
+        double p0 = 0.0, p1 = 0.0, p2 = 0.0, p3 = 0.0;
+
+        for (std::size_t i = 0; i < kFrames; ++i)
+        {
+            const double o3 = item.depth >= 3 ? std::sin (kTwoPi * p3) : 0.0;
+            const double o2 = item.depth >= 2 ? std::sin (kTwoPi * (p2 + item.index3 * o3)) : 0.0;
+            const double o1 = std::sin (kTwoPi * (p1 + item.index2 * o2));
+
+            rendered[i] = std::sin (kTwoPi * (p0 + item.index1 * o1));
+
+            const auto step = [&kRate] (double& phase, double hz)
+            {
+                phase += hz / kRate;
+                if (phase >= 1.0)
+                    phase -= 1.0;
+            };
+
+            step (p0, f0);
+            step (p1, f1);
+            step (p2, f2);
+            step (p3, f3);
+        }
+
+        const auto spectrum = fftOfReal (rendered);
+        const std::size_t half = kFrames / 2;
+
+        double peak = 0.0;
+        for (std::size_t k = 1; k < half; ++k)
+            peak = std::max (peak, std::norm (spectrum[k]));
+
+        const double threshold = peak * std::pow (10.0, -80.0 / 10.0);
+
+        std::size_t highest = 0;
+        for (std::size_t k = 1; k < half; ++k)
+            if (std::norm (spectrum[k]) >= threshold)
+                highest = k;
+
+        const double measured = static_cast<double> (highest) * binWidth;
+
+        FmBandwidth bandwidth;
+        bandwidth.setOperatorCount (4);
+        bandwidth.setOperatorFrequency (0, f0);
+        bandwidth.setOperatorFrequency (1, f1);
+        bandwidth.setOperatorFrequency (2, f2);
+        bandwidth.setOperatorFrequency (3, f3);
+        bandwidth.setIndex (1, 0, item.index1);
+        if (item.depth >= 2)
+            bandwidth.setIndex (2, 1, item.index2);
+        if (item.depth >= 3)
+            bandwidth.setIndex (3, 2, item.index3);
+
+        const double predicted = bandwidth.topSidebandHz();
+
+        std::printf ("        [stack] %5d  %9.0f Hz  %9.0f Hz  %7.1fx\n",
+                     item.depth, predicted, measured, predicted / measured);
+
+        // The only property asserted: never under, at any depth. Tightening the
+        // bound is welcome; letting it fall below the real edge is not.
+        CHECK (predicted >= measured - binWidth);
+    }
+}

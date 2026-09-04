@@ -479,14 +479,47 @@ made **both** figures worse. Reverted; the cause is recorded as unconfirmed.
 
 **Risks held open**, to be answered by measurement rather than argument:
 
-1. Whether the matrix recursion over the classic criterion holds for deep
-   stacks — F1 table 3 decides, and if it does not, the cap falls back to a
-   measured lookup rather than a formula.
+1. **Answered at F3, and the answer is no.** The matrix recursion is exact for
+   a two-operator pair and a loose upper bound for a stack: measured at 440 Hz
+   against the rendered −80 dB edge, it over-estimates by **2.3× at depth 2 and
+   19.1× at depth 3** (table in `FmBandwidth.hpp`, assertion in
+   `the_predictor_is_an_upper_bound_at_every_stack_depth`). The cause is
+   structural — each stage multiplies the modulator's *whole top* by the
+   sideband order, and a spread modulator has already had that widening applied
+   once, so the factor compounds by roughly 2π per stage.
+   **What was done:** the bound is kept, because conservative is the safe
+   direction for a cap; the panel labels it an upper bound rather than a
+   reading; and the index cap now defaults to **Off**, so a loose bound does not
+   clamp patches that never needed it.
+   **Still open:** tightening it. Composing in frequency *deviation* (Carson's
+   `D + W`) with the Bessel widening applied once at the end is the right shape;
+   both obvious forms were tried against that table and one under-estimated at
+   depth 2, which is the one direction a bound may not err in. Work, not a
+   guess.
 2. The `exp` cost per operator at 8 voices — F2's budget decides whether
    Character needs a coarse quantisation to hit a fast path.
 3. Whether Scale-mode ratios stay musical at wide detunes.
 4. Whether six operators at ×4 fit the CPU budget on the rig. Only the rig can
    answer that, and F3 is when it is asked.
+
+**Measured at F3:**
+
+| claim | figure |
+|---|---|
+| Steinberg validator on the bundle | **47 of 47** |
+| predictor vs a rendered stack, depth 1 / 2 / 3 | 1.0× / 2.3× / 6.9× over (19.1× at the deepest case) |
+| parameters | 101, all at `kSchemaV1` |
+| plugin build | warning-clean on GCC |
+
+**Three defects the editor screenshot caught**, none of which a unit test would
+have: the operator strips left a third of the window empty; every value read
+`0.99999...`, because a skewed range round-trips its default through the 0–1
+normalisation and JUCE printed it in full — fixed at the parameter, so the
+host's automation lane reads correctly too; and the bandwidth readout was blank
+until audio ran, which made the panel's most important number invisible with the
+transport stopped. It is computed on the message thread now.
+
+---
 
 **Parked deliberately** (in `docs/ROADMAP.md`, each with an unpark condition):
 higher-order FM as a seventh character; a resample/freeze lane; per-operator ADV

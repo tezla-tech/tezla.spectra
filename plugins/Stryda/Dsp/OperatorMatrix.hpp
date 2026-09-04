@@ -161,8 +161,8 @@ public:
             return;
 
         const double clamped = std::clamp (pan, -1.0, 1.0);
-        if (clamped == pans_[index (op)])
-            return;
+        if (! (clamped < pans_[index (op)]) && ! (clamped > pans_[index (op)]))
+            return;   // guarded no-op; -Wfloat-equal forbids the direct compare
 
         pans_[index (op)] = clamped;
 
