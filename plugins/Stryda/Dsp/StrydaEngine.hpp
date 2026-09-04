@@ -136,17 +136,50 @@ public:
     [[nodiscard]] dsp::Tuning& getTuning() noexcept { return tuning_; }
     [[nodiscard]] const dsp::Tuning& getTuning() const noexcept { return tuning_; }
 
+    /// One note takes `unisonCount` voices, not one.
+    ///
+    /// The stack is built in two passes: first the voices this note already
+    /// owns, so a fast retrigger reuses its own copies rather than spending a
+    /// second stack of them, then free or stolen ones. The chosen indices are
+    /// carried in a small array and excluded from the second pass, because a
+    /// voice claimed a moment ago is not yet started and nothing else would
+    /// stop `allocate` handing it out twice.
     void noteOn (int note, double velocity) noexcept
     {
-        auto& voice = voices_[static_cast<std::size_t> (allocate (note))];
-        voice.noteOn (note, tuning_.frequencyFor (note), velocity);
-        voice.applyParameters (parameters_);
+        const int wanted = std::clamp (parameters_.extras.unisonCount, 1, kMaxVoices);
+        const int count = std::min (wanted, polyphony_);
 
-        // Immediately, rather than waiting up to `kCapChunks` for the sub-grid:
-        // a voice that started uncapped would alias for those 2.7 ms, and the
-        // start of a note is exactly where the ear is listening.
-        voice.refreshIndexCap (parameters_, internalRate_);
-        ++capResolutions_;
+        std::array<int, kMaxVoices> chosen {};
+        int taken = 0;
+
+        for (int v = 0; v < polyphony_ && taken < count; ++v)
+            if (voices_[static_cast<std::size_t> (v)].isActive()
+                && voices_[static_cast<std::size_t> (v)].getNote() == note)
+                chosen[static_cast<std::size_t> (taken++)] = v;
+
+        while (taken < count)
+        {
+            chosen[static_cast<std::size_t> (taken)] = allocate (chosen.data(), taken);
+            ++taken;
+        }
+
+        const double frequency = tuning_.frequencyFor (note);
+
+        for (int i = 0; i < taken; ++i)
+        {
+            auto& voice = voices_[static_cast<std::size_t> (chosen[static_cast<std::size_t> (i)])];
+
+            voice.noteOn (note, frequency, velocity);
+            voice.setUnisonSlot (i, count);
+            voice.applyParameters (parameters_);
+
+            // Immediately, rather than waiting up to `kCapChunks` for the
+            // sub-grid: a voice that started uncapped would alias for those
+            // 2.7 ms, and the start of a note is exactly where the ear is
+            // listening.
+            voice.refreshIndexCap (parameters_, internalRate_);
+            ++capResolutions_;
+        }
     }
 
     void noteOff (int note) noexcept
@@ -245,28 +278,45 @@ public:
     }
 
 private:
-    [[nodiscard]] int allocate (int note) noexcept
+    /// A free voice, or the best one to steal. `exclude` holds the indices
+    /// already claimed by this note-on, which are not yet started and so would
+    /// otherwise look free.
+    [[nodiscard]] int allocate (const int* exclude, int excludeCount) noexcept
     {
-        // A repeated note takes its own voice back, so a fast retrigger does
-        // not spend two.
-        for (int v = 0; v < polyphony_; ++v)
-            if (voices_[static_cast<std::size_t> (v)].isActive()
-                && voices_[static_cast<std::size_t> (v)].getNote() == note)
-                return v;
+        const auto claimed = [exclude, excludeCount] (int v)
+        {
+            for (int i = 0; i < excludeCount; ++i)
+                if (exclude[i] == v)
+                    return true;
+            return false;
+        };
 
         for (int v = 0; v < polyphony_; ++v)
-            if (! voices_[static_cast<std::size_t> (v)].isActive())
+            if (! voices_[static_cast<std::size_t> (v)].isActive() && ! claimed (v))
                 return v;
 
         // Steal the oldest releasing voice if there is one, otherwise the
         // oldest held voice -- taking a note the player is still holding is
         // the last resort, not the first.
+        // Seeded with the first unclaimed voice rather than with 0, so the
+        // fallback can never hand back one this note-on has already taken --
+        // which is reachable when every voice is held and none has aged yet.
         int best = 0;
+        for (int v = 0; v < polyphony_; ++v)
+            if (! claimed (v))
+            {
+                best = v;
+                break;
+            }
+
         std::uint64_t oldest = 0;
         bool foundReleasing = false;
 
         for (int v = 0; v < polyphony_; ++v)
         {
+            if (claimed (v))
+                continue;
+
             auto& voice = voices_[static_cast<std::size_t> (v)];
             const bool releasing = voice.isReleasing();
 

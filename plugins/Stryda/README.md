@@ -107,6 +107,45 @@ setting rather than a formality — it is the first thing to reach for if the CP
 meter climbs, and at 176.4 or 192 kHz sessions it is what Auto picks anyway. The
 tooltip reads the session's actual rate and says what Auto is doing right now.
 
+### The filter, the sub lane and unison
+
+**FILTER** is one state-variable filter per voice, after the whole operator
+matrix and before the sub. Morph crossfades lowpass → bandpass → highpass rather
+than switching, Key tracks the note, Env opens the cutoff by a signed number of
+**octaves** on its own AHDSR, and Sing pushes the resonance towards
+self-oscillation. At 20 kHz it is not merely transparent, it is **skipped** —
+bit for bit the same samples a build with no filter would produce, tested.
+
+**SUB** is the reason a Stryda bass survives a system. A sine or triangle with
+its own envelope, level, and octave, which goes through **nothing**: not the
+matrix, not the filter, and not the mangle chain when that lands. Drive the
+operators as hard as the patch wants; the fundamental stays exactly where you
+put it. At level 0 the whole lane is skipped.
+
+**UNISON** plays several copies of the patch per note, and they come out of the
+same voice budget — at 4 copies and 8 voices of polyphony you get two notes.
+Detune spreads their pitch and Spread their stereo position, as usual. **Index
+spread is the one that is not usual**: it offsets each copy's *modulation index*,
+so the copies differ in **timbre** rather than only in pitch. That is what a
+reese actually is, and it is close to free. Only cells that are already doing
+something get offset, so it cannot switch on a path the patch never asked for.
+
+Two behaviours worth knowing:
+
+- **Only one copy carries the sub.** Eight detuned sub oscillators fighting over
+  one octave is a mush; one solid fundamental under a wide stack is a bass.
+- **A thick stack punches harder than a thin one at the attack.** The copies
+  start in phase and drift apart over about a second, so the onset sums
+  coherently and the sustain does not. Measured: 8 copies are 2.56× the level of
+  one over the first 85 ms and 1.07× over two seconds. The 1/√n compensation
+  targets the sustain deliberately — flattening the onset instead would leave
+  everything after it 8 dB quiet.
+
+**Split is not here yet.** It arrives with the vowel lane and the mangle chain in
+F7, because a crossover with nothing between its two bands is an allpass: it
+would cost phase and buy nothing until there is a stage to keep out of the low
+end.
+
 ### The index cap, and why it is Off by default
 
 The cap scales every index down until the predicted top sits under the internal

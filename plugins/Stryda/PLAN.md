@@ -352,7 +352,7 @@ first `pending` row.**
 | F3 minimal JUCE layer, rig build + ear round | pending |
 | F4 `PhaseShaper`, formant operator, key scaling, velocity | done in code; not yet played on the rig. **Exponential-FM cells deferred** — see below |
 | **FIX** index cap hung the audio thread; oversampling control attached | done — see "The rig freeze" below |
-| F5 sub lane, Split, per-voice filter, unison index spread | DSP done and tested; JUCE parameters and editor pending |
+| F5 sub lane, per-voice filter, unison index spread | done — **Split deferred to F7**, see below. Not yet played on the rig |
 | F6 microtuning at the ratio, ratio sequencer, named braids | pending |
 | F7 vowel lane + mangle chain | pending |
 | F8 modulation layer + dice gate | pending |
@@ -377,6 +377,56 @@ is measured is the mathematics the predictor claims to predict):
 | Character 0 -> 1 at index 5: spectral centroid | 4.14 -> **2.69** harmonics |
 | Character 0 -> 1: partial-order reversals (the Bessel oscillation) | 2 -> **0** |
 | index needed at Character 1 to match Character 0's centroid | 11.12 vs 5.00 — **+122 %** |
+
+### F5, and the one thing it deliberately does not ship
+
+Delivered: the **per-voice filter** (morph, resonance, key tracking, an envelope
+in octaves, drive and Sing), the **protected sub lane** (own oscillator, own
+AHDSR, octave and shape), and **unison** with pitch detune, stereo spread and
+**index spread**. Twenty-two parameters at `kSchemaV3`, all appended, all
+neutral by default.
+
+**Split is deferred to F7**, and the reason is not scheduling. A Linkwitz–Riley
+crossover summed straight back together is an allpass, not an identity — so
+until the vowel lane and the mangle chain exist to sit in the high band, a Split
+control would cost phase and buy nothing, and it would be a dead knob on the
+panel in the meantime. It unparks the moment F7's chain lands, which is the
+first time there is anything for the two bands to be different about.
+
+Three things the implementation decided:
+
+- **The unison amounts are global, not per-copy offsets.** Each voice knows
+  which copy of the stack it is and works out its own share every control
+  chunk, so turning Detune up moves copies that are already sounding. Sonitus
+  had the other arrangement and shipped a bug where the spread did not apply
+  until the detune knob happened to move.
+- **One copy carries the sub.** Eight unison voices each adding a sub is eight
+  detuned oscillators fighting over the one octave that has to be solid. A test
+  silences the matrix and asserts the lane is bit-identical at one copy and at
+  four.
+- **Two more zombie paths, found while wiring it.** The filter envelope shapes
+  something that must itself be sounding, and the sub envelope only makes noise
+  on the carrying copy while the lane has a level — but both were counted
+  towards "is this voice still doing anything". A patch with a short operator
+  release and a long sub release kept silent voices alive for the difference.
+  Same shape as the Sonitus zombie, invisible to every silence-based test, so
+  the assertion is on the voice **count** (CLAUDE.md §7).
+
+**And one measurement that changed a test rather than the code.** The 1/√n
+unison compensation looked broken: eight copies measured **2.56×** the level of
+one. They were not incoherent. Every copy starts at the same phase, so at the
+onset they sum coherently, and they drift apart over roughly a second:
+
+| window | 5 cents | 15 cents | 40 cents |
+|---|---|---|---|
+| 85 ms | 7.91 / 8 | 7.25 / 8 | 4.98 / 8 |
+| 500 ms | 5.80 / 8 | 3.47 / 8 | 2.24 / 8 |
+| 2000 ms | 3.03 / 8 | 3.03 / 8 | 2.84 / 8 |
+
+(raw sum factor with the 1/√n divided back out; 8 is fully in phase, √8 = 2.83
+is fully random). So 1/√n is exactly right for the steady state — 1.07× at two
+seconds — and the loud onset is what makes a detuned stack punch. Flattening it
+with 1/n would leave the sustain 8 dB quiet. The test asserts both ends.
 
 ### The rig freeze, 2026-09-04 — and what it cost to find
 

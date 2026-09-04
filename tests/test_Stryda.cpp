@@ -1295,3 +1295,304 @@ TEZLA_TEST (each_f5_stage_actually_does_something_when_asked)
     CHECK (filtered < open * 0.5);    // the filter removes the note
     CHECK (subbed > open * 1.1);      // the sub lane adds to it
 }
+
+// ---------------------------------------------------------------------------
+// F5: unison, the protected sub lane, and what keeps a voice alive
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// One note, rendered, with whatever the caller wants changed about it.
+template <typename Configure>
+[[nodiscard]] std::vector<double> renderNote (Configure&& configure,
+                                              int frames = 4096,
+                                              int polyphony = 8)
+{
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setPolyphony (polyphony);
+
+    VoiceParameters parameters = singleCarrier();
+    configure (parameters);
+    engine.setParameters (parameters);
+    engine.noteOn (60, 1.0);
+
+    return renderEngine (engine, frames, 512);
+}
+
+[[nodiscard]] double rmsOf (const std::vector<double>& samples)
+{
+    double sum = 0.0;
+    for (const double sample : samples)
+        sum += sample * sample;
+    return std::sqrt (sum / static_cast<double> (samples.size()));
+}
+
+[[nodiscard]] std::size_t differingSamples (const std::vector<double>& a,
+                                            const std::vector<double>& b)
+{
+    std::size_t differing = 0;
+    const std::size_t count = std::min (a.size(), b.size());
+
+    for (std::size_t i = 0; i < count; ++i)
+        if (! (a[i] == b[i]))
+            ++differing;
+
+    return differing + (a.size() > count ? a.size() - count : b.size() - count);
+}
+} // namespace
+
+TEZLA_TEST (a_unison_stack_of_one_is_bit_exactly_no_unison_at_all)
+{
+    // The three amounts have nothing to spread across at a count of one, so
+    // they must not be able to move a single sample. This is the property that
+    // lets unison default to 1 and leave every F4 project untouched.
+    const auto reference = renderNote ([] (VoiceParameters&) {});
+
+    CHECK (rmsOf (reference) > 0.01);
+
+    const auto loud = renderNote ([] (VoiceParameters& parameters)
+    {
+        parameters.extras.unisonCount = 1;
+        parameters.extras.unisonDetuneCents = 50.0;
+        parameters.extras.unisonSpread = 1.0;
+        parameters.extras.unisonIndexSpread = 2.0;
+    });
+
+    std::printf ("        [unison] count 1 with every amount at maximum: %zu of %zu differ\n",
+                 differingSamples (reference, loud), reference.size());
+
+    CHECK (differingSamples (reference, loud) == 0);
+}
+
+TEZLA_TEST (a_unison_stack_takes_one_voice_per_copy_and_they_are_distinct)
+{
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setPolyphony (8);
+
+    VoiceParameters parameters = singleCarrier();
+    parameters.extras.unisonCount = 4;
+    parameters.extras.unisonDetuneCents = 20.0;
+    engine.setParameters (parameters);
+
+    engine.noteOn (60, 1.0);
+
+    std::printf ("        [unison] count 4 on one note: %d voices active\n",
+                 engine.getActiveVoiceCount());
+
+    CHECK (engine.getActiveVoiceCount() == 4);
+
+    // A retrigger takes its own copies back rather than spending four more.
+    engine.noteOn (60, 1.0);
+    CHECK (engine.getActiveVoiceCount() == 4);
+
+    // A second note takes four more, and the first note keeps its own.
+    engine.noteOn (67, 1.0);
+    CHECK (engine.getActiveVoiceCount() == 8);
+
+    // The stack cannot exceed the polyphony it has to live inside: the copies
+    // would otherwise be handed the same voice twice and silently collapse.
+    StrydaEngine narrow;
+    narrow.prepare (48000.0, 512);
+    narrow.setPolyphony (3);
+
+    VoiceParameters wide = singleCarrier();
+    wide.extras.unisonCount = 8;
+    narrow.setParameters (wide);
+    narrow.noteOn (60, 1.0);
+
+    std::printf ("        [unison] count 8 at 3 voices of polyphony: %d active\n",
+                 narrow.getActiveVoiceCount());
+
+    CHECK (narrow.getActiveVoiceCount() == 3);
+}
+
+TEZLA_TEST (detune_and_index_spread_each_change_the_stack_on_their_own)
+{
+    const auto flat = renderNote ([] (VoiceParameters& parameters)
+    {
+        parameters.extras.unisonCount = 4;
+    });
+
+    const auto detuned = renderNote ([] (VoiceParameters& parameters)
+    {
+        parameters.extras.unisonCount = 4;
+        parameters.extras.unisonDetuneCents = 20.0;
+    });
+
+    // Index spread needs a live cell to offset, so give the patch one.
+    const auto spreadIndex = renderNote ([] (VoiceParameters& parameters)
+    {
+        parameters.indices[0][1] = 1.2;
+        parameters.operators[1].ratio = 2.0;
+        parameters.extras.unisonCount = 4;
+        parameters.extras.unisonIndexSpread = 0.6;
+    });
+
+    const auto spreadReference = renderNote ([] (VoiceParameters& parameters)
+    {
+        parameters.indices[0][1] = 1.2;
+        parameters.operators[1].ratio = 2.0;
+        parameters.extras.unisonCount = 4;
+    });
+
+    std::printf ("        [unison] detune moves %zu samples, index spread %zu\n",
+                 differingSamples (flat, detuned),
+                 differingSamples (spreadReference, spreadIndex));
+
+    CHECK (differingSamples (flat, detuned) > 1000);
+    CHECK (differingSamples (spreadReference, spreadIndex) > 1000);
+
+    // And index spread cannot switch on a path the patch never asked for: with
+    // no live cells there is nothing to offset, whatever the amount.
+    const auto noCells = renderNote ([] (VoiceParameters& parameters)
+    {
+        parameters.extras.unisonCount = 4;
+        parameters.extras.unisonIndexSpread = 2.0;
+    });
+
+    CHECK (differingSamples (flat, noCells) == 0);
+}
+
+TEZLA_TEST (only_one_copy_of_a_unison_stack_carries_the_sub)
+{
+    // Silence the matrix and listen to the sub lane alone. Four copies of the
+    // stack must produce exactly what one does -- not four subs a few cents
+    // apart, which is a chorused mush in the one octave that has to be solid.
+    const auto subOnly = [] (int count)
+    {
+        return renderNote ([count] (VoiceParameters& parameters)
+        {
+            for (auto& settings : parameters.operators)
+                settings.level = 0.0;
+
+            parameters.extras.subLevel = 0.7;
+            parameters.extras.unisonCount = count;
+            parameters.extras.unisonDetuneCents = 25.0;
+        });
+    };
+
+    const auto one = subOnly (1);
+    const auto four = subOnly (4);
+
+    std::printf ("        [sub] lane alone, rms %.5f at 1 copy and %.5f at 4; %zu differ\n",
+                 rmsOf (one), rmsOf (four), differingSamples (one, four));
+
+    CHECK (rmsOf (one) > 0.05);
+    CHECK (differingSamples (one, four) == 0);
+}
+
+TEZLA_TEST (a_thicker_stack_settles_to_the_same_level_but_punches_harder)
+{
+    // ---------------------------------------------------------------------
+    // **1/sqrt(n) is right, and the first version of this test was not**
+    // ---------------------------------------------------------------------
+    //
+    // It rendered 85 ms and expected eight copies to land near one in level.
+    // They measured 2.56x, which looked like a broken compensation and was not:
+    // every copy starts at the same phase, so at the onset they sum
+    // COHERENTLY. Measured raw sum factors, with the 1/sqrt(n) divided back
+    // out (n means fully in phase, sqrt(n) means fully random):
+    //
+    //      window    5 cents      15 cents     40 cents
+    //      85 ms     7.91 / 8     7.25 / 8     4.98 / 8
+    //      500 ms    5.80 / 8     3.47 / 8     2.24 / 8
+    //      2000 ms   3.03 / 8     3.03 / 8     2.84 / 8      (sqrt(8) = 2.83)
+    //
+    // So the copies drift apart over roughly a second and the steady state is
+    // exactly the incoherent sum 1/sqrt(n) compensates for. The loud onset is
+    // not a defect to flatten -- it is what makes a detuned stack punch, and
+    // flattening it with 1/n would leave the sustain 8 dB quiet.
+    //
+    // The test therefore asserts both: the steady state lands near unity, and
+    // the onset is measurably louder than it.
+    const auto render = [] (int count, int frames)
+    {
+        return renderNote ([count] (VoiceParameters& parameters)
+        {
+            parameters.operators[0].sustain = 1.0;
+            parameters.operators[0].decay = 8.0;
+            parameters.extras.unisonCount = count;
+            parameters.extras.unisonDetuneCents = 15.0;
+        }, frames, 16);
+    };
+
+    const double settledOne = rmsOf (render (1, 96000));
+    const double settledEight = rmsOf (render (8, 96000));
+    const double settled = settledOne > 0.0 ? settledEight / settledOne : 0.0;
+
+    const double onsetOne = rmsOf (render (1, 4096));
+    const double onsetEight = rmsOf (render (8, 4096));
+    const double onset = onsetOne > 0.0 ? onsetEight / onsetOne : 0.0;
+
+    std::printf ("        [unison] 8 copies vs 1: %.2fx over 2 s, %.2fx over the first 85 ms\n",
+                 settled, onset);
+
+    CHECK (settled > 0.85);
+    CHECK (settled < 1.35);
+
+    // The onset has to be the louder of the two, or the copies are not starting
+    // in phase and the stack has no transient of its own.
+    CHECK (onset > settled * 1.5);
+}
+
+TEZLA_TEST (an_inaudible_filter_or_sub_envelope_never_holds_a_voice_open)
+{
+    // ---------------------------------------------------------------------
+    // **The Sonitus zombie, in a new place**
+    // ---------------------------------------------------------------------
+    //
+    // The filter envelope shapes something that must itself be sounding, and
+    // the sub envelope only makes noise on the copy that carries the lane and
+    // only while that lane has a level. Counting either towards "is this voice
+    // still doing anything" keeps silent voices alive, costs a voice slot and a
+    // sample loop each, and is invisible to every silence-based test -- which
+    // is exactly how it pinned Sonitus's CPU meter at 100 %.
+    //
+    // So the assertion is on the voice COUNT, not on the audio.
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setPolyphony (8);
+
+    VoiceParameters parameters = singleCarrier();
+
+    // Short operator envelopes: the note is over quickly.
+    for (auto& settings : parameters.operators)
+    {
+        settings.attack = 0.001;
+        settings.decay = 0.02;
+        settings.sustain = 0.0;
+        settings.release = 0.01;
+    }
+
+    // A silent sub lane with a very long release, and a filter envelope with
+    // one to match. Neither can be heard; neither may keep the voice.
+    parameters.extras.subLevel = 0.0;
+    parameters.extras.subRelease = 10.0;
+    parameters.extras.subSustain = 1.0;
+    parameters.extras.filterRelease = 10.0;
+    parameters.extras.filterSustain = 1.0;
+
+    engine.setParameters (parameters);
+    engine.noteOn (60, 1.0);
+
+    std::vector<double> left (512, 0.0);
+    std::vector<double> right (512, 0.0);
+
+    engine.process (left.data(), right.data(), 512);
+    CHECK (engine.getActiveVoiceCount() == 1);
+
+    engine.noteOff (60);
+
+    // Half a second: far past the operators' 10 ms release, far short of the
+    // ten seconds the two inaudible envelopes are set to.
+    for (int block = 0; block < 47; ++block)
+        engine.process (left.data(), right.data(), 512);
+
+    std::printf ("        [zombie] 0.5 s after note-off, %d voices still active "
+                 "(the silent envelopes are set to 10 s)\n",
+                 engine.getActiveVoiceCount());
+
+    CHECK (engine.getActiveVoiceCount() == 0);
+}
