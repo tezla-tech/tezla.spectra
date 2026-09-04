@@ -351,7 +351,8 @@ first `pending` row.**
 | F2 `FmOperator` + `OperatorMatrix` + voice + engine + index cap | done |
 | F3 minimal JUCE layer, rig build + ear round | pending |
 | F4 `PhaseShaper`, formant operator, key scaling, velocity | done in code; not yet played on the rig. **Exponential-FM cells deferred** — see below |
-| F5 sub lane, Split, per-voice filter, unison index spread | pending |
+| **FIX** index cap hung the audio thread; oversampling control attached | done — see "The rig freeze" below |
+| F5 sub lane, Split, per-voice filter, unison index spread | DSP done and tested; JUCE parameters and editor pending |
 | F6 microtuning at the ratio, ratio sequencer, named braids | pending |
 | F7 vowel lane + mangle chain | pending |
 | F8 modulation layer + dice gate | pending |
@@ -376,6 +377,67 @@ is measured is the mathematics the predictor claims to predict):
 | Character 0 -> 1 at index 5: spectral centroid | 4.14 -> **2.69** harmonics |
 | Character 0 -> 1: partial-order reversals (the Bessel oscillation) | 2 -> **0** |
 | index needed at Character 1 to match Character 0's centroid | 11.12 vs 5.00 — **+122 %** |
+
+### The rig freeze, 2026-09-04 — and what it cost to find
+
+The user played an F3 build (`eaf72bb`), where the index cap defaulted to
+**Soft**, and reported: *"when i play some neuro growl preset and adjust the
+operator 1 knob, the CPU usage slams past 100"*, and then *"it seems to happen
+mostly when i adjust the knob around a low value, but it is hard to test
+properly as it freezes FL when i do"*.
+
+It was not oversampling, which was the obvious suspect. It was the index cap,
+and the "low value" detail was the whole diagnosis:
+
+| what | measured | after |
+|---|---|---|
+| `fm::feedbackOrder` at `beta < 1` rad | **30–55 ms** per call | 5.3 ns (tabled) |
+| `fm::feedbackOrder` at `beta >= 1` rad | 0 — saturating early-out | unchanged |
+| `fm::significantOrderExact` at index 64 rad | **5.7 ms** per call | **1.0 us** |
+| one `FmBandwidth::indexScaleFor` with any feedback | **2.0–2.8 s** | **4.6 us** |
+| how often the engine resolved it | per voice per 32-sample chunk | per voice per 16 chunks |
+
+Two traps worth keeping written down:
+
+- **The cost hid on the cheap-looking side of a boundary.** `feedbackOrder`
+  returns immediately at or above 1 radian and walks 512 orders below it, so a
+  patch with *more* feedback was free and one with less was not — which is
+  exactly what "around a low value" meant.
+- **And the bisection dragged every patch onto the slow side anyway.**
+  `indexScaleFor` scales every index down as it searches, so a beta set above
+  the boundary crosses below it partway through and pays the full walk. The
+  1.885-radian case measured 2.8 s, the *slowest* of the four.
+
+The fixes, in order of how much they were worth:
+
+1. **`dsp::besselJLadder`** — Miller's downward recurrence, so
+   `significantOrderExact` gets every order in one O(n) pass instead of an
+   O(n) integral per order. Agrees with `besselJn` to **2.232e-15** over the
+   whole range Stryda uses.
+2. **`fm::feedbackOrderExact` bisects** rather than counting, which is the same
+   answer because the Kapteyn coefficients fall monotonically in `n` for
+   `beta < 1` — checked at 99 × 512 points, zero violations, and asserted
+   against the counting form in the suite.
+3. **Memo tables** for both at the default threshold, rounded **up** so the
+   bound never errs low. Built once per process, 3.5 ms and 78 ms, warmed in
+   `StrydaProcessor`'s constructor so no audio callback ever pays for them.
+4. **A sample-counted cap sub-grid**, `StrydaEngine::kCapChunks = 16`. Counted
+   in control chunks rather than callbacks, so the output stays independent of
+   the host's buffer size — asserted both ways.
+
+**Four tests, each seen red first.** The wall-clock one was written with a 1.5x
+bound, and resolving the cap every chunk again measured 1.30x and sailed
+through it; the bound is 1.10x now against a baseline of 0.84/0.85/0.87. The
+cost test in `test_FmBandwidth.cpp` was worse — a single loose bound passed with
+the table deliberately bypassed — and is now two bounds that each fail when the
+thing they name is removed. A neutrality test for F5's filter was a decoration
+for the same reason and was rewritten around the skip boundary.
+
+**And the control the user actually asked for.** *"we need the option to
+disable oversampling just like the other synths we made"* — it was built in F3
+and never attached: `HeaderBar::attachSuiteControls` was simply not called. OS,
+RENDER and the master trim are in the header now, with the live tooltip that
+says what Auto is doing at the session's rate.
 
 **Three things the measurement decided, and one it corrected:**
 

@@ -45,6 +45,21 @@ public:
     /// work is a rounding error.
     static constexpr int kControlChunk = 32;
 
+    /// How many control chunks pass between index-cap resolutions.
+    ///
+    /// The cap costs about 4.6 us per voice to resolve -- a bisection over a
+    /// bandwidth prediction, not arithmetic -- so resolving it every chunk
+    /// costs more than the synthesis does. Sixteen chunks is 512 internal
+    /// samples, 2.7 ms at 192 kHz, which is faster than any hand moves and far
+    /// slower than the audio.
+    ///
+    /// It is counted in **chunks, not blocks**: the chunk grid is anchored to
+    /// the sample stream, so this grid is too, and the output does not depend
+    /// on the host's buffer size. Counting the callback instead would
+    /// reintroduce exactly the dependence `getChunkCountdown` exists to prove
+    /// is absent.
+    static constexpr int kCapChunks = 16;
+
     void prepare (double sampleRate, int maxBlockSize)
     {
         hostRate_ = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -71,6 +86,12 @@ public:
             voice.reset();
 
         chunkCountdown_ = 0;
+
+        // 1, not `kCapChunks`: the first control chunk after a reset resolves
+        // the cap rather than running fifteen chunks with whatever scale was
+        // left over from the last stream.
+        capChunksLeft_ = 1;
+        capResolutions_ = 0;
     }
 
     void setOversamplingMode (dsp::OversamplingMode mode) noexcept { mode_ = mode; }
@@ -93,6 +114,11 @@ public:
         for (auto& voice : voices_)
             voice.prepare (internalRate_);
 
+        // The cap is resolved against the *internal* Nyquist, which has just
+        // moved, so the scale every voice is holding is now the answer to a
+        // different question. Re-ask it at the next chunk.
+        capChunksLeft_ = 1;
+
         return true;
     }
 
@@ -114,7 +140,13 @@ public:
     {
         auto& voice = voices_[static_cast<std::size_t> (allocate (note))];
         voice.noteOn (note, tuning_.frequencyFor (note), velocity);
-        voice.applyParameters (parameters_, internalRate_);
+        voice.applyParameters (parameters_);
+
+        // Immediately, rather than waiting up to `kCapChunks` for the sub-grid:
+        // a voice that started uncapped would alias for those 2.7 ms, and the
+        // start of a note is exactly where the ear is listening.
+        voice.refreshIndexCap (parameters_, internalRate_);
+        ++capResolutions_;
     }
 
     void noteOff (int note) noexcept
@@ -137,6 +169,15 @@ public:
     /// buffer-size independent once a parameter actually moves.
     [[nodiscard]] int getChunkCountdown() const noexcept { return chunkCountdown_; }
 
+    /// How many voice index-cap resolutions have happened since `prepare`.
+    ///
+    /// Exposed for the same reason `getChunkCountdown` is: the property that
+    /// matters is a *rate*, and a wall clock cannot assert a rate on a shared
+    /// machine without either false failures or a threshold so loose it catches
+    /// nothing. This counts the expensive thing directly, so the test that
+    /// guards the rig freeze is exact rather than statistical.
+    [[nodiscard]] long long getCapResolutionCount() const noexcept { return capResolutions_; }
+
     [[nodiscard]] int getActiveVoiceCount() const noexcept
     {
         int count = 0;
@@ -157,9 +198,24 @@ public:
         {
             if (chunkCountdown_ <= 0)
             {
+                const bool resolveCap = --capChunksLeft_ <= 0;
+
+                if (resolveCap)
+                    capChunksLeft_ = kCapChunks;
+
                 for (auto& voice : voices_)
-                    if (voice.isActive())
-                        voice.applyParameters (parameters_, internalRate_);
+                {
+                    if (! voice.isActive())
+                        continue;
+
+                    voice.applyParameters (parameters_);
+
+                    if (resolveCap)
+                    {
+                        voice.refreshIndexCap (parameters_, internalRate_);
+                        ++capResolutions_;
+                    }
+                }
 
                 chunkCountdown_ = kControlChunk;
             }
@@ -238,6 +294,8 @@ private:
     int factor_ { 4 };
     int polyphony_ { 8 };
     int chunkCountdown_ { 0 };
+    int capChunksLeft_ { 1 };
+    long long capResolutions_ { 0 };
 
     dsp::OversamplingMode mode_ { dsp::OversamplingMode::Auto };
     dsp::RenderOversampling render_ { dsp::RenderOversampling::sameAsLive };

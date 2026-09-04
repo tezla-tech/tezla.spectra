@@ -46,6 +46,8 @@
 #include <cmath>
 #include <numbers>
 
+#include "Exact.hpp"
+
 namespace tezla::dsp
 {
 
@@ -97,6 +99,124 @@ namespace tezla::dsp
     }
 
     return sign * sum / static_cast<double> (steps);
+}
+
+/// The largest order `besselJLadder` will fill. Sized so the ladder covers the
+/// whole range the significant-order search asks for (an index of 200 radians
+/// needs orders past 250) with room to spare, while keeping the buffer small
+/// enough to sit in thread-local storage rather than on a stack.
+inline constexpr int kBesselLadderMaxOrder = 1024;
+
+/// `J_0(x)` through `J_highest(x)`, all of them, in one pass.
+///
+/// ---------------------------------------------------------------------------
+/// **Why this exists, and what it replaced**
+/// ---------------------------------------------------------------------------
+///
+/// `besselJn` above evaluates one order for a cost of `8 * (n + |x|)`
+/// trigonometric calls. Asking it for *every* order up to the aliasing edge --
+/// which is exactly what a significant-order search does -- therefore costs
+/// `O(n^2)`, and at Stryda's indices that is millions of `sin` and `cos` calls
+/// per call. It made `fm::significantOrderExact` cost 5.7 ms at an index of 64
+/// radians, and it is half of why the index cap froze FL Studio on the user's
+/// rig (2026-09-04; the other half is `fm::feedbackOrder` below).
+///
+/// Miller's downward recurrence gets all of them together instead. Bessel's
+/// recurrence
+///
+///     J_(n-1)(x) = (2n / x) * J_n(x) - J_(n+1)(x)
+///
+/// is unstable upwards for `n > x` -- the growing second solution `Y_n` swamps
+/// it -- and stable downwards, so the ladder starts well above both the wanted
+/// order and the turning point with an arbitrary seed, walks down, and fixes
+/// the arbitrary scale afterwards with the normalisation identity
+///
+///     J_0(x) + 2 * ( J_2(x) + J_4(x) + ... ) = 1.
+///
+/// **Derived from the recurrence and the identity, both standard, and verified
+/// rather than trusted:** `tests/test_FmBandwidth.cpp` checks the whole ladder
+/// against `besselJn`'s integral over the range Stryda uses. Worst absolute
+/// disagreement 2.232e-15 at `x = 200`, order 236 -- and 0.86 us for 140 orders
+/// at `x = 100.53` against 5.7 ms for the same job one order at a time.
+///
+/// Returns false, leaving `out` untouched, if `highest` is out of range.
+[[nodiscard]] inline bool besselJLadder (double x, int highest, double* out) noexcept
+{
+    if (out == nullptr || highest < 0 || highest > kBesselLadderMaxOrder)
+        return false;
+
+    const auto count = static_cast<std::size_t> (highest) + 1;
+    const double magnitude = x < 0.0 ? -x : x;
+
+    if (magnitude < 1e-12)
+    {
+        for (std::size_t i = 0; i < count; ++i)
+            out[i] = 0.0;
+
+        out[0] = 1.0;
+        return true;
+    }
+
+    // Start above the turning point by a margin that grows with the order, so
+    // the downward pass has spent the transient before it reaches anything we
+    // keep. The margin is the usual `sqrt`-of-order rule, generously scaled.
+    int start = std::max (highest, static_cast<int> (magnitude));
+    start += std::max (24, static_cast<int> (
+                               std::ceil (12.0 * std::sqrt (static_cast<double> (start + 1)))));
+    start += start & 1;   // even, so the even-order sum below starts correctly
+
+    double above = 0.0;      // J_(n+1)
+    double here = 1e-260;    // J_n, at an arbitrary scale fixed up at the end
+    double evenSum = 0.0;    // accumulates 2 * (J_2 + J_4 + ...)
+
+    for (std::size_t i = 0; i < count; ++i)
+        out[i] = 0.0;
+
+    for (int n = start; n >= 1; --n)
+    {
+        const double below = (2.0 * static_cast<double> (n) / magnitude) * here - above;
+        above = here;
+        here = below;
+
+        // The unnormalised values grow without bound on the way down. Rescale
+        // everything, including what has already been stored, before they can
+        // overflow -- the normalisation at the end is scale-free, so this
+        // changes nothing about the answer.
+        if ((here < 0.0 ? -here : here) > 1e250)
+        {
+            here *= 1e-260;
+            above *= 1e-260;
+            evenSum *= 1e-260;
+
+            for (std::size_t i = 0; i < count; ++i)
+                out[i] *= 1e-260;
+        }
+
+        const int order = n - 1;
+
+        if (order <= highest)
+            out[static_cast<std::size_t> (order)] = here;
+
+        if (order > 0 && (order % 2) == 0)
+            evenSum += 2.0 * here;
+    }
+
+    evenSum += here;   // `here` is J_0 by now
+
+    if (! (evenSum > 0.0 || evenSum < 0.0))
+        return false;
+
+    const double scale = 1.0 / evenSum;
+
+    for (std::size_t i = 0; i < count; ++i)
+        out[i] *= scale;
+
+    // J_n(-x) = (-1)^n J_n(x).
+    if (x < 0.0)
+        for (std::size_t i = 1; i < count; i += 2)
+            out[i] = -out[i];
+
+    return true;
 }
 
 /// Modified Bessel function of the first kind, order n:
@@ -187,8 +307,8 @@ inline constexpr double kThresholdDb = -80.0;
 /// Under-estimating is the one direction a bandwidth bound may not err in, so
 /// the normalisation is by the peak, which is also what any spectrum analyser
 /// shows.
-[[nodiscard]] inline int significantOrder (double indexRadians,
-                                           double thresholdDb = kThresholdDb) noexcept
+[[nodiscard]] inline int significantOrderExact (double indexRadians,
+                                                double thresholdDb) noexcept
 {
     if (! (indexRadians > 0.0))
         return 0;
@@ -200,9 +320,27 @@ inline constexpr double kThresholdDb = -80.0;
                                           + 6.0 * std::cbrt (indexRadians)
                                           + 16.0) + 1;
 
+    // One ladder, both answers. The peak and the last order above threshold are
+    // two reductions over the same set of orders, so evaluating that set once
+    // is not a shortcut -- it is the same arithmetic with the redundancy taken
+    // out. Thread-local so the buffer is neither allocated nor on the stack;
+    // it is statically zero-initialised, so there is no guard and no first-call
+    // allocation on any thread.
+    static thread_local std::array<double, kBesselLadderMaxOrder + 1> ladder {};
+
+    const bool haveLadder = ceiling <= kBesselLadderMaxOrder
+                              && besselJLadder (indexRadians, ceiling, ladder.data());
+
+    const auto valueAt = [haveLadder, indexRadians] (int n) noexcept
+    {
+        const double value = haveLadder ? ladder[static_cast<std::size_t> (n)]
+                                        : besselJn (n, indexRadians);
+        return value < 0.0 ? -value : value;
+    };
+
     double peak = 0.0;
     for (int n = 0; n <= ceiling; ++n)
-        peak = std::max (peak, std::abs (besselJn (n, indexRadians)));
+        peak = std::max (peak, valueAt (n));
 
     if (! (peak > 0.0))
         return 0;
@@ -211,10 +349,75 @@ inline constexpr double kThresholdDb = -80.0;
 
     int highest = 0;
     for (int n = 0; n <= ceiling; ++n)
-        if (std::abs (besselJn (n, indexRadians)) >= threshold)
+        if (valueAt (n) >= threshold)
             highest = n;
 
     return highest;
+}
+
+/// The same answer at the default threshold, from a table.
+///
+/// ---------------------------------------------------------------------------
+/// **This is not premature optimisation. It is a bug fix.**
+/// ---------------------------------------------------------------------------
+///
+/// The exact form above evaluates `besselJn` about twice per candidate order,
+/// each with an adaptive step count of `8 * (n + |x|)`. At an index of 16
+/// radians that is roughly **31 000 trigonometric evaluations per call**.
+/// `FmBandwidth::topSidebandHz` calls it up to sixty times, and
+/// `indexScaleFor` calls *that* thirty-three times while bisecting -- so one
+/// index-cap resolution was **on the order of 60 million trig evaluations**.
+///
+/// Stryda was resolving the cap per voice per 32-sample control chunk, and the
+/// editor was resolving it again at twelve frames a second to draw the
+/// bandwidth readout. On the user's rig that pinned FL Studio's CPU meter past
+/// 100 % the moment a knob was touched, which is exactly when the editor
+/// timer and the parameter push coincide. Reported from the rig on 2026-09-04.
+///
+/// The table is 2048 entries over indices 0 to 200 radians, built once on first
+/// use (thread-safe by C++11 static-local rules, 8 KB, never on the audio
+/// thread's critical path because the first call happens at `prepare`). The
+/// order is a step function of the index, so **nearest-entry lookup is not an
+/// approximation of the answer -- it is the answer**, to within the table's
+/// index resolution of 0.1 radians, and the value is rounded up so the result
+/// stays on the safe side of the true edge.
+///
+/// A non-default threshold falls through to the exact form, because only the
+/// tests ask for one.
+[[nodiscard]] inline int significantOrder (double indexRadians,
+                                           double thresholdDb = kThresholdDb) noexcept
+{
+    constexpr int kTableSize = 2048;
+    constexpr double kTableTop = 200.0;
+
+    if (! (indexRadians > 0.0))
+        return 0;
+
+    // `isExactly` rather than `!=`: the table is keyed on the default threshold
+    // and only an exact match may read it, which is a deliberate bit comparison
+    // rather than the accidental one `-Wfloat-equal` is warning about.
+    if (! isExactly (thresholdDb, kThresholdDb) || indexRadians > kTableTop)
+        return significantOrderExact (indexRadians, thresholdDb);
+
+    static const std::array<int, kTableSize> table = []
+    {
+        std::array<int, kTableSize> built {};
+
+        for (int i = 0; i < kTableSize; ++i)
+            built[static_cast<std::size_t> (i)] = significantOrderExact (
+                kTableTop * static_cast<double> (i) / static_cast<double> (kTableSize - 1),
+                kThresholdDb);
+
+        return built;
+    }();
+
+    // Rounded up rather than to nearest: the order rises with the index, so the
+    // next entry is the conservative one, and conservative is the only
+    // direction a bandwidth bound may err in.
+    const auto slot = static_cast<std::size_t> (
+        std::ceil (indexRadians * (kTableSize - 1) / kTableTop));
+
+    return table[std::min (slot, static_cast<std::size_t> (kTableSize - 1))];
 }
 
 /// The textbook asymptotic edge, `n ~ I + 2*I^(1/3) + 1`.
@@ -235,6 +438,13 @@ inline constexpr double kThresholdDb = -80.0;
 /// The highest harmonic still above `thresholdDb` for an operator modulating
 /// **its own** phase by `betaRadians`.
 ///
+/// How far the feedback harmonic count searches before it saturates.
+///
+/// Past this the Kapteyn coefficients fall like n^(-4/3), so -80 dB is not
+/// reached until well past a thousand harmonics; counting further would only
+/// make the saturation look like a measurement.
+inline constexpr int kFeedbackSearchCeiling = 512;
+
 /// Feedback phase modulation is `y = sin(w t + beta * y)`, which is **Kepler's
 /// equation**, and its solution is the classical Kapteyn series: the n-th
 /// harmonic of the output has amplitude exactly
@@ -281,33 +491,145 @@ inline constexpr double kThresholdDb = -80.0;
 /// Saturating rather than extrapolating is the conservative direction: it makes
 /// the index cap clamp hard exactly where the model stops being able to
 /// promise anything.
+///
+/// ---------------------------------------------------------------------------
+/// **Why this bisects instead of counting, and what the counting cost**
+/// ---------------------------------------------------------------------------
+///
+/// The obvious form walks `n` from 1 to the ceiling and keeps the last order
+/// above threshold. It is also the single most expensive function in this
+/// header by three orders of magnitude, because `besselJn`'s step count grows
+/// with `n + |x|` and here `x = n * beta`: the walk costs about
+/// `8 * (1 + beta) * ceiling^2 / 2` trigonometric evaluations, which is **two
+/// million per call**. Timed at 30-55 ms each, and only for `beta < 1` -- at
+/// and above 1 radian the saturating early-out returns instantly, which is why
+/// the cost hides at exactly the settings a synthesiser spends least time at.
+///
+/// The Kapteyn coefficients decay monotonically in `n` for every `beta < 1`
+/// (checked at 99 x 512 points, zero violations above 1e-9, and asserted in
+/// `tests/test_FmBandwidth.cpp` against the counting form itself), so the last
+/// order above threshold is found by bisection in nine evaluations rather than
+/// 512 -- **the same answer**, not an approximation of it. The counting form
+/// lives in the test as the reference it is compared against, which is where a
+/// naive implementation belongs.
+[[nodiscard]] inline int feedbackOrderExact (double betaRadians,
+                                             double thresholdDb) noexcept
+{
+    if (! (betaRadians > 0.0))
+        return 1;
+
+    if (betaRadians >= 1.0)
+        return kFeedbackSearchCeiling;
+
+    const double threshold = std::pow (10.0, thresholdDb / 20.0);
+
+    const auto amplitudeAt = [betaRadians] (int n) noexcept
+    {
+        const double nb = static_cast<double> (n) * betaRadians;
+        return std::abs (2.0 * besselJn (n, nb) / nb);
+    };
+
+    // The two ends first, so the invariant below is true when the loop starts
+    // and the answer is never extrapolated from outside the searched range.
+    if (amplitudeAt (kFeedbackSearchCeiling) >= threshold)
+        return kFeedbackSearchCeiling;
+
+    if (amplitudeAt (1) < threshold)
+        return 1;
+
+    // Invariant: `low` is at or above threshold, `high` is below it.
+    int low = 1;
+    int high = kFeedbackSearchCeiling;
+
+    while (high - low > 1)
+    {
+        const int mid = low + (high - low) / 2;
+
+        if (amplitudeAt (mid) >= threshold)
+            low = mid;
+        else
+            high = mid;
+    }
+
+    return low;
+}
+
+/// The same answer at the default threshold, from a table.
+///
+/// Nine Bessel evaluations is cheap next to 512 and still far too expensive to
+/// run per voice per control chunk: `topSidebandHz` calls this twelve times and
+/// `indexScaleFor` calls *that* thirty-three times, so a single index-cap
+/// resolution came to **two to three seconds** on this machine with any
+/// feedback at all in the patch. That is not a CPU spike, it is a hang, and it
+/// is what froze FL Studio on the user's rig when a knob was touched (reported
+/// 2026-09-04). Note the trap in the arithmetic: the bisection in
+/// `indexScaleFor` scales every index down as it searches, so a patch with
+/// feedback *above* the 1-radian early-out still falls below it partway
+/// through the search and pays the full cost anyway.
+///
+/// The order rises monotonically with beta, so rounding the lookup **up** to
+/// the next tabulated beta is the conservative direction -- a slightly wider
+/// predicted spectrum, never a narrower one. 1024 entries over (0, 1] give a
+/// beta resolution of about 0.001; the table is built once on first use, which
+/// happens at `prepare` and not on the audio thread's critical path.
 [[nodiscard]] inline int feedbackOrder (double betaRadians,
                                         double thresholdDb = kThresholdDb) noexcept
 {
-    /// Past this the Kapteyn coefficients fall like n^(-4/3), so -80 dB is not
-    /// reached until well past a thousand harmonics; counting further would
-    /// only make the saturation look like a measurement.
-    constexpr int kSearchCeiling = 512;
+    constexpr int kTableSize = 1024;
 
     if (! (betaRadians > 0.0))
         return 1;
 
     if (betaRadians >= 1.0)
-        return kSearchCeiling;
+        return kFeedbackSearchCeiling;
 
-    const double threshold = std::pow (10.0, thresholdDb / 20.0);
+    if (! isExactly (thresholdDb, kThresholdDb))
+        return feedbackOrderExact (betaRadians, thresholdDb);
 
-    int highest = 1;
-    for (int n = 1; n <= kSearchCeiling; ++n)
+    static const std::array<int, kTableSize> table = []
     {
-        const double nb = static_cast<double> (n) * betaRadians;
-        const double amplitude = std::abs (2.0 * besselJn (n, nb) / nb);
+        std::array<int, kTableSize> built {};
 
-        if (amplitude >= threshold)
-            highest = n;
-    }
+        // Built by walking up rather than by a bisection per entry, because the
+        // order is monotone in beta as well as in n: entry `i` cannot be below
+        // entry `i - 1`, so the search starts where the last one finished and
+        // only ever steps upward. The total number of upward steps across the
+        // whole table is therefore the final order, not the table size times
+        // the search depth -- about 1500 Bessel evaluations for the lot instead
+        // of 9000, and the build drops from 430 ms to well under a tenth of it.
+        const double threshold = std::pow (10.0, kThresholdDb / 20.0);
+        int order = 1;
 
-    return highest;
+        for (int i = 0; i < kTableSize; ++i)
+        {
+            const double beta = static_cast<double> (i + 1) / static_cast<double> (kTableSize);
+
+            if (beta >= 1.0)
+            {
+                built[static_cast<std::size_t> (i)] = kFeedbackSearchCeiling;
+                continue;
+            }
+
+            while (order < kFeedbackSearchCeiling)
+            {
+                const double nb = static_cast<double> (order + 1) * beta;
+
+                if (std::abs (2.0 * besselJn (order + 1, nb) / nb) < threshold)
+                    break;
+
+                ++order;
+            }
+
+            built[static_cast<std::size_t> (i)] = order;
+        }
+
+        return built;
+    }();
+
+    const auto slot = static_cast<std::size_t> (
+        std::max (0.0, std::ceil (betaRadians * kTableSize) - 1.0));
+
+    return table[std::min (slot, static_cast<std::size_t> (kTableSize - 1))];
 }
 
 /// The largest ModFM index `k` whose aliasing stays below `thresholdDb`.

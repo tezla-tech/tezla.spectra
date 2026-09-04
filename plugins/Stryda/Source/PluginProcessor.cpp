@@ -148,6 +148,13 @@ StrydaProcessor::StrydaProcessor()
                                                           true)),
       state_ (*this, nullptr, "STRYDA", createParameterLayout())
 {
+    // Build the bandwidth predictor's order tables here, on the thread that
+    // constructs the plugin, rather than leaving them to whichever thread
+    // happens to ask first. They cost about 80 ms once per process and are
+    // shared by every instance; `prepareToPlay` is not guaranteed to be off the
+    // audio thread in every host, and 80 ms there is a dropout.
+    (void) dsp::fm::significantOrder (1.0);
+    (void) dsp::fm::feedbackOrder (0.5);
 }
 
 bool StrydaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
