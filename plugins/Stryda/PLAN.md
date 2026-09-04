@@ -348,7 +348,7 @@ first `pending` row.**
 |---|---|
 | F0 plan + registry + references + Ictus pause + roadmap | done |
 | F1 `FmBandwidth` + `tezla-measure stryda`, four tables | done |
-| F2 `FmOperator` + `OperatorMatrix` + voice + engine + index cap | pending |
+| F2 `FmOperator` + `OperatorMatrix` + voice + engine + index cap | done |
 | F3 minimal JUCE layer, rig build + ear round | pending |
 | F4 `PhaseShaper`, exponential cells, formant operator, key scaling | pending |
 | F5 sub lane, Split, per-voice filter, unison index spread | pending |
@@ -424,6 +424,56 @@ may not err in.
   *uniform* −31 dB alias floor at every factor and every rate — which looks
   exactly like a real result and would have been quoted as one. The render now
   discards 4096 host samples first.
+
+---
+
+**Measured at F2** (`tezla-tests`, 48 kHz host, x4 internal unless said):
+
+| claim | figure |
+|---|---|
+| Character 0 against `sin(2 pi phase)`, 48000 samples | **bit-identical** |
+| Character 0 against the closed form `sin(wc t + k sin(wm t))` | **0.000e+00** |
+| Character 1 against the closed form `e^(k cos - k) sin(wc t)` | **1.665e-16** |
+| ModFM peak over index 0..8 cycles (the normalisation) | **1.000000**, never above |
+| `5 -> 0` against an explicit instantaneous reference | **2.220e-16** |
+| `0 -> 5` against an explicit one-sample-late reference | **2.220e-16** |
+| 64-, 97- and 512-sample blocks, fixed patch | **bit-identical** |
+| chunk countdown after 2048 samples at three block sizes | **0 / 0 / 0** |
+| index cap when off, and when on but not binding | **bit-identical output** |
+| index scale, ratio 11 at index 6: C7 / C2 | **0.0116** / **1.0000** |
+| voice retirement one second after note-off, sustain 0 | **0 active** |
+| 8 voices, 6 operators, x4, classic FM | 47-57 % of a core (container, noisy) |
+| 8 voices, 6 operators, x4, half ModFM | 41-50 % of a core |
+| idle instrument | **1.0 %** |
+
+**Three tests were decorations, and the break-checks are what said so.** Each
+passed while the thing it claimed to cover was removed:
+
+1. The Character-0 sine test survived deleting the branch that skips the
+   exponential, because `std::exp (0.0 * finite)` is 1.0 anyway. Replaced by a
+   test that drives the ModFM inputs to **infinity** -- where `0.0 * inf` is NaN
+   -- and asserts the classic operator is still bit-exactly a sine.
+2. The matrix-ordering test survived making both directions read the current
+   sample, because **`outputs_` already holds the previous value** for an
+   operator that has not run yet. That is not only a test bug: it meant the
+   `previousOutputs_` / `previousQuadratures_` / `previousGains_` copies were
+   redundant, three six-element array copies per sample for nothing. Removing
+   them left the audio bit-identical. Replaced by a test that compares each
+   direction against an *explicit* reference built with and without a one-sample
+   delay -- 2.220e-16 both ways.
+3. The block-size test survived cutting the render loop at the block boundary,
+   because with nothing changing between chunks both cuts produce the same
+   samples. Replaced by a test on the mechanism: the chunk countdown after a
+   fixed number of samples must not depend on the route taken. Broken, it reads
+   **-224 / -2016 / -12** at block sizes 64 / 512 / 97.
+
+**An optimisation that measured worse, recorded so it is not tried again.**
+Classic FM measures *slower* than ModFM here -- 47-57 % against 41-50 % of a
+core, repeatably over ten interleaved runs -- which is the opposite of what an
+extra exponential and cosine predict. The likeliest cause is `std::sin` argument
+reduction: at full tilt the phase reaches tens of radians. Wrapping the argument
+with `std::floor` first is mathematically exact and bit-exact at neutral, and it
+made **both** figures worse. Reverted; the cause is recorded as unconfirmed.
 
 ---
 
