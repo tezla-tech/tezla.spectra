@@ -109,8 +109,8 @@ tooltip reads the session's actual rate and says what Auto is doing right now.
 
 ### The panel is paged
 
-**OPERATORS · MATRIX · VOICE · SEQ · MANGLE · ADV · MOD · TUNING.** Each page
-gets the whole window,
+**OPERATORS · MATRIX · VOICE · SEQ · MANGLE · ADV · MOD · NOTES · TUNING.** Each
+page gets the whole window,
 so the window only has to fit the largest page rather than the sum of them, and
 each page lays its rows out from the height it is given — a small window gets
 denser, not clipped. Minimum 860 × 520.
@@ -354,11 +354,29 @@ of the range.
 
 ## Presets
 
-*Init* (one operator, bit-exactly a sine — start here), *Neuro Growl*,
-*Bell*, *Sub Stack*. Each carries its own notes: what it is, what to automate,
-and what to listen for.
+Twelve, each with its own notes on the NOTES page — what the patch is for, what
+to hold down, what is worth automating, and where the sound came from.
 
----
+| | what it is for |
+|---|---|
+| **Init** | One operator, one sine, bit-exactly a sine wave. Turn one matrix cell up. |
+| **Neuro Growl** | The reason this plugin exists. A three-deep stack, sub lane underneath, unison with index spread on top. |
+| **Bell** | Chowning's own territory: 1 : 3.5, a modulator that decays faster than the carrier. |
+| **Sub Stack** | A bass that stays a bass, and the patch to check the index cap on. |
+| **Talk Box** | The vowel lane with its own pattern. Split keeps the bottom out of it. |
+| **Reese** | Six copies, 18 cents, full spread, and index spread so they differ in timbre rather than only pitch. |
+| **Step Growl** | The ratio sequencer in sixteenths. A riff made of harmonic identity rather than filter. |
+| **Saw Teeth** | What SHAPE does, and a warning about it: a saw modulator with the cap Hard. |
+| **Tine Piano** | Two pairs, a 14 : 1 strike with a short envelope over a long body. Velocity to index. |
+| **Macro Growl** | One knob, five destinations, some negative. Sweep MACRO 1. |
+| **Slow Bloom** | The ADV envelopes and the LFOs, on something with time to show them. |
+| **Mangled** | The whole chain switched on at once, so you can hear what each stage costs. |
+
+Every one is **trimmed to about −3 dBFS** on a single note at full velocity, and
+`tezla-render presets` is a gate rather than a report: it plays each preset and
+exits non-zero if any clips. The first draft of these twelve had five over full
+scale, one at +4.7 dBFS, which no amount of reading the parameters back would
+have found.
 
 ## Sources
 

@@ -60,6 +60,108 @@ private:
     std::array<std::unique_ptr<Control>, kNumOperators> noise_ {};
 };
 
+/// The output spectrum, with the predicted top sideband drawn on it.
+///
+/// ---------------------------------------------------------------------------
+/// **The prediction is the point, not the curve**
+/// ---------------------------------------------------------------------------
+///
+/// A spectrum analyser is a commodity. What is worth showing here is the thing
+/// this instrument knows that an analyser cannot: where the sidebands are going
+/// to stop, computed from the matrix rather than measured after the fact.
+/// `dsp::FmBandwidth` has been measured against a real spectrum since F1 and is
+/// exact to the bin (0 Hz error, 6.0 Hz bins), and this is where that
+/// measurement becomes something a player can see rather than a number in a
+/// test log.
+///
+/// Three markers, and each says something different:
+///
+///  - **EDGE** -- the predicted top sideband. Everything the patch produces is
+///    below it. If the curve has content past it, the prediction is wrong and
+///    that is a bug worth reporting.
+///  - **NYQUIST** -- half the internal rate, which is where the oversampler is
+///    working. Sidebands past this fold back and become the inharmonic mush
+///    CLAUDE.md section 7 calls a defect.
+///  - **UNCAPPED** -- where the edge WOULD have been without the index cap,
+///    drawn only when the cap is actually doing something. A cap that is not
+///    binding is exactly inert and draws nothing, which is the honest picture
+///    of it, and the gap between the two lines is the work it did.
+class BandwidthView final : public juce::Component,
+                            public juce::SettableTooltipClient
+{
+public:
+    BandwidthView (StrydaProcessor& owner, ui::Palette palette);
+
+    void prepare (double sampleRate);
+
+    /// Pulls a frame and redraws. Called from the editor's timer.
+    void refresh (double predictedTopHz, double cappedTopHz, bool capBiting);
+
+    void paint (juce::Graphics& g) override;
+
+private:
+    [[nodiscard]] float xFor (double hz) const;
+
+    StrydaProcessor& processor_;
+    ui::Palette palette_;
+    dsp::SpectrumAnalyser analyser_;
+
+    double lowHz_ { 20.0 };
+    double highHz_ { 20000.0 };
+    double predicted_ { 0.0 };
+    double capped_ { 0.0 };
+    bool capBiting_ { false };
+};
+
+/// The current preset's notes, and a glossary of the words the panel uses.
+///
+/// A tooltip answers "what does this knob do". A preset needs something else:
+/// what the patch is FOR, what to hold down, what is worth automating, and
+/// where the sound came from -- which is a paragraph and sometimes a century of
+/// history. `Preset::notes` sits beside the settings it describes so the two
+/// cannot drift, and the field is not defaultable, so a preset added without
+/// notes fails to compile rather than showing a blank page.
+///
+/// The markup is deliberately tiny: a blank line separates paragraphs and
+/// `**text**` is bold. Anything more would be a document format, and the notes
+/// are prose.
+class NotesView final : public juce::Component
+{
+public:
+    NotesView (StrydaProcessor& owner, ui::Palette palette);
+
+    /// Rebuild for a new preset. Cheap enough to call on a change and far too
+    /// expensive to call every frame, which is why the editor compares the
+    /// index first.
+    void setProgram (int index);
+
+    /// How tall the laid-out text is, so the viewport can scroll it.
+    [[nodiscard]] int getPreferredHeight() const noexcept { return height_; }
+
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+
+private:
+    struct Block
+    {
+        enum class Kind { title, heading, body };
+
+        Kind kind { Kind::body };
+        juce::AttributedString text;
+        juce::TextLayout layout;
+        int height { 0 };
+    };
+
+    void build (int width);
+
+    StrydaProcessor& processor_;
+    ui::Palette palette_;
+    int program_ { -1 };
+    int builtWidth_ { 0 };
+    int height_ { 0 };
+    std::vector<Block> blocks_;
+};
+
 /// One operator's actual output wave, for one cycle.
 ///
 /// ---------------------------------------------------------------------------
@@ -156,6 +258,7 @@ public:
         pageMangle,
         pageAdv,
         pageMod,
+        pageNotes,
         pageTuning,
         pageCount
     };
@@ -173,6 +276,7 @@ private:
     void layoutMangle (juce::Rectangle<int> area);
     void layoutAdv (juce::Rectangle<int> area);
     void layoutMod (juce::Rectangle<int> area);
+    void layoutNotes (juce::Rectangle<int> area);
 
     void paintOperators (juce::Graphics& g, juce::Rectangle<int> area);
     void paintMatrix (juce::Graphics& g, juce::Rectangle<int> area);
@@ -199,6 +303,10 @@ private:
     /// The predicted top of the spectrum, from the parameters rather than from
     /// the audio thread, so the readout is live with the transport stopped.
     [[nodiscard]] double predictedTop() const;
+
+    /// Set by predictedTop(): the top the patch would produce with no cap, so
+    /// the spectrum can show what the cap pulled it back from.
+    mutable double uncappedTop_ { 0.0 };
 
     /// Set by predictedTop(): whether the index cap is doing work at the moment.
     mutable bool capBiting_ { false };
@@ -329,11 +437,20 @@ private:
                kNumSlots> slotDestAttachments_ {};
     std::vector<Control*> slotAmounts_;
 
+    /// F9b: the spectrum on the MATRIX page, under the readout.
+    std::unique_ptr<BandwidthView> spectrum_;
+
     juce::Label bandwidth_;
     juce::Label voices_;
 
     juce::ComboBox indexCapBox_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> indexCapAttachment_;
+
+    /// F9b: the NOTES page. A viewport because a good preset note is longer
+    /// than a panel is tall, and clipping the interesting half would be worse
+    /// than not writing it.
+    juce::Viewport notesViewport_;
+    std::unique_ptr<NotesView> notesView_;
 
     juce::ComboBox presetBox_;
 

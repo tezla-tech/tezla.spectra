@@ -272,6 +272,419 @@ void MatrixGrid::resized()
 
 
 // ---------------------------------------------------------------------------
+// The spectrum, with the predicted edge on it
+// ---------------------------------------------------------------------------
+
+BandwidthView::BandwidthView (StrydaProcessor& owner, ui::Palette palette)
+    : processor_ (owner), palette_ (palette)
+{
+    setInterceptsMouseClicks (false, false);
+    setTooltip (
+        "The output spectrum, with three markers that matter more than the curve does.\n\n"
+        "**EDGE** is the predicted top sideband, computed from the matrix rather than measured "
+        "-- everything the patch produces is below it. The predictor has been measured against "
+        "a real spectrum to 0 Hz at a 6 Hz bin width, so if the curve has content past the "
+        "line, that is a bug rather than a surprise.\n\n"
+        "**NYQUIST** is half the internal rate, where the oversampler is working. Anything past "
+        "it folds back and becomes inharmonic mush.\n\n"
+        "**CAP** appears only when the index cap is actually doing something, and shows where "
+        "it pulled the edge back to. A cap that is not binding draws nothing, because it is "
+        "doing nothing -- exactly, to the bit.");
+}
+
+void BandwidthView::prepare (double sampleRate)
+{
+    // **The axis stops at the HOST Nyquist, not the internal one.** The capture
+    // is filled after decimation, so there is nothing above it to draw; an axis
+    // running to the internal Nyquist would show a curve that stops two thirds
+    // of the way across and read as a broken analyser rather than as a correct
+    // one. Markers past the end are pinned to the right edge and say so.
+    //
+    // 4096 points: about 12 Hz at 48 kHz, which separates the sidebands of a
+    // bass note rather than smearing them into one another.
+    highHz_ = std::max (2000.0, sampleRate * 0.5 * 0.98);
+    analyser_.prepare (sampleRate, 12, 200, lowHz_, highHz_);
+}
+
+void BandwidthView::refresh (double predictedTopHz, double cappedTopHz, bool capBiting)
+{
+    predicted_ = predictedTopHz;
+    capped_ = cappedTopHz;
+    capBiting_ = capBiting;
+
+    if (analyser_.update (processor_.getOutputCapture()))
+        repaint();
+    else
+        repaint();      // the markers move with the patch even in silence
+}
+
+float BandwidthView::xFor (double hz) const
+{
+    // Logarithmic, like every frequency axis in the suite.
+    const double clamped = juce::jlimit (lowHz_, highHz_, hz);
+    const double span = std::log (highHz_ / lowHz_);
+
+    return static_cast<float> (std::log (clamped / lowHz_) / span)
+             * static_cast<float> (getWidth());
+}
+
+void BandwidthView::paint (juce::Graphics& g)
+{
+    auto area = getLocalBounds().toFloat();
+
+    g.setColour (palette_.background.darker (0.25f));
+    g.fillRoundedRectangle (area, 4.0f);
+
+    // Decade lines, so the axis is readable without a full ruler.
+    g.setFont (juce::FontOptions (9.0f));
+
+    for (const double hz : { 100.0, 1000.0, 10000.0 })
+    {
+        if (hz >= highHz_)
+            continue;
+
+        const float x = xFor (hz);
+
+        g.setColour (palette_.dimText.withAlpha (0.18f));
+        g.drawVerticalLine (static_cast<int> (x), area.getY(), area.getBottom());
+
+        g.setColour (palette_.dimText.withAlpha (0.55f));
+        g.drawText (hz >= 1000.0 ? juce::String (hz / 1000.0, 0) + "k"
+                                 : juce::String (hz, 0),
+                    static_cast<int> (x) + 3, static_cast<int> (area.getBottom()) - 13,
+                    30, 12, juce::Justification::left);
+    }
+
+    // The curve.
+    const auto& magnitudes = analyser_.getMagnitudesDb();
+
+    if (magnitudes.size() >= 2)
+    {
+        constexpr float kTopDb = 0.0f;
+        constexpr float kBottomDb = -84.0f;
+
+        juce::Path curve;
+
+        for (std::size_t bin = 0; bin < magnitudes.size(); ++bin)
+        {
+            const float x = area.getWidth() * static_cast<float> (bin)
+                              / static_cast<float> (magnitudes.size() - 1);
+            const float level = juce::jlimit (kBottomDb, kTopDb, magnitudes[bin]);
+            const float y = area.getBottom()
+                          - area.getHeight() * (level - kBottomDb) / (kTopDb - kBottomDb);
+
+            if (bin == 0)
+                curve.startNewSubPath (x, y);
+            else
+                curve.lineTo (x, y);
+        }
+
+        juce::Path filled (curve);
+        filled.lineTo (area.getRight(), area.getBottom());
+        filled.lineTo (area.getX(), area.getBottom());
+        filled.closeSubPath();
+
+        g.setColour (palette_.accent.withAlpha (0.18f));
+        g.fillPath (filled);
+
+        g.setColour (palette_.accent.withAlpha (0.9f));
+        g.strokePath (curve, juce::PathStrokeType (1.3f));
+    }
+
+    // The markers, drawn over the curve because they are the point of it.
+    int labelRow = 0;
+
+    const auto marker = [&] (double hz, juce::Colour colour, const juce::String& label,
+                             bool dashed)
+    {
+        if (! (hz > lowHz_))
+            return;
+
+        // Off the top of the axis is the normal case for the EDGE at a factor
+        // of four: it is pinned to the right and carries its own number, which
+        // is more useful than a line that silently sits on the border.
+        const bool beyond = hz > highHz_;
+        const float x = beyond ? area.getRight() - 1.0f : xFor (hz);
+
+        const auto text = beyond
+                            ? label + " " + (hz >= 1000.0
+                                                ? juce::String (hz / 1000.0, hz >= 10000.0 ? 0 : 1) + "k"
+                                                : juce::String (hz, 0))
+                            : label;
+
+        g.setColour (colour);
+
+        if (dashed)
+        {
+            const float dashes[] { 4.0f, 3.0f };
+            juce::Path line;
+            line.startNewSubPath (x, area.getY() + 2.0f);
+            line.lineTo (x, area.getBottom() - 2.0f);
+
+            juce::PathStrokeType (1.4f).createDashedStroke (line, line, dashes, 2);
+            g.strokePath (line, juce::PathStrokeType (1.4f));
+        }
+        else
+        {
+            g.drawVerticalLine (static_cast<int> (x), area.getY() + 2.0f, area.getBottom() - 2.0f);
+        }
+
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+
+        // Right-aligned when the line is near the right edge, so a label never
+        // runs off the plot; and stacked, so two markers that land in the same
+        // place -- which they do whenever both are past the axis -- do not
+        // print on top of each other.
+        const bool nearRight = x > area.getWidth() - 90.0f;
+        const int row = labelRow++;
+
+        g.drawText (text,
+                    static_cast<int> (nearRight ? x - 86.0f : x + 4.0f),
+                    static_cast<int> (area.getY()) + 3 + row * 12, 84, 12,
+                    nearRight ? juce::Justification::right : juce::Justification::left);
+    };
+
+    const double nyquist = processor_.getInternalNyquistHz();
+
+    marker (nyquist, palette_.dimText.withAlpha (0.8f), "NYQUIST", true);
+    marker (predicted_, palette_.secondary, "EDGE", false);
+
+    if (capBiting_)
+        marker (capped_, juce::Colour { 0xffe8b23a }, "UNCAPPED", true);
+}
+
+// ---------------------------------------------------------------------------
+// The NOTES page
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// The words the panel uses that a player would reasonably not know, and what
+/// each one means here specifically. Written for someone who knows synths and
+/// has not read a Bessel function in their life.
+struct GlossaryEntry { const char* term; const char* meaning; };
+
+const GlossaryEntry kGlossary[] {
+    { "Index",
+      "How hard one operator modulates another, in **cycles** of phase deviation. It is the "
+      "brightness control of FM: a higher index means more sidebands, further out. Every cell "
+      "in the matrix is an index." },
+
+    { "Ratio",
+      "An operator's frequency as a multiple of the note. In FM the ratio IS the interval -- "
+      "sidebands land at the carrier plus and minus whole multiples of the modulator, so a "
+      "whole-number ratio fuses into one tone and 4.76 is a bell." },
+
+    { "Character",
+      "Classic FM at 0, ModFM at 1, continuously between. At the ModFM end the partials fall "
+      "away in order and the index behaves like a filter opening; at the classic end it steps "
+      "through Bessel nulls and the timbre flickers. **It only does anything on an operator "
+      "that something else modulates** -- it scales with the index arriving, so on a carrier "
+      "nobody modulates it is inert at every setting." },
+
+    { "Shape",
+      "The operator's waveform. Sine is the default and the safe one: a non-sine operator's "
+      "harmonics MULTIPLY the sideband ladder rather than adding to it, so a Saw modulator at "
+      "index 4 is a different order of brightness -- and of aliasing -- than a sine." },
+
+    { "Fold",
+      "Phase distortion: the ramp the operator reads is bent before anything reads it, which "
+      "puts a knee in the wave. Exactly the identity at 0." },
+
+    { "Feedback",
+      "An operator modulating itself, drawn on the matrix diagonal because that is the same "
+      "idea as a cell. Bounded by construction, and the two-sample average inside it is what "
+      "stops it settling into a useless flip at Nyquist." },
+
+    { "Braid",
+      "A named topology -- Stack, Twin, Fan, Ring, Pairs, Solo. Pressing one WRITES the matrix "
+      "and leaves it editable, so it is a starting point rather than a mode." },
+
+    { "Matrix order",
+      "Operators evaluate 6 down to 1, so a cell BELOW the diagonal is instantaneous within "
+      "the sample and one ABOVE it is one sample old. That delay is what turns an algebraic "
+      "loop into a computable one, and it is why op 4 -> op 2 and op 2 -> op 4 do not sound "
+      "alike at the same index." },
+
+    { "Index cap",
+      "Scales every index down until the predicted top sideband fits under the internal "
+      "Nyquist -- 1980s key scaling derived from the arithmetic rather than dialled in. Off by "
+      "default. When it is not binding it is **exactly** inert, to the bit." },
+
+    { "Split",
+      "A crossover. The low band goes round the vowel lane and the whole mangle chain "
+      "untouched, which is what stops a mangled bass losing its bottom. At 0 Hz it is skipped "
+      "outright, because a Linkwitz-Riley crossover summed back together is an allpass rather "
+      "than an identity." },
+
+    { "Sub lane",
+      "An oscillator with its own envelope that enters neither the matrix nor the mangle "
+      "chain. Nothing in the instrument can touch it, so the fundamental stays where you put "
+      "it however hard the operators are driven." },
+
+    { "Index spread",
+      "Unison detunes the copies in pitch; this spreads the modulation index across them too, "
+      "so they differ in TIMBRE as well. It is the thickest control here and it is what a "
+      "reese wants." },
+
+    { "Ratio mode",
+      "Free, Harmonic (the nearest simple p:q), or Scale -- the ratio snapped to the loaded "
+      "tuning's degrees, octave-extended. Scale mode puts a modulator's whole sideband ladder "
+      "on your scale rather than on 12-TET's, at every key, and it is the one idea here no "
+      "other FM synth has." },
+
+    { "Matrix depth",
+      "A modulation destination that scales every live cell together rather than adding to "
+      "them. Scaling can only move what is already there; adding would switch on paths the "
+      "patch never asked for." }
+};
+} // namespace
+
+NotesView::NotesView (StrydaProcessor& owner, ui::Palette palette)
+    : processor_ (owner), palette_ (palette)
+{
+    setInterceptsMouseClicks (false, false);
+}
+
+void NotesView::setProgram (int index)
+{
+    if (index == program_)
+        return;
+
+    program_ = index;
+    builtWidth_ = 0;        // force a rebuild at the next resize or paint
+    build (getWidth());
+    repaint();
+}
+
+void NotesView::build (int width)
+{
+    if (width <= 0)
+        return;
+
+    builtWidth_ = width;
+    blocks_.clear();
+
+    const auto& presets = StrydaProcessor::getPresets();
+    const auto safe = juce::jlimit (0, static_cast<int> (presets.size()) - 1, program_);
+
+    if (presets.empty())
+        return;
+
+    const auto& preset = presets[static_cast<std::size_t> (safe)];
+
+    // The little markup: a blank line separates paragraphs, `**text**` is bold.
+    const auto addBlock = [this, width] (Block::Kind kind, const juce::String& text)
+    {
+        Block block;
+        block.kind = kind;
+
+        const float size = kind == Block::Kind::title ? 19.0f
+                         : kind == Block::Kind::heading ? 12.0f
+                         : 13.0f;
+
+        const auto colour = kind == Block::Kind::title ? palette_.accent
+                          : kind == Block::Kind::heading ? palette_.secondary
+                          : palette_.text;
+
+        // Split on `**` and alternate weight, so the bold survives wrapping
+        // rather than being a marker the reader has to ignore.
+        auto remaining = text;
+        bool bold = false;
+
+        while (remaining.isNotEmpty())
+        {
+            const auto marker = remaining.indexOf ("**");
+            const auto piece = marker >= 0 ? remaining.substring (0, marker) : remaining;
+
+            if (piece.isNotEmpty())
+                block.text.append (piece,
+                    juce::FontOptions (size, bold || kind != Block::Kind::body
+                                                 ? juce::Font::bold : juce::Font::plain),
+                    colour);
+
+            if (marker < 0)
+                break;
+
+            remaining = remaining.substring (marker + 2);
+            bold = ! bold;
+        }
+
+        block.text.setLineSpacing (kind == Block::Kind::body ? 3.0f : 1.0f);
+        block.layout.createLayout (block.text, static_cast<float> (width));
+        block.height = static_cast<int> (std::ceil (block.layout.getHeight()))
+                     + (kind == Block::Kind::body ? 12 : 16);
+
+        blocks_.push_back (std::move (block));
+    };
+
+    addBlock (Block::Kind::title, preset.name);
+
+    for (const auto& paragraph : juce::StringArray::fromTokens (
+             juce::String (preset.notes), "\n\n", {}))
+        if (paragraph.trim().isNotEmpty())
+            addBlock (Block::Kind::body, paragraph.trim());
+
+    addBlock (Block::Kind::heading, "GLOSSARY");
+
+    for (const auto& entry : kGlossary)
+        addBlock (Block::Kind::body,
+                  "**" + juce::String (entry.term) + "** -- " + juce::String (entry.meaning));
+
+    height_ = 0;
+    for (const auto& block : blocks_)
+        height_ += block.height;
+
+    height_ += 24;
+}
+
+void NotesView::resized()
+{
+    if (getWidth() != builtWidth_)
+    {
+        build (getWidth());
+
+        // The viewport sizes this component from `getPreferredHeight`, and the
+        // height only becomes known once the text has been wrapped -- so a
+        // rebuild at a new width has to ask for a new size rather than assume
+        // the old one still fits.
+        if (auto* viewport = findParentComponentOfClass<juce::Viewport>())
+            setSize (getWidth(), juce::jmax (viewport->getHeight(), height_));
+    }
+}
+
+void NotesView::paint (juce::Graphics& g)
+{
+    if (getWidth() != builtWidth_)
+        build (getWidth());
+
+    int y = 0;
+
+    for (const auto& block : blocks_)
+    {
+        block.layout.draw (g, juce::Rectangle<float> (
+            0.0f, static_cast<float> (y),
+            static_cast<float> (getWidth()), block.layout.getHeight()));
+
+        y += block.height;
+    }
+}
+
+void StrydaEditor::layoutNotes (juce::Rectangle<int> area)
+{
+    notesViewport_.setBounds (area.reduced (12, 8));
+
+    if (notesView_ != nullptr)
+    {
+        // The scrollbar's width, so the text never runs under it.
+        const int width = juce::jmax (200, notesViewport_.getWidth() - 18);
+
+        notesView_->setSize (width, juce::jmax (notesViewport_.getHeight(),
+                                                notesView_->getPreferredHeight()));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The operator's own wave
 // ---------------------------------------------------------------------------
 
@@ -1346,6 +1759,18 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
         "moves in ratio, a cutoff in octaves, a level in level.\n\n"
         "Exactly zero is inert, and inert here means the destination is not even read.");
 
+    spectrum_ = std::make_unique<BandwidthView> (owner, palette_);
+    spectrum_->prepare (owner.getSampleRate() > 0.0 ? owner.getSampleRate() : 48000.0);
+    addChildComponent (*spectrum_);
+
+    notesView_ = std::make_unique<NotesView> (owner, palette_);
+    notesView_->setProgram (owner.getCurrentProgram());
+
+    notesViewport_.setViewedComponent (notesView_.get(), false);
+    notesViewport_.setScrollBarsShown (true, false);
+    notesViewport_.setScrollBarThickness (14);
+    addChildComponent (notesViewport_);
+
     tuningPage_ = std::make_unique<ui::TuningPanel> (owner, palette_,
         "Notes play through this scale, as everywhere in the suite. What is different is that "
         "an operator's RATIO can snap to it too -- set an operator's Ratio mode to Scale on the "
@@ -1362,7 +1787,7 @@ StrydaEditor::StrydaEditor (StrydaProcessor& owner)
 
     // The tabs. Built last so every page's controls exist to be hidden.
     static const char* const tabNames[] { "OPERATORS", "MATRIX", "VOICE", "SEQ",
-                                         "MANGLE", "ADV", "MOD", "TUNING" };
+                                         "MANGLE", "ADV", "MOD", "NOTES", "TUNING" };
 
     static_assert (static_cast<int> (std::size (tabNames)) == pageCount,
                    "every page needs a tab, and in the same order");
@@ -1425,6 +1850,16 @@ double StrydaEditor::predictedTop() const
         bandwidth.setOperatorFrequency (op, kReferenceHz * value (ids::op (op, "Ratio")));
         bandwidth.setFeedback (op, value (ids::op (op, "Feedback")));
 
+        // **The readout has to know about SHAPE or it disagrees with the cap.**
+        // A non-sine operator carries n harmonics of its own frequency and puts
+        // its ladder n times further out; the cap multiplies by that number, so
+        // a readout that did not would say "clear" about a patch the cap was
+        // holding down hard.
+        bandwidth.setHarmonics (op, dsp::fmShapeHarmonics (
+            static_cast<dsp::FmShape> (juce::jlimit (
+                0, static_cast<int> (dsp::FmShape::count) - 1,
+                static_cast<int> (std::lround (value (ids::op (op, "Shape"))))))));
+
         for (int from = 0; from < kNumOperators; ++from)
             if (op != from)
                 bandwidth.setIndex (from, op, value (ids::cell (op, from)));
@@ -1440,6 +1875,7 @@ double StrydaEditor::predictedTop() const
     const double amount = cap == 0 ? 0.0 : (cap == 1 ? 0.6 : 1.0);
 
     capBiting_ = false;
+    uncappedTop_ = bandwidth.topSidebandHz();
 
     if (amount > 0.0 && nyquist > 0.0)
     {
@@ -1450,7 +1886,7 @@ double StrydaEditor::predictedTop() const
         return bandwidth.topSidebandHz (dsp::fm::kThresholdDb, scale);
     }
 
-    return bandwidth.topSidebandHz();
+    return uncappedTop_;
 }
 
 Control& StrydaEditor::addControl (const juce::String& id,
@@ -1549,6 +1985,9 @@ void StrydaEditor::applyPageVisibility()
 
     matrix_.setVisible (matrix);
     bandwidth_.setVisible (matrix);
+
+    if (spectrum_ != nullptr)
+        spectrum_->setVisible (matrix);
     indexCapBox_.setVisible (matrix);
 
     for (auto& row : scaling_)
@@ -1671,6 +2110,18 @@ void StrydaEditor::applyPageVisibility()
         slotAmounts_[slot]->caption.setVisible (false);
     }
 
+    const bool notes = currentPage_ == pageNotes;
+    notesViewport_.setVisible (notes);
+
+    if (notes && notesView_ != nullptr)
+    {
+        notesView_->setProgram (processor_.getCurrentProgram());
+        layoutNotes (getLocalBounds()
+                       .withTrimmedTop (kHeaderHeight + kTabHeight)
+                       .withTrimmedBottom (34 + kMargin)
+                       .reduced (kMargin));
+    }
+
     if (tuningPage_ != nullptr)
     {
         const bool tuning = currentPage_ == pageTuning;
@@ -1701,6 +2152,11 @@ void StrydaEditor::paint (juce::Graphics& g)
         case pageMangle:    paintMangle (g, area);    break;
         case pageAdv:       paintAdv (g, area);       break;
         case pageMod:       paintMod (g, area);       break;
+
+        case pageNotes:
+            ui::paintPlate (g, area, palette_.panel, palette_.accent);
+            break;
+
         default: break;   // the tuning page paints itself
     }
 }
@@ -1814,6 +2270,7 @@ void StrydaEditor::resized()
         case pageMangle:    layoutMangle (area);     break;
         case pageAdv:       layoutAdv (area);        break;
         case pageMod:       layoutMod (area);        break;
+        case pageNotes:     layoutNotes (area);      break;
 
         case pageTuning:
             if (tuningPage_ != nullptr)
@@ -1880,6 +2337,14 @@ void StrydaEditor::layoutMatrix (juce::Rectangle<int> area)
     area.removeFromLeft (kMargin);
 
     bandwidth_.setBounds (area.removeFromTop (kReadoutHeight).reduced (12, 6));
+
+    // The spectrum sits directly under the readout, because it is the same
+    // claim drawn rather than written: the number says where the edge is, the
+    // picture says where it is against everything else.
+    if (spectrum_ != nullptr)
+        spectrum_->setBounds (area.removeFromTop (
+            juce::jlimit (70, 150, area.getHeight() * 30 / 100)).reduced (10, 2));
+
     area.removeFromTop (6);
 
     auto plate = area.reduced (6);
@@ -2406,6 +2871,11 @@ void StrydaEditor::timerCallback()
 
     voices_.setText (juce::String (processor_.getActiveVoices()) + " voices",
                      juce::dontSendNotification);
+
+    // Only while the page it lives on is showing: pulling an FFT frame for a
+    // hidden component is a redraw nobody sees at thirty frames a second.
+    if (spectrum_ != nullptr && currentPage_ == pageMatrix)
+        spectrum_->refresh (top, uncappedTop_, capBiting_);
 
     if (presetBox_.getSelectedId() != processor_.getCurrentProgram() + 1)
         presetBox_.setSelectedId (processor_.getCurrentProgram() + 1, juce::dontSendNotification);

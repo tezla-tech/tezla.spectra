@@ -22,6 +22,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <tezla/dsp/FmBandwidth.hpp>
+#include <tezla/dsp/SpectrumAnalyser.hpp>
 #include <tezla/dsp/FmOperator.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/ScalaFile.hpp>
@@ -389,6 +390,8 @@ public:
     /// The live bandwidth readout: the predicted top sideband for the note last
     /// played, against the internal Nyquist.
     [[nodiscard]] double getPredictedTopHz() const noexcept { return predictedTopHz_.load(); }
+    [[nodiscard]] dsp::SpectrumCapture& getOutputCapture() noexcept { return outputCapture_; }
+
     [[nodiscard]] double getInternalNyquistHz() const noexcept { return internalNyquist_.load(); }
     [[nodiscard]] double getIndexScale() const noexcept { return indexScale_.load(); }
     [[nodiscard]] int getActiveVoices() const noexcept { return activeVoices_.load(); }
@@ -426,6 +429,12 @@ private:
     dsp::KeyboardMap keyboardMap_ {};
     bool hasKeyboardMap_ { false };
     double concertPitchHz_ { 440.0 };
+
+    /// The output, for the spectrum on the MATRIX page. One producer (the
+    /// audio thread), one consumer (the editor's timer); a torn read costs one
+    /// slightly wrong frame in a display that redraws thirty times a second,
+    /// which is the right trade against a lock on the audio thread.
+    dsp::SpectrumCapture outputCapture_;
 
     /// The host tempo from the last block, so a synced LFO can resolve its
     /// division without every voice having to be told the tempo separately.

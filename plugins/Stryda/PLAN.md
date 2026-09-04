@@ -434,6 +434,66 @@ The predictor has been measured to 0 Hz against a real spectrum since F1
 (bin width 6.0 Hz); this is where that measurement becomes something a player
 can see.
 
+## F9b, and the gate the presets needed
+
+Twelve presets, each carrying its own notes (`Preset::notes` is not defaultable,
+so one added without them fails to compile): Init, Neuro Growl, Bell, Sub Stack,
+Talk Box, Reese, Step Growl, Saw Teeth, Tine Piano, Macro Growl, Slow Bloom,
+Mangled. A NOTES page that renders them with a glossary of the fourteen panel
+words a player would reasonably not know. A spectrum on the MATRIX page with the
+predicted top sideband, the internal Nyquist and the uncapped edge drawn on it.
+
+### `tezla-render presets`, and why applying a preset proves nothing
+
+Checking a preset by applying it and reading the parameters back proves the ids
+are spelt right. It does not prove the preset makes a sound, and it does not
+prove the sound fits in a file. **Five of the first twelve were over full
+scale**, one at **1.714** -- 4.7 dB of clipping the moment a note is played at
+full velocity -- and a five-note chord on another peaked at **3.08**.
+
+Nothing in the tree could have caught that. The only command that made audio at
+all, `audio:`, feeds a test signal into the *input*, which on an instrument is
+silence. So `note:<midi>[@vel]` was added to the render tool, `audio:` now
+prints peak and RMS, and `tezla-render presets` plays every preset -- one low
+note at full velocity, held then released -- and gates on three claims: it is
+audible, it does not clip, and it has notes. It exits non-zero on clipping.
+
+All twelve now sit between **-3.7 and -2.3 dBFS**. Seen to fail: three presets
+un-trimmed reports "3 over 0.95" and exits 2.
+
+**Silence only warns, it does not fail.** Malleus ships an "Idle reference --
+adds nothing" on purpose and Svarayantra with no soundfont is correctly silent;
+the tool cannot read intent, so it prints silence loudly and leaves the
+judgement to the reader.
+
+### What the gate found in the rest of the suite
+
+Run against the other instruments, unfixed and reported rather than changed --
+these are shipped plugins and retrimming them would change existing projects:
+
+| plugin | over full scale |
+|---|---|
+| Sonitus | **6 of 46** -- worst "One knob reese" at +2.4 dBFS, and Sonitus has been played on the rig |
+| Ictus | **2 of 6** -- "Jungle Snap" at +4.2 dBFS on a single kick at velocity 1 |
+| Malleus | 1 of 15 -- "Slendro Gongs" at -0.1 dBFS, marginal |
+
+### Two things fixed while wiring the display
+
+- **The bandwidth readout did not know about SHAPE.** F9a taught the index cap
+  that a non-sine operator carries n harmonics, and did not teach the readout
+  the same thing -- so the panel would have said "clear" about a patch the cap
+  was holding down hard. Both now call `setHarmonics`.
+- **The spectrum capture read `scratch_`, which holds only the last MIDI span.**
+  Sample-accurate MIDI splits a block into spans and `renderSpan` writes each to
+  `scratch_[0..count)`, so after the loop the scratch carries the final span
+  with stale samples behind it. The symptom was a flat curve at the floor rather
+  than anything that looked like a bug. It reads `buffer` now.
+
+And one thing that was **not** a bug, recorded because it cost twenty minutes:
+the analyser reading -96 dB after 1.5 s of audio was the `audio:` command doing
+its job -- it releases the note at 75 % of the run, so the last FFT window was
+the decayed tail. A 0.35 s run shows the spectrum.
+
 ## Continuity — how any session resumes this work
 
 This section is the handoff, updated **in the same commit as each phase**, so
@@ -454,7 +514,8 @@ first `pending` row.**
 | F7 vowel lane + mangle chain, and Split arrives | done — not yet played on the rig |
 | F8 modulation layer + dice gate | done — not yet played on the rig. Two new pages, ADV and MOD |
 | F9a operator waveform display + shape choice (the two the user asked for on 2026-09-04) | done — not yet played on the rig |
-| F9b editor close-out: spectrum with the predicted edge, NOTES page, presets, registry flip, validator on all fourteen | pending |
+| F9b presets, NOTES page, spectrum with the predicted edge, registry flip | done — not yet played on the rig |
+| **THE RIG** — F4 to F9b have never been heard. This is the next thing and it is overdue | **pending** |
 
 **Measured at F1** (`tezla-measure stryda`, `tezla-tests`; the reference
 operator is the published closed form written out as plain arithmetic, so what
@@ -820,7 +881,8 @@ may not err in.
 | voice retirement one second after note-off, sustain 0 | **0 active** |
 | 8 voices, 6 operators, x4, classic FM | 47-57 % of a core (container, noisy) |
 | 8 voices, 6 operators, x4, half ModFM | 41-50 % of a core |
-| idle instrument | **1.0 %** |
+| idle instrument, before the silent path | 1.96 % (0.0785 s per 4 s) |
+| idle instrument, after it | **1.08 %** (0.0431 s per 4 s) |
 
 **Three tests were decorations, and the break-checks are what said so.** Each
 passed while the thing it claimed to cover was removed:
