@@ -779,9 +779,16 @@ TEZLA_TEST (a_kit_of_all_eight_pads_fits_its_budget_and_idles_for_nothing)
     // band-limited pulses through three filters and they play sixteenths, so
     // they are the most expensive pad in the kit. Measured 2026-09-03 at
     // 6.04 % of a core against the 4.8-5.2 % the five-pad kit cost, and the
-    // budget keeps the same two-and-a-half times' headroom the container's
-    // noise needs. The figure is printed above on every run.
-    CHECK_CPU_BUDGET (activeSeconds, 0.15, "all eight pads, everything on, 48 kHz x4");
+    // budget kept two-and-a-half times' headroom for the container's noise.
+    // Re-based 2026-09-05 at I4.5: the 64-mode plate (I4.3), Under, Knock,
+    // Thump, Ring (I4.4) and the mid/side path (I4.5) took the same kit to
+    // 13.7 % under gcc and 14.4-15.7 % under clang -- the round-1 build read
+    // 14.4-15.3 % under clang before I4.5 added its 0.5-0.9 %, so the 15 %
+    // budget had no headroom left on one compiler and failed by machine
+    // noise. 22 % is 1.5 times the clang figure: room for the noise, and a
+    // doubling still fails. The rig's own figure has not been measured. The
+    // figure is printed above on every run.
+    CHECK_CPU_BUDGET (activeSeconds, 0.22, "all eight pads, everything on, 48 kHz x4");
     CHECK_CPU_BUDGET (idleSeconds, 0.01, "idle instrument");
 }
 
