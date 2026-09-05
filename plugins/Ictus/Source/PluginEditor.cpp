@@ -1339,6 +1339,29 @@ void IctusEditor::buildMixPage()
         });
     }
 
+    // ---- outputs ----
+    page.beginPlate ("Output", "which of the five outputs each pad leaves by", kTintVelocity);
+
+    for (const auto& entry : entries)
+    {
+        const int index = static_cast<int> (entry.pad);
+
+        page.addChoice (kOutputIds[index], entry.name, choices::output,
+            juce::String (entry.name) + " output: which of the instrument's five stereo outputs "
+            "this pad is rendered to -- Main, Kick, Snare, Hats or Perc. The names are labels, "
+            "nothing more: any pad can go to any output, and several pads can share one. Every "
+            "pad is on Main by default, which is the one-output instrument every saved project "
+            "was mixed against, bit for bit. In FL Studio the outputs appear once the plugin is "
+            "told to use them: in the wrapper's PROCESSING tab, turn on 'Process inactive inputs "
+            "and outputs' (or the corresponding output enable), then right-click the "
+            "instrument's mixer track and choose 'Auto map outputs' to lay Kick, Snare, Hats and "
+            "Perc onto the next four mixer tracks -- or set them by hand in the wrapper's "
+            "mixer-track offsets. An output nobody is routed to is silent and costs nothing "
+            "once its last hit has gone; each output in use costs one more decimation, under "
+            "1 % of a core per stereo pair at x4 (the whole kit on five outputs measured 3.1 % "
+            "more than on one). Takes effect at the next hit.");
+    }
+
     // ---- the readout ----
     page.beginPlate ("Field", "what the output's correlation is doing", kTintAmplitude);
 
@@ -1354,7 +1377,9 @@ void IctusEditor::buildMixPage()
                   "nothing spread has no side and is the mono render bit for bit. For a drum and bass "
                   "mix: the kick centred and mono, the snare's body centred with only its wires and room "
                   "opening, the hats 10 to 25 % off and spread, the clap wide -- the readout's low band "
-                  "lit throughout.");
+                  "lit throughout. Output splits the kit across up to five stereo outputs so each drum "
+                  "can have its own mixer track and its own processing; with everything on Main, which "
+                  "is the default, the instrument is the single-output one it always was, bit for bit.");
 
 }
 

@@ -57,8 +57,18 @@
 // to the kick, the snare, the ghost and the clap; and the clap engine can
 // play a LAYER under Snare 1, started with it after an offset, so the
 // classic snare-plus-clap of the sampled drum machines is one pad.
+//
+// I7: five OUTPUT BUSES -- Main, Kick, Snare, Hats, Perc -- each with an
+// `Oversampler` of its own at the shared factor, and an Output choice per
+// pad that says which one it renders into. Main is the default for every
+// pad, so a project saved before the buses existed still puts the whole kit
+// on the one output it always had, bit for bit; a bus nothing is routed to
+// and whose decimators have flushed is skipped exactly. The plugin hands the
+// buses to the host one by one (`processBuses`); the mono-era `process`
+// returns their sum, which is what the tests and the tools listen to.
 
 #include <cstdint>
+#include <vector>
 
 #include <tezla/dsp/Denormals.hpp>
 #include <tezla/dsp/EarlyReflections.hpp>
@@ -97,6 +107,24 @@ constexpr int kPadCount = static_cast<int> (PadIndex::count);
 /// snare 38, closed hat 42, open hat 46, clap 39, rim 37, kick 2 on 35,
 /// snare 2 on 40.
 constexpr int kDefaultPadNotes[kPadCount] = { 36, 38, 42, 46, 39, 37, 35, 40 };
+
+/// The output buses (I7). **Append-only**: a pad's Output parameter stores
+/// this as an index, and the host sees the buses in this order.
+enum class OutputBus
+{
+    main = 0,
+    kick,
+    snare,
+    hats,
+    perc,
+
+    count
+};
+
+constexpr int kBusCount = static_cast<int> (OutputBus::count);
+
+/// The buses' names, in OutputBus order -- what the host shows.
+constexpr const char* kBusNames[kBusCount] = { "Main", "Kick", "Snare", "Hats", "Perc" };
 
 /// The pads that have a room (I4.5). **Append-only** too: the parameter
 /// tables are indexed by it.
@@ -178,6 +206,10 @@ struct EngineParameters
     /// The rooms, indexed by RoomIndex.
     RoomSettings room[kRoomCount] {};
 
+    /// Per pad, which output bus it renders into (an OutputBus index). 0 is
+    /// Main for every pad: the one output the kit always had.
+    int output[kPadCount] {};
+
     /// The clap engine played under Snare 1 as a layer, 0..1: 0 starts no
     /// layer at all. It takes the CLAP page's sound and this level, the
     /// snare's velocity and the snare's placement.
@@ -237,6 +269,24 @@ public:
     /// for at prepare(), so a factor change later allocates nothing.
     static constexpr int kMaxFactor = 8;
 
+    /// A bus whose decimators have SEEN this many exactly-zero internal
+    /// samples in a row holds nothing: every delay line in the chain is
+    /// zeros, so its output is exactly zero for as long as zeros keep
+    /// arriving. Such a bus skips its decimation and the host gets zeros --
+    /// exactly what the filters would have produced. Measured, not
+    /// estimated: an impulse's decimated response is exactly zero after 96
+    /// internal samples at x2, 224 at x4 and 480 at x8 (the three halfband
+    /// stages, `Oversampler::kTapsPerStage`, each at its own rate), and the
+    /// test `a_flushed_bus_would_have_decimated_to_exactly_nothing` keeps
+    /// this constant above all three.
+    ///
+    /// The decision about a block is made on the zeros that went through
+    /// BEFORE it: a block that is itself zero after a non-zero tail still
+    /// has that tail's response to deliver, and skipping it would cut the
+    /// tail off -- at large blocks only, which is exactly the kind of bug
+    /// that reaches the rig before a test (CLAUDE.md section 7).
+    static constexpr int kBusFlushSamples = 1024;
+
     void prepare (double sampleRate, int maxBlockSize);
     void reset() noexcept;
 
@@ -260,7 +310,26 @@ public:
     /// pedal -- and `HatSettings::choke` is what arms it.
     void choke (PadIndex pad) noexcept;
 
+    /// The whole kit summed into one stereo pair -- every bus, whatever the
+    /// pads' Output says. With every pad on Main this is the Main bus and
+    /// nothing else, bit for bit; it is what the tests and the tools render.
     void process (double* const* output, int numSamples) noexcept;
+
+    /// The buses one by one: `channels` holds 2 * kBusCount pointers, bus
+    /// major (Main left, Main right, Kick left, ...). A bus nothing has
+    /// reached for kBusFlushSamples is written as zeros without running its
+    /// decimators.
+    void processBuses (double* const* channels, int numSamples) noexcept;
+
+    /// Whether a bus is currently being skipped -- flushed and unfed.
+    [[nodiscard]] bool isBusIdle (OutputBus bus) const noexcept
+    {
+        return busZeroRun_[static_cast<int> (bus)] >= kBusFlushSamples;
+    }
+
+    /// How many bus-blocks have been skipped since prepare(): the cost claim
+    /// behind "all on Main costs one bus".
+    [[nodiscard]] std::uint64_t getBusSkipCount() const noexcept { return busSkips_; }
 
     /// The latency this instrument actually has, in host samples.
     ///
@@ -276,9 +345,10 @@ public:
     /// whole number that results: 24, 32, 36. Zero with oversampling off.
     [[nodiscard]] int getLatencySamples() const noexcept
     {
-        return oversampler_.getFactor() > 1 ? (oversampler_.getLatencySamples() + 1) / 2 : 0;
+        const auto& main = oversamplers_[0];
+        return main.getFactor() > 1 ? (main.getLatencySamples() + 1) / 2 : 0;
     }
-    [[nodiscard]] int getOversamplingFactor() const noexcept { return oversampler_.getFactor(); }
+    [[nodiscard]] int getOversamplingFactor() const noexcept { return oversamplers_[0].getFactor(); }
     [[nodiscard]] double getInternalRate() const noexcept { return internalRate_; }
 
     /// Whether the host is rendering offline, for the render-quality
@@ -371,7 +441,20 @@ private:
     void reconcileFactor() noexcept;
     void rebuildForRate() noexcept;
     void controlTick() noexcept;
-    void renderChunk (double* left, double* right, int numSamples) noexcept;
+
+    /// Renders `numSamples` internal samples at `offset` into every bus's
+    /// internal buffers, each pad into the bus its Output names.
+    void renderChunk (int offset, int numSamples) noexcept;
+
+    /// The whole block at the internal rate: the chunk loop, the clap
+    /// layer's countdown, the half-sample alignment and the per-bus silence
+    /// bookkeeping. Returns false when the instrument is idle and the caller
+    /// should write zeros.
+    bool renderBlock (int numSamples) noexcept;
+
+    /// One bus's decimation into `destination` (two channels), or zeros when
+    /// the bus is flushed and unfed.
+    bool downsampleBus (int bus, double* const* destination, int numSamples) noexcept;
 
     void startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings& settings,
                     int note, double velocity, bool keyed) noexcept;
@@ -402,7 +485,19 @@ private:
 
     EngineParameters parameters_;
 
-    dsp::Oversampler oversampler_;      // the Main bus
+    /// One per output bus, at the shared factor; index 0 is Main.
+    dsp::Oversampler oversamplers_[kBusCount];
+
+    /// Where a bus other than Main lands when `process()` sums the kit.
+    std::vector<double> busScratch_[2];
+
+    /// Per bus, how many consecutive exactly-zero internal samples its
+    /// decimators have processed (capped at kBusFlushSamples), whether the
+    /// block just rendered is zero throughout, and how many bus-blocks the
+    /// skip has spared since prepare().
+    int busZeroRun_[kBusCount] {};
+    bool busBlockZero_[kBusCount] {};
+    std::uint64_t busSkips_ { 0 };
 
     Pad<KickEngine> kick1_;
     Pad<KickEngine> kick2_;
@@ -443,8 +538,8 @@ private:
     double padVelocity_[kPadCount] {};
 
     /// The half-host-sample alignment delay: the last `factor / 2` internal
-    /// samples of the previous block, per channel. At most 4 (x8).
-    double carry_[2][4] {};
+    /// samples of the previous block, per bus and channel. At most 4 (x8).
+    double carry_[kBusCount][2][4] {};
 };
 
 } // namespace tezla::ictus

@@ -29,10 +29,11 @@ auditioned without a keyboard; six presets; the shared header with output
 trim, oversampling and render quality; **Bass mode** (every key plays the
 kick at the key's pitch), **Note snap** (a drum's Tune lands on the tuning's
 nearest note, for tuning drums to a bass line), a **Gate** with a **Release**
-on every drum, and the shared **tuning page** behind them all. The punch
-chain, humanise, the sample layer and the per-pad outputs are declared in the
-engine and arrive phase by phase; nothing already saved will move when they
-do (parameters are append-only, CLAUDE.md §8).
+on every drum, the shared **tuning page** behind them all, and **five stereo
+outputs** with an **Output** per pad, so the kit can be split across mixer
+tracks (see *Outputs* below). The punch chain, humanise and the sample layer
+are declared in the engine and arrive phase by phase; nothing already saved
+will move when they do (parameters are append-only, CLAUDE.md §8).
 
 ## The kick
 
@@ -367,10 +368,40 @@ stays at unity and the far one falls to nothing, so the centre is both channels
 at unity, the dual mono this instrument always rendered, bit for bit, and a pad
 hard left leaves the right channel exactly empty. Smoothed over 20 ms, so it can
 be automated; jumped to on the first block after a project loads, so a pad saved
-hard left does not drift across the field for its first hits. The pads are
-still mono sources; the width that needs a side signal from the drum itself —
-the plate's modes spread, the hiss decorrelated, the clap's bursts placed — is
-the next round's, together with a Width and a mono-below corner per pad.
+hard left does not drift across the field for its first hits. The fifth round
+gave the pads a side of their own -- the spreads, the rooms, a **Width** and a
+**Mono below** per pad and the **Field** readout, all described under the hats
+above -- and the same page carries each pad's **Output**.
+
+## Outputs — the kit across mixer tracks
+
+Every pad has an **Output** on the MIX page: which of the instrument's five
+stereo outputs -- **Main, Kick, Snare, Hats, Perc** -- it is rendered to. The
+names are labels, nothing more: any pad can go to any output, and several can
+share one. Every pad is on Main by default, which is the one-output instrument
+every saved project was mixed against, bit for bit.
+
+In FL Studio: open the plugin's wrapper settings and, on the *Processing* tab,
+make sure the extra outputs are active (*Process inactive inputs and outputs*
+if they do not appear). Then right-click the instrument's mixer track and choose
+**Auto map outputs**: FL lays Kick, Snare, Hats and Perc onto the mixer tracks
+following the one the plugin is on -- or set each by hand in the wrapper's
+**Mixer-track offsets**. From there every drum has its own channel strip, its
+own effects and its own sends: a compressor on the kick alone, a reverb on the
+snare alone, a bus of hats.
+
+What it costs, measured: an output nobody is routed to is silent and, once its
+last hit has gone, skipped exactly -- with everything on Main the other four
+cost nothing. Each output in use costs one more decimation: the busy eight-pad
+kit at 48 kHz ×4 reads 3.1 % of a core more on five outputs than on one.
+Splitting changes no sound: the five outputs summed at unity are the one-output
+render to within 1.8e-15, and a drum alone on an output is bit-identical to the
+same drum on Main.
+
+**Not yet loaded in FL Studio.** How FL lays out the five outputs of a JUCE
+VST3 -- which types every instrument output as a main bus -- is the one thing
+that could not be checked from here. The worst case is the extra outputs not
+appearing, never silence: a bus the host does not take is folded into Main.
 
 ## Bass mode and the tuning page
 
@@ -422,6 +453,6 @@ Windows: `scripts\build.bat Ictus -install` (an elevated prompt for the
 install) and FL Studio finds it on the next scan. The full guide is
 [`docs/BUILD.md`](../../docs/BUILD.md). The plugin builds and passes
 Steinberg's validator on Linux, and the I2 kick **has been built and played on
-the rig** — the first ear round is what Bass mode, Gate and Release came from.
-Nothing since that round has been loaded there: not I2.1, not the snare, not
-the ghost, not the hats or the clap.
+the rig** — the first ear round is what Bass mode, Gate and Release came from — as
+have the rounds through I4.4 ("amazing stuff"). The fifth round and the
+outputs have not been loaded there yet.

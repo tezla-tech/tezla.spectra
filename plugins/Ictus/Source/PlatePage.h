@@ -50,6 +50,12 @@ public:
     void addLamp (const char* parameterId, const juce::String& name,
                   const juce::String& legend, const juce::String& tooltip);
 
+    /// A choice parameter as a drop-down in the house look -- for the
+    /// settings that are a pick from a short list (an output bus), where a
+    /// knob would hide the names.
+    void addChoice (const char* parameterId, const juce::String& name,
+                    const juce::StringArray& options, const juce::String& tooltip);
+
     /// A display spanning `columns` cells of the current plate. The page
     /// owns it; the returned pointer is for the caller's refresh calls.
     juce::Component* addDisplay (std::unique_ptr<juce::Component> display, int columns);
@@ -102,9 +108,18 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
+    struct Choice
+    {
+        juce::String id;
+        juce::ComboBox box;
+        juce::Label label;
+        juce::Colour tint;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
+    };
+
     struct Cell
     {
-        enum class Kind { knob, lamp, display } kind {};
+        enum class Kind { knob, lamp, display, choice } kind {};
         int index {};
         int columns { 1 };
     };
@@ -130,6 +145,7 @@ private:
     std::vector<Plate> plates_;
     std::vector<std::unique_ptr<Knob>> knobs_;
     std::vector<std::unique_ptr<Lamp>> lamps_;
+    std::vector<std::unique_ptr<Choice>> choices_;
     std::vector<std::unique_ptr<juce::Component>> displays_;
 
     juce::String note_;

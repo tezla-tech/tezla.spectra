@@ -40,8 +40,13 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     // memory (Oversampler's contract). prepare() runs before any parameter
     // is known, which is why process() checks the factor it actually built
     // against the one the parameters ask for (CLAUDE.md section 7).
-    oversampler_.prepare (maxBlockSize_, 2,
-                          dsp::oversamplingFactor (effectiveOversampling(), sampleRate_));
+    const int factor = dsp::oversamplingFactor (effectiveOversampling(), sampleRate_);
+
+    for (auto& oversampler : oversamplers_)
+        oversampler.prepare (maxBlockSize_, 2, factor);
+
+    for (auto& channel : busScratch_)
+        channel.assign (static_cast<std::size_t> (maxBlockSize_), 0.0);
 
     // The rooms' lines are sized for the largest internal rate the factor
     // can reach, here, off the audio thread; rebuildForRate() then only
@@ -54,7 +59,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
 
 void Engine::rebuildForRate() noexcept
 {
-    internalRate_ = sampleRate_ * oversampler_.getFactor();
+    internalRate_ = sampleRate_ * oversamplers_[0].getFactor();
 
     kick1_.prepare (internalRate_);
     kick2_.prepare (internalRate_);
@@ -115,7 +120,16 @@ void Engine::reset() noexcept
     hatOpen_.reset();
     clap_.reset();
     snareClap_.reset();
-    oversampler_.reset();
+
+    for (auto& oversampler : oversamplers_)
+        oversampler.reset();
+
+    // Every bus starts flushed: nothing has reached it, so nothing is owed.
+    for (int bus = 0; bus < kBusCount; ++bus)
+    {
+        busZeroRun_[bus] = kBusFlushSamples;
+        busBlockZero_[bus] = true;
+    }
 
     for (int pad = 0; pad < kPadCount; ++pad)
     {
@@ -133,9 +147,10 @@ void Engine::reset() noexcept
     sinceControl_ = 0;
     idleSamples_ = 0;
 
-    for (auto& channel : carry_)
-        for (auto& sample : channel)
-            sample = 0.0;
+    for (auto& bus : carry_)
+        for (auto& channel : bus)
+            for (auto& sample : channel)
+                sample = 0.0;
 }
 
 void Engine::reconcileFactor() noexcept
@@ -149,9 +164,11 @@ void Engine::reconcileFactor() noexcept
     // filters were rebuilt underneath it.
     const int wanted = dsp::oversamplingFactor (effectiveOversampling(), sampleRate_);
 
-    if (wanted != oversampler_.getFactor())
+    if (wanted != oversamplers_[0].getFactor())
     {
-        oversampler_.setFactor (wanted);
+        for (auto& oversampler : oversamplers_)
+            oversampler.setFactor (wanted);
+
         rebuildForRate();
     }
 }
@@ -455,10 +472,8 @@ void Engine::controlTick() noexcept
         room_[index].setToneHz (parameters_.room[index].toneHz);
 }
 
-void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
+void Engine::renderChunk (int offset, int numSamples) noexcept
 {
-    bool silent = true;
-
     // Which rooms run this chunk: one with its level at exactly 0, not on
     // its way anywhere, and nothing left in its line costs nothing and
     // changes nothing.
@@ -470,6 +485,22 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
                      || room_[index].isActive();
 
     const bool layerOn = snareClap_.isActive();
+
+    // Where each pad lands: its Output, read once per chunk so a change
+    // takes effect at the next control boundary rather than mid-chunk.
+    int route[kPadCount];
+    double* busLeft[kBusCount];
+    double* busRight[kBusCount];
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+        route[pad] = std::clamp (parameters_.output[pad], 0, kBusCount - 1);
+
+    for (int bus = 0; bus < kBusCount; ++bus)
+    {
+        double* const* internal = oversamplers_[bus].internalBuffers();
+        busLeft[bus] = internal[0] + offset;
+        busRight[bus] = internal[1] + offset;
+    }
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -485,7 +516,7 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
         mid[static_cast<int> (PadIndex::hatOpen)] = hatOpen_.process (side[static_cast<int> (PadIndex::hatOpen)]);
         mid[static_cast<int> (PadIndex::clap)] = clap_.process (side[static_cast<int> (PadIndex::clap)]);
 
-        // The clap layer sits under Snare 1: its placement, its room.
+        // The clap layer sits under Snare 1: its placement, its room, its bus.
         if (layerOn)
         {
             double layerSide = 0.0;
@@ -510,13 +541,18 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
             side[pad] += level * (0.5 * (roomLeft - roomRight));
         }
 
-        double l = 0.0;
-        double r = 0.0;
+        const double master = masterGain_.next();
 
         // Per pad: the side through Width and Mono below, then the two
-        // channels formed and placed by the balance law, summed in the order
-        // the mono engine always used. A pad whose side is exactly 0.0 skips
-        // the side path and both channels are its mid -- the old render.
+        // channels formed and placed by the balance law, summed into the
+        // pad's bus in the order the mono engine always used -- the first
+        // pad on a bus assigns, the rest add, so a bus carrying the whole
+        // kit is the old render bit for bit. A pad whose side is exactly 0.0
+        // skips the side path and both channels are its mid.
+        double l[kBusCount];
+        double r[kBusCount];
+        bool used[kBusCount] {};
+
         for (int n = 0; n < kPadCount; ++n)
         {
             const int pad = kSumOrder[n];
@@ -549,45 +585,31 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
 
             const double padLeft = dsp::isExactlyZero (s) ? m : m + s;
             const double padRight = dsp::isExactlyZero (s) ? m : m - s;
+            const int bus = route[pad];
 
-            if (n == 0)
+            if (used[bus])
             {
-                l = padLeft * balanceLeft (panNow);
-                r = padRight * balanceRight (panNow);
+                l[bus] += padLeft * balanceLeft (panNow);
+                r[bus] += padRight * balanceRight (panNow);
             }
             else
             {
-                l += padLeft * balanceLeft (panNow);
-                r += padRight * balanceRight (panNow);
+                l[bus] = padLeft * balanceLeft (panNow);
+                r[bus] = padRight * balanceRight (panNow);
+                used[bus] = true;
             }
         }
 
-        const double master = masterGain_.next();
-
-        left[i] = l * master;
-        right[i] = r * master;
-
-        silent = silent && std::abs (left[i]) < kIdleThreshold && std::abs (right[i]) < kIdleThreshold;
+        for (int bus = 0; bus < kBusCount; ++bus)
+        {
+            busLeft[bus][i] = used[bus] ? l[bus] * master : 0.0;
+            busRight[bus][i] = used[bus] ? r[bus] * master : 0.0;
+        }
     }
-
-    bool roomsRinging = false;
-
-    for (int index = 0; index < kRoomCount; ++index)
-        roomsRinging = roomsRinging || (roomOn[index] && room_[index].isActive());
-
-    if (silent && activeHitCount() == 0 && ! roomsRinging)
-        idleSamples_ += numSamples;
-    else
-        idleSamples_ = 0;
 }
 
-void Engine::process (double* const* output, int numSamples) noexcept
+bool Engine::renderBlock (int numSamples) noexcept
 {
-    const dsp::ScopedNoDenormals guard;
-
-    if (numSamples <= 0)
-        return;
-
     reconcileFactor();
 
     masterGain_.setTarget (dsp::dbToGain (parameters_.masterDb));
@@ -596,15 +618,14 @@ void Engine::process (double* const* output, int numSamples) noexcept
     // after a rebuild, ramped after. prepare() runs before any parameter is
     // known, so a smoother primed there starts at its default, and a pad
     // saved hard left would open every project drifting across the field
-    // for its first hits.
+    // for its first hits. Re-targeted only when the value moves: setTarget
+    // marks the smoother as moving until next() has run, and a pan pushed
+    // every block would run its ramp every sample for nothing.
     for (int pad = 0; pad < kPadCount; ++pad)
     {
         const double wantedPan = std::clamp (parameters_.pan[pad], -1.0, 1.0);
         const double wantedWidth = std::clamp (parameters_.width[pad], 0.0, 2.0);
 
-        // Guarded like the rooms': a smoother re-targeted every block reads
-        // as moving every block, and a moving smoother costs a step a sample
-        // for every pad. At rest the render reads the value it holds.
         if (! pansPrimed_)
         {
             pan_[pad].setCurrentAndTarget (wantedPan);
@@ -624,12 +645,11 @@ void Engine::process (double* const* output, int numSamples) noexcept
     {
         const double wanted = std::clamp (parameters_.room[index].level, 0.0, 1.0);
 
-        // Guarded: setTarget marks the smoother as moving until next() has
-        // run, and a room that is "moving" is a room that runs. Pushed every
-        // block unguarded, a room at 0 would have been fed for the first
-        // chunk of every block a pad sounded in -- and then kept running by
-        // its own line for the rest of the hit (CLAUDE.md section 7, the
-        // setter that must refuse a no-op).
+        // Guarded for the same reason, and with more at stake: a room that
+        // is "moving" is a room that runs. Pushed every block unguarded, a
+        // room at 0 was fed for the first chunk of every block a pad sounded
+        // in -- and then kept running by its own line for the rest of the hit
+        // (CLAUDE.md section 7, the setter that must refuse a no-op).
         if (! pansPrimed_)
             roomLevel_[index].setCurrentAndTarget (wanted);
         else if (! dsp::isExactly (wanted, roomLevel_[index].getTarget()))
@@ -638,7 +658,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
 
     pansPrimed_ = true;
 
-    const int factor = oversampler_.getFactor();
+    const int factor = oversamplers_[0].getFactor();
     const int internalSamples = numSamples * factor;
 
     // An idle instrument costs nothing. Nothing here can wake by itself:
@@ -646,14 +666,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
     // -240 dBFS, and the counter resets the instant a hit starts.
     if (idleSamples_ >= static_cast<int> (internalRate_ * kIdleSecondsBeforeSkipping)
         && activeHitCount() == 0 && snareClapPending_ < 0)
-    {
-        for (int channel = 0; channel < 2; ++channel)
-            std::fill (output[channel], output[channel] + numSamples, 0.0);
-
-        return;
-    }
-
-    double* const* internal = oversampler_.internalBuffers();
+        return false;
 
     int done = 0;
 
@@ -675,7 +688,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
         if (snareClapPending_ > 0)
             take = std::min (take, snareClapPending_);
 
-        renderChunk (internal[0] + done, internal[1] + done, take);
+        renderChunk (done, take);
 
         done += take;
         sinceControl_ -= take;
@@ -686,30 +699,138 @@ void Engine::process (double* const* output, int numSamples) noexcept
 
     // Half a host sample of delay before the decimators, so the latency the
     // plugin declares is the whole number the instrument really has (see
-    // getLatencySamples()). The block is shifted right by factor / 2 internal
-    // samples; the samples pushed off its end lead the next block.
-    if (const int shift = factor / 2; shift > 0)
+    // getLatencySamples()). Each bus's block is shifted right by factor / 2
+    // internal samples; the samples pushed off its end lead its next block.
+    // Then the silence bookkeeping, on the shifted block: whether each bus's
+    // block is exactly zero throughout. Its run of processed zeros moves in
+    // downsampleBus(), once the block has been decided on.
+    const int shift = factor / 2;
+    bool allSilent = true;
+
+    for (int bus = 0; bus < kBusCount; ++bus)
     {
+        double* const* internal = oversamplers_[bus].internalBuffers();
+        bool zero = true;
+
         for (int channel = 0; channel < 2; ++channel)
         {
             double* buffer = internal[channel];
-            double tail[4] {};
 
-            for (int i = 0; i < shift; ++i)
-                tail[i] = buffer[internalSamples - shift + i];
-
-            std::memmove (buffer + shift, buffer,
-                          static_cast<std::size_t> (internalSamples - shift) * sizeof (double));
-
-            for (int i = 0; i < shift; ++i)
+            if (shift > 0)
             {
-                buffer[i] = carry_[channel][i];
-                carry_[channel][i] = tail[i];
+                double tail[4] {};
+
+                for (int i = 0; i < shift; ++i)
+                    tail[i] = buffer[internalSamples - shift + i];
+
+                std::memmove (buffer + shift, buffer,
+                              static_cast<std::size_t> (internalSamples - shift) * sizeof (double));
+
+                for (int i = 0; i < shift; ++i)
+                {
+                    buffer[i] = carry_[bus][channel][i];
+                    carry_[bus][channel][i] = tail[i];
+                }
             }
+
+            for (int i = 0; i < internalSamples && zero; ++i)
+                zero = dsp::isExactlyZero (buffer[i]);
         }
+
+        busBlockZero_[bus] = zero;
+        allSilent = allSilent && zero;
     }
 
-    oversampler_.downsample (output, numSamples);
+    bool roomsRinging = false;
+
+    for (const auto& room : room_)
+        roomsRinging = roomsRinging || room.isActive();
+
+    if (allSilent && activeHitCount() == 0 && ! roomsRinging)
+        idleSamples_ += internalSamples;
+    else
+        idleSamples_ = 0;
+
+    return true;
+}
+
+bool Engine::downsampleBus (int bus, double* const* destination, int numSamples) noexcept
+{
+    // Flushed by what went through before this block, and fed nothing in
+    // it: the decimators would produce exactly zeros. Decided before the
+    // run is advanced, so a block that is zero after a tail still runs.
+    const bool flushed = busZeroRun_[bus] >= kBusFlushSamples && busBlockZero_[bus];
+
+    busZeroRun_[bus] = busBlockZero_[bus]
+                         ? std::min (kBusFlushSamples, busZeroRun_[bus] + numSamples * oversamplers_[bus].getFactor())
+                         : 0;
+
+    if (flushed)
+    {
+        for (int channel = 0; channel < 2; ++channel)
+            std::fill (destination[channel], destination[channel] + numSamples, 0.0);
+
+        ++busSkips_;
+        return false;
+    }
+
+    oversamplers_[bus].downsample (destination, numSamples);
+    return true;
+}
+
+void Engine::process (double* const* output, int numSamples) noexcept
+{
+    const dsp::ScopedNoDenormals guard;
+
+    if (numSamples <= 0)
+        return;
+
+    if (! renderBlock (numSamples))
+    {
+        for (int channel = 0; channel < 2; ++channel)
+            std::fill (output[channel], output[channel] + numSamples, 0.0);
+
+        return;
+    }
+
+    // Main straight into the output; every other bus that is not flushed is
+    // decimated into the scratch and added. With every pad on Main the other
+    // four are flushed, and this is the Main bus and nothing else.
+    downsampleBus (0, output, numSamples);
+
+    double* const scratch[2] { busScratch_[0].data(), busScratch_[1].data() };
+
+    for (int bus = 1; bus < kBusCount; ++bus)
+    {
+        if (! downsampleBus (bus, scratch, numSamples))
+            continue;
+
+        for (int channel = 0; channel < 2; ++channel)
+            for (int i = 0; i < numSamples; ++i)
+                output[channel][i] += scratch[channel][i];
+    }
+}
+
+void Engine::processBuses (double* const* channels, int numSamples) noexcept
+{
+    const dsp::ScopedNoDenormals guard;
+
+    if (numSamples <= 0)
+        return;
+
+    if (! renderBlock (numSamples))
+    {
+        for (int channel = 0; channel < 2 * kBusCount; ++channel)
+            std::fill (channels[channel], channels[channel] + numSamples, 0.0);
+
+        return;
+    }
+
+    for (int bus = 0; bus < kBusCount; ++bus)
+    {
+        double* const destination[2] { channels[2 * bus], channels[2 * bus + 1] };
+        downsampleBus (bus, destination, numSamples);
+    }
 }
 
 } // namespace tezla::ictus

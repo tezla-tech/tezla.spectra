@@ -119,6 +119,39 @@ void PlatePage::addLamp (const char* parameterId, const juce::String& name,
     lamps_.push_back (std::move (lamp));
 }
 
+void PlatePage::addChoice (const char* parameterId, const juce::String& name,
+                           const juce::StringArray& options, const juce::String& tooltip)
+{
+    if (plates_.empty())
+        beginPlate ("", "", 0);
+
+    auto choice = std::make_unique<Choice>();
+    choice->tint = plates_.back().tint;
+
+    // Item ids from 1: the attachment maps a choice's index to id + 1.
+    for (int i = 0; i < options.size(); ++i)
+        choice->box.addItem (options[i], i + 1);
+
+    choice->box.setComponentID (parameterId);
+    choice->box.setTooltip (tooltip);
+    choice->box.setJustificationType (juce::Justification::centred);
+    ui::styleChoice (choice->box, palette_, choice->tint);
+    ui::noWheel (choice->box);
+    addAndMakeVisible (choice->box);
+
+    choice->label.setText (name, juce::dontSendNotification);
+    ui::styleName (choice->label, palette_, choice->tint);
+    choice->label.setTooltip (tooltip);
+    addAndMakeVisible (choice->label);
+
+    choice->id = parameterId;
+    choice->attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        state_, parameterId, choice->box);
+
+    plates_.back().cells.push_back ({ Cell::Kind::choice, static_cast<int> (choices_.size()), 1 });
+    choices_.push_back (std::move (choice));
+}
+
 juce::Component* PlatePage::addDisplay (std::unique_ptr<juce::Component> display, int columns)
 {
     if (plates_.empty())
@@ -165,6 +198,16 @@ void PlatePage::setControlEnabled (const char* parameterId, bool enabled)
             lamp->label.setColour (juce::Label::textColourId,
                                    enabled ? nameColour (lamp->tint) : nameColour (lamp->tint).withAlpha (0.35f));
             lamp->label.repaint();
+        }
+
+    for (auto& choice : choices_)
+        if (choice->id == id)
+        {
+            choice->box.setEnabled (enabled);
+            choice->box.setAlpha (enabled ? 1.0f : 0.45f);
+            choice->label.setColour (juce::Label::textColourId,
+                                     enabled ? nameColour (choice->tint) : nameColour (choice->tint).withAlpha (0.35f));
+            choice->label.repaint();
         }
 }
 
@@ -350,6 +393,15 @@ void PlatePage::layoutBand (std::size_t first, std::size_t last, juce::Rectangle
                     auto& lamp = *lamps_[static_cast<std::size_t> (cell.index)];
                     lamp.label.setBounds (area.removeFromTop (kLabelHeight));
                     lamp.button->setBounds (ui::LampButton::sized (64, 26).withCentre (area.getCentre()));
+                    break;
+                }
+
+                case Cell::Kind::choice:
+                {
+                    auto& choice = *choices_[static_cast<std::size_t> (cell.index)];
+                    choice.label.setBounds (area.removeFromTop (kLabelHeight));
+                    const int boxWidth = juce::jmin (area.getWidth() - 8, 104);
+                    choice.box.setBounds (juce::Rectangle<int> (boxWidth, 26).withCentre (area.getCentre()));
                     break;
                 }
 

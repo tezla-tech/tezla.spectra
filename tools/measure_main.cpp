@@ -6345,7 +6345,7 @@ int runIctus (const Args& args)
 
                 std::printf ("Tension on a 250 ms snare (last sample the snares lift; -1 never):\n");
 
-                for (const auto [tension, velocity] : { std::pair { 0.0, 1.0 }, std::pair { 0.25, 1.0 }, std::pair { 0.5, 1.0 },
+                for (const auto& [tension, velocity] : { std::pair { 0.0, 1.0 }, std::pair { 0.25, 1.0 }, std::pair { 0.5, 1.0 },
                                                         std::pair { 1.0, 1.0 }, std::pair { 1.0, 0.4 } })
                 {
                     SnareSettings u = t;

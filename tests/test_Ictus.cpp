@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <numbers>
@@ -20,6 +21,7 @@
 #include <tezla/dsp/Correlation.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Fft.hpp>
+#include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Scales.hpp>
 
 #include <IctusEngine.hpp>
@@ -685,12 +687,13 @@ TEZLA_TEST (the_kick_output_is_block_size_independent)
 // CPU
 // ---------------------------------------------------------------------------
 
-TEZLA_TEST (a_kit_of_all_eight_pads_fits_its_budget_and_idles_for_nothing)
+namespace
 {
-    constexpr double rate = 48000.0;
-    constexpr int block = 480;
-    constexpr int blocks = 100;      // one second of audio
 
+/// The eight pads with everything on -- the kit the CPU budgets are measured
+/// on, here and split across the buses in the I7 tests.
+EngineParameters busyKit()
+{
     EngineParameters parameters;
     parameters.kick1 = everythingOn();
     parameters.kick2 = everythingOn();
@@ -702,6 +705,18 @@ TEZLA_TEST (a_kit_of_all_eight_pads_fits_its_budget_and_idles_for_nothing)
     parameters.hat.spread = 0.5;
     parameters.hat.air = 0.4;
     parameters.clap = ClapSettings {};
+    return parameters;
+}
+
+} // namespace
+
+TEZLA_TEST (a_kit_of_all_eight_pads_fits_its_budget_and_idles_for_nothing)
+{
+    constexpr double rate = 48000.0;
+    constexpr int block = 480;
+    constexpr int blocks = 100;      // one second of audio
+
+    const EngineParameters parameters = busyKit();
 
     auto engine = heapEngine();
     engine->prepare (rate, block);
@@ -4839,14 +4854,11 @@ TEZLA_TEST (the_clap_layer_starts_under_snare_one_after_its_offset_at_every_bloc
     }
 }
 
-TEZLA_TEST (the_kit_with_everything_spread_is_the_same_at_every_block_size)
+/// The whole kit with every spread, room and rattle control engaged -- the
+/// widest signal the instrument makes, which is what the block rule and the
+/// bus routing are proved on.
+EngineParameters everythingSpreadKit()
 {
-    // The round's block rule: the side path, the rooms, the clap layer's
-    // countdown and the rattle's own envelopes all count in samples on the
-    // control grid, so 64-, 97- and 512-sample blocks produce the same bits.
-    constexpr double rate = 48000.0;
-    constexpr int samples = 24000;
-
     EngineParameters p;
     p.kick1 = everythingOn();
     p.kick1.dropCurve = -0.5;
@@ -4891,10 +4903,25 @@ TEZLA_TEST (the_kit_with_everything_spread_is_the_same_at_every_block_size)
         p.room[room].toneHz = 3000.0 + 1000.0 * room;
     }
 
-    const std::vector<Hit> hits { { 0, 36, 0.9 }, { 1000, 38, 1.0 }, { 2500, 35, 0.7 },
-                                  { 3100, 37, 0.8 }, { 4000, 36, 1.0 }, { 4700, 38, 0.6 },
-                                  { 1500, 46, 0.8 }, { 2200, 42, 1.0 }, { 3600, 42, 0.5 },
-                                  { 5200, 39, 0.9 }, { 6000, 40, 0.8 } };
+    return p;
+}
+
+/// Half a second of a break: every pad struck at least once, some twice.
+const std::vector<Hit> kBreakHits { { 0, 36, 0.9 }, { 1000, 38, 1.0 }, { 2500, 35, 0.7 },
+                                    { 3100, 37, 0.8 }, { 4000, 36, 1.0 }, { 4700, 38, 0.6 },
+                                    { 1500, 46, 0.8 }, { 2200, 42, 1.0 }, { 3600, 42, 0.5 },
+                                    { 5200, 39, 0.9 }, { 6000, 40, 0.8 } };
+
+TEZLA_TEST (the_kit_with_everything_spread_is_the_same_at_every_block_size)
+{
+    // The round's block rule: the side path, the rooms, the clap layer's
+    // countdown and the rattle's own envelopes all count in samples on the
+    // control grid, so 64-, 97- and 512-sample blocks produce the same bits.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    const EngineParameters p = everythingSpreadKit();
+    const auto& hits = kBreakHits;
 
     const auto small = renderBoth (p, rate, samples, hits, 64);
     const auto large = renderBoth (p, rate, samples, hits, 512);
@@ -4915,4 +4942,565 @@ TEZLA_TEST (the_kit_with_everything_spread_is_the_same_at_every_block_size)
 
     CHECK (worst == 0.0);
     CHECK (rmsOf (sideOf (small)) > 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// I7: the output buses
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+/// All five buses of the engine, as the plugin hears them: `processBuses`
+/// with the notes on their exact samples whatever the block size.
+struct BusRender
+{
+    std::vector<double> channel[2 * kBusCount];   ///< bus major: Main L, Main R, Kick L, ...
+    std::uint64_t skips { 0 };
+    int calls { 0 };
+    bool idle[kBusCount] {};
+
+    [[nodiscard]] const std::vector<double>& left (OutputBus bus) const
+    {
+        return channel[2 * static_cast<int> (bus)];
+    }
+
+    [[nodiscard]] const std::vector<double>& right (OutputBus bus) const
+    {
+        return channel[2 * static_cast<int> (bus) + 1];
+    }
+};
+
+BusRender renderBuses (const EngineParameters& parameters, double rate, int samples,
+                       const std::vector<Hit>& hits, int blockSize = 256)
+{
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+    engine->setParameters (parameters);
+
+    BusRender out;
+
+    for (auto& channel : out.channel)
+        channel.assign (static_cast<std::size_t> (samples), 0.0);
+
+    int done = 0;
+
+    while (done < samples)
+    {
+        for (const auto& hit : hits)
+            if (hit.sample == done)
+                engine->noteOn (hit.note, hit.velocity);
+
+        int take = std::min (blockSize, samples - done);
+
+        for (const auto& hit : hits)
+            if (hit.sample > done)
+                take = std::min (take, hit.sample - done);
+
+        double* block[2 * kBusCount];
+
+        for (int channel = 0; channel < 2 * kBusCount; ++channel)
+            block[channel] = out.channel[channel].data() + done;
+
+        engine->processBuses (block, take);
+
+        done += take;
+        ++out.calls;
+    }
+
+    out.skips = engine->getBusSkipCount();
+
+    for (int bus = 0; bus < kBusCount; ++bus)
+        out.idle[bus] = engine->isBusIdle (static_cast<OutputBus> (bus));
+
+    return out;
+}
+
+bool identical (const std::vector<double>& a, const std::vector<double>& b)
+{
+    if (a.size() != b.size())
+        return false;
+
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (! isExactly (a[i], b[i]))
+            return false;
+
+    return true;
+}
+
+double worstDifference (const std::vector<double>& a, const std::vector<double>& b)
+{
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < std::min (a.size(), b.size()); ++i)
+        worst = std::max (worst, std::abs (a[i] - b[i]));
+
+    return worst;
+}
+
+/// The kit split the way the buses are named: kicks to Kick, snares to
+/// Snare, both hats to Hats, the clap and the perc to Perc. Nothing on Main.
+EngineParameters splitKit()
+{
+    EngineParameters p = everythingSpreadKit();
+    p.output[static_cast<int> (PadIndex::kick1)] = static_cast<int> (OutputBus::kick);
+    p.output[static_cast<int> (PadIndex::kick2)] = static_cast<int> (OutputBus::kick);
+    p.output[static_cast<int> (PadIndex::snare1)] = static_cast<int> (OutputBus::snare);
+    p.output[static_cast<int> (PadIndex::snare2)] = static_cast<int> (OutputBus::snare);
+    p.output[static_cast<int> (PadIndex::hatClosed)] = static_cast<int> (OutputBus::hats);
+    p.output[static_cast<int> (PadIndex::hatOpen)] = static_cast<int> (OutputBus::hats);
+    p.output[static_cast<int> (PadIndex::clap)] = static_cast<int> (OutputBus::perc);
+    p.output[static_cast<int> (PadIndex::perc)] = static_cast<int> (OutputBus::perc);
+    return p;
+}
+
+} // namespace
+
+TEZLA_TEST (every_pad_on_main_is_the_one_output_instrument_bit_for_bit_and_the_other_buses_cost_nothing)
+{
+    // The default routing is the instrument every saved project was mixed
+    // against: Main carries what process() always returned, exactly, the
+    // other four buses are exactly silent, and each of them is skipped on
+    // every block rather than decimated -- the cost claim behind "all on
+    // Main costs one bus".
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    const EngineParameters p = everythingSpreadKit();
+    const auto summed = renderBoth (p, rate, samples, kBreakHits);
+    const auto buses = renderBuses (p, rate, samples, kBreakHits);
+
+    CHECK (identical (buses.left (OutputBus::main), summed.left));
+    CHECK (identical (buses.right (OutputBus::main), summed.right));
+    CHECK (rmsOf (summed.left) > 0.0);
+
+    for (int bus = 1; bus < kBusCount; ++bus)
+    {
+        CHECK (allExactlyZero (buses.channel[2 * bus]));
+        CHECK (allExactlyZero (buses.channel[2 * bus + 1]));
+        CHECK (buses.idle[bus]);
+    }
+
+    // Four unfed buses, skipped on every one of the calls: the render is
+    // shorter than the idle time after its last hit, so every call rendered.
+    std::printf ("        [buses] all on Main: %d calls, %llu bus-blocks skipped\n",
+                 buses.calls, static_cast<unsigned long long> (buses.skips));
+
+    CHECK (buses.skips == 4 * static_cast<std::uint64_t> (buses.calls));
+    CHECK (! buses.idle[0]);
+}
+
+TEZLA_TEST (a_pad_on_its_own_bus_leaves_by_it_alone)
+{
+    // Route Kick 1 to the Kick bus and strike only the kick: the Kick bus
+    // must be exactly the one-output render of the same hits, Main exactly
+    // silent. A bus's first pad assigns rather than adds, so nothing about
+    // the split is approximate. (The other pads cannot join this render:
+    // every hit advances the shared hit count that seeds the next one, so a
+    // kick struck after a snare is a different kick -- by design, and it is
+    // why the sum test below is the one that covers the mixed case.)
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    EngineParameters p = everythingSpreadKit();
+    p.output[static_cast<int> (PadIndex::kick1)] = static_cast<int> (OutputBus::kick);
+
+    std::vector<Hit> kickHits;
+
+    for (const auto& hit : kBreakHits)
+        if (hit.note == 36)
+            kickHits.push_back (hit);
+
+    CHECK (kickHits.size() == 2);
+
+    const auto oneOutput = renderBoth (everythingSpreadKit(), rate, samples, kickHits);
+    const auto buses = renderBuses (p, rate, samples, kickHits);
+
+    CHECK (identical (buses.left (OutputBus::kick), oneOutput.left));
+    CHECK (identical (buses.right (OutputBus::kick), oneOutput.right));
+    CHECK (rmsOf (oneOutput.left) > 0.0);
+
+    for (auto bus : { OutputBus::main, OutputBus::snare, OutputBus::hats, OutputBus::perc })
+    {
+        CHECK (allExactlyZero (buses.left (bus)));
+        CHECK (allExactlyZero (buses.right (bus)));
+    }
+
+    // The whole break with only the kick routed away: Main and Kick together
+    // are the one-output kit to within rounding, and both carry something.
+    const auto mixed = renderBuses (p, rate, samples, kBreakHits);
+    const auto unsplit = renderBoth (everythingSpreadKit(), rate, samples, kBreakHits);
+
+    const auto left = sum (mixed.left (OutputBus::main), mixed.left (OutputBus::kick), 1.0);
+    const auto right = sum (mixed.right (OutputBus::main), mixed.right (OutputBus::kick), 1.0);
+
+    const double worst = std::max (worstDifference (left, unsplit.left), worstDifference (right, unsplit.right));
+
+    std::printf ("        [buses] the kick routed away: Main + Kick against the one output, worst difference %.3g\n", worst);
+
+    CHECK (worst < 1e-12);
+    CHECK (rmsOf (mixed.left (OutputBus::kick)) > 0.0);
+    CHECK (rmsOf (mixed.left (OutputBus::main)) > 0.0);
+}
+
+TEZLA_TEST (the_kit_split_across_five_buses_sums_to_the_unsplit_kit)
+{
+    // Decimation is linear, so the buses summed at the host are the one-bus
+    // render to within rounding -- and process(), which sums them itself, is
+    // that sum bit for bit, in the same order.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    const EngineParameters unsplit = everythingSpreadKit();
+    const EngineParameters split = splitKit();
+
+    const auto one = renderBoth (unsplit, rate, samples, kBreakHits);
+    const auto buses = renderBuses (split, rate, samples, kBreakHits);
+    const auto summedByEngine = renderBoth (split, rate, samples, kBreakHits);
+
+    std::vector<double> left (static_cast<std::size_t> (samples), 0.0);
+    std::vector<double> right (static_cast<std::size_t> (samples), 0.0);
+
+    for (int bus = 0; bus < kBusCount; ++bus)
+    {
+        const auto& l = buses.channel[2 * bus];
+        const auto& r = buses.channel[2 * bus + 1];
+
+        // Every bus carries something: the split is real, not a relabelling.
+        if (bus > 0)
+            CHECK (rmsOf (l) > 0.0);
+
+        for (int i = 0; i < samples; ++i)
+        {
+            left[static_cast<std::size_t> (i)] += l[static_cast<std::size_t> (i)];
+            right[static_cast<std::size_t> (i)] += r[static_cast<std::size_t> (i)];
+        }
+    }
+
+    const double worst = std::max (worstDifference (left, one.left), worstDifference (right, one.right));
+
+    std::printf ("        [buses] split kit summed against the unsplit render: worst difference %.3g; "
+                 "peak %.4f; %llu bus-blocks skipped of %d calls x 5\n",
+                 worst, peakOf (one.left), static_cast<unsigned long long> (buses.skips), buses.calls);
+
+    CHECK (worst < 1e-12);
+    CHECK (allExactlyZero (buses.left (OutputBus::main)));
+    CHECK (identical (summedByEngine.left, left));
+    CHECK (identical (summedByEngine.right, right));
+}
+
+TEZLA_TEST (every_bus_is_the_same_at_every_block_size)
+{
+    // The block rule for the buses: the routing, the carry and the skip all
+    // count in internal samples, so 64-, 97- and 512-sample blocks produce
+    // the same ten channels. (The skip's own tail bug is the next test's: the
+    // break needs the exact block phase it fell to a hit's retirement.)
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    const EngineParameters p = splitKit();
+    const auto small = renderBuses (p, rate, samples, kBreakHits, 64);
+    const auto large = renderBuses (p, rate, samples, kBreakHits, 512);
+    const auto odd = renderBuses (p, rate, samples, kBreakHits, 97);
+
+    double worst = 0.0;
+
+    for (int channel = 0; channel < 2 * kBusCount; ++channel)
+    {
+        worst = std::max (worst, worstDifference (small.channel[channel], large.channel[channel]));
+        worst = std::max (worst, worstDifference (small.channel[channel], odd.channel[channel]));
+    }
+
+    std::printf ("        [buses] five buses across 64 / 97 / 512: worst difference %g\n", worst);
+    CHECK (worst == 0.0);
+}
+
+TEZLA_TEST (a_bus_delivers_the_decimators_tail_whatever_the_block_size)
+{
+    // The skip decides on the zeros the decimators have ALREADY seen. Decided
+    // on the block's own zeros instead -- the first version -- a block that
+    // was silent after a hit retired at the very end of the block before it
+    // was skipped with that hit's last 224 internal samples of response still
+    // in the filters, and the tail was cut: at block sizes of 256 and up
+    // only, and only when the retirement fell in a block's last 56 host
+    // samples at x4. So this test finds where a lone closed hat's tail ends
+    // at 64-sample blocks, picks block sizes that put that end in the first
+    // samples of a block -- the phase that spills a tail across the boundary
+    // -- and asks for the same bits. Seen to fail with the old decision.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    EngineParameters p;
+    p.hat = HatSettings {};
+    p.output[static_cast<int> (PadIndex::hatClosed)] = static_cast<int> (OutputBus::hats);
+
+    const std::vector<Hit> oneHat { { 0, 42, 1.0 } };
+    const auto reference = renderBuses (p, rate, samples, oneHat, 64);
+
+    const int last = std::max (lastNonZeroSample (reference.left (OutputBus::hats)),
+                               lastNonZeroSample (reference.right (OutputBus::hats)));
+
+    CHECK (last > 1000);
+    CHECK (last < samples - 2048);
+
+    // Block sizes whose grid puts the tail's last sample 8 to 48 samples into
+    // a block: the retirement itself then sits in the previous block's last
+    // few dozen samples, and its response spills over the boundary.
+    std::vector<int> spilling;
+
+    for (int block = 256; block <= 1024 && spilling.size() < 4; ++block)
+        if (const int into = last % block; into >= 8 && into <= 48)
+            spilling.push_back (block);
+
+    CHECK (spilling.size() == 4);
+
+    double worst = 0.0;
+
+    for (int block : spilling)
+    {
+        const auto trial = renderBuses (p, rate, samples, oneHat, block);
+
+        for (int channel = 0; channel < 2 * kBusCount; ++channel)
+            worst = std::max (worst, worstDifference (trial.channel[channel], reference.channel[channel]));
+    }
+
+    std::printf ("        [buses] a closed hat's tail ends at host sample %d; blocks of %d / %d / %d / %d spill it: worst difference %g\n",
+                 last, spilling[0], spilling[1], spilling[2], spilling[3], worst);
+
+    CHECK (worst == 0.0);
+}
+
+TEZLA_TEST (a_flushed_bus_would_have_decimated_to_exactly_nothing)
+{
+    // The skip's premise, measured on the decimator itself: after an impulse
+    // at the internal rate, how many exactly-zero internal samples until the
+    // decimated output is exactly zero and stays so? kBusFlushSamples must
+    // clear it at every factor, and the engine's counter must then agree: a
+    // bus goes idle after its tail and wakes on the next hit.
+    for (int factor : { 2, 4, 8 })
+    {
+        Oversampler oversampler;
+        oversampler.prepare (64, 2, factor);
+
+        int zerosSeen = 0;
+        int lastNonZeroAt = -1;
+        bool impulseSent = false;
+
+        for (int block = 0; block < 40; ++block)
+        {
+            double* const* internal = oversampler.internalBuffers();
+
+            for (int channel = 0; channel < 2; ++channel)
+                std::fill (internal[channel], internal[channel] + 64 * factor, 0.0);
+
+            if (! impulseSent)
+            {
+                internal[0][0] = 1.0;
+                internal[1][0] = -1.0;
+                impulseSent = true;
+            }
+
+            std::vector<double> left (64), right (64);
+            double* out[2] = { left.data(), right.data() };
+            oversampler.downsample (out, 64);
+
+            for (int i = 0; i < 64; ++i)
+            {
+                zerosSeen += factor;
+
+                if (! isExactlyZero (left[static_cast<std::size_t> (i)]) || ! isExactlyZero (right[static_cast<std::size_t> (i)]))
+                    lastNonZeroAt = zerosSeen;
+            }
+        }
+
+        std::printf ("        [flush] x%d: the decimated impulse is exactly zero after %d internal samples (limit %d)\n",
+                     factor, lastNonZeroAt, Engine::kBusFlushSamples);
+
+        CHECK (lastNonZeroAt > 0);
+        CHECK (lastNonZeroAt < Engine::kBusFlushSamples);
+    }
+
+    // The engine: one kick on the Kick bus, then nothing. The bus must be
+    // busy while the kick and its tail run and idle once they have gone --
+    // and the skip must never be counted while the tail is still owed.
+    constexpr double rate = 48000.0;
+    constexpr int block = 256;
+
+    EngineParameters p;
+    p.kick1 = everythingOn();
+    p.output[static_cast<int> (PadIndex::kick1)] = static_cast<int> (OutputBus::kick);
+
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+    engine->setParameters (p);
+
+    std::vector<double> storage[2 * kBusCount];
+    double* channels[2 * kBusCount];
+
+    for (int channel = 0; channel < 2 * kBusCount; ++channel)
+    {
+        storage[channel].assign (block, 0.0);
+        channels[channel] = storage[channel].data();
+    }
+
+    engine->noteOn (36, 1.0);
+    engine->processBuses (channels, block);
+
+    CHECK (! engine->isBusIdle (OutputBus::kick));
+    CHECK (engine->isBusIdle (OutputBus::main));
+
+    int idleAfterBlocks = -1;
+    int lastSoundingBlock = 0;
+
+    for (int b = 1; b < 400 && idleAfterBlocks < 0; ++b)
+    {
+        engine->processBuses (channels, block);
+
+        if (! allExactlyZero (storage[2]) || ! allExactlyZero (storage[3]))
+            lastSoundingBlock = b;
+
+        if (engine->isBusIdle (OutputBus::kick))
+            idleAfterBlocks = b;
+    }
+
+    std::printf ("        [flush] the kick on its bus: last sounding block %d, idle from block %d\n",
+                 lastSoundingBlock, idleAfterBlocks);
+
+    CHECK (idleAfterBlocks > lastSoundingBlock);
+    CHECK (engine->activeHitCount() == 0);
+
+    // Woken by the next hit, on the block it lands in.
+    engine->noteOn (36, 1.0);
+    engine->processBuses (channels, block);
+
+    CHECK (! engine->isBusIdle (OutputBus::kick));
+    CHECK (! allExactlyZero (storage[2]));
+}
+
+TEZLA_TEST (a_kit_split_across_five_buses_fits_its_budget)
+{
+    // The same busy break as the eight-pad budget, every pad on its named
+    // bus: four more decimations a block, and nothing else. The figure is
+    // printed on every run; the budget is the eight-pad one plus the four
+    // stereo decimations at x4.
+    constexpr double rate = 48000.0;
+    constexpr int block = 480;
+    constexpr int blocks = 100;
+
+    EngineParameters parameters = busyKit();
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+        parameters.output[pad] = splitKit().output[pad];
+
+    auto engine = heapEngine();
+    engine->prepare (rate, block);
+    engine->setParameters (parameters);
+
+    std::vector<double> storage[2 * kBusCount];
+    double* channels[2 * kBusCount];
+
+    for (int channel = 0; channel < 2 * kBusCount; ++channel)
+    {
+        storage[channel].assign (block, 0.0);
+        channels[channel] = storage[channel].data();
+    }
+
+    double sink = 0.0;
+
+    engine->noteOn (36, 1.0);
+    engine->processBuses (channels, block);
+
+    const auto start = std::chrono::steady_clock::now();
+
+    for (int b = 0; b < blocks; ++b)
+    {
+        if (b % 12 == 0)
+            engine->noteOn (36, 1.0);
+
+        if (b % 12 == 6)
+            engine->noteOn (35, 0.8);
+
+        if (b % 12 == 3)
+            engine->noteOn (38, 1.0);
+
+        if (b % 12 == 9)
+            engine->noteOn (40, 0.9);
+
+        if (b % 8 == 4)
+            engine->noteOn (37, 0.7);
+
+        if (b % 3 == 0)
+            engine->noteOn (42, 0.8);
+
+        if (b % 24 == 18)
+            engine->noteOn (46, 0.9);
+
+        if (b % 12 == 3)
+            engine->noteOn (39, 0.85);
+
+        engine->processBuses (channels, block);
+        sink += storage[2][0];
+    }
+
+    const double activeSeconds = std::chrono::duration<double> (
+        std::chrono::steady_clock::now() - start).count();
+
+    // The same kit on one bus, the same way, for the difference: what the
+    // four extra decimations cost, measured rather than estimated.
+    auto oneBus = heapEngine();
+    oneBus->prepare (rate, block);
+    oneBus->setParameters (busyKit());
+    oneBus->noteOn (36, 1.0);
+    oneBus->processBuses (channels, block);
+
+    const auto startOne = std::chrono::steady_clock::now();
+
+    for (int b = 0; b < blocks; ++b)
+    {
+        if (b % 12 == 0)
+            oneBus->noteOn (36, 1.0);
+
+        if (b % 12 == 6)
+            oneBus->noteOn (35, 0.8);
+
+        if (b % 12 == 3)
+            oneBus->noteOn (38, 1.0);
+
+        if (b % 12 == 9)
+            oneBus->noteOn (40, 0.9);
+
+        if (b % 8 == 4)
+            oneBus->noteOn (37, 0.7);
+
+        if (b % 3 == 0)
+            oneBus->noteOn (42, 0.8);
+
+        if (b % 24 == 18)
+            oneBus->noteOn (46, 0.9);
+
+        if (b % 12 == 3)
+            oneBus->noteOn (39, 0.85);
+
+        oneBus->processBuses (channels, block);
+        sink += storage[0][0];
+    }
+
+    const double oneBusSeconds = std::chrono::duration<double> (
+        std::chrono::steady_clock::now() - startOne).count();
+
+    std::printf ("        [engine cpu] the eight pads split across five buses at 48 kHz x%d: %.2f%% of a core "
+                 "against %.2f%% on one bus -- the four extra decimations cost %.2f%%; "
+                 "%llu bus-blocks skipped (sink %g)\n",
+                 engine->getOversamplingFactor(), 100.0 * activeSeconds, 100.0 * oneBusSeconds,
+                 100.0 * (activeSeconds - oneBusSeconds),
+                 static_cast<unsigned long long> (engine->getBusSkipCount()), sink);
+
+    // Main is unfed and skipped throughout; the other four run.
+    CHECK (engine->getBusSkipCount() >= static_cast<std::uint64_t> (blocks));
+    CHECK (engine->isBusIdle (OutputBus::main));
+    CHECK (! engine->isBusIdle (OutputBus::hats));
+
+    // The eight-pad budget (0.22) plus the four extra stereo decimations,
+    // each about half a per cent of a core at x4, with the same headroom.
+    CHECK_CPU_BUDGET (activeSeconds, 0.26, "eight pads on five buses, everything on, 48 kHz x4");
 }
