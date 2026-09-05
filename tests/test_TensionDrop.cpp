@@ -149,3 +149,85 @@ TEZLA_TEST (the_drop_glides_a_ringing_bank_onto_its_target)
         CHECK_NEAR (hz, target, 0.5);
     }
 }
+
+TEZLA_TEST (the_curve_bends_the_landing_and_is_the_exponential_at_zero)
+{
+    // Curve 0 is the original glide by branch: the same sequence of
+    // remaining cents as a drop triggered without a curve at all.
+    TensionDrop plain, zero;
+    plain.prepare (96000.0);
+    zero.prepare (96000.0);
+    plain.trigger (24.0, 0.1);
+    zero.trigger (24.0, 0.1, 0.0);
+
+    for (int block = 0; block < 400; ++block)
+    {
+        plain.advance (32);
+        zero.advance (32);
+        CHECK (plain.remainingCents() == zero.remainingCents());
+    }
+
+    // Curve -1 is a straight line in cents that lands at exactly the stated
+    // time: half the depth half way, nothing at all at the end.
+    TensionDrop line;
+    line.prepare (96000.0);
+    line.trigger (24.0, 0.1, -1.0);
+    line.advance (4800);
+    CHECK_NEAR (line.remainingCents(), 1200.0, 1.0e-9);
+    line.advance (4800);
+    CHECK (line.multiplier() == 1.0);
+    CHECK (! line.isActive());
+
+    // Curve +1 holds near the start and then falls: at half time it still
+    // carries e^(-5 * 0.5^4) = 73 % of the depth, where the exponential
+    // carries 8 %; and it lands.
+    TensionDrop snap;
+    snap.prepare (96000.0);
+    snap.trigger (24.0, 0.1, 1.0);
+    snap.advance (4800);
+    CHECK_NEAR (snap.remainingCents(), 2400.0 * std::exp (-5.0 * std::pow (0.5, 4.0)), 1.0e-9);
+
+    TensionDrop exponential;
+    exponential.prepare (96000.0);
+    exponential.trigger (24.0, 0.1);
+    exponential.advance (4800);
+    CHECK_NEAR (exponential.remainingCents(), 2400.0 * std::exp (-2.5), 0.01);
+
+    snap.advance (96000);
+    CHECK (! snap.isActive());
+
+    std::printf ("        [curve] half way through a 24 st drop: line %.0f cents, exponential %.0f, snap %.0f\n",
+                 1200.0, 2400.0 * std::exp (-2.5), 2400.0 * std::exp (-5.0 * std::pow (0.5, 4.0)));
+
+    // Every curve is 1.0 of the depth at the start, for a hit that reads the
+    // multiplier before its first control tick.
+    for (const double curve : { -1.0, -0.5, 0.5, 1.0 })
+    {
+        TensionDrop d;
+        d.prepare (48000.0);
+        d.trigger (12.0, 0.05, curve);
+        CHECK (d.multiplier() == 2.0);
+    }
+}
+
+TEZLA_TEST (a_curved_drop_ignores_block_size_too)
+{
+    // The curved landings count elapsed samples -- an exact integer sum --
+    // so 32-sample blocks and one 4096-sample block land on the same bits.
+    for (const double curve : { -1.0, -0.3, 0.6, 1.0 })
+    {
+        TensionDrop small, large;
+        small.prepare (192000.0);
+        large.prepare (192000.0);
+        small.trigger (-7.0, 0.03, curve);
+        large.trigger (-7.0, 0.03, curve);
+
+        for (int block = 0; block < 128; ++block)
+            small.advance (32);
+
+        large.advance (4096);
+
+        CHECK (small.remainingCents() == large.remainingCents());
+        CHECK (small.multiplier() == large.multiplier());
+    }
+}

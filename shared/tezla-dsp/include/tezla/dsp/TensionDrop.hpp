@@ -32,7 +32,18 @@
 // same span into blocks lands within rounding of the same place -- host
 // buffer size cannot bend the glide (CLAUDE.md section 7's block rule, held
 // by construction).
+//
+// The CURVE (Ictus I4.5) bends the landing's shape without touching the
+// exponential: 0 is the glide above, bit for bit, by branch. Towards -1 the
+// cents blend to a straight line that lands at exactly the stated time -- the
+// laser, falling at one rate from the first sample to the last. Towards +1
+// the exponent's time is raised to a power, 1 + 3 curve, so the drop holds
+// near its start and then falls away -- the snap. A curved glide counts its
+// elapsed samples (an exact integer sum) rather than multiplying a
+// coefficient, so it too lands within rounding of the same place whatever
+// the block size.
 
+#include <algorithm>
 #include <cmath>
 
 #include "Exact.hpp"
@@ -58,17 +69,26 @@ public:
     {
         cents_ = 0.0;
         decayPerSample_ = 1.0;
+        curve_ = 0.0;
+        depthCents_ = 0.0;
+        elapsedSamples_ = 0.0;
+        lengthSamples_ = 1.0;
     }
 
     /// Starts a glide of `depthSemitones` (signed) landing over
-    /// `timeSeconds`. Called at note-on.
-    void trigger (double depthSemitones, double timeSeconds) noexcept
+    /// `timeSeconds`, shaped by `curve` (-1..+1, see the header; 0 is the
+    /// exponential exactly). Called at note-on.
+    void trigger (double depthSemitones, double timeSeconds, double curve = 0.0) noexcept
     {
         const double time = timeSeconds < 0.001 ? 0.001
                           : timeSeconds > 5.0 ? 5.0 : timeSeconds;
 
         cents_ = 100.0 * depthSemitones;
+        depthCents_ = cents_;
         decayPerSample_ = std::exp (-kLandFactor / (time * sampleRate_));
+        curve_ = std::clamp (curve, -1.0, 1.0);
+        lengthSamples_ = time * sampleRate_;
+        elapsedSamples_ = 0.0;
     }
 
     /// Advances the glide by a block of samples.
@@ -77,11 +97,38 @@ public:
         if (numSamples <= 0 || isExactlyZero (cents_))
             return;
 
-        cents_ *= std::pow (decayPerSample_, static_cast<double> (numSamples));
+        if (isExactlyZero (curve_))
+        {
+            cents_ *= std::pow (decayPerSample_, static_cast<double> (numSamples));
+        }
+        else
+        {
+            elapsedSamples_ += static_cast<double> (numSamples);
+            cents_ = depthCents_ * shapeAt (elapsedSamples_ / lengthSamples_);
+        }
 
         if (std::abs (cents_) < kSnapCents)
             cents_ = 0.0;
     }
+
+    /// The curved landing's remaining fraction at `u` = elapsed / stated
+    /// time: the exponential blended to a line towards -1, the exponential
+    /// of a power of time towards +1. 1.0 at u = 0 for every curve.
+    [[nodiscard]] double shapeAt (double u) const noexcept
+    {
+        const double t = u < 0.0 ? 0.0 : u;
+
+        if (curve_ < 0.0)
+        {
+            const double exponential = std::exp (-kLandFactor * t);
+            const double line = t < 1.0 ? 1.0 - t : 0.0;
+            return (1.0 + curve_) * exponential + (-curve_) * line;
+        }
+
+        return std::exp (-kLandFactor * std::pow (t, 1.0 + 3.0 * curve_));
+    }
+
+    [[nodiscard]] double getCurve() const noexcept { return curve_; }
 
     /// The current frequency multiplier for every mode. Exactly 1.0 at
     /// rest, so the resonator's retune guard sees a true no-op.
@@ -98,6 +145,12 @@ private:
     double sampleRate_ { 44100.0 };
     double cents_ { 0.0 };
     double decayPerSample_ { 1.0 };
+
+    // the curved landings
+    double curve_ { 0.0 };
+    double depthCents_ { 0.0 };
+    double elapsedSamples_ { 0.0 };
+    double lengthSamples_ { 1.0 };
 };
 
 } // namespace tezla::dsp
