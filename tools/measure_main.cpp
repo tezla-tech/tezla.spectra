@@ -5605,8 +5605,9 @@ int runIctus (const Args& args)
     // that is what is counted: the share of its energy within a semitone of
     // one of the six.
 
-    std::printf ("\nSizzle: the share of the hiss landing within a semitone of a partial\n"
-                 "(Tune 400 Hz, no metal in the mix -- the noise layer alone):\n\n");
+    std::printf ("\nSizzle: the share of the hiss landing within a semitone of one of the bank's\n"
+                 "six centres -- the partials' harmonics nearest the two bands, where the metal\n"
+                 "is heard (Tune 400 Hz, Colour 4 kHz, no metal in the mix -- the noise layer alone):\n\n");
 
     for (const double sizzle : { 0.0, 0.25, 0.5, 0.75, 1.0 })
     {
@@ -5649,6 +5650,16 @@ int runIctus (const Args& args)
         const auto last = std::min (static_cast<std::size_t> (12000.0 / binWidth),
                                     windowed.size() / 2);
 
+        // The bank's centres for THIS hit: at Sizzle 0 the bank is not
+        // built, so the same table is asked for directly.
+        double partials[HatEngine::kOscillators] {};
+        double centres[HatEngine::kOscillators] {};
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            partials[i] = 400.0 * HatEngine::kSets[0][i];
+
+        HatEngine::sizzleCentres (partials, 4000.0, 192000.0, centres);
+
         double total = 0.0;
         double onPartials = 0.0;
 
@@ -5659,18 +5670,122 @@ int runIctus (const Args& args)
             total += power;
 
             for (int i = 0; i < HatEngine::kOscillators; ++i)
-                if (std::abs (1200.0 * std::log2 (hz / (400.0 * HatEngine::kSets[0][i]))) < 100.0)
+                if (std::abs (1200.0 * std::log2 (hz / centres[i])) < 100.0)
                 {
                     onPartials += power;
                     break;
                 }
         }
 
-        std::printf ("  Sizzle %3.0f%% -> %5.1f%% of the hiss on a partial\n",
+        std::printf ("  Sizzle %3.0f%% -> %5.1f%% of the hiss on a centre\n",
                      100.0 * sizzle, 100.0 * onPartials / std::max (total, 1.0e-300));
     }
 
-    // ---- 5. what the two new engines cost --------------------------------
+        // ---- 4d. Plate: the modal cymbal against the six pulses ---------------
+    //
+    // I4.3. The modes are placed by the published cymbal law (Fletcher &
+    // Rossing Table 20.1, the 14-inch fit, p = 1.47; circle families at
+    // 7.4 diameters each, read off Perrin et al.), the lowest AT Tune.
+
+    std::printf ("\nPlate: the modal cymbal's table, f = c (m + 7.4 n)^1.47 with (2,0) at Tune,\n"
+                 "capped at 18 kHz and the bank's 64 modes:\n\n");
+    std::printf ("  %8s  %5s  %9s  %9s  %s\n", "Tune", "modes", "lowest", "highest", "last spacing");
+
+    {
+        double hz[HatEngine::kPlateModes] {};
+        double amplitude[HatEngine::kPlateModes] {};
+
+        for (const double tune : { 60.0, 205.3, 400.0, 900.0, 1200.0 })
+        {
+            const int count = HatEngine::plateModesAt (tune, 0.0, 192000.0 * 0.45, hz, amplitude);
+
+            std::printf ("  %6.1f Hz  %5d  %7.1f Hz  %7.0f Hz  %5.0f Hz (%.0f cents)\n",
+                         tune, count, hz[0], hz[count - 1], hz[count - 1] - hz[count - 2],
+                         1200.0 * std::log2 (hz[count - 1] / hz[count - 2]));
+        }
+    }
+
+    std::printf ("\nPlate against the metal -- the share of energy off the six pulses' harmonic\n"
+                 "series above 4 kHz (Tune 900; the plate's lowest mode IS the first pulse, so\n"
+                 "below that the two share a line by design), and the level through the\n"
+                 "default chain, which is what set kPlateGain:\n\n");
+
+    {
+        double partials[HatEngine::kOscillators] {};
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            partials[i] = 900.0 * HatEngine::kSets[0][i];
+
+        for (const double plate : { 0.0, 0.5, 1.0 })
+        {
+            HatSettings hat;
+            hat.tuneHz = 900.0;
+            hat.spread = 0.0;
+            hat.ring = 0.0;
+            hat.air = 0.0;
+            hat.damp = 0.0;
+            hat.drive = 0.0;
+            hat.strike = 0.0;
+            hat.width = 1.0;
+            hat.highpassHz = 4000.0;
+            hat.decayOpenSeconds = 1.2;
+            hat.plate = plate;
+            hat.velocityColour = 0.0;
+            hat.velocityDecay = 0.0;
+            hat.velocityStrike = 0.0;
+
+            HatEngine engine;
+            engine.prepare (192000.0);
+            engine.start (hat, true, 1.0, 12u, 0);
+
+            std::vector<double> out (static_cast<std::size_t> (1.3 * 192000.0));
+
+            for (std::size_t n = 0; n < out.size(); ++n)
+            {
+                if (n % Engine::kControlIntervalSamples == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+
+                out[n] = engine.process();
+            }
+
+            std::printf ("  plate %3.0f%%   off the series %6.1f dB\n", 100.0 * plate,
+                         inharmonicDb (out, 192000.0, partials, HatEngine::kOscillators, 20000.0));
+        }
+
+        for (const bool open : { false, true })
+        {
+            double rms[2] {};
+
+            for (int which = 0; which < 2; ++which)
+            {
+                HatSettings hat;
+                hat.plate = which == 0 ? 0.0 : 1.0;
+
+                HatEngine engine;
+                engine.prepare (192000.0);
+                engine.start (hat, open, 1.0, 99u, 0);
+
+                const auto samples = static_cast<std::size_t> ((open ? 0.6 : 0.12) * 192000.0);
+                double sum = 0.0;
+
+                for (std::size_t n = 0; n < samples; ++n)
+                {
+                    if (n % Engine::kControlIntervalSamples == 0)
+                        engine.advanceControl (Engine::kControlIntervalSamples);
+
+                    const double x = engine.process();
+                    sum += x * x;
+                }
+
+                rms[which] = std::sqrt (sum / static_cast<double> (samples));
+            }
+
+            std::printf ("  %-6s default chain: metal RMS %.4f, plate RMS %.4f (plate %+.1f dB)\n",
+                         open ? "open" : "closed", rms[0], rms[1], 20.0 * std::log10 (rms[1] / rms[0]));
+        }
+    }
+
+// ---- 5. what the two new engines cost --------------------------------
 
     {
         // The guard the plugin always has and a bare engine loop does not.
@@ -5704,6 +5819,22 @@ int runIctus (const Args& args)
         const double hatNs = 1.0e9 * std::chrono::duration<double> (
             std::chrono::steady_clock::now() - start).count() / samples;
 
+        HatSettings plateHat = hat;
+        plateHat.plate = 1.0;
+        plateHat.grit = 0.6;
+
+        HatEngine plateEngine;
+        plateEngine.prepare (192000.0);
+        plateEngine.start (plateHat, true, 1.0, 5u, 0);
+
+        start = std::chrono::steady_clock::now();
+
+        for (int n = 0; n < samples; ++n)
+            sink += plateEngine.process();
+
+        const double plateNs = 1.0e9 * std::chrono::duration<double> (
+            std::chrono::steady_clock::now() - start).count() / samples;
+
         ClapSettings clap;
         clap.tailSeconds = 1.0;
 
@@ -5719,9 +5850,10 @@ int runIctus (const Args& args)
         const double clapNs = 1.0e9 * std::chrono::duration<double> (
             std::chrono::steady_clock::now() - start).count() / samples;
 
-        std::printf ("\nOne second at 192 kHz: hat %.1f ns/sample (%.2f%% of a core), clap %.1f ns/sample"
-                     " (%.2f%% of a core); sink %g\n",
-                     hatNs, hatNs * 192000.0 / 1.0e7, clapNs, clapNs * 192000.0 / 1.0e7, sink);
+        std::printf ("\nOne second at 192 kHz: hat %.1f ns/sample (%.2f%% of a core), with the plate"
+                     " %.1f ns/sample (%.2f%%), clap %.1f ns/sample (%.2f%% of a core); sink %g\n",
+                     hatNs, hatNs * 192000.0 / 1.0e7, plateNs, plateNs * 192000.0 / 1.0e7,
+                     clapNs, clapNs * 192000.0 / 1.0e7, sink);
     }
 
     // ---- 6. a WAV to listen to: a bar of kick and snare ------------------

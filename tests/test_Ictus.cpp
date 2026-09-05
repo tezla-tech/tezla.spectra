@@ -2107,6 +2107,332 @@ TEZLA_TEST (a_hat_hit_retires_exactly_and_leaves_exact_zeros)
         CHECK (isExactlyZero (out[n]));
 }
 
+// ---------------------------------------------------------------------------
+// The plate -- I4.3, the rig's "thin and tinny"
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (the_plates_modes_follow_the_cymbal_law_and_are_incommensurate)
+{
+    double hz[HatEngine::kPlateModes] {};
+    double amplitude[HatEngine::kPlateModes] {};
+
+    const int count = HatEngine::plateModesAt (205.3, 0.0, 192000.0 * 0.45, hz, amplitude);
+
+    // At the default Tune the bank's whole capacity fits below the 18 kHz
+    // cap, and the 64th mode lands near 9 kHz -- dense enough at the top to
+    // read as a plate, low enough at the bottom to have body.
+    CHECK (count == HatEngine::kPlateModes);
+    CHECK (hz[count - 1] > 7000.0 && hz[count - 1] < 12000.0);
+
+    std::printf ("        [plate] %d modes from %.1f to %.0f Hz at Tune 205.3\n", count, hz[0], hz[count - 1]);
+
+    // The lowest mode IS Tune, exactly: it is the one mode never jittered.
+    CHECK (isExactly (hz[0], 205.3));
+
+    // The rim family follows f = c m^p with p = 1.47, the fit for the 14-inch
+    // thick cymbal in Fletcher & Rossing's Table 20.1: the second mode is
+    // (3,0), at 1.5^1.47 times the first, within the +-1.2 % jitter.
+    const double law = std::pow (1.5, HatEngine::kPlateExponent);
+    CHECK (std::abs (hz[1] / hz[0] - law) < law * 0.015);
+
+    // Every mode is below the ceiling asked for, and the table is ascending
+    // to within the jitter (a mode may be nudged past a neighbour closer than
+    // the jitter is wide, which is the point of the jitter).
+    for (int k = 0; k < count; ++k)
+        CHECK (hz[k] < 192000.0 * 0.45);
+
+    for (int k = 1; k < count; ++k)
+        CHECK (hz[k] > hz[k - 1] * 0.97);
+
+    // Incommensurate: no two modes coincide (a cymbal's modes are distinct
+    // frequencies, Perrin et al.), and the low twelve -- the ones the ear can
+    // still resolve as pitches -- are not a harmonic series of the lowest.
+    // Counted rather than forbidden one by one, because the law itself puts
+    // (6,0) at 3^1.47 = 5.02 times the fundamental, seven cents from the
+    // fifth harmonic: a coincidence or two is what a real cymbal has (Perrin's
+    // 18-inch has (9,0) on (2,1)); twelve of them would be a bell.
+    for (int a = 0; a < count; ++a)
+        for (int b = a + 1; b < count; ++b)
+            CHECK (std::abs (1200.0 * std::log2 (hz[b] / hz[a])) > 3.0);
+
+    int nearHarmonic = 0;
+
+    for (int k = 1; k < 12; ++k)
+        for (int harmonic = 2; harmonic <= 8; ++harmonic)
+            if (std::abs (1200.0 * std::log2 (hz[k] / (harmonic * hz[0]))) < 30.0)
+                ++nearHarmonic;
+
+    std::printf ("        [plate] %d of the low twelve modes sit within 30 cents of a harmonic of the lowest\n",
+                 nearHarmonic);
+    CHECK (nearHarmonic <= 3);
+
+    // The strike: amplitudes fall as (f / f0)^-0.5 and their squares sum to
+    // the excitation level squared.
+    double power = 0.0;
+    for (int k = 0; k < count; ++k)
+        power += amplitude[k] * amplitude[k];
+
+    CHECK (std::abs (std::sqrt (power) - HatEngine::kPlateExcitation) < 1.0e-12);
+    CHECK (std::abs (amplitude[count - 1] / amplitude[0]
+                     - std::pow (hz[count - 1] / hz[0], -HatEngine::kPlateTilt)) < 1.0e-9);
+
+    // A small plate has fewer modes: at Tune 1200 the cap at 18 kHz leaves
+    // room for far fewer than 64, and every one is still below it.
+    const int small = HatEngine::plateModesAt (1200.0, 0.0, 192000.0 * 0.45, hz, amplitude);
+
+    CHECK (small < HatEngine::kPlateModes && small > 8);
+
+    for (int k = 0; k < small; ++k)
+        CHECK (hz[k] < HatEngine::kPlateTopHz);
+
+    // Spread widens the jitter and never moves the lowest mode.
+    double spread[HatEngine::kPlateModes] {};
+    (void) HatEngine::plateModesAt (205.3, 1.0, 192000.0 * 0.45, spread, amplitude);
+
+    CHECK (isExactly (spread[0], 205.3));
+
+    // `hz` holds the Tune 1200 table from the check above; the Spread 0 table
+    // at 205.3 again, to compare against.
+    (void) HatEngine::plateModesAt (205.3, 0.0, 192000.0 * 0.45, hz, amplitude);
+
+    double widest = 0.0;
+    for (int k = 1; k < count; ++k)
+        widest = std::max (widest, std::abs (1200.0 * std::log2 (spread[k] / hz[k])));
+
+    std::printf ("        [plate] Spread 1 moves a mode by up to %.1f cents against Spread 0\n", widest);
+    CHECK (widest > 10.0 && widest < 45.0);
+}
+
+TEZLA_TEST (plate_at_zero_never_builds_the_bank_and_grit_at_zero_is_sixteen_bits)
+{
+    // The proof that Plate 0 is the engine before the plate existed is a
+    // golden render: five renders at three rates, 412 800 samples, byte for
+    // byte identical before and after the change (the I4.3 notes in
+    // plugins/Ictus/PLAN.md). What a test can hold permanently is the branch
+    // that makes it so: at 0 the bank is never built, and Grit's crusher sits
+    // at its exact 16-bit bypass.
+    HatSettings s = hatEverythingOn();
+    s.plate = 0.0;
+    s.grit = 0.0;
+
+    HatEngine off;
+    off.prepare (192000.0);
+    off.start (s, false, 1.0, 1u, 0);
+
+    CHECK (off.getPlateModeCount() == 0);
+    CHECK (isExactly (off.getGritBits(), tezla::dsp::Bitcrusher::kMaxBits));
+
+    s.plate = 1.0;
+    s.grit = 1.0;
+
+    HatEngine on;
+    on.prepare (192000.0);
+    on.start (s, false, 1.0, 1u, 0);
+
+    CHECK (on.getPlateModeCount() == HatEngine::kPlateModes);
+    CHECK (std::abs (on.getGritBits() - HatEngine::kGritMinBits) < 1.0e-9);
+    CHECK (isExactly (on.getPlateModeHz (0), s.tuneHz));
+}
+
+TEZLA_TEST (the_plate_is_a_cymbal_and_not_the_pulse_chord)
+{
+    // The measurement that separates a plate from six pulses: the share of
+    // the energy that no pulse's harmonic series explains. The bare bank puts
+    // everything it makes ON those series (-77 dB off them, the I4 figure);
+    // a plate's modes are not harmonics of anything, so at Plate 1 most of
+    // the energy is off them. Same rig as the Ring measurement in
+    // tezla-measure -- Tune 900 so the series are far apart, the bands wide
+    // open, nothing else in the mix -- with one difference: the high-pass at
+    // 4 kHz. The plate's lowest mode sits AT Tune by design, which is the
+    // first pulse's fundamental, and with the longest decay in the bank it
+    // carried 77 % of the energy over 1.3 s and read as "on the series" --
+    // the first version of this test measured that one shared line and
+    // nothing else. Above 4 kHz the two sources have nothing in common.
+    //
+    // What this measure can and cannot catch: its mask is +-8 bins, about
+    // +-6 Hz, around each harmonic, so a plate that degenerated into the
+    // pulses' series would read on it -- the break-check that made the modes
+    // harmonics of Tune with the jitter off went red -- while the same series
+    // WITH the plate's +-1.2 % jitter reads off it. The small departures are
+    // the mode-table test's job; this one guards the gross one.
+    double partials[HatEngine::kOscillators] {};
+
+    for (int i = 0; i < HatEngine::kOscillators; ++i)
+        partials[i] = 900.0 * HatEngine::kSets[0][i];
+
+    const auto offSeriesDb = [&] (double plate)
+    {
+        HatSettings s = bareHat();
+        s.tuneHz = 900.0;
+        s.width = 1.0;
+        s.highpassHz = 4000.0;
+        s.decayOpenSeconds = 1.2;
+        s.plate = plate;
+
+        HatEngine engine;
+        const auto out = renderHatEngine (engine, s, 192000.0, 1.3, true, 1.0, 12u);
+        return inharmonicFloorDb (out, 192000.0, partials, HatEngine::kOscillators, 20000.0);
+    };
+
+    const double metal = offSeriesDb (0.0);
+    const double plate = offSeriesDb (1.0);
+
+    std::printf ("        [plate] energy off the six harmonic series: metal %.1f dB, plate %.1f dB\n", metal, plate);
+
+    CHECK (metal < -60.0);
+    CHECK (plate > -3.0);
+}
+
+TEZLA_TEST (grit_puts_the_steps_in_the_sound_and_leaves_the_level_alone)
+{
+    // Geometric from 16 bits to 4: 0 is the crusher's exact bypass, 1 is
+    // four bits, half way is eight.
+    CHECK (isExactly (HatEngine::bitsForGrit (0.0), 16.0));
+    CHECK (std::abs (HatEngine::bitsForGrit (1.0) - HatEngine::kGritMinBits) < 1.0e-9);
+    CHECK (std::abs (HatEngine::bitsForGrit (0.5) - 8.0) < 1.0e-9);
+
+    // A clean plate puts its energy on its own 64 modes; quantising it to
+    // four bits spreads error across every bin. Measured as the share of
+    // energy OFF the plate's own modes, which is what the steps are.
+    HatSettings s = bareHat();
+    s.tuneHz = 400.0;
+    s.plate = 1.0;
+    s.width = 1.0;
+    s.highpassHz = 200.0;
+    s.decayOpenSeconds = 1.2;
+
+    HatEngine clean;
+    const auto quiet = renderHatEngine (clean, s, 192000.0, 1.3, true, 1.0, 12u);
+
+    double modes[HatEngine::kPlateModes] {};
+    double amplitude[HatEngine::kPlateModes] {};
+    const int count = HatEngine::plateModesAt (400.0, 0.0, 192000.0 * 0.45, modes, amplitude);
+
+    s.grit = 1.0;
+
+    HatEngine gritty;
+    const auto crushed = renderHatEngine (gritty, s, 192000.0, 1.3, true, 1.0, 12u);
+
+    const double cleanOff = inharmonicFloorDb (quiet, 192000.0, modes, count, 20000.0);
+    const double crushedOff = inharmonicFloorDb (crushed, 192000.0, modes, count, 20000.0);
+
+    double rmsClean = 0.0;
+    double rmsCrushed = 0.0;
+
+    for (std::size_t n = 0; n < quiet.size(); ++n)
+    {
+        rmsClean += quiet[n] * quiet[n];
+        rmsCrushed += crushed[n] * crushed[n];
+    }
+
+    const double levelDb = 10.0 * std::log10 (rmsCrushed / rmsClean);
+
+    std::printf ("        [grit] energy off the plate's modes: clean %.1f dB, 4 bits %.1f dB; level %+.2f dB\n",
+                 cleanOff, crushedOff, levelDb);
+
+    // The steps are the point: at least 10 dB more of the energy lands off
+    // the modes. And it is texture, not a volume control.
+    CHECK (crushedOff > cleanOff + 10.0);
+    CHECK (std::abs (levelDb) < 3.0);
+}
+
+TEZLA_TEST (a_plate_hat_retires_exactly_and_leaves_exact_zeros)
+{
+    HatSettings s = hatEverythingOn();
+    s.plate = 1.0;
+    s.grit = 0.7;
+    s.decayOpenSeconds = 0.3;
+
+    HatEngine engine;
+    const auto out = renderHatEngine (engine, s, 96000.0, 1.2, true);
+
+    CHECK (! engine.isActive());
+
+    const int last = lastNonZeroSample (out);
+    const double seconds = static_cast<double> (last) / 96000.0;
+
+    std::printf ("        [plate retire] last non-zero at %.3f s, active %d\n",
+                 seconds, engine.isActive() ? 1 : 0);
+
+    CHECK (seconds < 0.6);
+
+    for (std::size_t n = static_cast<std::size_t> (last) + 1; n < out.size(); ++n)
+        CHECK (isExactlyZero (out[n]));
+}
+
+TEZLA_TEST (a_plate_hat_is_the_same_cymbal_at_every_host_rate)
+{
+    // CLAUDE.md section 6, for the plate: its mode frequencies and decays are
+    // computed from the internal rate, so through the instrument at Auto the
+    // four host rates must agree.
+    EngineParameters parameters;
+    parameters.hat = hatEverythingOn();
+    parameters.hat.plate = 1.0;
+    parameters.hat.grit = 0.5;
+    parameters.hat.decayOpenSeconds = 0.35;
+    parameters.oversampling = OversamplingMode::Auto;
+
+    double centroids[4] {};
+    double energies[4] {};
+    int index = 0;
+
+    for (const double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+    {
+        const auto out = render (parameters, rate, static_cast<int> (0.5 * rate),
+                                 { { 0, 46, 1.0 } });
+
+        centroids[index] = centroidHz (out, rate, 0.5);
+        energies[index] = audibleEnergy (out, rate, 0.5);
+        ++index;
+    }
+
+    std::printf ("        [plate rates] centroid %.0f / %.0f / %.0f / %.0f Hz; audible energy %.4g / %.4g / %.4g / %.4g\n",
+                 centroids[0], centroids[1], centroids[2], centroids[3],
+                 energies[0], energies[1], energies[2], energies[3]);
+
+    for (int i = 1; i < 4; ++i)
+    {
+        CHECK (std::abs (centroids[i] - centroids[0]) / centroids[0] < 0.05);
+        CHECK (std::abs (energies[i] - energies[0]) / energies[0] < 0.08);
+    }
+}
+
+TEZLA_TEST (the_plate_costs_what_the_notes_say)
+{
+    // 64 modes at 192 kHz: measured 213 ns a sample against 125 for the hat
+    // without it (2026-09-05, this container). Budget with the usual
+    // headroom for a shared machine; fastest of three, like the other
+    // budgets.
+    HatSettings s = hatEverythingOn();
+    s.plate = 1.0;
+    s.grit = 0.6;
+    s.decayOpenSeconds = 3.0;
+
+    const auto elapsed = tezla::test::fastestOf (3, [&s] {
+        HatEngine engine;
+        engine.prepare (192000.0);
+        engine.start (s, true, 1.0, 99u, 0);
+
+        double sink = 0.0;
+
+        for (int n = 0; n < 192000; ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                engine.advanceControl (Engine::kControlIntervalSamples);
+
+            sink += engine.process();
+        }
+
+        if (sink == 12345.678)
+            std::printf ("x");
+    });
+
+    std::printf ("        [plate cpu] one second at 192 kHz, plate 1 grit 0.6: %.1f ns/sample (%.2f%% of a core)\n",
+                 elapsed * 1.0e9 / 192000.0, 100.0 * elapsed);
+
+    CHECK_CPU_BUDGET (elapsed, 0.40, "hat with the plate, one second at 192 kHz");
+}
+
 TEZLA_TEST (a_closed_hat_chokes_the_open_one_and_the_fade_does_not_click)
 {
     constexpr double rate = 96000.0;
@@ -2429,37 +2755,87 @@ TEZLA_TEST (damp_closes_the_top_as_the_hit_decays_and_is_out_of_the_path_at_zero
     CHECK (dampedCentroid < openCentroid * 0.8);
 }
 
-TEZLA_TEST (sizzle_moves_the_hiss_onto_the_metals_own_partials)
+TEZLA_TEST (sizzle_rings_the_hiss_where_the_metal_is_heard)
 {
     // The claim: with Sizzle up, the noise is not beside the metal -- it is
-    // ringing at the frequencies the metal already has. Measured as the share
-    // of the noise layer's energy that lands within a semitone of a partial.
+    // ringing at the frequencies the metal is HEARD at. Measured through the
+    // DEFAULT chain, which is where the first version failed: it rang the
+    // hiss at the six fundamentals, 205 to 800 Hz, under a 1.2 kHz high-pass
+    // and bands at 3.4 and 7.1 kHz, so at Sizzle 100 the hiss lost 16.5 dB
+    // and 0.0 % of it landed within a semitone of a partial (I4.3). The bank
+    // sits at the partials' harmonics nearest the two bands now.
+    //
+    // The hiss alone is the difference between a render with Air and one
+    // without, same seed: the metal is deterministic and the chain is linear
+    // with Drive at 0, so the difference is exactly the noise layer.
     constexpr double rate = 192000.0;
 
-    HatSettings s = bareHat();
-    s.tuneHz = 400.0;
-    s.air = 1.0;
-    s.airToneHz = 200.0;
-    s.width = 1.0;
-    s.highpassHz = 200.0;
-    s.colourHz = 4000.0;
-    s.decayOpenSeconds = 1.0;
+    HatSettings s = bareHat();          // the default chain: Colour 3440, Highpass 1200, Width 0.5
+    s.decayOpenSeconds = 0.5;
 
-    double partials[HatEngine::kOscillators] {};
-
-    for (int i = 0; i < HatEngine::kOscillators; ++i)
-        partials[i] = 400.0 * HatEngine::kSets[0][i];
-
-    const auto shareOnPartials = [&partials] (const std::vector<double>& x, double sampleRate)
+    const auto hissAlone = [&] (double sizzle)
     {
-        const auto windowed = windowFirst (x, sampleRate, 0.6);
+        HatSettings dry = s;
+        dry.air = 0.0;
+
+        HatSettings wet = s;
+        wet.air = 1.0;
+        wet.airToneHz = 5000.0;
+        wet.sizzle = sizzle;
+
+        HatEngine a, b;
+        const auto without = renderHatEngine (a, dry, rate, 0.5, true, 1.0, 7u);
+        const auto with = renderHatEngine (b, wet, rate, 0.5, true, 1.0, 7u);
+
+        std::vector<double> hiss (with.size());
+
+        for (std::size_t n = 0; n < hiss.size(); ++n)
+            hiss[n] = with[n] - without[n];
+
+        double centres[HatEngine::kOscillators] {};
+
+        for (int i = 0; i < HatEngine::kOscillators; ++i)
+            centres[i] = b.getSizzleHz (i);
+
+        return std::pair { hiss, std::vector<double> (centres, centres + HatEngine::kOscillators) };
+    };
+
+    const auto [flat, unusedCentres] = hissAlone (0.0);
+    const auto [rung, centres] = hissAlone (1.0);
+
+    // 1. The bank sits inside the bands: each centre within an octave of
+    //    Colour or of the upper band, never under the high-pass.
+    for (const double hz : centres)
+    {
+        const double toLower = std::abs (std::log2 (hz / 3440.0));
+        const double toUpper = std::abs (std::log2 (hz / (3440.0 * HatEngine::kUpperBandRatio)));
+        CHECK (std::min (toLower, toUpper) < 1.0);
+        CHECK (hz > 1200.0);
+    }
+
+    // 2. Level: Sizzle is a placement, not an attenuator.
+    double flatRms = 0.0;
+    double rungRms = 0.0;
+
+    for (std::size_t n = 0; n < flat.size(); ++n)
+    {
+        flatRms += flat[n] * flat[n];
+        rungRms += rung[n] * rung[n];
+    }
+
+    const double levelDb = 10.0 * std::log10 (rungRms / flatRms);
+
+    // 3. Placement: the share of the hiss within a semitone of a centre.
+    const auto shareOnCentres = [&] (const std::vector<double>& x)
+    {
+        const auto windowed = windowFirst (x, rate, 0.4);
         const auto spectrum = fftOfReal (windowed.samples);
-        const double binWidth = sampleRate / static_cast<double> (windowed.samples.size());
-        const auto last = std::min (static_cast<std::size_t> (12000.0 / binWidth),
+        const double binWidth = rate / static_cast<double> (windowed.samples.size());
+        const auto last = std::min (static_cast<std::size_t> (20000.0 / binWidth),
                                     windowed.samples.size() / 2);
 
         double total = 0.0;
-        double onPartials = 0.0;
+        double on = 0.0;
 
         for (std::size_t bin = 1; bin <= last; ++bin)
         {
@@ -2467,31 +2843,26 @@ TEZLA_TEST (sizzle_moves_the_hiss_onto_the_metals_own_partials)
             const double power = std::norm (spectrum[bin]);
             total += power;
 
-            for (const double partial : partials)
-                if (std::abs (1200.0 * std::log2 (hz / partial)) < 100.0)
+            for (const double centre : centres)
+                if (std::abs (1200.0 * std::log2 (hz / centre)) < 100.0)
                 {
-                    onPartials += power;
+                    on += power;
                     break;
                 }
         }
 
-        return onPartials / std::max (total, 1.0e-300);
+        return on / std::max (total, 1.0e-300);
     };
 
-    HatEngine flat, rung;
-    s.sizzle = 0.0;
-    const auto without = renderHatEngine (flat, s, rate, 1.0, true);
-    s.sizzle = 1.0;
-    const auto with = renderHatEngine (rung, s, rate, 1.0, true);
+    const double flatShare = shareOnCentres (flat);
+    const double rungShare = shareOnCentres (rung);
 
-    const double flatShare = shareOnPartials (without, rate);
-    const double rungShare = shareOnPartials (with, rate);
+    std::printf ("        [hat sizzle] centres %.0f %.0f %.0f / %.0f %.0f %.0f Hz; level %+.1f dB; "
+                 "within a semitone of a centre: %.1f%% flat, %.1f%% rung\n",
+                 centres[0], centres[1], centres[2], centres[3], centres[4], centres[5],
+                 levelDb, 100.0 * flatShare, 100.0 * rungShare);
 
-    std::printf ("        [hat sizzle] energy within a semitone of a partial: %.1f%% flat, %.1f%% rung\n",
-                 100.0 * flatShare, 100.0 * rungShare);
-
-    // Measured 2026-09-03: 9.6 % of the hiss lands on a partial by chance,
-    // 46.4 % when Sizzle runs it through them.
+    CHECK (std::abs (levelDb) < 3.0);
     CHECK (rungShare > flatShare * 2.5);
 }
 

@@ -59,10 +59,36 @@ The short form:
 | FL Studio manual (Plugin Wrapper) and the multi-output page | read first-hand | Auto map outputs = the tracks following the plugin's own; offsets for manual assignment; inactive outputs are skipped unless told otherwise. |
 | JUCE forum threads on multi-out; JUCE's MultiOutSynth demo | read first-hand | Declare every bus enabled; the `isBusesLayoutSupported` shape. |
 | Bilbao, JASA 2012 (snare FD model) | abstract only | Why the rattle is the one nonlinearity worth keeping. |
+| **Fletcher & Rossing, *The Physics of Musical Instruments*** (the whole book, 628 pp., `technical references/drumsynth/new/`) | **read first-hand 2026-09-05**, §3.6 and ch. 20 | The plate's mode law: f = c (m + 2n)^p, p = 2 for a flat plate, p < 2 for cymbals; **Table 20.1**, the 14-inch thick cymbal at p = 1.47 (taken); the free-plate ratio table 3.2; the cascade (2–10 kHz builds 10 dB in 50 ms, sub-700 Hz drains in 200 ms, 3–5 kHz shimmer dominates 1–4 s); per-mode decay times. **See "What else the book bears on" below.** |
+| Perrin, Swallowe, Zietlow & Moore, "The normal modes of cymbals", Proc. IoA 30(2) 2008 | read first-hand 2026-09-05 | Measured modes of an 18-inch crash and a 12-inch ridged cymbal — (3,0) 64 Hz to (23,0) 1864 Hz; (2,0) 62, (3,0) 135, (10,0) 971, (13,0) 1421 Hz — Q of 10³–10⁴, split doublets, mixing only between near neighbours. Where the circle-family offset β = 7.4 was read off: (2,1) on (9,0), (1,1) on (8,0). |
+| Chaigne, Touzé & Thomas, "Nonlinear vibrations and chaos in gongs and cymbals", Acoust. Sci. & Tech. 26(5) 2005 | read first-hand 2026-09-05 | The cascade's mechanism: quadratic (curvature) nonlinearity, combination resonances pΩ = a_i ω_i + a_j ω_j with |a_i|+|a_j| = 2, 5–10 active modes, periodic → quasiperiodic → chaotic and low-dimensional (not random). Why the shared bank's Bloom was tried on the plate, and the physics the parked build-up would model. |
+| Ducceschi & Touzé, "Modal approach for nonlinear vibrations of damped impacted plates: application to sound synthesis of gongs and cymbals", JSV 344, 2015 | read first-hand 2026-09-05 | The damping law the plate's per-mode T60 follows, c_p = 0.007 ω^0.7 for the cymbal (taken as the exponent); the stick as a 1 ms raised cosine; ~1000 modes and 3 h of CPU per second for a full cymbal — the number that says 64 modes plus a noise layer is the honest budget here, not a corner cut. |
+| Harrison & Hill, "A scientific approach to microphone placement for cymbals in live sound", Proc. IoA 35(2) 2013 | read first-hand 2026-09-05 | Nothing numeric taken. Confirms for 14-inch hi-hats specifically that the low frequencies of the first 25 ms give way to rising highs, more so on heavy cymbals — the build-up is a hat property, not only a crash's. |
+| Reid, "Analysing Metallic Percussion", SOS May 2002 | read first-hand 2026-09-05 | "Hundreds of energised modes... at discrete frequencies", the strike → few hundred Hz → a few kHz over hundreds of ms → mid frequencies last; at high amplitude the spectrum is "in essence noise", so the drum-machine designers "were not completely wrong to use white noise". Background; nothing numeric taken. |
 
-**Nothing is outstanding.** If a later phase needs another source, the rule is
-CLAUDE.md §9: stop, list the URLs with one line each on what they change, and
-carry on with what does not depend on them.
+**The access route, again.** Every one of the six was refused by the proxy in
+one pass on 2026-09-05 (J-STAGE, HAL, ScienceDirect, AIP, ResearchGate, Sound
+On Sound, ensta-paris). Per CLAUDE.md §9 -- now a standing instruction in the
+user's words -- the block was reported before any design was started, the URLs
+listed, and the user fetched all six plus the complete book into
+`technical references/drumsynth/new/`.
+
+### What else the book bears on
+
+Fletcher & Rossing is the standard text and the user now has the whole of it on
+disk, so it is worth saying which chapters would change which engine if read
+against them. None of this is done; each is a candidate for the round it names.
+
+| Chapter | Engine it bears on | What it would settle |
+|---|---|---|
+| **18.9 Bass drums, 18.12 Onset and decay of drum sound** | Ictus kick | The real kick's modes and how its pitch and spectrum move in the first 100 ms -- a check on the Drop and Sigh ranges, and on the "shifted series" shell parked in `docs/ROADMAP.md` §9.3. |
+| **18.10 Side drums, 18.13 Snare action, 18.11 Tom-toms** | Ictus snare, ghost, Perc | Measured membrane-mode frequencies for snare and tom heads (the (0,1) fundamental, the (1,1) pair, air loading), and the physics of the wires -- the snare shell's 1 : 1.6 : 2.2 ratios and the rattle model were built from Reid and Bilbao's abstract; these chapters are the primary source. |
+| **18.5–18.7** (timpani air loading, radiation and decay) | Ictus kick and snare | Why the low modes of a drum radiate the way they do -- a check on the kick's Tail and the snare's body decay. |
+| **20.3, 20.6, 20.7** (cymbal transients, nonlinear coupling, build-up) | Ictus hats -- **the parked build-up** | The equations (20.1–20.6) for how mode j grows from mode i and peaks at t*: the coherent per-mode drive the parked item needs, with the timescale measured. |
+| **20.5, 20.8–20.9** (tam-tams, gongs, pitch glide) | Malleus (plates, gongs, Bloom) | Measured tam-tam and gong modes and the hardening/softening pitch glide -- Malleus's Bloom was derived from the von Kármán argument alone; this is the measurement to check it against. |
+| **19 Mallet percussion** (bars, tuning, resonators, chimes, gamelan) | Malleus | The bar and tube mode tables Malleus computed in-house, now checkable against the book's measured ones; gamelan tunings for the tuning library. |
+| **21 Bells** | Malleus | The church-bell partial series (hum, prime, tierce, quint, nominal) that `docs/DSP-REFERENCES.md` still records as trusted second-hand -- it can now be pinned first-hand, and the handbell and Chinese two-tone bell tables are new material. |
+| **3.5–3.8 Plates** | the whole suite's modal work | The clamped, free and simply-supported circular-plate tables (3.1–3.3), Chladni's law, and the rectangular-plate cases -- the ground the plate, the snare shell and Malleus's plate mode all stand on. |
 
 ---
 
@@ -529,7 +555,8 @@ CLAUDE.md.
 | I4 hat + clap engines, choke | done in code; not yet played on the rig |
 | I4.1 the rig's verdict on the hats: depth, and the noise made part of the metal | **played on the rig**; the round's findings are the I4.2 row |
 | I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
-| **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** | — |
+| I4.3 the rig's third round (2026-09-05): "thin and tinny" → **Plate** (a 64-mode cymbal from the published mode law) and **Grit**, six sources fetched by the user and read first-hand | done in code; not yet played on the rig. Plate 0 / Grit 0 is the old hat bit for bit (golden render) |
+| **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** I4.3 was a direct ask on 2026-09-05 (CLAUDE.md §1, the chat wins for that task) and does not lift the pause | — |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
 | I7 multi-out buses | pending |
@@ -1017,6 +1044,133 @@ here and one deliberately left.
 Break-checks at I4.2, each seen red then reverted: the drive taking the
 clipper's residue alone (the original bug, 4 checks red across both engines);
 the clap's gate ignoring note-off.
+
+**I4.3 -- "thin and tinny"** (2026-09-05, the user: *"the hi hats sound really
+thin and tinny with the controls we have, is it possible you can make the hihats
+better and the possibility to make them sound fatter and more like the [classic
+sampled drum machine] hi hats? they are nice and chunky"*). Two controls, both
+appended at `kSchemaV10` and both exactly neutral at 0, and one preset.
+
+**The diagnosis needed no paper.** Six pulses through a band-pass is the
+classic analogue cymbal circuit, and it is thin by construction: open the bands
+and you hear a pulse chord, not a cymbal, because the source has no body that
+survives them. The chunky hat the user means is a *recording of a real pair of
+cymbals* through a six-bit sample path. A real 14-inch plate has a mode every
+20-30 Hz -- some 900 below 20 kHz by thin-plate theory -- so above 2 kHz it is
+structured noise and below that it has body. Six oscillators cannot make that
+whatever the filters do. **The design did need papers**, and per CLAUDE.md §9
+(now in the user's own words) the six were listed and fetched before a line was
+written; what each settled is in the sources table above.
+
+**Plate** crossfades the six pulses against a 64-mode `dsp::ModalResonator` --
+the bank Malleus and the snare shell already use. The modes follow the
+modified Chladni law the literature fits real cymbals to, `f = c (m + βn)^p`:
+`p = 1.47` is **taken** from Fletcher & Rossing's Table 20.1 (the 14-inch thick
+cymbal, the closest thing in the table to a hat top and the only cymbal a
+single line fits); `β = 7.4` is design read off Perrin et al.'s two cymbals
+(Chladni's flat plate has 2; a domed cymbal's circle families sit far higher);
+Tune sets `c` so (2,0) sits AT Tune, as the lowest pulse does; a deterministic
+±1.2 % jitter stands in for the doublet splitting Perrin measured and keeps
+every pair of modes incommensurate. Each mode's own T60 follows Ducceschi &
+Touzé's cymbal damping law, `c_p ∝ ω^0.7` (the exponent taken; anchored so a
+mode at 1.5 kHz rings twice the pad's decay). The strike hits every mode at
+once, in phase, falling as f^-0.5. Both ends of the crossfade are branches:
+at 0 the bank is never built and the path is the old engine; at 1 the metal's
+weight is exactly 0.
+
+**Grit** quantises the summed layers before Drive, 16 bits at 0 (the crusher's
+exact bypass) to 4 at 100, geometric, with about six bits two thirds of the way
+up. It is quantisation used as a saturator at the internal rate -- the images
+the decimator removes are gone and the in-band, signal-correlated error is what
+stays -- and the header says so rather than calling it a bit-crusher; CLAUDE.md
+§7's host-rate rule is for the folded images, and a per-pad host-rate stage
+waits for I7's buses.
+
+**Fat Hats** is the preset: Plate 85, Grit 55, Colour 1.8 kHz, Width 100,
+Highpass 350, a hard stick. The kit presets are untouched, as instructed at
+I4.2.
+
+Measured (`tezla-tests plate`, `grit`, `hat`; `tezla-measure ictus` table 3):
+
+| claim | figure |
+|---|---|
+| Plate 0 / Grit 0 against the engine before the change: five renders, three rates, 412 800 samples | **byte for byte identical** (md5 `bba80239…` both sides) |
+| modes placed at Tune 205.3 | **64**, from 205.3 Hz (exactly Tune) to 9404 Hz; (3,0)/(2,0) = 1.5^1.47 within the jitter |
+| the low twelve modes within 30 cents of a harmonic of the lowest | **1** (the law's own 3^1.47 = 5.02); a harmonic series would be twelve |
+| Spread 1 against Spread 0 | moves a mode by up to **20.9 cents**; the lowest never moves |
+| energy off the six pulses' harmonic series above 4 kHz, Tune 900 | metal **−73.0 dB**, plate **−0.8 dB** |
+| Grit at 4 bits: energy off the plate's own 64 modes | **−64.6 → −2.5 dB**; level **+0.13 dB** (texture, not volume) |
+| level, plate 1 against metal through the default chain | at 1 / 0.07: +2.2 to +3.2 dB (fat chain −0.4 to −0.7); at 12: +2.1 / +1.5 dB; at **10**: **+1.5 dB closed, +1.1 dB open** — the default Drive compresses the plate's hotter strike, so it does not follow the gain linearly |
+| a plate hat with Grit, 0.3 s open decay | last non-zero at **0.361 s**, active 0, exact zeros after |
+| through the instrument at Auto, 44.1 / 48 / 96 / 192 kHz | centroid **4845 / 4798 / 4795 / 4793 Hz**, audible energy within 3.3 % |
+| one second at 192 kHz | test: plate 1 grit 0.6 **169–191 ns/sample** across runs (3.2–3.7 % of a core); `tezla-measure`: hat **122 ns**, with the plate **183 ns** (2.3 → 3.5 %); Bloom would have added about 100 more |
+
+**What was tried and removed, with the numbers.** The bank's Bloom -- the von
+Kármán quadratic coupling, exactly the mechanism Chaigne et al. describe and
+the thing that makes Rossing's 2-10 kHz band build 10 dB in the first 50 ms --
+was wired in at `0.6 × velocity`. On this bank it does not work. Struck at unit
+power the plate peaked at 0.55, ten times the level the coupling was calibrated
+on, and saturated; struck at the calibrated 0.07 it still collapsed: at full
+velocity the first 80 ms had a **spectral centroid of 128 Hz on a plate whose
+lowest mode is 205 Hz**, and the level read 12-17 dB under the metal because
+the high-pass then removed what the bank had become. The mechanism: 64 modes a
+few tens of hertz apart put strong difference tones into the coupling term, and
+a resonator driven far below its own frequency answers with a forced response
+about `1/(2 sin(ω/2))` times the drive -- 150× for 205 Hz at 192 kHz. At a tenth
+of the amount nothing collapsed and nothing measurably built either. So the
+plate is linear; the fall from bright to dark is the damping law's and Damp's;
+the build-up is parked in `docs/ROADMAP.md` §9 with the route that would work
+(a coherent per-mode drive -- a slow unipolar push cannot excite a fast mode,
+which is why "spread the impulse over 50 ms" is not it). It also saved 100 ns a
+sample.
+
+**Also fixed, with the latitude the user gave to revisit the earlier hat work:
+Sizzle did nothing it claimed at the default chain.** It rang the hiss through
+band-passes at the six *fundamentals* (205–800 Hz) — and the chain then
+high-passes at 1.2 kHz and listens through bands at 3.4 and 7.1 kHz, so those
+resonances sat 15–30 dB under the floor. Measured at the default chain: Sizzle
+100 cut the hiss by **16.5 dB** (RMS 0.171 → 0.026) and put **0.0 %** of its
+energy within a semitone of a partial; what it did was dull the hiss (86 % above
+6 kHz → 57 %). The I4.1 figure (16.6 → 40.9 %) was measured on the noise layer
+alone with Highpass 200 and Colour 4 kHz — a chain that passes the fundamentals,
+which the default one does not. The bank now sits at each partial's harmonic
+nearest the band it is assigned to (the low three partials at Colour, the high
+three at the upper band), `HatEngine::sizzleCentres`, shared with the picture;
+the make-up came down from 2.6 to 0.65 for resonances that are inside the bands.
+
+| claim | figure |
+|---|---|
+| Sizzle's six centres at the default chain | **3490 / 3348 / 3326 Hz** and **7318 / 7020 / 7200 Hz** — every one a harmonic of a partial, every one inside a band; `tezla-measure`'s noise-only rig (Tune 400, Colour 4 kHz) reads 18.1 → 54.4 % on a centre across the control |
+| the hiss's level, Sizzle 100 against 0, default chain | **+1.3 dB** (was −16.5 dB) |
+| the hiss within a semitone of a centre, Sizzle 0 → 100 | **15.3 % → 66.9 %** |
+
+Seen red: the centres put back on the fundamentals fails the level and the
+placement check. Sizzle 0 is unchanged; a saved project with Sizzle up sounds
+different, and better — the user's words at I4.2 were that the hat presets were
+bad anyway, and on 2026-09-05 that the earlier hat work could be undone or
+tweaked.
+
+**A gap in the presets gate, found and parked.** `tezla-render presets` plays
+note 36 — the kick — so the two hat-only presets (*Lush Hats*, *Fat Hats*) read
+as the default kick, identical to *Init Kit*, and their hats are not gated at
+all. *Fat Hats* was checked by hand instead: closed **−5.9 dBFS**, open
+**−5.2 dBFS** at velocity 1 and Level 70, so Level went to 85 (about −4). A
+per-pad audit for the drum machine is a roadmap item.
+
+**Two test claims were wrong and the measurement said so** (CLAUDE.md §10: a
+failing test is a claim until proven otherwise, and here the code was right):
+the off-series measure first read **−6.3 dB** for the plate, because the
+plate's lowest mode IS the first pulse partial by design and, with the longest
+decay in the bank, carried 77 % of the energy over 1.3 s -- the test was
+measuring one shared line; it looks above 4 kHz now. And "no low mode within 30
+cents of a harmonic" was contradicted by the law itself; the test counts
+coincidences (one) against a series (twelve).
+
+Break-checks at I4.3, each seen red then reverted with the file checksummed
+back: the crossfade branch forced on at Plate 0 (the bank built at 0); the law's
+exponent set to Chladni's flat-plate 2; the jitter applied to the lowest mode;
+Grit's map made linear; the plate's modes made a harmonic series of Tune; the
+plate added outside the envelope so it rang past retirement.
 
 **I4.3 -- a hold on the snares' wires** (2026-09-03, the user). The wires had
 a decay and nothing else, so the only way to get a long buzz was a long

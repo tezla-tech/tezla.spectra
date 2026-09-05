@@ -44,7 +44,10 @@ constexpr int kSchemaV8 = 8;
 
 /// Schema 9: a hold on the snares' wires.
 constexpr int kSchemaV9 = 9;
-constexpr int kStateSchemaVersion = kSchemaV9;
+
+/// Schema 10: the hats' Plate and Grit (I4.3, the rig's "thin and tinny").
+constexpr int kSchemaV10 = 10;
+constexpr int kStateSchemaVersion = kSchemaV10;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -420,6 +423,38 @@ const std::vector<Preset>& presets()
                 { ids::k1Shape, 15.0f },
                 { ids::k1Level, 85.0f },
                 { ids::k1VelLevel, 60.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The chunky hat the rig asked for (I4.3): the plate nearly all
+            // the way, a little of the six pulses left in for sheen, the
+            // steps of a six-bit sample path, the bands opened and dropped so
+            // the body gets through, a hard stick, a short closed and a
+            // medium open. Appended -- presets are recalled by index.
+            "Fat Hats",
+            {
+                { ids::htPlate, 85.0f },
+                { ids::htGrit, 55.0f },
+                { ids::htTune, 250.0f },
+                { ids::htHarmonics, 0.0f },
+                { ids::htSpread, 35.0f },
+                { ids::htRing, 20.0f },
+                { ids::htDrive, 40.0f },
+                { ids::htAir, 55.0f },
+                { ids::htAirTone, 2500.0f },
+                { ids::htAirDecay, 90.0f },
+                { ids::htSizzle, 60.0f },
+                { ids::htColour, 1800.0f },
+                { ids::htWidth, 100.0f },
+                { ids::htHighpass, 350.0f },
+                { ids::htDamp, 50.0f },
+                { ids::htStrike, 65.0f },
+                { ids::htHold, 4.0f },
+                { ids::hcDecay, 60.0f },
+                { ids::hoDecay, 450.0f },
+                { ids::htLevel, 85.0f },
+                { ids::htVelColour, 30.0f },
             }
         },
     };
@@ -1029,6 +1064,24 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::g1WiresHold, kSchemaV9 }, "Ghost Wires hold",
         skewed (0.0f, 300.0f, 0.1f, 40.0f), 0.0f, attributes ("ms")));
 
+    // ---- schema 10: the plate, and the grit (I4.3) ---------------------------
+    //
+    // The rig heard the hats as thin and tinny and asked for the chunky hat of
+    // a sampled real pair of cymbals. Six pulses cannot be that whatever the
+    // filters do, so Plate crossfades them against a 64-mode modal cymbal
+    // placed by the published cymbal mode law, and Grit quantises the layers
+    // the way a low-resolution sample path did. Both 0 by default: a project
+    // saved before they existed reopens bit for bit (CLAUDE.md section 8; the
+    // golden render is in plugins/Ictus/PLAN.md).
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htPlate, kSchemaV10 }, "Hats Plate",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htGrit, kSchemaV10 }, "Hats Grit",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -1135,6 +1188,8 @@ void IctusProcessor::pullParameters()
     h.colourHz = valueOf (state_, ids::htColour);
     h.ring = valueOf (state_, ids::htRing) * 0.01;
     h.drive = valueOf (state_, ids::htDrive) * 0.01;
+    h.plate = valueOf (state_, ids::htPlate) * 0.01;
+    h.grit = valueOf (state_, ids::htGrit) * 0.01;
     h.air = valueOf (state_, ids::htAir) * 0.01;
     h.airToneHz = valueOf (state_, ids::htAirTone);
     h.airDecay = valueOf (state_, ids::htAirDecay) * 0.01;

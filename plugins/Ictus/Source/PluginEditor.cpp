@@ -586,9 +586,18 @@ void IctusEditor::buildHatPage()
 
     page.addKnob (ids::htTune, "Tune",
         "Where the lowest of the six partials sits, 60 Hz to 1.2 kHz, and the "
-        "whole set moves with it. A cymbal has no pitch, so this is a size "
-        "control rather than a note: low is a big dark lid, high a small tight "
-        "one.", Emphasis::lead);
+        "whole set moves with it -- and where the plate's lowest mode sits too. "
+        "A cymbal has no pitch, so this is a size control rather than a note: "
+        "low is a big dark lid, high a small tight one.", Emphasis::lead);
+
+    page.addKnob (ids::htPlate, "Plate",
+        "The six pulses crossfaded against a plate of metal: 64 modes placed by "
+        "the law the cymbal literature fits real cymbals to, struck all at once, "
+        "each dying at its own rate with the high ones first. At 0 this is the "
+        "classic six-oscillator hat exactly; at 100 it is the plate alone, and "
+        "that is where a chunky hat lives -- lower Colour, open Width and drop "
+        "Highpass to let its body through. Costs 64 modes while it is up; "
+        "nothing at 0.", Emphasis::lead);
 
     page.addKnob (ids::htHarmonics, "Harmonics",
         "Which set of six ratios, and everything between them. Metal is the "
@@ -619,6 +628,15 @@ void IctusEditor::buildHatPage()
         "fills the gaps between partials with intermodulation and glues the two "
         "layers into one instrument. 0 is exact.");
 
+    page.addKnob (ids::htGrit, "Grit",
+        "The steps of a low-resolution sample path: everything before Drive "
+        "quantised from 16 bits at 0 down to 4 at 100, with about six bits -- the "
+        "depth the classic sampled drum machines kept their cymbals at -- two "
+        "thirds of the way up. It is quantisation used as a saturator, not a "
+        "bit-crusher: the images are removed by the oversampling and what stays "
+        "is the crunch, which is signal-correlated and fills the gaps between "
+        "partials. 0 is exact.");
+
     partialsView_ = static_cast<PartialsView*> (
         page.addDisplay (std::make_unique<PartialsView> (ictus_, palette_, page.tintOf (kTintPitch)), 3));
 
@@ -632,11 +650,12 @@ void IctusEditor::buildHatPage()
         "object. 0 draws no noise at all.", Emphasis::lead);
 
     page.addKnob (ids::htSizzle, "Sizzle",
-        "How much of the hiss is rung through the six partials rather than left "
-        "flat. At 0 it is raw filtered noise beside the metal -- two things at "
-        "once. At 100 every bit of it rings at the frequencies the metal already "
-        "has, so the noise and the harmonics are one instrument. Costs six "
-        "band-passes while it is up, and none at 0.", Emphasis::lead);
+        "How much of the hiss is rung through the metal rather than left flat. "
+        "At 0 it is raw filtered noise beside the metal -- two things at once. "
+        "At 100 every bit of it rings at six of the partials' harmonics, the "
+        "ones nearest the two bands, so the noise and the metal are one "
+        "instrument where it is actually heard. Costs six band-passes while it "
+        "is up, and none at 0.", Emphasis::lead);
 
     page.addKnob (ids::htAirTone, "Air tone",
         "The hiss's own high-pass, 200 Hz to 12 kHz, before it meets the metal. "
@@ -744,12 +763,13 @@ void IctusEditor::buildHatPage()
         "attack, softer ones almost none.", Emphasis::trim);
 
     page.setNote ("One pair of cymbals, struck two ways: the closed pad (F#1) and the open one "
-                  "(A#1) share every control but their decay. Six band-limited pulses, a ring "
-                  "modulator, an overdrive and a noise layer rung through the same six partials, "
-                  "all inside the oversampled section. Measured: inharmonic energy in the audible "
-                  "band at -74 to -77 dB at the rate Auto runs, against -12 to -17 dB for the "
-                  "same six pulses generated naively; oversampling Off at 48 kHz costs about "
-                  "40 dB of that.");
+                  "(A#1) share every control but their decay. Six band-limited pulses or a "
+                  "64-mode plate (Plate), a ring modulator, an overdrive, the steps of a "
+                  "low-resolution sample path (Grit) and a noise layer rung through the same six "
+                  "partials, all inside the oversampled section. Measured: inharmonic energy in "
+                  "the audible band at -74 to -77 dB at the rate Auto runs, against -12 to -17 dB "
+                  "for the same six pulses generated naively; oversampling Off at 48 kHz costs "
+                  "about 40 dB of that. Plate 0 and Grit 0 are the hat exactly as it was.");
 
     page.setValueText (ids::htHarmonics, [] (double position)
     {

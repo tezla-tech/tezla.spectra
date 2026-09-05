@@ -256,6 +256,55 @@ change to anything already decided.
    bit-exactness with existing renders is lost by design. Decided by: the
    user asking, after hearing the Ictus layer.
 
+6. **The plate's cascade — the build-up an open hat has and this one does
+   not.** Rossing measured a cymbal's 2–10 kHz band building by 10 dB or more
+   in the first 50 ms after the strike (Fletcher & Rossing §20.3), energy
+   climbing out of the low modes through the quadratic coupling Chaigne, Touzé
+   & Thomas describe; Harrison & Hill saw it on 14-inch hi-hats. The shared
+   bank's Bloom is that coupling and it was tried on the plate at I4.3 and
+   removed with the numbers (`plugins/Ictus/PLAN.md`): on 64 modes tens of
+   hertz apart the coupling term's difference tones drive every mode's forced
+   response at about 1/(2 sin(ω/2)) times the drive — 150× at 205 Hz — and the
+   first 80 ms collapsed to a centroid of 128 Hz. **What would work:** a
+   coherent per-mode drive, not an impulse spread in time (a slow unipolar push
+   cannot excite a fast mode). The cheap route is a per-mode output-gain ramp
+   over ~50 ms on the modes above ~1 kHz, interpolated per sample so it puts no
+   sidebands at the control rate — about 64 multiplies a sample for 50 ms —
+   with the equations of F&R §20.6 (20.5–20.6) giving each mode's rise time.
+   Would change: the open pad only; the closed pair does not cascade. Decided
+   by: the user hearing the open hat and wanting the sizzle to *grow*.
+7. **Split doublets on the plate.** Every m > 0 mode of a real cymbal is a
+   pair split by a fraction of a percent to a few percent (Perrin et al.: four
+   peaks within 15 Hz at 340 Hz), and the beating between partners is part of
+   a long ride's shimmer. The plate spends its 64 modes on distinct
+   frequencies with a deterministic jitter instead. Would change: the lowest
+   16 modes as pairs (32 slots) plus 32 singles above — the splitting is only
+   audible where modes are resolvable. Decided by: the open hat on the rig.
+8. **Grit at the host rate.** The hat's Grit runs inside the oversampled
+   section, so it is quantisation-as-saturation and the folded images CLAUDE.md
+   §7 reserves for a crusher are removed. A per-pad host-rate stage needs the
+   per-pad buses of I7. Would change: Grit moves after the pad's own
+   decimation, gaining the imaging of a low-rate sample path. Decided by: I7
+   landing, and the user preferring it.
+9. **Fletcher & Rossing against the kick, the snares and Malleus.** The user
+   has supplied the complete book (2026-09-05) and only §3.6 and ch. 20 have
+   been read against an engine. The chapter map in `plugins/Ictus/PLAN.md`
+   ("What else the book bears on") names what each remaining chapter would
+   settle: 18.9–18.13 for the kick's shell and the snare's head modes and wires,
+   19 and 21 for Malleus's bar and bell tables (the bell row in
+   `docs/DSP-REFERENCES.md` is still marked second-hand), 20.5–20.9 for
+   Malleus's Bloom against measured gongs. Would change: numbers, checked
+   against measurements, never models. Decided by: the next round on each of
+   those engines.
+
+10. **A per-pad presets gate for the drum machine.** `tezla-render presets`
+   plays one note at full velocity — note 36, the kick — which is the right
+   gate for a synthesiser and blind for a drum machine: a hat-only preset reads
+   as the default kick (found at I4.3, where *Lush Hats* and *Fat Hats* both
+   read −2.0 dBFS, identical to *Init Kit*). Would change: the gate strikes
+   every pad a preset touches, or all eight, and reports the loudest. Decided
+   by: the next preset round on Ictus.
+
 **What would unpark each:** the user saying so, per item.
 
 ## 10. Sonitus declares twice its latency

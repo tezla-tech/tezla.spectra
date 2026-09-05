@@ -164,6 +164,40 @@ fixed pattern that sums to zero, so the set loosens without moving.
 - **Hold** and **Shape** give the envelope a plateau and a curve, exponential
   through to linear.
 
+### Plate — the cymbal the six pulses could never be
+
+The six-pulse circuit is thin by construction: open its bands and you hear a
+pulse chord, not a cymbal, because the source has no body that survives them.
+A real 14-inch plate has a mode every 20–30 Hz — some 900 below 20 kHz — so
+above 2 kHz it is structured noise and below that it has body. That density is
+what a chunky hat is.
+
+**Plate** crossfades the six pulses against a bank of **64 modes** placed by
+the law the cymbal literature fits real cymbals to, `f = c (m + 7.4 n)^1.47`:
+the exponent is Rossing's measured fit for a 14-inch thick cymbal (Fletcher &
+Rossing, Table 20.1), the lowest mode sits exactly at **Tune**, a fixed ±1.2 %
+jitter keeps every pair of modes incommensurate the way real cymbals' split
+doublets do, and each mode dies at its own rate — the high ones first, by the
+damping law measured on real cymbals (Ducceschi & Touzé). The strike hits every
+mode at once, in phase. At 0 this is the classic hat **exactly** (the bank is
+never built); at 100 it is the plate alone. To hear its body, lower **Colour**,
+open **Width** and drop **Highpass** — the *Fat Hats* preset does. Measured: at
+Plate 100 the energy off the six pulses' harmonic series above 4 kHz is
+**−0.8 dB** against **−73 dB** for the bare pulses — it is a plate of metal, not
+a chord. Costs 64 modes while it is up, about 3.5 % of a core at 192 kHz
+against 2.3 % without.
+
+### Grit — the steps of a six-bit sample path
+
+**Grit** quantises everything before Drive, from 16 bits at 0 (exact) down to 4
+at 100, geometrically, with about six bits — where the classic sampled drum
+machines kept their cymbals — two thirds of the way up. It is quantisation used
+as a saturator rather than a bit-crusher: the images are removed by the
+oversampling, and what stays is the signal-correlated crunch that fills the gaps
+between partials. Measured at 4 bits: the energy off the plate's own modes rises
+from **−64.6 to −2.5 dB** while the level moves **0.13 dB**. Texture, not
+volume.
+
 ### The hiss is the plate, not something beside it
 
 On a real cymbal the sizzle is not noise added to the metal: it *is* the
@@ -171,12 +205,15 @@ metal, its own modes excited chaotically rather than struck cleanly. That is
 why a sampled hat sounds like one object and an oscillator bank with noise
 laid over it sounds like two things glued together.
 
-**Sizzle** runs the noise through a band-pass at each of the six partials, so
-the hiss rings at the frequencies the metal already has. Measured as the share
-of the hiss landing within a semitone of a partial: **16.6 % at Sizzle 0,
-40.9 % at 100**. **Air** is its level, **Air tone** its own high-pass, and
-**Air decay** its length as a percentage of the pad's — under 100 is a chiff
-on the front of a long ring, over 100 a shimmer that outlives it.
+**Sizzle** runs the noise through six band-passes at the frequencies the metal
+is *heard* at — for each partial, its harmonic nearest one of the two bands —
+so the hiss rings where the metal already is. (The first version rang it at the
+six fundamentals, 205–800 Hz, which sit 15–30 dB under the 1.2 kHz high-pass;
+measured at the default chain that cut the hiss by 16.5 dB and put none of it
+on a partial. Fixed at I4.3, with the numbers in `PLAN.md`.) **Air** is its
+level, **Air tone** its own high-pass, and **Air decay** its length as a
+percentage of the pad's — under 100 is a chiff on the front of a long ring,
+over 100 a shimmer that outlives it.
 
 **Colour** is the lower of two band-passes; the upper follows at 2.06 times it
 — the spacing of the two bands in the analysed circuit — with **Width** from a
@@ -198,7 +235,9 @@ the whole control while its peak falls by more than half.
 Measured: inharmonic energy in the audible band is **−74 to −77 dB** at the
 rate Auto runs, against **−12 to −17 dB** for the same six pulses generated
 naively. Choosing oversampling *Off* at 48 kHz costs about 40 dB of that. The
-engine costs **112 ns a sample** at 192 kHz, 2.2 % of a core.
+engine costs **122 ns a sample** at 192 kHz (2.3 % of a core) as the six-pulse
+hat, **183 ns** (3.5 %) with the plate up. Plate 0 and Grit 0 are the hat as it
+was, byte for byte — a project saved before they existed reopens unchanged.
 
 ## The clap
 

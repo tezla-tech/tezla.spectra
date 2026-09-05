@@ -66,11 +66,22 @@
 // harmonics in a sampled hat sound like one object, and why noise simply
 // added beside an oscillator bank sounds like two things glued together.
 //
-//   SIZZLE   runs the noise through a band-pass at each of the six partials,
-//            so the hiss rings at the frequencies the metal already has. At
-//            0 it is raw filtered hiss beside the metal; at 1 every bit of
-//            it is the plate speaking. The crossfade is exact at both ends
-//            and the bank is not run at all at 0.
+//   SIZZLE   runs the noise through six band-passes at the frequencies the
+//            metal is HEARD at: for each partial, its harmonic nearest one of
+//            the two bands (the low three partials aim at Colour, the high
+//            three at the upper band). At 0 it is raw filtered hiss beside
+//            the metal; at 1 every bit of it is the plate speaking. The
+//            crossfade is exact at both ends and the bank is not run at 0.
+//
+//            The first version rang the hiss at the six FUNDAMENTALS, 205 to
+//            800 Hz -- and the chain then high-passes at 1.2 kHz and listens
+//            through bands at 3.4 and 7.1 kHz, so those resonances were 15 to
+//            30 dB under the floor. Measured at the default chain (I4.3):
+//            Sizzle 100 cut the hiss by 16.5 dB and put 0.0 % of its energy
+//            within a semitone of a partial; what it did was dull the hiss
+//            (86 % above 6 kHz to 57 %). Nothing you hear of the metal is a
+//            fundamental -- that is the picture's own caption -- so the hiss
+//            has to ring at the harmonics, where the metal is.
 //   AIR      its level, with its own tone and its own decay -- so a long
 //            hiss can shimmer over a short metal body, or a fast chiff can
 //            sit on a long one, which is how a sampled hat is put together.
@@ -95,6 +106,86 @@
 // millisecond and is measured; the cut is then exact and the pad's activity
 // count is honest (CLAUDE.md section 7).
 //
+// ---------------------------------------------------------------------------
+// The plate, and why the six pulses could never be fat
+// ---------------------------------------------------------------------------
+//
+// The rig's verdict on all of the above was "thin and tinny", and the ask was
+// the chunky hat of a sampled real pair of cymbals. Six pulses cannot get
+// there whatever the filters do: open the bands and you hear a pulse chord,
+// not a cymbal, because the source has no body that survives them. A real
+// 14-inch plate has hundreds of modes -- a mode every 20-30 Hz by thin-plate
+// theory, some 900 below 20 kHz (Fletcher & Rossing section 3.6; Perrin et
+// al. 2008 counted "over 100 modes, plus many split degenerate partners" on
+// one crash cymbal below 3 kHz) -- so above 2 kHz it is structured noise and
+// below that it has real body. That density is what "chunky" is.
+//
+//   PLATE    a bank of up to 64 modes (`dsp::ModalResonator`, the bank
+//            Malleus and the snare shell already use), placed by the modified
+//            Chladni law the cymbal literature fits real cymbals to:
+//
+//                f(m, n) = c * (m + beta * n)^p
+//
+//            m nodal diameters, n nodal circles. The exponent p = 1.47 is
+//            TAKEN from Fletcher & Rossing's Table 20.1 (Rossing 1982): it is
+//            the fit for the 14-inch thick cymbal, the one closest to a hat
+//            top and the only cymbal in the table a single straight line fits.
+//            Chladni's flat plate has beta = 2; on a domed cymbal the
+//            nodal-circle families sit far higher, and beta = 7.4 is a design
+//            choice read off Perrin et al.'s two cymbals, where (2,1) lands on
+//            (9,0) for the 18-inch and (1,1) on (8,0) for the 12-inch. Tune
+//            sets c so the lowest mode (2,0) sits AT Tune, as the lowest pulse
+//            does. A deterministic +/-1.2 % jitter per mode stands in for the
+//            doublet splitting and near-neighbour mixing Perrin measured, so no
+//            two modes are commensurate and every hit is still the same hit.
+//            Spread widens the jitter.
+//
+//            Each mode's own decay follows the damping law Ducceschi & Touze
+//            (JSV 2015) used for their cymbal, c_p proportional to omega^0.7,
+//            so T60 falls as f^-0.7: the high modes die first on their own,
+//            before Damp does anything. The exponent is TAKEN; the anchor (a
+//            mode at 1.5 kHz rings for twice the pad's decay) is design.
+//
+//            The strike excites every mode at once, in phase, with an
+//            amplitude falling as f^-0.5 -- a hard tip, since Rossing's
+//            spectra show the region above 10 kHz present from the strike and
+//            unchanged afterwards.
+//
+//            What is NOT here, and was tried: the cascade. A real cymbal
+//            moves energy upward after the strike through the von Karman
+//            quadratic coupling (Chaigne, Touze & Thomas 2005); Rossing
+//            measured the 2-10 kHz band building by 10 dB or more in the
+//            first 50 ms (F&R 20.3), and that build is most of an open hat's
+//            sizzle. The bank's Bloom is that coupling, built and bounded for
+//            Malleus -- and on THIS bank it does not work: 64 modes a few tens
+//            of hertz apart put strong difference tones into the coupling
+//            term, and a resonator driven at a frequency far below its own
+//            answers with a forced response about 1 / (2 sin(omega/2)) times
+//            the drive, which for a 205 Hz mode at 192 kHz is 150x. Measured
+//            at full velocity, struck at the calibrated level: the first 80 ms
+//            had a spectral centroid of 128 Hz on a plate whose lowest mode is
+//            205 Hz. At a tenth of the amount nothing collapsed and nothing
+//            measurably built either. So the plate is linear, the cymbal's
+//            fall from bright to dark is Damp's and the damping law's, and the
+//            build-up is parked in docs/ROADMAP.md with the mechanism and the
+//            route that would work (a coherent per-mode drive, not an impulse
+//            spread in time -- a slow unipolar push cannot excite a fast mode).
+//
+//            Plate is a crossfade: 0 is the six pulses exactly -- the bank is
+//            not built and the old path is bit for bit what it was -- and 1 is
+//            the plate alone. Equal-power in between, with both ends branched.
+//
+//   GRIT     the crunch of a low-resolution sample path: the summed layers
+//            quantised to between 16 and 4 bits before Drive. This is
+//            quantisation used as a nonlinearity, NOT a bit-crusher effect --
+//            it runs at the internal rate, so the images the decimator removes
+//            are gone and what stays is the in-band quantisation error, which
+//            is signal-correlated and fills the gaps between partials the way
+//            the cascade does. CLAUDE.md section 7 puts a crusher at the host
+//            rate for the folded images; a per-pad host-rate stage needs the
+//            per-pad buses of I7, and this is honest about being the other
+//            thing. Exact at 0 (the crusher's own bypass at 16 bits).
+//
 // EVERYTHING IS SNAPSHOTTED AT `start()`, as in the kick and the snare.
 
 #include <algorithm>
@@ -103,7 +194,9 @@
 
 #include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Bitcrusher.hpp>
 #include <tezla/dsp/Exact.hpp>
+#include <tezla/dsp/ModalResonator.hpp>
 #include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/UnisonBank.hpp>
@@ -121,6 +214,10 @@ struct HatSettings
     double spread { 0.0 };               ///< pulls the six apart, 0..1
     double ring { 0.35 };                ///< the low three times the high three, 0..1
     double drive { 0.25 };               ///< soft clip after the layers meet, 0..1
+
+    // ---- the plate ------------------------------------------------------
+    double plate { 0.0 };                ///< the six pulses (0) crossfaded to a modal cymbal (1); 0 is exact
+    double grit { 0.0 };                 ///< bit depth before Drive: 0 is 16 bits and exact, 1 is 4 bits
 
     // ---- the noise layer -------------------------------------------------
     double air { 0.45 };                 ///< its level, 0..1
@@ -284,9 +381,33 @@ public:
     /// Narrow enough that each one rings and the noise takes the partial's
     /// pitch; wide enough that six of them are a sizzle rather than six
     /// whistles. A band-pass at Q 12 passes a small fraction of the noise
-    /// power a flat path does, hence the make-up.
+    /// power a flat path does, hence the make-up -- re-measured at I4.3 for
+    /// the bank sitting inside the bands rather than under the high-pass,
+    /// so that Sizzle 0 and 100 are within a decibel through the default
+    /// chain (the old placement lost 16.5 dB).
     static constexpr double kSizzleQ = 12.0;
-    static constexpr double kSizzleMakeup = 2.6;
+    static constexpr double kSizzleMakeup = 0.65;
+
+    /// Where Sizzle's six band-passes sit: for each partial, the harmonic of
+    /// it nearest the band it is assigned to -- the low three partials to
+    /// `colourHz`, the high three to the upper band at `kUpperBandRatio`
+    /// times it -- clamped under the rate. Static so the panel's picture
+    /// draws the very frequencies the engine rings.
+    static void sizzleCentres (const double (&partials)[kOscillators], double colourHz, double rate,
+                               double (&centres)[kOscillators]) noexcept
+    {
+        const double ceiling = rate * 0.45;
+
+        for (int i = 0; i < kOscillators; ++i)
+        {
+            const double target = i < kOscillators / 2 ? colourHz
+                                                       : std::min (colourHz * kUpperBandRatio, ceiling);
+            const double partial = std::max (partials[i], 1.0);
+            const double harmonic = std::max (1.0, std::round (target / partial));
+
+            centres[i] = std::clamp (harmonic * partial, 20.0, ceiling);
+        }
+    }
 
     /// The output trim, chosen from measurement so a default hit lands near
     /// full scale (`tezla-measure ictus` table 3).
@@ -296,9 +417,197 @@ public:
     /// do not draw the same numbers.
     static constexpr std::uint64_t kAirSalt = 0x2545F4914F6CDD1Dull;
 
+    // ---- the plate ------------------------------------------------------
+
+    /// How many modes the plate may hold: the bank's whole capacity. Fewer
+    /// are placed when Tune is high, because nothing is placed above
+    /// `kPlateTopHz` -- a small plate simply has fewer modes below it.
+    static constexpr int kPlateModes = dsp::ModalResonator::kMaxModes;
+
+    /// The exponent of the modified Chladni law, f = c (m + beta n)^p.
+    /// TAKEN from Fletcher & Rossing, *The Physics of Musical Instruments*,
+    /// Table 20.1 (Rossing 1982): the 14-inch thick cymbal, p = 1.47 -- the
+    /// closest cymbal in the table to a hat top, and the only one a single
+    /// line fits. Attributed again in docs/DSP-REFERENCES.md.
+    static constexpr double kPlateExponent = 1.47;
+
+    /// How much a nodal circle costs in "diameters". Chladni's flat plate
+    /// says 2; on a domed cymbal the circle families sit much higher. Read
+    /// off Perrin, Swallowe, Zietlow & Moore (Proc. IoA 2008): (2,1) lands on
+    /// (9,0) for their 18-inch crash and (1,1) on (8,0) for their 12-inch, so
+    /// beta is 7 to 7.6; 7.4 is inside that and not an integer, so the
+    /// families interleave rather than land on each other. Design, informed.
+    static constexpr double kPlateCircleOffset = 7.4;
+
+    /// The deterministic per-mode jitter at Spread 0, as a fraction of the
+    /// frequency. Stands in for the doublet splitting and the near-neighbour
+    /// mixing Perrin measured (four peaks within 15 Hz at 340 Hz), and keeps
+    /// every pair of modes incommensurate. The lowest mode is never jittered:
+    /// it IS Tune. Spread doubles it at 1.
+    static constexpr double kPlateJitter = 0.012;
+
+    /// No mode is placed above this, whatever Tune and the rate allow: there
+    /// is nothing to hear there and a mode there is arithmetic for nothing.
+    static constexpr double kPlateTopHz = 18000.0;
+
+    /// The strike's spectrum: mode amplitude falls as (f / f0)^-tilt. A hard
+    /// stick tip -- Rossing's spectra (F&R Fig. 20.6) have the band above
+    /// 10 kHz present at the strike and unchanged after it.
+    static constexpr double kPlateTilt = 0.5;
+
+    /// Each mode's own decay, T60 = anchorRatio * decay * (anchorHz / f)^exp.
+    /// The exponent is TAKEN from Ducceschi & Touze (JSV 344, 2015), whose
+    /// cymbal simulation uses the modal damping c_p = 0.007 omega^0.7 -- so
+    /// T60 falls as omega^-0.7 and the high modes die first. The anchor is
+    /// design: a mode at 1.5 kHz rings for twice the pad's decay, so the
+    /// envelope is what you hear shaping the middle of the plate, the low
+    /// modes outlast it (the envelope cuts them), and the top falls away on
+    /// its own before Damp is asked to do anything.
+    static constexpr double kPlateDampExponent = 0.7;
+    static constexpr double kPlateDampAnchorHz = 1500.0;
+    static constexpr double kPlateDampAnchorRatio = 2.0;
+    static constexpr double kPlateMaxT60Seconds = 8.0;
+
+    /// The amplitude the plate is struck at: the root of the modes' summed
+    /// squared amplitudes. Kept at the level a Malleus voice rings at (it
+    /// peaks near 0.05) so that the bank is used in the regime its own tests
+    /// measure, with the level made up at the output by `kPlateGain`; the
+    /// bank is linear, so the split is exact and only the readout changes.
+    static constexpr double kPlateExcitation = 0.07;
+
+    /// The plate's level against the six pulses at the crossfade's far end,
+    /// the excitation above included. From measurement, so the crossfade
+    /// moves timbre rather than loudness (CLAUDE.md section 7): at 1 / 0.07
+    /// the plate's RMS through the default chain read 2.2 to 3.2 dB above the
+    /// metal's (closed and open, default and everything-on) and 0.4 to 0.7 dB
+    /// under it through a fat chain (Colour 1.5 kHz, Highpass 300 Hz). At 12
+    /// it still read +2.1 dB closed and +1.5 dB open through the default
+    /// chain (`tezla-measure ictus` table 3); at 10 it reads +1.5 dB closed
+    /// and +1.1 dB open there -- the default Drive of 25 % compresses the
+    /// plate's hotter strike, so the level does not follow the gain linearly
+    /// -- and level with the metal through a fat chain. As level as two
+    /// different spectra through a soft clip get.
+    static constexpr double kPlateGain = 10.0;
+
+    /// Grit's far end, in bits. Sixteen is the crusher's exact bypass; four
+    /// is coarse enough that the steps are the sound. About six -- the depth
+    /// the classic sampled drum machines stored their cymbals at -- sits at
+    /// two thirds of the control.
+    static constexpr double kGritMinBits = 4.0;
+
+    /// Places the plate's modes for a Tune, in ascending order, and returns
+    /// how many were placed. `hz` and `amplitude` are the mode table; the
+    /// amplitudes are normalised so their squares sum to `kPlateExcitation`
+    /// squared -- the strike, at the level the bank's coupling expects.
+    ///
+    /// The (m, n) field of the modified Chladni law is walked as a k-way
+    /// merge of its nodal-circle families -- each family is monotonic in m,
+    /// so the next mode overall is always one of the family heads -- until
+    /// `kPlateModes` are placed or every head is above the ceiling. Bounded
+    /// work, no sort, no allocation, so it can run at `start()`.
+    ///
+    /// Static, so the panel's picture draws exactly the modes the engine
+    /// rings, the way `ratiosAt` serves both for the six pulses.
+    static int plateModesAt (double tuneHz, double spread, double ceilingHz,
+                             double (&hz)[kPlateModes], double (&amplitude)[kPlateModes]) noexcept
+    {
+        constexpr int kFamilies = 12;
+
+        const double tune = std::clamp (tuneHz, 60.0, 1200.0);
+        const double ceiling = std::min (ceilingHz, kPlateTopHz);
+
+        // c so that (2,0) sits at Tune.
+        const double c = tune / std::pow (2.0, kPlateExponent);
+        const double jitter = kPlateJitter * (1.0 + std::clamp (spread, 0.0, 1.0));
+
+        // The family heads: the n = 0 (rim) family starts at m = 2, since
+        // m = 0 and 1 with no nodal circle are rigid-body motions of a free
+        // plate; the others start at m = 0, the axisymmetric singlet.
+        int head[kFamilies] {};
+        for (int n = 0; n < kFamilies; ++n)
+            head[n] = n == 0 ? 2 : 0;
+
+        const auto frequencyOf = [c] (int m, int n) noexcept
+        {
+            return c * std::pow (static_cast<double> (m) + kPlateCircleOffset * static_cast<double> (n),
+                                 kPlateExponent);
+        };
+
+        int count = 0;
+        double sumSquares = 0.0;
+
+        // The golden-ratio sequence, keyed on the emission index: a
+        // low-discrepancy jitter, the same for every hit.
+        constexpr double kGolden = 0.6180339887498949;
+
+        while (count < kPlateModes)
+        {
+            int best = -1;
+            double bestHz = ceiling;
+
+            for (int n = 0; n < kFamilies; ++n)
+            {
+                const double f = frequencyOf (head[n], n);
+
+                if (f < bestHz)
+                {
+                    bestHz = f;
+                    best = n;
+                }
+            }
+
+            if (best < 0)
+                break;
+
+            ++head[best];
+
+            double f = bestHz;
+
+            // The lowest mode is never jittered -- it IS Tune. The branch is
+            // what says so; the sequence's first term happens to be exactly
+            // 0.5 as well (a factor of exactly 1.0), so a break-check that
+            // removed the branch changed nothing, and one that moved the
+            // mode by 1 % went red.
+            if (count > 0)
+            {
+                const double sequence = std::fmod (0.5 + static_cast<double> (count) * kGolden, 1.0);
+                f *= 1.0 + jitter * (2.0 * sequence - 1.0);
+            }
+
+            if (f >= ceiling)
+                continue;
+
+            hz[count] = f;
+            amplitude[count] = std::pow (f / tune, -kPlateTilt);
+            sumSquares += amplitude[count] * amplitude[count];
+            ++count;
+        }
+
+        if (sumSquares > 0.0)
+        {
+            const double normalise = kPlateExcitation / std::sqrt (sumSquares);
+
+            for (int i = 0; i < count; ++i)
+                amplitude[i] *= normalise;
+        }
+
+        return count;
+    }
+
+    /// Grit to bits: geometric from 16 down to `kGritMinBits`, so each step
+    /// of the control halves the resolution by the same ratio. 16 bits is
+    /// the crusher's exact bypass.
+    [[nodiscard]] static double bitsForGrit (double grit) noexcept
+    {
+        const double g = std::clamp (grit, 0.0, 1.0);
+        return dsp::Bitcrusher::kMaxBits * std::pow (kGritMinBits / dsp::Bitcrusher::kMaxBits, g);
+    }
+
     void prepare (double internalRate) noexcept
     {
         rate_ = internalRate > 0.0 ? internalRate : 48000.0;
+
+        plate_.prepare (rate_);
 
         for (auto& oscillator : oscillators_)
         {
@@ -375,6 +684,11 @@ public:
 
         damp_.reset();
         shaper_.reset();
+
+        plate_.reset();
+        plateOn_ = false;
+        gritOn_ = false;
+        plateCount_ = 0;
 
         body_.kill();
         airEnvelope_.kill();
@@ -465,6 +779,56 @@ public:
         ring_ = std::clamp (s.ring, 0.0, 1.0);
         ringOn_ = ! dsp::isExactlyZero (ring_);
 
+        // ---- the envelope's decay, needed by the plate's own damping ----
+        const double decay = open ? std::clamp (s.decayOpenSeconds, 0.1, 3.0)
+                                  : std::clamp (s.decayClosedSeconds, 0.01, 0.4);
+        const double bodySeconds = scaled (decay, s.velocityDecay);
+
+        // ---- the plate ----
+        //
+        // Both ends of the crossfade are BRANCHES, not arithmetic: at 0 the
+        // bank is never built and the metal is multiplied by nothing, so the
+        // path is bit for bit the engine before the plate existed; at 1 the
+        // metal's weight is exactly 0.0 rather than cos(pi/2)'s 6e-17.
+        const double plate = std::clamp (s.plate, 0.0, 1.0);
+        plateOn_ = ! dsp::isExactlyZero (plate);
+
+        if (plateOn_)
+        {
+            const bool plateOnly = plate >= 1.0;
+            metalWeight_ = plateOnly ? 0.0 : std::cos (plate * 1.5707963267948966);
+            plateWeight_ = (plateOnly ? 1.0 : std::sin (plate * 1.5707963267948966)) * kPlateGain;
+
+            double amplitude[kPlateModes] {};
+            plateCount_ = plateModesAt (tune, spread, rate_ * 0.45, plateHz_, amplitude);
+
+            plate_.setModeCount (std::max (1, plateCount_));
+
+            for (int k = 0; k < plateCount_; ++k)
+            {
+                // Ducceschi & Touze's law for the mode's own decay, anchored
+                // to the pad's decay -- see kPlateDampExponent.
+                const double t60 = std::clamp (kPlateDampAnchorRatio * bodySeconds
+                                                   * std::pow (kPlateDampAnchorHz / plateHz_[k],
+                                                               kPlateDampExponent),
+                                               dsp::ModalResonator::kMinT60Seconds, kPlateMaxT60Seconds);
+
+                plate_.setMode (k, plateHz_[k], t60, 1.0);
+                plate_.excite (k, amplitude[k]);
+            }
+        }
+        else
+        {
+            plateCount_ = 0;
+            metalWeight_ = 1.0;
+            plateWeight_ = 0.0;
+        }
+
+        // ---- grit ----
+        const double grit = std::clamp (s.grit, 0.0, 1.0);
+        gritOn_ = ! dsp::isExactlyZero (grit);
+        crusher_.setBits (bitsForGrit (grit));
+
         // ---- drive ----
         const double drive = std::clamp (s.drive, 0.0, 1.0);
         driveOn_ = ! dsp::isExactlyZero (drive);
@@ -489,9 +853,6 @@ public:
         damp_.setCutoffHz (kDampTopHz);
 
         // ---- the envelopes ----
-        const double decay = open ? std::clamp (s.decayOpenSeconds, 0.1, 3.0)
-                                  : std::clamp (s.decayClosedSeconds, 0.01, 0.4);
-        const double bodySeconds = scaled (decay, s.velocityDecay);
         const double tension = 1.0 - std::clamp (s.shape, 0.0, 1.0);
 
         body_.setAttackSeconds (0.0);
@@ -514,15 +875,19 @@ public:
             random_.seed (seed ^ kAirSalt);
             airFilter_.setCutoffHz (std::clamp (s.airToneHz, 200.0, std::min (12000.0, rate_ * 0.4)));
 
-            // Sizzle: the hiss through the plate's own partials, at whatever
-            // Tune, Harmonics and Spread have just put them.
+            // Sizzle: the hiss through the metal's own partials as HEARD --
+            // their harmonics nearest the two bands, at whatever Tune,
+            // Harmonics, Spread and Colour have just put them.
             sizzle_ = std::clamp (s.sizzle, 0.0, 1.0);
             sizzleOn_ = ! dsp::isExactlyZero (sizzle_);
 
             if (sizzleOn_)
+            {
+                sizzleCentres (partials_, colour, rate_, sizzleHz_);
+
                 for (int i = 0; i < kOscillators; ++i)
-                    sizzleBank_[static_cast<std::size_t> (i)]
-                        .setCutoffHz (std::clamp (partials_[i], 20.0, rate_ * 0.45));
+                    sizzleBank_[static_cast<std::size_t> (i)].setCutoffHz (sizzleHz_[i]);
+            }
 
             airEnvelope_.setAttackSeconds (0.0);
             airEnvelope_.setAttackTension (0.0);
@@ -658,8 +1023,14 @@ public:
             metal += ring_ * kRingGain * a * b;
         }
 
-        // ---- the two layers meet ----
-        double x = metal * body;
+        // ---- the plate, and the two sources meet ----
+        //
+        // `plateOn_` false is the engine as it was: metal times the envelope
+        // and not a multiplication more (the golden render in the I4.3 notes
+        // is what says so).
+        double x = plateOn_
+                 ? (metal * metalWeight_ + plate_.process() * plateWeight_) * body
+                 : metal * body;
 
         if (airOn_)
         {
@@ -682,6 +1053,10 @@ public:
 
             x += air_ * kAirGain * airEnv * hiss;
         }
+
+        // ---- grit: the steps of a low-resolution sample path ----
+        if (gritOn_)
+            x = crusher_.process (x);
 
         // ---- drive ----
         if (driveOn_)
@@ -771,6 +1146,25 @@ public:
     /// hit darken as it rings, and what a test watches to prove it does.
     [[nodiscard]] double getDampCutoffHz() const noexcept { return damp_.getCutoffHz(); }
 
+    /// Where Sizzle's band-pass `index` sits for the hit that is sounding.
+    [[nodiscard]] double getSizzleHz (int index) const noexcept
+    {
+        return index >= 0 && index < kOscillators ? sizzleHz_[index] : 0.0;
+    }
+
+    /// How many modes the plate placed for the hit that is sounding -- 0 when
+    /// Plate is 0, which is also the proof that the bank was never built.
+    [[nodiscard]] int getPlateModeCount() const noexcept { return plateCount_; }
+
+    /// One placed mode's frequency, in Hz.
+    [[nodiscard]] double getPlateModeHz (int index) const noexcept
+    {
+        return index >= 0 && index < plateCount_ ? plateHz_[index] : 0.0;
+    }
+
+    /// The bit depth Grit resolved to for this hit; 16 is the exact bypass.
+    [[nodiscard]] double getGritBits() const noexcept { return crusher_.getBits(); }
+
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
 private:
@@ -783,6 +1177,16 @@ private:
     dsp::SvfFilter ringLow_, ringHigh_;
     bool ringOn_ { false };
     double ring_ { 0.0 };
+
+    dsp::ModalResonator plate_;
+    double plateHz_[kPlateModes] {};
+    int plateCount_ { 0 };
+    bool plateOn_ { false };
+    double metalWeight_ { 1.0 };
+    double plateWeight_ { 0.0 };
+
+    dsp::Bitcrusher crusher_;
+    bool gritOn_ { false };
 
     dsp::Adaa1<dsp::SoftClipExcess> shaper_;
     dsp::SoftClipExcess clip_;
@@ -806,6 +1210,7 @@ private:
 
     dsp::SvfFilter airFilter_;
     dsp::SvfFilter sizzleBank_[kOscillators];
+    double sizzleHz_[kOscillators] {};
     bool sizzleOn_ { false };
     double sizzle_ { 0.0 };
     dsp::Adsr airEnvelope_;
