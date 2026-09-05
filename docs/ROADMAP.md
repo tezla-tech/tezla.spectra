@@ -398,3 +398,19 @@ anything already decided.
    §7's bit-exactness rules mean touching them is never free. **What would
    unpark it:** F1 confirming the predictor's accuracy, and the user wanting it
    there.
+
+7. **Skip the decimator over provable silence.** Stryda's engine now skips the
+   per-sample voice loop when no voice is sounding and writes the zeros
+   directly, which took idle from 0.0785 s to 0.0431 s per four seconds of
+   audio — 1.96 % of a core to 1.08 %. The remaining cost is almost entirely
+   `Oversampler::downsample` running its halfband FIRs over silence, which it
+   must, because a FIR's output is only provably zero once its delay line has
+   flushed. Making that skippable means the oversampler counting consecutive
+   silent input samples against its own support and saying when it is clean.
+   Parked because it is a **shared** change — every plugin in the suite decimates
+   through that object, and §7's bit-exactness rule means each one's neutral path
+   has to be re-proved — so it belongs in its own commit rather than in a
+   plugin's close-out. It would roughly halve the idle cost of every instrument
+   here, which matters at CLAUDE.md §1's twenty instances in a project.
+   **What would unpark it:** the user asking, or an idle CPU figure becoming a
+   problem on the rig.

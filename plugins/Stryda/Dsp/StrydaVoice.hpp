@@ -21,6 +21,7 @@
 #include <tezla/dsp/SmallRandom.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 
+#include "Modulation.hpp"
 #include "OperatorMatrix.hpp"
 
 namespace tezla::stryda
@@ -47,6 +48,13 @@ struct OperatorParameters
     // ---- F4 -----------------------------------------------------------------
 
     double fold { 0.0 };            ///< phase distortion, 0 = identity
+
+    /// The waveform, as a `dsp::FmShape`. **0 is Sine and is bit-exact**,
+    /// so a patch from before shapes existed renders unchanged. Anything
+    /// else multiplies the sidebands this operator produces by
+    /// `dsp::fmShapeHarmonics`, which the bandwidth predictor is told.
+    int shape { 0 };
+
     int mode { 0 };                 ///< 0 normal, 1 formant
     double formantHz { 800.0 };
     double formantDepth { 1.0 };    ///< the ModFM index k, in cycles
@@ -56,6 +64,12 @@ struct OperatorParameters
     double keyBreak { 60.0 };       ///< MIDI note
     double keyLeft { 0.0 };         ///< -1 .. 1, per octave below the break
     double keyRight { 0.0 };        ///< -1 .. 1, per octave above it
+
+    /// Free / Harmonic / Scale, as a `RatioMode`. The engine resolves it before
+    /// the voice ever sees `ratio`, so a voice only ever handles a plain
+    /// number -- the quantiser needs the loaded scale, and the scale lives with
+    /// the tuning in the engine.
+    int ratioMode { 0 };
 
     double velLevel { 0.0 };        ///< how much velocity moves the output level
     double velIndex { 0.0 };        ///< how much it moves the modulation this operator sends
@@ -123,6 +137,8 @@ struct VoiceParameters
     double capCeiling { 0.9 };
 
     VoiceExtras extras {};
+
+    ModulationSettings modulation {};
 };
 
 class StrydaVoice
@@ -138,6 +154,12 @@ public:
         sub_.reset();
         filterEnvelope_.prepare (sampleRate_);
         subEnvelope_.prepare (sampleRate_);
+
+        for (auto& envelope : envelopes2_)
+            envelope.prepare (sampleRate_);
+
+        for (auto& lfo : lfos_)
+            lfo.prepare (sampleRate_);
 
         for (auto& envelope : envelopes_)
             envelope.prepare (sampleRate_);
@@ -192,6 +214,20 @@ public:
         filterEnvelope_.noteOn();
         subEnvelope_.noteOn();
 
+        for (auto& envelope : envelopes2_)
+            envelope.noteOn();
+
+        for (std::size_t i = 0; i < lfos_.size(); ++i)
+            if (parameters_.modulation.lfos[i].retrigger)
+                lfos_[i].reset();
+
+        // The sources have just been reset, so the values the first
+        // `applyParameters` reads are the ones at t = 0. The engine's chunk
+        // grid advances them from there.
+        envelopeValues_ = {};
+        lfoValues_ = {};
+        modulatorsStarted_ = false;
+
         for (int op = 0; op < kNumOperators; ++op)
         {
             matrix_.setStartPhase (op, 0.0);
@@ -219,6 +255,9 @@ public:
 
         filterEnvelope_.noteOff();
         subEnvelope_.noteOff();
+
+        for (auto& envelope : envelopes2_)
+            envelope.noteOff();
 
         for (auto& envelope : envelopes_)
             envelope.noteOff();
@@ -269,13 +308,24 @@ public:
 
     /// Push the current settings. Called once per control chunk, never per
     /// sample, and every setter it reaches is guarded against a no-op.
-    void applyParameters (const VoiceParameters& parameters) noexcept
+    /// `advanceModulators` is false when this is an extra refresh inside a
+    /// control chunk -- the ratio sequencer's step edge (F6) -- because the
+    /// modulators are on the chunk grid and running them twice for one chunk
+    /// would make an LFO's rate depend on the sequencer's division.
+    void applyParameters (const VoiceParameters& parameters,
+                          bool advanceModulators = true) noexcept
     {
         parameters_ = parameters;
 
+        // **The whole layer is skipped when no slot is doing anything**, so a
+        // patch that uses none of it is bit-identical to a build without it --
+        // the destinations are not even read, let alone written with a zero.
+        if (parameters.modulation.anyActive())
+            applyModulation (advanceModulators);
+
         for (int op = 0; op < kNumOperators; ++op)
         {
-            const auto& settings = parameters.operators[static_cast<std::size_t> (op)];
+            const auto& settings = parameters_.operators[static_cast<std::size_t> (op)];
             const auto slot = static_cast<std::size_t> (op);
 
             // The unison copy's detune rides on the operator's own fine tune,
@@ -292,6 +342,8 @@ public:
 
             matrix_.setFrequency (op, hz);
             matrix_.setCharacter (op, settings.character);
+            matrix_.setShape (op, static_cast<dsp::FmShape> (
+                std::clamp (settings.shape, 0, static_cast<int> (dsp::FmShape::count) - 1)));
             matrix_.setFeedback (op, settings.feedback);
             matrix_.setFold (op, settings.fold);
             matrix_.setMode (op, settings.mode == 1 ? dsp::FmOperator::Mode::formant
@@ -312,15 +364,15 @@ public:
             envelope.setSustain (settings.sustain);
             envelope.setReleaseSeconds (settings.release);
 
-            matrix_.setNoiseIndex (op, parameters.noiseIndices[slot]);
+            matrix_.setNoiseIndex (op, parameters_.noiseIndices[slot]);
 
             for (int from = 0; from < kNumOperators; ++from)
             {
-                const auto& source = parameters.operators[static_cast<std::size_t> (from)];
+                const auto& source = parameters_.operators[static_cast<std::size_t> (from)];
                 const double sourceGain = keyScaleGain (source, static_cast<double> (note_))
                                             * velocityGain (source.velIndex, velocity_);
 
-                const double cell = parameters.indices[slot][static_cast<std::size_t> (from)];
+                const double cell = parameters_.indices[slot][static_cast<std::size_t> (from)];
 
                 // **Index spread, and it is the thickest thing here.** Detuning
                 // a unison stack in pitch gives you the same timbre several
@@ -338,7 +390,7 @@ public:
 
         matrix_.refreshQuadratureNeeds();
 
-        applyExtras (parameters.extras);
+        applyExtras (parameters_.extras);
     }
 
     /// Resolve the index cap and install its scale.
@@ -360,9 +412,219 @@ public:
     /// counted in control chunks, which are themselves anchored to the stream
     /// rather than to the host's block, so the update instants -- and therefore
     /// the output -- stay independent of the buffer size (CLAUDE.md section 7).
-    void refreshIndexCap (const VoiceParameters& parameters, double internalRate) noexcept
+    ///
+    /// It reads the voice's **modulated** copy, which `applyParameters` has
+    /// always just written -- both call sites push parameters first. A slot
+    /// aimed at `matrixDepth` or an operator's feedback moves exactly the
+    /// numbers the bandwidth prediction is made of, so capping the patch's
+    /// values instead would leave the cap protecting a spectrum nobody is
+    /// listening to.
+    void refreshIndexCap (double internalRate) noexcept
     {
-        matrix_.setIndexScale (capScaleFor (parameters, internalRate));
+        matrix_.setIndexScale (capScaleFor (parameters_, internalRate));
+    }
+
+    /// Run the sources forward and add every live slot into `parameters_`.
+    ///
+    /// Written against the modulated COPY rather than the patch, so a slot can
+    /// stack on another slot's result and the patch itself is never touched.
+    void applyModulation (bool advance) noexcept
+    {
+        const auto& settings = parameters_.modulation;
+
+        for (std::size_t i = 0; i < envelopes2_.size(); ++i)
+        {
+            auto& envelope = envelopes2_[i];
+            const auto& shape = settings.envelopes[i];
+
+            envelope.setPointCount (shape.pointCount);
+            envelope.setSustainIndex (shape.sustain);
+            envelope.setLoopStart (shape.loopStart);
+            envelope.setLoop (shape.loop);
+
+            for (int p = 0; p < dsp::MultiEnvelope::kMaxPoints; ++p)
+            {
+                const auto& point = shape.points[static_cast<std::size_t> (p)];
+                envelope.setPoint (p, point.seconds, point.level, point.tension);
+            }
+        }
+
+        for (std::size_t i = 0; i < lfos_.size(); ++i)
+        {
+            const auto& shape = settings.lfos[i];
+
+            lfos_[i].setWave (static_cast<dsp::Lfo::Wave> (shape.wave));
+            lfos_[i].setRateHz (shape.rateHz);
+            lfos_[i].setSmooth (shape.smooth);
+            lfos_[i].setPhaseOffset (shape.phaseOffset);
+        }
+
+        // The first refresh after a note-on reads the sources where the
+        // note-on left them rather than a chunk into their life: `noteOn` has
+        // just reset them, and advancing before the first read would start
+        // every modulation envelope 32 internal samples ahead of the amp
+        // envelope beside it. After that the chunk grid drives them.
+        if (advance && modulatorsStarted_)
+        {
+            // One envelope sample per internal sample, which is what a
+            // breakpoint envelope in seconds means; the LFO takes the whole
+            // chunk at once. Only the READ is on the chunk grid -- the timing
+            // is exact, and a modulation envelope that ran at a 32nd of the
+            // rate would drift against the amp envelope beside it.
+            for (std::size_t i = 0; i < envelopes2_.size(); ++i)
+            {
+                double value = envelopeValues_[i];
+
+                for (int n = 0; n < kModulationChunk; ++n)
+                    value = envelopes2_[i].process();
+
+                envelopeValues_[i] = value;
+            }
+
+            for (std::size_t i = 0; i < lfos_.size(); ++i)
+                lfoValues_[i] = lfos_[i].advance (kModulationChunk);
+        }
+        else if (advance)
+        {
+            // Read where the reset left them, then hand the grid the baton.
+            for (std::size_t i = 0; i < lfos_.size(); ++i)
+                lfoValues_[i] = lfos_[i].advance (0);
+
+            modulatorsStarted_ = true;
+        }
+
+        for (const auto& slot : settings.slots)
+        {
+            if (slot.source == source::none || slot.destination == dest::off
+                || dsp::isExactlyZero (slot.amount))
+                continue;
+
+            addModulation (slot.destination, slot.amount * sourceValue (slot.source, settings));
+        }
+    }
+
+    [[nodiscard]] double sourceValue (int which,
+                                      const ModulationSettings& settings) const noexcept
+    {
+        switch (which)
+        {
+            case source::env1: return envelopeValues_[0];
+            case source::env2: return envelopeValues_[1];
+            case source::lfo1: return lfoValues_[0];
+            case source::lfo2: return lfoValues_[1];
+            case source::velocity: return velocity_;
+
+            // 0 at the bottom of the keyboard, 1 at the top, so a positive
+            // amount always means "more as you play up".
+            case source::key: return static_cast<double> (note_) / 127.0;
+
+            case source::macro1: return settings.macros[0];
+            case source::macro2: return settings.macros[1];
+            case source::macro3: return settings.macros[2];
+            case source::macro4: return settings.macros[3];
+
+            default: return 0.0;
+        }
+    }
+
+    /// Add `value` to one destination of the modulated copy.
+    ///
+    /// The per-operator groups are contiguous and in operator order (asserted
+    /// in `Modulation.hpp`), so the operator falls out of a subtraction rather
+    /// than needing a table that could drift from the list.
+    void addModulation (int destination, double value) noexcept
+    {
+        const auto operatorAt = [destination] (int first)
+        {
+            return static_cast<std::size_t> (destination - first);
+        };
+
+        if (destination >= dest::op1Ratio && destination <= dest::op6Ratio)
+        {
+            auto& ratio = parameters_.operators[operatorAt (dest::op1Ratio)].ratio;
+            ratio = std::clamp (ratio + value, 0.03125, 64.0);
+            return;
+        }
+
+        if (destination >= dest::op1Character && destination <= dest::op6Character)
+        {
+            auto& character = parameters_.operators[operatorAt (dest::op1Character)].character;
+            character = std::clamp (character + value, 0.0, 1.0);
+            return;
+        }
+
+        if (destination >= dest::op1Level && destination <= dest::op6Level)
+        {
+            auto& level = parameters_.operators[operatorAt (dest::op1Level)].level;
+            level = std::clamp (level + value, 0.0, 1.0);
+            return;
+        }
+
+        if (destination >= dest::op1Feedback && destination <= dest::op6Feedback)
+        {
+            auto& feedback = parameters_.operators[operatorAt (dest::op1Feedback)].feedback;
+            feedback = std::clamp (feedback + value, 0.0, dsp::FmOperator::kMaxFeedback);
+            return;
+        }
+
+        if (destination >= dest::op1Fold && destination <= dest::op6Fold)
+        {
+            auto& fold = parameters_.operators[operatorAt (dest::op1Fold)].fold;
+            fold = std::clamp (fold + value, 0.0, 1.0);
+            return;
+        }
+
+        switch (destination)
+        {
+            case dest::matrixDepth:
+            {
+                // Every live cell together, as a scale rather than an offset:
+                // adding a fixed amount to thirty cells would switch on paths
+                // the patch never asked for, which is the same trap the unison
+                // index spread avoids.
+                const double scale = std::max (0.0, 1.0 + value);
+
+                for (auto& row : parameters_.indices)
+                    for (auto& cell : row)
+                        cell *= scale;
+
+                break;
+            }
+
+            case dest::filterCutoff:
+                // In octaves, because that is how a filter is heard.
+                parameters_.extras.cutoffHz = std::clamp (
+                    parameters_.extras.cutoffHz * std::exp2 (value), 20.0, 20000.0);
+                break;
+
+            case dest::filterResonance:
+                parameters_.extras.resonance
+                    = std::clamp (parameters_.extras.resonance + value, 0.0, 1.0);
+                break;
+
+            case dest::filterMorph:
+                parameters_.extras.morph
+                    = std::clamp (parameters_.extras.morph + value, 0.0, 1.0);
+                break;
+
+            case dest::filterDrive:
+                parameters_.extras.drive
+                    = std::clamp (parameters_.extras.drive + value, 0.0, 1.0);
+                break;
+
+            case dest::filterSing:
+                parameters_.extras.sing
+                    = std::clamp (parameters_.extras.sing + value, 0.0, 1.0);
+                break;
+
+            case dest::subLevel:
+                parameters_.extras.subLevel
+                    = std::clamp (parameters_.extras.subLevel + value, 0.0, 1.0);
+                break;
+
+            default:
+                break;
+        }
     }
 
     /// The filter, the sub lane and the unison offsets.
@@ -446,6 +708,15 @@ public:
 
             bandwidth.setOperatorFrequency (op, hz);
             bandwidth.setFeedback (op, settings.feedback);
+
+            // **A non-sine operator is only safe because of this line.** Its
+            // waveform carries n harmonics of its own frequency, so it puts
+            // its sideband ladder n times further out; leaving the predictor
+            // at 1 would let a saw modulator through the cap at sixteen times
+            // the bandwidth the cap thought it was allowing.
+            bandwidth.setHarmonics (op, dsp::fmShapeHarmonics (
+                static_cast<dsp::FmShape> (std::clamp (
+                    settings.shape, 0, static_cast<int> (dsp::FmShape::count) - 1))));
 
             for (int from = 0; from < kNumOperators; ++from)
                 bandwidth.setIndex (from, op,
@@ -613,6 +884,17 @@ private:
     double unisonPan_ { 0.0 };
     double unisonIndex_ { 0.0 };
     double unisonGain_ { 1.0 };
+
+    /// How many samples the modulators advance per control chunk. Mirrors
+    /// `StrydaEngine::kControlChunk` rather than including the engine, which
+    /// would be a circular dependency -- the test asserts they agree.
+    static constexpr int kModulationChunk = 32;
+
+    std::array<dsp::MultiEnvelope, 2> envelopes2_ {};
+    std::array<dsp::Lfo, 2> lfos_ {};
+    std::array<double, 2> envelopeValues_ {};
+    std::array<double, 2> lfoValues_ {};
+    bool modulatorsStarted_ { false };
 };
 
 } // namespace tezla::stryda

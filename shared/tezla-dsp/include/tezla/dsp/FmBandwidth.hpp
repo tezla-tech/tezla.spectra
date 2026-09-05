@@ -832,6 +832,20 @@ public:
             feedback_[static_cast<std::size_t> (op)] = cycles > 0.0 ? cycles : 0.0;
     }
 
+    /// How many harmonics of its own frequency this operator's waveform
+    /// carries -- `dsp::fmShapeHarmonics` for the shape it is set to.
+    ///
+    /// **This is the whole reason a non-sine operator is safe.** The recursion
+    /// below is stated in multiples of a modulator's frequency, so a modulator
+    /// carrying `n` harmonics puts its ladder `n` times further out. Leaving
+    /// this at 1 for a saw operator would under-predict the top by sixteen and
+    /// the index cap would let through exactly the aliasing it exists to stop.
+    void setHarmonics (int op, int harmonics) noexcept
+    {
+        if (op >= 0 && op < kMaxOperators)
+            harmonics_[static_cast<std::size_t> (op)] = std::max (1, harmonics);
+    }
+
     void setOperatorCount (int count) noexcept
     {
         count_ = std::clamp (count, 1, kMaxOperators);
@@ -856,12 +870,17 @@ public:
             for (int j = count_ - 1; j >= 0; --j)
             {
                 const auto index = static_cast<std::size_t> (j);
-                double width = frequencies_[index];
+
+                // The operator's own top before anything modulates it: its
+                // frequency times the harmonics its waveform carries.
+                const double own = frequencies_[index]
+                                 * static_cast<double> (harmonics_[index]);
+
+                double width = own;
 
                 const double beta = feedback_[index] * indexScale * kTwoPi;
                 if (beta > 0.0)
-                    width = frequencies_[index]
-                          * static_cast<double> (fm::feedbackOrder (beta, thresholdDb));
+                    width = own * static_cast<double> (fm::feedbackOrder (beta, thresholdDb));
 
                 for (int i = 0; i < count_; ++i)
                 {
@@ -872,9 +891,11 @@ public:
                     if (! (cycles > 0.0))
                         continue;
 
-                    const double modulatorTop = top[static_cast<std::size_t> (i)] > 0.0
-                                                  ? top[static_cast<std::size_t> (i)]
-                                                  : frequencies_[static_cast<std::size_t> (i)];
+                    const auto source = static_cast<std::size_t> (i);
+                    const double modulatorTop
+                        = top[source] > 0.0
+                            ? top[source]
+                            : frequencies_[source] * static_cast<double> (harmonics_[source]);
 
                     width += static_cast<double> (fm::significantOrder (cycles * kTwoPi, thresholdDb))
                            * modulatorTop;
@@ -922,6 +943,7 @@ private:
 
     std::array<double, kMaxOperators> frequencies_ {};
     std::array<double, kMaxOperators> feedback_ {};
+    std::array<int, kMaxOperators> harmonics_ { 1, 1, 1, 1, 1, 1, 1, 1 };
     std::array<std::array<double, kMaxOperators>, kMaxOperators> indices_ {};
     int count_ { 6 };
 };

@@ -19,6 +19,10 @@
 #include <tezla/dsp/FmOperator.hpp>
 #include <tezla/dsp/PhaseShaper.hpp>
 
+#include <tezla/dsp/Divisions.hpp>
+#include <tezla/dsp/Scales.hpp>
+
+#include "Braids.hpp"
 #include "StrydaEngine.hpp"
 
 using namespace tezla::dsp;
@@ -445,9 +449,15 @@ TEZLA_TEST (six_operators_at_eight_voices_fit_the_budget)
         for (int v = 0; v < 8; ++v)
             engine.noteOn (48 + v * 3, 1.0);
 
-        const auto start = std::chrono::steady_clock::now();
-        renderEngine (engine, 48000 * 2, 512);
-        outElapsed = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
+        // **The fastest of three, not one.** A single reading measures the
+        // code plus whatever else this shared container was doing, and those
+        // do not separate afterwards. Measured: 1.178 s quiet, 1.803 s with the
+        // cores busy, against a 1.600 s budget -- two failures in five runs
+        // with nothing deliberately loading the machine. See `fastestOf`.
+        outElapsed = tezla::test::fastestOf (3, [&engine] {
+            renderEngine (engine, 48000 * 2, 512);
+        });
+
         outFactor = engine.getFactor();
     };
 
@@ -478,7 +488,9 @@ TEZLA_TEST (six_operators_at_eight_voices_fit_the_budget)
     //
     // The budgets therefore sit well above the observed range: tight enough
     // that doubling the per-sample work fails, loose enough that a busy
-    // container does not.
+    // container does not -- and the figure asserted is now the fastest of
+    // three runs rather than a single one, so contention has to be sustained
+    // across all three to reach the budget at all.
     CHECK_CPU_BUDGET (classicSeconds, 1.60, "8 Stryda voices, 6 classic FM operators");
     CHECK_CPU_BUDGET (modfmSeconds, 1.60, "8 Stryda voices, 6 operators at half ModFM");
 }
@@ -651,20 +663,89 @@ TEZLA_TEST (the_cap_sub_grid_is_anchored_to_the_stream_not_the_block)
     CHECK (odd == large);
 }
 
+TEZLA_TEST (the_silent_path_takes_every_quiet_sample_and_no_sounding_one)
+{
+    // The engine skips the per-sample voice loop when no voice is sounding and
+    // writes the silence instead. That is bit-exact **by construction** --
+    // `StrydaVoice::process` returns without touching its arguments when the
+    // voice is inactive, so sixteen inactive voices sum to exactly 0.0 -- and
+    // the only way it can be wrong is by firing while something IS sounding.
+    // A wall clock cannot assert "only", so count the skip directly, the way
+    // `getCapResolutionCount` counts the cap.
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setParameters (singleCarrier());
+
+    const int factor = engine.getFactor();
+
+    // 1. Before any note, every internal sample goes through the silent path
+    //    and the output is exactly zero -- not small, zero.
+    const auto beforeNote = renderEngine (engine, 4800, 512);
+    const long long quiet = engine.getSilentSamples();
+
+    CHECK (quiet == static_cast<long long> (4800 * factor));
+
+    for (const double sample : beforeNote)
+        CHECK (dsp::isExactlyZero (sample));
+
+    // 2. While the note sounds, the path is not taken once. If the skip's
+    //    condition inverted, this is what would catch it.
+    engine.noteOn (45, 1.0);
+
+    const auto sounding = renderEngine (engine, 24000, 512);
+
+    CHECK (engine.getSilentSamples() == quiet);
+
+    double loudest = 0.0;
+    for (const double sample : sounding)
+        loudest = std::max (loudest, std::abs (sample));
+
+    CHECK (loudest > 0.1);
+
+    // 3. Released and left alone, the voice retires and the path resumes --
+    //    and the last second of the render is exactly zero, which is what says
+    //    the fill covered its whole run rather than part of it.
+    engine.noteOff (45);
+
+    const auto tail = renderEngine (engine, 48000 * 3, 512);
+    const long long resumed = engine.getSilentSamples() - quiet;
+
+    std::printf ("        [silent] %lld internal samples skipped in the 3 s tail\n", resumed);
+
+    CHECK (resumed > 0);
+    CHECK (engine.getActiveVoiceCount() == 0);
+
+    for (std::size_t i = tail.size() - 48000; i < tail.size(); ++i)
+        CHECK (dsp::isExactlyZero (tail[i]));
+}
+
 TEZLA_TEST (an_idle_instrument_costs_almost_nothing)
 {
     StrydaEngine engine;
     engine.prepare (48000.0, 512);
     engine.setParameters (singleCarrier());
 
-    const auto start = std::chrono::steady_clock::now();
-    renderEngine (engine, 48000 * 4, 512);
-    const auto elapsed = std::chrono::duration<double> (std::chrono::steady_clock::now() - start).count();
+    // Fastest of three, same reason as the voice budget above.
+    const auto elapsed = tezla::test::fastestOf (3, [&engine] {
+        renderEngine (engine, 48000 * 4, 512);
+    });
 
     std::printf ("        [cpu] idle, 4 s of audio in %.4f s (%.3f %% of a core)\n",
                  elapsed, 100.0 * elapsed / 4.0);
 
-    CHECK_CPU_BUDGET (elapsed, 0.08, "idle Stryda");
+    // 0.06, not the 0.08 this budget carried until the silent path existed.
+    // A budget is only a guard while it is tighter than the thing it guards
+    // against: idle measures 0.0431 s here and measured 0.0785 s before the
+    // skip, so 0.08 would now pass the *old* code -- it had stopped asserting
+    // anything and had become a coin flip besides, red about two runs in five.
+    // 0.06 has 39 % of headroom over the measurement and still fails the
+    // moment the skip stops firing.
+    //
+    // What is left is the decimator, which runs the halfband FIRs over
+    // silence because a flushed filter is the only one whose output is
+    // provably zero. Parked in `docs/ROADMAP.md`: it is a shared-DSP change
+    // and belongs in its own commit, not a close-out.
+    CHECK_CPU_BUDGET (elapsed, 0.06, "idle Stryda");
 }
 
 // ---------------------------------------------------------------------------
@@ -1595,4 +1676,1104 @@ TEZLA_TEST (an_inaudible_filter_or_sub_envelope_never_holds_a_voice_open)
                  engine.getActiveVoiceCount());
 
     CHECK (engine.getActiveVoiceCount() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// F6: the ratio modes, the sequencer, and the step-boundary cut
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (free_ratio_mode_returns_its_input_bit_for_bit)
+{
+    // The default, and the one every existing patch runs through. "Transparent"
+    // is not enough: a mode that returned a value equal to within an ulp would
+    // change every project the day it shipped (CLAUDE.md section 7).
+    const auto scale = dsp::scales::twelveToneEqual();
+
+    for (double ratio : { 0.25, 0.9999, 1.0, 1.0000001, 2.5, 3.14159265358979,
+                          7.0, 11.3333333333, 31.999999 })
+    {
+        const double free = resolveRatio (ratio, RatioMode::free, scale);
+
+        CHECK (free == ratio);
+    }
+
+    // And zero and nonsense come back untouched rather than becoming a snap.
+    CHECK (resolveRatio (0.0, RatioMode::harmonic, scale) == 0.0);
+    CHECK (resolveRatio (-1.0, RatioMode::scale, scale) == -1.0);
+}
+
+TEZLA_TEST (harmonic_mode_lands_on_simple_ratios_and_scale_mode_on_the_scale)
+{
+    const auto twelve = dsp::scales::twelveToneEqual();
+
+    // Harmonic: the nearest p:q with both terms at most 16.
+    struct Row { double asked; double expected; };
+
+    const Row rows[] {
+        { 1.02, 1.0 }, { 1.98, 2.0 }, { 3.02, 3.0 },
+        { 1.51, 1.5 }, { 3.49, 3.5 }, { 0.51, 0.5 }
+    };
+
+    for (const auto& row : rows)
+    {
+        const double got = resolveRatio (row.asked, RatioMode::harmonic, twelve);
+
+        std::printf ("        [ratio] harmonic %.3f -> %.6f (want %.4f)\n",
+                     row.asked, got, row.expected);
+
+        CHECK (std::abs (got - row.expected) < 1e-9);
+    }
+
+    // Scale, on 12-TET: every answer is a power of the twelfth root of two,
+    // which is what "a degree of this scale, octave-extended" means.
+    for (double asked : { 1.03, 1.4, 2.9, 5.1, 11.7 })
+    {
+        const double got = resolveRatio (asked, RatioMode::scale, twelve);
+        const double semitones = 12.0 * std::log2 (got);
+
+        std::printf ("        [ratio] scale %.3f -> %.6f (%.4f semitones)\n",
+                     asked, got, semitones);
+
+        CHECK (std::abs (semitones - std::round (semitones)) < 1e-9);
+
+        // And it is the NEAREST degree, not merely a degree.
+        CHECK (std::abs (1200.0 * std::log2 (got / asked)) <= 50.000001);
+    }
+}
+
+TEZLA_TEST (scale_mode_follows_a_loaded_scale_rather_than_twelve_tone)
+{
+    // The whole point of snapping a ratio rather than a frequency: load a scale
+    // whose degrees are somewhere else, and the ratios move with it.
+    dsp::Scale third;
+    third.name = "three degrees";
+    third.repeat = 2.0;
+    third.ratios = { 1.0, 4.0 / 3.0, 3.0 / 2.0 };
+
+    CHECK (third.isUsable());
+
+    // 1.4 sits between 4/3 (1.3333) and 3/2 (1.5); nearer 4/3 in cents.
+    const double snapped = resolveRatio (1.4, RatioMode::scale, third);
+
+    std::printf ("        [ratio] on a 1 : 4/3 : 3/2 scale, 1.400 -> %.6f\n", snapped);
+
+    CHECK (std::abs (snapped - 4.0 / 3.0) < 1e-12);
+
+    // Octave-extended: 2.9 is nearest 3/2 an octave up.
+    CHECK (std::abs (resolveRatio (2.9, RatioMode::scale, third) - 3.0) < 1e-12);
+
+    // **The wrap, which the first version of this test did not reach.** A ratio
+    // just under a repeat boundary is nearer the NEXT repeat's 1/1 than this
+    // one's last degree, and a scan of only the repeat it falls in gets it
+    // wrong. 1.95 is 44 cents under 2/1 and 810 cents over 3/2. Found by
+    // breaking the scan to one repeat and watching the test still pass.
+    CHECK (std::abs (resolveRatio (1.95, RatioMode::scale, third) - 2.0) < 1e-12);
+    CHECK (std::abs (resolveRatio (3.9, RatioMode::scale, third) - 4.0) < 1e-12);
+
+    // Below the first repeat too -- a ratio under 1 is a sub-harmonic modulator
+    // and has to snap as cleanly as one above it.
+    CHECK (std::abs (resolveRatio (0.7, RatioMode::scale, third) - 2.0 / 3.0) < 1e-12);
+
+    // The same ratio on 12-TET does NOT land there, or the test above proves
+    // nothing about the scale being read.
+    const double tempered = resolveRatio (1.4, RatioMode::scale,
+                                          dsp::scales::twelveToneEqual());
+
+    CHECK (std::abs (tempered - 4.0 / 3.0) > 1e-6);
+}
+
+TEZLA_TEST (the_sequencer_is_exactly_inert_until_it_is_switched_on)
+{
+    const auto render = [] (bool enabled, double stepOne)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.operators[1].ratio = 2.0;
+        parameters.indices[0][1] = 1.2;
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (enabled);
+        sequencer.setTarget (1);
+        sequencer.setLength (4);
+
+        for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+            sequencer.setStep (i, i == 0 ? stepOne : 2.0);
+
+        engine.setSequencerDivision (7);
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 24000, 512);
+    };
+
+    const auto off = render (false, 7.0);
+    const auto offAgain = render (false, 0.25);
+
+    // With the sequencer off, the pattern cannot reach the audio at all --
+    // not even a wildly different first step.
+    std::printf ("        [seq] off, step 1 at 7.0 vs 0.25: %zu of %zu samples differ\n",
+                 differingSamples (off, offAgain), off.size());
+
+    CHECK (rmsOf (off) > 0.01);
+    CHECK (differingSamples (off, offAgain) == 0);
+
+    // On, it very much can.
+    const auto on = render (true, 7.0);
+
+    CHECK (differingSamples (off, on) > 1000);
+}
+
+TEZLA_TEST (the_sequenced_render_is_the_same_at_every_block_size)
+{
+    // ---------------------------------------------------------------------
+    // **The property the step-boundary cut exists for**
+    // ---------------------------------------------------------------------
+    //
+    // A ratio jump is a far larger event than a voicing rebuild -- it swaps one
+    // harmonic identity for another. Reading the step once per callback would
+    // put the jump up to a buffer late and make the render depend on the host's
+    // buffer size, which is the defect CLAUDE.md section 7 measured at 0.296 of
+    // full scale on Emberdrive.
+    const auto render = [] (int blockSize)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.operators[1].ratio = 2.0;
+        parameters.indices[0][1] = 1.5;
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (true);
+        sequencer.setTarget (1);
+        sequencer.setLength (4);
+        sequencer.setStep (0, 1.0);
+        sequencer.setStep (1, 4.0);
+        sequencer.setStep (2, 2.0);
+        sequencer.setStep (3, 7.0);
+
+        engine.setSequencerDivision (7);      // 1/16
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 24000, blockSize);
+    };
+
+    const auto small = render (64);
+    const auto large = render (512);
+    const auto odd = render (97);
+
+    std::printf ("        [seq] 64 vs 512: %zu of %zu differ;  97 vs 512: %zu\n",
+                 differingSamples (small, large), large.size(),
+                 differingSamples (odd, large));
+
+    CHECK (rmsOf (large) > 0.01);
+    CHECK (differingSamples (small, large) == 0);
+    CHECK (differingSamples (odd, large) == 0);
+}
+
+TEZLA_TEST (a_step_lands_on_its_own_edge_and_not_at_the_next_control_chunk)
+{
+    // ---------------------------------------------------------------------
+    // **What the step-boundary cut actually buys, since the obvious test
+    // did not measure it**
+    // ---------------------------------------------------------------------
+    //
+    // The block-size test above passes with the cut removed, and that is not a
+    // flaw in the cut -- it is that the CONTROL CHUNK grid is already anchored
+    // to the stream, so the jump gets quantised to the same 32-sample instant
+    // at every buffer size either way. Buffer independence was never the thing
+    // the cut protects.
+    //
+    // What it protects is WHERE the jump lands: without it, a step edge is
+    // rounded up to the next control chunk, up to 32 internal samples (0.17 ms
+    // at 192 kHz) late, and always late in the same direction. So the
+    // assertion is on the exact sample the output first changes.
+    const auto render = [] (double secondStep)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (1);
+
+        VoiceParameters parameters = singleCarrier();
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (true);
+        sequencer.setTarget (0);
+        sequencer.setLength (2);
+        sequencer.setStep (0, 1.0);
+        sequencer.setStep (1, secondStep);
+
+        engine.setSequencerDivision (7);      // 1/16
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 1.0);
+
+        return renderEngine (engine, 24000, 512);
+    };
+
+    const auto a = render (1.0);
+    const auto b = render (4.0);
+
+    std::size_t first = a.size();
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (! (a[i] == b[i]))
+        {
+            first = i;
+            break;
+        }
+
+    // Where the edge actually is: one step of a 1/16 at 174 bpm, in internal
+    // samples, rounded up because the engine renders whole samples.
+    const int factor = 4;                     // 48 kHz -> x4
+    const double internalRate = 48000.0 * factor;
+    const double stepSeconds = 1.0 / dsp::divisionRateHz (7, 174.0);
+    const auto edgeInternal = static_cast<std::size_t> (std::ceil (stepSeconds * internalRate));
+    const std::size_t edgeHost = edgeInternal / static_cast<std::size_t> (factor);
+
+    const std::size_t chunk = static_cast<std::size_t> (StrydaEngine::kControlChunk);
+    const std::size_t quantised = ((edgeInternal + chunk - 1) / chunk) * chunk
+                                    / static_cast<std::size_t> (factor);
+
+    std::printf ("        [seq] first difference at host sample %zu; the edge is %zu, "
+                 "the next control chunk %zu\n", first, edgeHost, quantised);
+
+    // **Not exact equality, and the reason is the decimator.** The engine runs
+    // at four times the host rate and decimates through a 63-tap halfband
+    // chain, so a change at internal sample N smears across a host sample or
+    // two either side of N/4. Asserting equality would be asserting the FIR's
+    // impulse response rather than where the sequencer put the edge. Measured
+    // at 4139 against a computed edge of 4138.
+    CHECK (first >= edgeHost);
+    CHECK (first - edgeHost <= 2);
+
+    // The assertion with the teeth: the jump lands BEFORE the next control
+    // chunk would have delivered it. Remove the cut and it lands at 4145 --
+    // past `quantised` -- which is what this catches.
+    CHECK (first < quantised + 1);
+
+    // And the two instants are genuinely different, or the check above could
+    // not tell the cut from its absence.
+    CHECK (quantised > edgeHost);
+}
+
+TEZLA_TEST (a_step_jump_does_not_retrigger_the_phase)
+{
+    // A ratio change is a frequency step, not a note-on: the accumulator runs
+    // on and the spectrum jumps. If it retriggered, every step edge would put a
+    // discontinuity in the carrier and the pattern would click rather than
+    // growl.
+    StrydaEngine engine;
+    engine.prepare (48000.0, 512);
+    engine.setPolyphony (1);
+
+    VoiceParameters parameters = singleCarrier();
+    engine.setParameters (parameters);
+
+    auto& sequencer = engine.getSequencer();
+    sequencer.setEnabled (true);
+    sequencer.setTarget (0);              // the carrier itself, so it is audible
+    sequencer.setLength (2);
+    sequencer.setStep (0, 1.0);
+    sequencer.setStep (1, 3.0);
+
+    engine.setSequencerDivision (7);
+    engine.setTransport (0.0, 174.0, true);
+    engine.noteOn (60, 1.0);
+
+    const auto rendered = renderEngine (engine, 48000, 512);
+
+    // The largest sample-to-sample step in the whole render. A phase reset at a
+    // ratio jump shows up as a jump of order the signal's amplitude; a
+    // continuous phase at a new frequency cannot step further than the new
+    // frequency's own slope.
+    double worst = 0.0;
+    for (std::size_t i = 1; i < rendered.size(); ++i)
+        worst = std::max (worst, std::abs (rendered[i] - rendered[i - 1]));
+
+    double peak = 0.0;
+    for (const double sample : rendered)
+        peak = std::max (peak, std::abs (sample));
+
+    std::printf ("        [seq] peak %.4f, largest neighbouring step %.5f (%.1f %% of peak)\n",
+                 peak, worst, 100.0 * worst / peak);
+
+    CHECK (peak > 0.1);
+    CHECK (worst < 0.2 * peak);
+
+    // **And the pattern is actually running**, which the first version of this
+    // test did not check -- it passed while every step above unity was being
+    // clamped to unity by `dsp::StepSequencer` and the sequencer was inert.
+    // A smoothness assertion is trivially true of a signal that never changes.
+    StrydaEngine flat;
+    flat.prepare (48000.0, 512);
+    flat.setPolyphony (1);
+    flat.setParameters (parameters);
+    flat.getSequencer().setEnabled (false);
+    flat.noteOn (60, 1.0);
+
+    const auto unsequenced = renderEngine (flat, 48000, 512);
+
+    std::printf ("        [seq] sequenced vs not: %zu of %zu samples differ\n",
+                 differingSamples (rendered, unsequenced), rendered.size());
+
+    CHECK (differingSamples (rendered, unsequenced) > 10000);
+}
+
+TEZLA_TEST (a_braid_writes_the_matrix_and_leaves_the_rest_alone)
+{
+    // Six topologies, each a starting point rather than a mode. What the table
+    // must guarantee is that every one of them is a *reachable* patch: indices
+    // inside the parameter range, at least one operator carrying, and no cell
+    // on the diagonal except where feedback is meant.
+    const auto& table = braids::table();
+
+    CHECK (static_cast<int> (table.size()) == braids::kCount);
+
+    for (const auto& braid : table)
+    {
+        double loudest = 0.0;
+
+        for (double level : braid.levels)
+        {
+            CHECK (level >= 0.0);
+            CHECK (level <= 1.0);
+            loudest = std::max (loudest, level);
+        }
+
+        // A topology with nothing reaching the output is silence with extra
+        // steps.
+        CHECK (loudest > 0.0);
+
+        for (int to = 0; to < StrydaVoice::kNumOperators; ++to)
+            for (int from = 0; from < StrydaVoice::kNumOperators; ++from)
+            {
+                const double cell = braid.cells[static_cast<std::size_t> (to)]
+                                               [static_cast<std::size_t> (from)];
+
+                CHECK (cell >= 0.0);
+                CHECK (cell <= 8.0);       // the matrix parameter's own ceiling
+
+                // The diagonal is feedback, whose parameter tops out at 1.
+                if (to == from)
+                    CHECK (cell <= 1.0);
+            }
+
+        // Named, and described -- a button with no name is a button nobody presses.
+        CHECK (braid.name != nullptr && *braid.name != 0);
+        CHECK (braid.description != nullptr && *braid.description != 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F7: Split, the vowel lane and the mangle chain
+// ---------------------------------------------------------------------------
+
+TEZLA_TEST (every_mangle_stage_is_skipped_bit_exactly_at_its_neutral_setting)
+{
+    // ---------------------------------------------------------------------
+    // **Six almost-identities is six chances at changing every project**
+    // ---------------------------------------------------------------------
+    //
+    // CLAUDE.md section 7: a stage permanently in the signal path needs a
+    // bit-exact bypass at its neutral setting, not merely a transparent one.
+    // This is the whole rule for this phase, so it is asserted stage by stage:
+    // set ONE stage to its neutral value and everything else to its default,
+    // and the chain must return its input unchanged to the last bit.
+    MangleChain chain;
+    chain.prepare (48000.0);
+
+    // A signal with content everywhere, so a stage that merely filters gently
+    // still shows up.
+    dsp::SmallRandom noise;
+    std::vector<double> source (4096, 0.0);
+
+    for (std::size_t i = 0; i < source.size(); ++i)
+        source[i] = 0.4 * noise.bipolar()
+                      + 0.5 * std::sin (kTwoPi * 110.0 * static_cast<double> (i) / 48000.0);
+
+    struct Case { const char* name; MangleParameters parameters; };
+
+    MangleParameters defaults;
+
+    // Each of these is a spelling of "do nothing" that is NOT the struct's own
+    // default, so the test proves the skip rather than the initialiser.
+    MangleParameters splitOff = defaults;   splitOff.splitHz = 0.0;
+    MangleParameters vowelOff = defaults;   vowelOff.vowelMix = 0.0;
+                                            vowelOff.vowelMorph = 0.8;
+                                            vowelOff.vowelTract = 0.2;
+    MangleParameters foldOff = defaults;    foldOff.fold = 0.0;
+    MangleParameters crushOff = defaults;   crushOff.crushBits = 16.0;
+                                            crushOff.crushAmount = 0.0;
+    MangleParameters rateOff = defaults;    rateOff.downsample = 1.0;
+    MangleParameters combOff = defaults;    combOff.combMix = 0.0;
+                                            combOff.combFeedback = 0.7;
+    MangleParameters phaseOff = defaults;   phaseOff.phaserMix = 0.0;
+                                            phaseOff.phaserFeedback = 0.8;
+    MangleParameters driveOff = defaults;   driveOff.drive = 0.0;
+    MangleParameters compOff = defaults;    compOff.compressRatio = 1.0;
+                                            compOff.compressThresholdDb = -30.0;
+                                            compOff.compressAttackMs = 1.0;
+
+    const Case cases[] {
+        { "defaults", defaults },   { "split off", splitOff },
+        { "vowel off", vowelOff },  { "fold off", foldOff },
+        { "crush off", crushOff },  { "rate off", rateOff },
+        { "comb off", combOff },    { "phaser off", phaseOff },
+        { "drive off", driveOff },  { "compressor at 1:1", compOff }
+    };
+
+    for (const auto& item : cases)
+    {
+        chain.reset();
+        chain.setParameters (item.parameters);
+
+        CHECK (! chain.isEngaged());
+
+        std::size_t differing = 0;
+
+        for (const double sample : source)
+        {
+            double left = sample;
+            double right = -sample;
+
+            chain.process (left, right);
+
+            if (! (left == sample) || ! (right == -sample))
+                ++differing;
+        }
+
+        std::printf ("        [mangle] %-18s : %zu of %zu samples changed\n",
+                     item.name, differing, source.size());
+
+        CHECK (differing == 0);
+    }
+}
+
+TEZLA_TEST (every_mangle_stage_does_something_when_it_is_asked_to)
+{
+    // The other half, and the half that stops the test above passing on a
+    // chain that was never wired up at all.
+    MangleChain chain;
+    chain.prepare (48000.0);
+
+    dsp::SmallRandom noise;
+    std::vector<double> source (8192, 0.0);
+
+    for (std::size_t i = 0; i < source.size(); ++i)
+        source[i] = 0.3 * noise.bipolar()
+                      + 0.6 * std::sin (kTwoPi * 220.0 * static_cast<double> (i) / 48000.0);
+
+    const auto changed = [&chain, &source] (const MangleParameters& parameters)
+    {
+        chain.reset();
+        chain.setParameters (parameters);
+
+        std::size_t differing = 0;
+
+        for (const double sample : source)
+        {
+            double left = sample;
+            double right = -sample;
+
+            chain.process (left, right);
+
+            if (! (left == sample))
+                ++differing;
+        }
+
+        return differing;
+    };
+
+    struct Case { const char* name; MangleParameters parameters; };
+
+    MangleParameters vowel;   vowel.vowelMix = 0.9;
+    MangleParameters fold;    fold.fold = 0.7;
+    MangleParameters crush;   crush.crushBits = 4.0; crush.crushAmount = 1.0;
+    MangleParameters rate;    rate.downsample = 12.0;
+    MangleParameters comb;    comb.combMix = 0.8;
+    MangleParameters phase;   phase.phaserMix = 0.8;
+    MangleParameters drive;   drive.drive = 0.8;
+    MangleParameters comp;    comp.compressRatio = 8.0; comp.compressThresholdDb = -30.0;
+
+    const Case cases[] {
+        { "vowel", vowel },   { "fold", fold },
+        { "crush", crush }, { "rate", rate },     { "comb", comb },
+        { "phaser", phase }, { "drive", drive },  { "compressor", comp }
+    };
+
+    for (const auto& item : cases)
+    {
+        const std::size_t differing = changed (item.parameters);
+
+        std::printf ("        [mangle] %-12s engaged: %zu of %zu samples changed\n",
+                     item.name, differing, source.size());
+
+        CHECK (differing > source.size() / 4);
+    }
+
+    // **Split is deliberately not in that list**, and its absence is the
+    // design rather than an oversight. A Linkwitz-Riley crossover summed
+    // straight back is an allpass, so Split with nothing after it costs phase
+    // and buys nothing -- which is exactly why F5 deferred the control to the
+    // phase that has a chain to keep out of the low end. The chain therefore
+    // does not count Split alone as "engaged" and returns its input untouched.
+    MangleParameters splitOnly;
+    splitOnly.splitHz = 200.0;
+
+    std::printf ("        [mangle] split alone: %zu samples changed (inert by design)\n",
+                 changed (splitOnly));
+
+    CHECK (changed (splitOnly) == 0);
+
+    // With something after it, Split very much changes the result -- the low
+    // band goes round the drive instead of through it.
+    MangleParameters splitDrive = drive;
+    splitDrive.splitHz = 200.0;
+
+    const std::size_t droveAlone = changed (drive);
+    const std::size_t droveSplit = changed (splitDrive);
+
+    std::printf ("        [mangle] drive alone %zu, drive with split %zu\n",
+                 droveAlone, droveSplit);
+
+    CHECK (droveSplit > source.size() / 4);
+}
+
+TEZLA_TEST (split_keeps_the_low_band_out_of_the_mangling)
+{
+    // The point of Split, stated as a measurement: with the chain destroying
+    // everything above the corner, the energy BELOW it must survive.
+    const auto lowBandEnergy = [] (double splitHz)
+    {
+        MangleChain chain;
+        chain.prepare (48000.0);
+
+        MangleParameters parameters;
+        parameters.splitHz = splitHz;
+        parameters.fold = 1.0;
+        parameters.drive = 1.0;
+        parameters.crushBits = 3.0;
+        parameters.crushAmount = 1.0;
+        chain.setParameters (parameters);
+
+        // A 50 Hz sine well under the corner, plus a 3 kHz sine well over it.
+        std::vector<double> rendered (24000, 0.0);
+
+        for (std::size_t i = 0; i < rendered.size(); ++i)
+        {
+            const double t = static_cast<double> (i) / 48000.0;
+
+            double left = 0.45 * std::sin (kTwoPi * 50.0 * t)
+                            + 0.45 * std::sin (kTwoPi * 3000.0 * t);
+            double right = left;
+
+            chain.process (left, right);
+            rendered[i] = left;
+        }
+
+        // The 50 Hz component, by correlation -- which reads the fundamental
+        // whatever the mangling did above it.
+        double real = 0.0;
+        double imaginary = 0.0;
+
+        for (std::size_t i = 0; i < rendered.size(); ++i)
+        {
+            const double phase = kTwoPi * 50.0 * static_cast<double> (i) / 48000.0;
+
+            real += rendered[i] * std::cos (phase);
+            imaginary += rendered[i] * std::sin (phase);
+        }
+
+        const double scale = 2.0 / static_cast<double> (rendered.size());
+
+        return std::sqrt (real * real + imaginary * imaginary) * scale;
+    };
+
+    const double unsplit = lowBandEnergy (0.0);
+    const double split = lowBandEnergy (300.0);
+
+    std::printf ("        [split] 50 Hz component through a destroyed chain: "
+                 "%.4f unsplit, %.4f split (asked for 0.4500)\n", unsplit, split);
+
+    // Split, the fundamental comes through close to as it went in.
+    CHECK (split > 0.40);
+    CHECK (split < 0.50);
+
+    // Unsplit, the folder and the crusher have had it.
+    CHECK (std::abs (unsplit - 0.45) > 0.05);
+}
+
+// ---------------------------------------------------------------------------
+// F8: the modulation layer
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// A patch with enough going on that any destination has something to change.
+///
+/// **Every operator is in the path**, and that is the whole point of it. The
+/// first version wired two and the destination sweep reported eighteen of
+/// thirty-seven destinations inert -- correctly, because "Op 5 ratio" cannot
+/// change a render in which operator 5 has no level and no matrix cell. A bed
+/// that cannot hear a destination proves nothing about whether it is wired.
+///
+/// So: a 6 -> 5 -> 4 -> 3 -> 2 -> 1 chain, every operator carrying a little
+/// output level of its own as well, a live filter and some sub. Operator 1's
+/// level is deliberately **below** the top of its range, because a destination
+/// swept upward into a clamp looks exactly like one that is not wired at all.
+///
+/// **And the chain is closed into a ring**, op 1 back round to op 6, for a
+/// reason worth writing down: Character is the ModFM exponential
+/// `exp(r k cos(w_m t) - r k)`, and `k` is the index arriving from the
+/// operators that modulate this one. An operator nothing modulates has k = 0,
+/// the exponential is exp(0) = 1, and its Character does **nothing at any
+/// setting** -- which is the mathematics rather than a defect. The open chain
+/// left operator 6 at the top with nothing reaching it, and the sweep duly
+/// reported "Op 6 character: INERT". The ring is one cell above the diagonal,
+/// so it is one sample old and the loop stays computable.
+[[nodiscard]] VoiceParameters modulationBed()
+{
+    VoiceParameters parameters = singleCarrier();
+
+    for (int op = 0; op < StrydaVoice::kNumOperators; ++op)
+    {
+        auto& settings = parameters.operators[static_cast<std::size_t> (op)];
+
+        settings.ratio = 1.0 + 0.5 * static_cast<double> (op);
+        settings.level = op == 0 ? 0.5 : 0.12;
+        settings.character = 0.25;
+        settings.fold = 0.1;
+
+        if (op + 1 < StrydaVoice::kNumOperators)
+            parameters.indices[static_cast<std::size_t> (op)]
+                             [static_cast<std::size_t> (op + 1)] = 0.9;
+    }
+
+    parameters.indices[StrydaVoice::kNumOperators - 1][0] = 0.5;
+    parameters.operators[0].feedback = 0.05;
+
+    parameters.extras.cutoffHz = 2400.0;
+    parameters.extras.resonance = 0.3;
+    parameters.extras.drive = 0.2;
+    parameters.extras.subLevel = 0.3;
+
+    return parameters;
+}
+
+/// One slot, filled in.
+void assignSlot (ModulationSettings& settings, int slot, int source, int destination,
+                 double amount)
+{
+    auto& s = settings.slots[static_cast<std::size_t> (slot)];
+    s.source = source;
+    s.destination = destination;
+    s.amount = amount;
+}
+} // namespace
+
+TEZLA_TEST (the_modulation_layer_is_bit_exactly_inert_until_a_slot_is_complete)
+{
+    // ---------------------------------------------------------------------
+    // **The rule this whole phase is answerable to**
+    // ---------------------------------------------------------------------
+    //
+    // CLAUDE.md section 7: a stage permanently in the signal path needs a
+    // bit-exact bypass at its neutral setting, not merely a transparent one.
+    // "Almost identity" means every existing project changes the day the
+    // plugin updates -- and here that is every Stryda project saved before F8.
+    //
+    // A slot needs a source AND a destination AND a non-zero amount. Each of
+    // the three spellings of "off" below has two of those three, so the test
+    // proves the guard rather than the struct's own initialiser.
+    const auto render = [] (const ModulationSettings& modulation)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = modulationBed();
+        parameters.modulation = modulation;
+        engine.setParameters (parameters);
+        engine.noteOn (60, 0.8);
+
+        return renderEngine (engine, 24000, 512);
+    };
+
+    ModulationSettings none;
+
+    // A source that reaches nothing.
+    ModulationSettings sourceOnly;
+    assignSlot (sourceOnly, 0, source::lfo1, dest::off, 0.9);
+
+    // A destination nothing reaches.
+    ModulationSettings destOnly;
+    assignSlot (destOnly, 3, source::none, dest::filterCutoff, -0.9);
+
+    // Both ends wired and the amount exactly zero, on every slot at once --
+    // the case a `!= 0.0` written as a tolerance would let through.
+    ModulationSettings zeroAmount;
+    for (int i = 0; i < kNumSlots; ++i)
+        assignSlot (zeroAmount, i, source::lfo1 + (i % 2), dest::op1Level + i, 0.0);
+
+    // And the envelopes and LFOs set to something wild, to prove that a
+    // *source* running is not what makes the layer audible.
+    ModulationSettings sourcesBusy = zeroAmount;
+    sourcesBusy.lfos[0].rateHz = 17.0;
+    sourcesBusy.lfos[0].wave = 4;
+    sourcesBusy.macros[0] = 1.0;
+    sourcesBusy.envelopes[0].points[1].level = 1.0;
+
+    const auto reference = render (none);
+    CHECK (rmsOf (reference) > 0.01);
+
+    struct Case { const char* name; const ModulationSettings* settings; };
+
+    const Case cases[] {
+        { "source only", &sourceOnly },
+        { "destination only", &destOnly },
+        { "amount exactly zero", &zeroAmount },
+        { "sources running, amounts zero", &sourcesBusy }
+    };
+
+    for (const auto& item : cases)
+    {
+        CHECK (! item.settings->anyActive());
+
+        const auto rendered = render (*item.settings);
+        const auto differing = differingSamples (reference, rendered);
+
+        std::printf ("        [mod inert] %-30s : %zu of %zu samples differ\n",
+                     item.name, differing, reference.size());
+
+        CHECK (differing == 0);
+    }
+
+    // The other half: one complete slot and the render must change, or the
+    // three cases above are proving nothing but that the layer is dead.
+    ModulationSettings live;
+    assignSlot (live, 0, source::lfo1, dest::filterCutoff, 0.9);
+
+    CHECK (live.anyActive());
+    CHECK (differingSamples (reference, render (live)) > 1000);
+}
+
+TEZLA_TEST (every_modulation_destination_moves_something)
+{
+    // ---------------------------------------------------------------------
+    // **A destination that falls through the switch is silent, not broken**
+    // ---------------------------------------------------------------------
+    //
+    // `addModulation` dispatches on an index into a frozen list. An entry
+    // added to `dest::names` without a case -- or a range test off by one --
+    // produces a control that appears in the box, stores its assignment, and
+    // does absolutely nothing. Nothing warns. So every destination in the list
+    // is swept here, and the sweep is by `dest::count` rather than by a number
+    // typed out, so a new entry is covered the day it is added.
+    const auto render = [] (int destination, double amount)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = modulationBed();
+
+        // Macro 1 at 1.0 is a constant source, so what is being tested is the
+        // destination rather than a source and a destination together.
+        parameters.modulation.macros[0] = 1.0;
+
+        if (destination != dest::off)
+            assignSlot (parameters.modulation, 0, source::macro1, destination, amount);
+
+        engine.setParameters (parameters);
+        engine.noteOn (60, 0.8);
+
+        return renderEngine (engine, 12000, 512);
+    };
+
+    const auto reference = render (dest::off, 0.0);
+    CHECK (rmsOf (reference) > 0.01);
+
+    std::size_t inert = 0;
+
+    for (int destination = dest::off + 1; destination < dest::count; ++destination)
+    {
+        // Amounts in the destination's own units: a ratio moves in ratio, a
+        // cutoff in octaves, a level in level. Positive where the default is
+        // at the bottom of its range, negative where it is at the top.
+        // Amounts in the destination's own units, and every one of them chosen
+        // to move *away* from a clamp: a sweep into a limit is indistinguishable
+        // from a destination that was never wired.
+        const double amount = destination >= dest::op1Ratio && destination <= dest::op6Ratio
+                                ? 1.0
+                                : (destination == dest::filterCutoff ? -1.5 : 0.4);
+
+        const auto rendered = render (destination, amount);
+        const auto differing = differingSamples (reference, rendered);
+
+        if (differing == 0)
+        {
+            std::printf ("        [dest] %-18s : INERT\n", dest::names[destination]);
+            ++inert;
+        }
+    }
+
+    std::printf ("        [dest] %d destinations swept, %zu inert\n",
+                 static_cast<int> (dest::count) - 1, inert);
+
+    CHECK (inert == 0);
+}
+
+TEZLA_TEST (a_sequencer_step_edge_does_not_advance_the_modulators)
+{
+    // ---------------------------------------------------------------------
+    // **An LFO's rate must not depend on the sequencer's division**
+    // ---------------------------------------------------------------------
+    //
+    // The engine refreshes a voice twice inside a chunk that contains a step
+    // edge: once for the edge, once for the chunk. The edge is an EXTRA
+    // refresh, so it must not run the modulators -- otherwise a 1/16 sequence
+    // at 174 BPM runs every LFO in the patch fast, and the faster the
+    // sequence the faster they go.
+    const auto walk = [] (bool extraRefreshes)
+    {
+        StrydaVoice voice;
+        voice.prepare (192000.0);
+
+        VoiceParameters parameters = modulationBed();
+        parameters.modulation.lfos[0].rateHz = 4.0;
+        parameters.modulation.lfos[0].wave = 2;   // saw up: monotone within a cycle
+        assignSlot (parameters.modulation, 0, source::lfo1, dest::filterCutoff, 1.0);
+
+        voice.applyParameters (parameters);
+        voice.noteOn (60, 440.0, 0.8);
+        voice.applyParameters (parameters);
+
+        // 200 control chunks, with an extra refresh interleaved in half of
+        // them when the sequencer is running.
+        for (int i = 0; i < 200; ++i)
+        {
+            voice.applyParameters (parameters, true);
+
+            if (extraRefreshes && (i % 2) == 0)
+                voice.applyParameters (parameters, false);
+        }
+
+        return voice.sourceValue (source::lfo1, parameters.modulation);
+    };
+
+    const double quiet = walk (false);
+    const double stepping = walk (true);
+
+    std::printf ("        [step edge] voice: LFO after 200 chunks %.9f quiet, %.9f stepping\n",
+                 quiet, stepping);
+
+    CHECK (quiet == stepping);
+
+    // ---------------------------------------------------------------------
+    // **And the same claim about the ENGINE, which is a different claim**
+    // ---------------------------------------------------------------------
+    //
+    // Everything above proves that the *voice* honours `advanceModulators` --
+    // and nothing at all about whether the engine ever passes false. The
+    // break-check found that out: changing the engine's call site to a hard
+    // `true` left every assertion above green, which makes them decorations
+    // for the bug they are supposed to catch (CLAUDE.md section 10).
+    //
+    // So: a sequencer that is **enabled but targeting nothing** still cuts the
+    // loop and still fires its extra refresh, while changing no ratio at all.
+    // With the modulation layer live, that render must be bit-identical to one
+    // with the sequencer switched off. It is not, the moment the extra refresh
+    // is allowed to advance an LFO.
+    const auto render = [] (bool sequencing)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (2);
+
+        VoiceParameters parameters = modulationBed();
+        parameters.modulation.lfos[0].rateHz = 3.0;
+        assignSlot (parameters.modulation, 0, source::lfo1, dest::filterCutoff, -1.5);
+
+        engine.setParameters (parameters);
+
+        auto& sequencer = engine.getSequencer();
+        sequencer.setEnabled (sequencing);
+        sequencer.setTarget (-1);          // running, aimed at nothing
+        sequencer.setLength (16);
+
+        // **1/32, and the number matters.** The first version said 2, which is
+        // "2 bars": at 174 BPM the next step was 529,655 internal samples away
+        // and the render was 192,000 long, so not one edge fired and the
+        // assertion below compared two identical renders of nothing. 1/32 at
+        // 174 BPM is 23.2 Hz -- an edge every 8,276 internal samples, 23 of
+        // them across this render.
+        engine.setSequencerDivision (8);
+        engine.setTransport (0.0, 174.0, true);
+        engine.noteOn (60, 0.9);
+
+        return renderEngine (engine, 48000, 512);
+    };
+
+    const auto still = render (false);
+    const auto running = render (true);
+
+    CHECK (rmsOf (still) > 0.01);
+
+    std::printf ("        [step edge] engine: sequencer off vs running-at-nothing, "
+                 "%zu of %zu samples differ\n",
+                 differingSamples (still, running), still.size());
+
+    CHECK (differingSamples (still, running) == 0);
+}
+
+TEZLA_TEST (the_modulated_render_is_the_same_at_every_block_size)
+{
+    // The chunk grid is anchored to the stream, so the instants at which the
+    // modulators advance are too -- and therefore so is the output. Reading
+    // them once per callback would make a growl depend on the host's buffer
+    // size, which is the Emberdrive lesson (0.296 of full scale).
+    const auto render = [] (int blockSize)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (4);
+
+        VoiceParameters parameters = modulationBed();
+        parameters.modulation.macros[0] = 0.7;
+        parameters.modulation.lfos[0].rateHz = 5.5;
+        parameters.modulation.lfos[1].rateHz = 0.8;
+        parameters.modulation.lfos[1].wave = 1;
+
+        assignSlot (parameters.modulation, 0, source::lfo1, dest::filterCutoff, -1.2);
+        assignSlot (parameters.modulation, 1, source::env1, dest::matrixDepth, 0.8);
+        assignSlot (parameters.modulation, 2, source::lfo2, dest::op2Ratio, 0.5);
+        assignSlot (parameters.modulation, 3, source::macro1, dest::op1Feedback, 0.4);
+
+        engine.setParameters (parameters);
+        engine.noteOn (60, 0.8);
+
+        return renderEngine (engine, 24000, blockSize);
+    };
+
+    const auto small = render (64);
+    const auto large = render (512);
+    const auto odd = render (77);
+
+    CHECK (rmsOf (small) > 0.01);
+
+    std::printf ("        [mod blocks] 64 vs 512: %zu differ, 64 vs 77: %zu differ, of %zu\n",
+                 differingSamples (small, large), differingSamples (small, odd), small.size());
+
+    CHECK (differingSamples (small, large) == 0);
+    CHECK (differingSamples (small, odd) == 0);
+}
+
+TEZLA_TEST (an_lfo_retriggers_or_free_runs_as_asked)
+{
+    // Retrigger on, two notes a while apart start the LFO at the same place;
+    // off, they do not -- which is what makes a bass line vary rather than
+    // repeat, and it is a per-voice property, not a global one.
+    const auto secondNoteStart = [] (bool retrigger)
+    {
+        StrydaEngine engine;
+        engine.prepare (48000.0, 512);
+        engine.setPolyphony (1);
+
+        VoiceParameters parameters = modulationBed();
+        parameters.modulation.lfos[0].rateHz = 3.0;
+        parameters.modulation.lfos[0].retrigger = retrigger;
+        assignSlot (parameters.modulation, 0, source::lfo1, dest::filterCutoff, -1.5);
+
+        engine.setParameters (parameters);
+
+        engine.noteOn (60, 0.8);
+        auto first = renderEngine (engine, 4800, 512);
+
+        engine.allNotesOff();
+        (void) renderEngine (engine, 20000, 512);
+
+        engine.noteOn (60, 0.8);
+        auto second = renderEngine (engine, 4800, 512);
+
+        return std::pair { std::move (first), std::move (second) };
+    };
+
+    const auto [onFirst, onSecond] = secondNoteStart (true);
+    const auto [offFirst, offSecond] = secondNoteStart (false);
+
+    std::printf ("        [retrig] on: %zu of %zu differ; off: %zu of %zu differ\n",
+                 differingSamples (onFirst, onSecond), onFirst.size(),
+                 differingSamples (offFirst, offSecond), offFirst.size());
+
+    // Retriggered, the second note is the first note again.
+    CHECK (differingSamples (onFirst, onSecond) == 0);
+
+    // Free-running, it is not -- the LFO has moved on by 20000 samples.
+    CHECK (differingSamples (offFirst, offSecond) > 1000);
+}
+
+TEZLA_TEST (the_index_cap_answers_the_modulated_indices_not_the_patch)
+{
+    // ---------------------------------------------------------------------
+    // **A cap resolved from the patch protects a spectrum nobody is hearing**
+    // ---------------------------------------------------------------------
+    //
+    // `matrixDepth` and an operator's feedback move exactly the numbers the
+    // bandwidth prediction is made of. If `refreshIndexCap` read the patch
+    // rather than the modulated copy, a slot that multiplies the matrix depth
+    // would multiply the sideband ladder with the cap none the wiser, and the
+    // aliasing CLAUDE.md section 7 calls a defect arrives with it.
+    //
+    // **The assertion is the scale the cap installed, not the audio after it**
+    // -- CLAUDE.md section 10, the LimiterCore lesson. A guard at the end of a
+    // chain makes every measurement of the guarded quantity true: a spectrum
+    // read after the cap looks fine whether the cap did nothing or everything,
+    // and reading it *through* an oversampler that is folding besides is worse
+    // still. What has teeth is what the guard had to do.
+    const auto capScale = [] (double depth)
+    {
+        StrydaVoice voice;
+        voice.prepare (192000.0);
+
+        VoiceParameters parameters = singleCarrier();
+        parameters.operators[1].level = 0.0;
+        parameters.operators[1].ratio = 3.0;
+        parameters.indices[0][1] = 1.0;
+        parameters.indexCap = 1.0;
+        parameters.modulation.macros[0] = 1.0;
+
+        if (depth > 0.0)
+            assignSlot (parameters.modulation, 0, source::macro1, dest::matrixDepth, depth);
+
+        voice.noteOn (69, 440.0, 1.0);        // A4
+        voice.applyParameters (parameters);
+        voice.refreshIndexCap (192000.0);
+
+        return voice.getIndexScale();
+    };
+
+    const double quiet = capScale (0.0);
+    const double pushed = capScale (24.0);
+
+    std::printf ("        [cap + mod] index scale: %.6f unmodulated, %.6f at matrix depth x25\n",
+                 quiet, pushed);
+
+    // Unmodulated, this patch fits inside the internal Nyquist with room to
+    // spare, so the cap is exactly inert -- 1.0, not 0.9999.
+    CHECK (quiet == 1.0);
+
+    // Modulated, it does not, and the cap has to pull the indices back. It can
+    // only know that by reading the modulated copy: the patch's own index is
+    // still 1.0 and would still have scaled by exactly 1.
+    CHECK (pushed < 1.0);
+
+    std::printf ("        [cap + mod] the cap removed %.1f%% of the modulated index\n",
+                 100.0 * (1.0 - pushed));
 }

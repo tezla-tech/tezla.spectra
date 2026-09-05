@@ -30,6 +30,8 @@
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Tuning.hpp>
 
+#include "MangleChain.hpp"
+#include "RatioSequencer.hpp"
 #include "StrydaVoice.hpp"
 
 namespace tezla::stryda
@@ -75,6 +77,16 @@ public:
             voices_[v].setSeed (0x9e3779b97f4a7c15ull ^ (v * 0x632be59bd9b4e019ull));
         }
 
+        sequencer_.prepare (internalRate_);
+
+        // **At the HOST rate, not the internal one.** Crush and downsample are
+        // the documented aliasing exception (CLAUDE.md section 7): their whole
+        // character is folded-back images, so running them oversampled would
+        // remove the effect rather than clean it up. The fold and the drive are
+        // ADAA, which band-limits them where they are.
+        mangle_.prepare (hostRate_);
+        vowelSteps_.prepare (hostRate_);
+
         reset();
     }
 
@@ -92,6 +104,13 @@ public:
         // left over from the last stream.
         capChunksLeft_ = 1;
         capResolutions_ = 0;
+        silentSamples_ = 0;
+
+        sequencer_.reset();
+        stepEdge_ = false;
+
+        mangle_.reset();
+        vowelSteps_.reset();
     }
 
     void setOversamplingMode (dsp::OversamplingMode mode) noexcept { mode_ = mode; }
@@ -114,6 +133,8 @@ public:
         for (auto& voice : voices_)
             voice.prepare (internalRate_);
 
+        sequencer_.prepare (internalRate_);
+
         // The cap is resolved against the *internal* Nyquist, which has just
         // moved, so the scale every voice is holding is now the answer to a
         // different question. Re-ask it at the next chunk.
@@ -126,7 +147,93 @@ public:
     [[nodiscard]] double getInternalRate() const noexcept { return internalRate_; }
     [[nodiscard]] int getLatencySamples() const noexcept { return oversampler_.getLatencySamples(); }
 
-    void setParameters (const VoiceParameters& parameters) noexcept { parameters_ = parameters; }
+    /// Take the patch and resolve everything the voices should not have to.
+    ///
+    /// The ratio modes are quantised here rather than in the voice because the
+    /// quantiser needs the loaded scale, and the scale lives with the tuning.
+    /// A voice therefore only ever handles a plain ratio, and **Free returns
+    /// its input bit for bit**, so the default costs nothing and changes
+    /// nothing.
+    void setParameters (const VoiceParameters& parameters) noexcept
+    {
+        parameters_ = parameters;
+        patchRatios_ = {};
+
+        for (int op = 0; op < StrydaVoice::kNumOperators; ++op)
+        {
+            auto& settings = parameters_.operators[static_cast<std::size_t> (op)];
+
+            settings.ratio = resolveRatio (settings.ratio,
+                                           static_cast<RatioMode> (settings.ratioMode),
+                                           tuning_.getScale());
+
+            // Kept so the sequencer can be switched off mid-note and the
+            // target operator go back to the ratio the patch actually asks for,
+            // rather than to whichever step happened to be playing.
+            patchRatios_[static_cast<std::size_t> (op)] = settings.ratio;
+        }
+    }
+
+    /// The post chain. Its parameters are pushed whole once per block: it runs
+    /// after the voices are summed and decimated, so it has no per-voice state
+    /// and nothing to chunk.
+    void setMangleParameters (const MangleParameters& parameters) noexcept
+    {
+        mangleParameters_ = parameters;
+        mangle_.setParameters (mangleParameters_);
+    }
+
+    [[nodiscard]] const MangleChain& getMangle() const noexcept { return mangle_; }
+
+    /// The vowel lane's own pattern: sixteen steps of vowel position, on its
+    /// own division, so the bass can talk in time without the ratio sequencer
+    /// having to agree with it.
+    void setVowelSequence (bool enabled, int length, int division, double glide) noexcept
+    {
+        vowelSequenced_ = enabled;
+        vowelSteps_.setLength (length);
+        vowelSteps_.setGlide (glide);
+        vowelDivision_ = division;
+    }
+
+    void setVowelStep (int index, double morph) noexcept
+    {
+        // The pattern's own range is -1..1 and the morph's is 0..1, so the map
+        // is written here rather than left to the caller -- one place, and the
+        // panel and the audio cannot disagree about it.
+        vowelSteps_.setStep (index, std::clamp (morph, 0.0, 1.0) * 2.0 - 1.0);
+    }
+
+    [[nodiscard]] int getVowelStepIndex() const noexcept { return vowelSteps_.getStepIndex(); }
+
+    [[nodiscard]] RatioSequencer& getSequencer() noexcept { return sequencer_; }
+    [[nodiscard]] const RatioSequencer& getSequencer() const noexcept { return sequencer_; }
+
+    /// Where the host's transport is, so the pattern can lock to the bar.
+    ///
+    /// Called once per block from the processor. The sequencer keeps its rate
+    /// between anchors and free-runs, which is what makes
+    /// `samplesToNextStep` exact where the cutting happens.
+    void setTransport (double ppqPosition, double bpm, bool playing) noexcept
+    {
+        bpm_ = bpm > 0.0 ? bpm : bpm_;
+
+        if (playing && sequencer_.isEnabled())
+            sequencer_.anchorToPpq (ppqPosition, bpm_, division_);
+        else
+            sequencer_.setDivision (division_, bpm_);
+
+        vowelSteps_.setRateHz (bpm_ > 0.0 ? dsp::divisionRateHz (vowelDivision_, bpm_) : 0.0);
+
+        if (playing && vowelSequenced_)
+        {
+            const double stepsPerBeat = dsp::divisionRateHz (vowelDivision_, bpm_) * 60.0 / bpm_;
+            (void) vowelSteps_.setPhaseFromPpq (ppqPosition, stepsPerBeat);
+        }
+    }
+
+    void setSequencerDivision (int index) noexcept { division_ = index; }
+    [[nodiscard]] int getSequencerDivision() const noexcept { return division_; }
 
     void setPolyphony (int voices) noexcept
     {
@@ -177,7 +284,7 @@ public:
             // sub-grid: a voice that started uncapped would alias for those
             // 2.7 ms, and the start of a note is exactly where the ear is
             // listening.
-            voice.refreshIndexCap (parameters_, internalRate_);
+            voice.refreshIndexCap (internalRate_);
             ++capResolutions_;
         }
     }
@@ -211,6 +318,15 @@ public:
     /// guards the rig freeze is exact rather than statistical.
     [[nodiscard]] long long getCapResolutionCount() const noexcept { return capResolutions_; }
 
+    /// How many internal samples have been filled by the silent path since
+    /// `prepare`.
+    ///
+    /// Same reason as the two above: the skip's correctness is that it fires
+    /// **only** when no voice is sounding, and a wall clock cannot assert
+    /// "only". This counts it directly, so the test can say the path took
+    /// every sample of a silent stretch and not one sample of a sounding one.
+    [[nodiscard]] long long getSilentSamples() const noexcept { return silentSamples_; }
+
     [[nodiscard]] int getActiveVoiceCount() const noexcept
     {
         int count = 0;
@@ -229,25 +345,51 @@ public:
         int written = 0;
         while (written < internalSamples)
         {
-            if (chunkCountdown_ <= 0)
+            // A control chunk is due, or the sequencer has just crossed a step
+            // edge. The edge is an EXTRA refresh rather than a re-phasing of
+            // the chunk grid: the grid stays anchored to the stream and the
+            // test that proves it keeps proving it.
+            //
+            // **And the refresh has to reach the voices, not just the
+            // parameters.** Pushing the new ratio into `parameters_` and
+            // waiting for the next chunk to apply it puts the jump back where
+            // it would have been without the cut -- which is exactly what the
+            // first version did, and the test that measures *where* the output
+            // first changes is what caught it.
+            const bool chunkDue = chunkCountdown_ <= 0;
+
+            if (chunkDue || stepEdge_)
             {
+                pushSequencedRatio();
+                stepEdge_ = false;
+
+                // `chunkDue` is what says whether the modulators may advance.
+                // A step edge is an EXTRA refresh inside a chunk, so letting it
+                // advance them too would make an LFO's rate depend on the
+                // sequencer's division -- a 1/16 sequence at 174 BPM would run
+                // every LFO in the patch fast.
+                for (auto& voice : voices_)
+                    if (voice.isActive())
+                        voice.applyParameters (parameters_, chunkDue);
+            }
+
+            if (chunkDue)
+            {
+                // The cap stays on its own coarser sub-grid: it costs a
+                // bandwidth bisection, where applying parameters costs
+                // arithmetic on numbers already to hand.
                 const bool resolveCap = --capChunksLeft_ <= 0;
 
                 if (resolveCap)
+                {
                     capChunksLeft_ = kCapChunks;
 
-                for (auto& voice : voices_)
-                {
-                    if (! voice.isActive())
-                        continue;
-
-                    voice.applyParameters (parameters_);
-
-                    if (resolveCap)
-                    {
-                        voice.refreshIndexCap (parameters_, internalRate_);
-                        ++capResolutions_;
-                    }
+                    for (auto& voice : voices_)
+                        if (voice.isActive())
+                        {
+                            voice.refreshIndexCap (internalRate_);
+                            ++capResolutions_;
+                        }
                 }
 
                 chunkCountdown_ = kControlChunk;
@@ -255,29 +397,117 @@ public:
 
             // Cut the loop at the chunk boundary, never at the block's: this is
             // what makes the output independent of the host's buffer size.
-            const int run = std::min (chunkCountdown_, internalSamples - written);
+            int run = std::min (chunkCountdown_, internalSamples - written);
 
-            for (int i = 0; i < run; ++i)
+            // And at the sequencer's step edge, which is a far larger event
+            // than a voicing rebuild -- a ratio jump swaps one harmonic
+            // identity for another. The step grid is anchored to the stream
+            // too (rate, or the transport), so cutting at it stays buffer-size
+            // independent.
+            if (sequencer_.isEnabled())
             {
-                double l = 0.0;
-                double r = 0.0;
+                const double toStep = sequencer_.samplesToNextStep();
 
-                for (auto& voice : voices_)
-                    voice.process (l, r);
+                if (toStep > 0.0 && toStep < static_cast<double> (run))
+                {
+                    run = std::max (1, static_cast<int> (std::ceil (toStep)));
+                    stepEdge_ = true;
+                }
+            }
 
-                internal[0][written + i] = l;
-                internal[1][written + i] = r;
+            // Nothing sounding: write the silence rather than summing sixteen
+            // early-outs for it. **Bit-exact by construction, not by
+            // measurement** -- `StrydaVoice::process` returns without touching
+            // its arguments when the voice is inactive, so an all-inactive
+            // stack contributes exactly 0.0, and a voice can only *become*
+            // active in `noteOn`, which is called between blocks. So the scan
+            // is valid for the whole run segment: a voice may retire inside it,
+            // never start.
+            bool anySounding = false;
+
+            for (auto& voice : voices_)
+                anySounding = anySounding || voice.isActive();
+
+            if (! anySounding)
+            {
+                std::fill (internal[0] + written, internal[0] + written + run, 0.0);
+                std::fill (internal[1] + written, internal[1] + written + run, 0.0);
+
+                silentSamples_ += run;
+            }
+            else
+            {
+                for (int i = 0; i < run; ++i)
+                {
+                    double l = 0.0;
+                    double r = 0.0;
+
+                    for (auto& voice : voices_)
+                        voice.process (l, r);
+
+                    internal[0][written + i] = l;
+                    internal[1][written + i] = r;
+                }
             }
 
             written += run;
             chunkCountdown_ -= run;
+
+            if (sequencer_.isEnabled())
+                sequencer_.advance (run);
         }
 
         double* outputs[2] { left, right };
         oversampler_.downsample (outputs, numSamples);
+
+        // The post chain, at the host rate, after the decimator. Its vowel
+        // morph is driven per sample when the lane is sequenced -- it is one
+        // filter bank rather than a per-voice graph, so there is nothing to
+        // chunk and no reason not to.
+        if (! mangle_.isEngaged() && ! vowelSequenced_)
+            return;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (vowelSequenced_)
+            {
+                // -1..1 back to 0..1, the inverse of `setVowelStep`.
+                mangleParameters_.vowelMorph = 0.5 * (vowelSteps_.advance (1) + 1.0);
+                mangle_.setParameters (mangleParameters_);
+            }
+
+            mangle_.process (left[i], right[i]);
+        }
     }
 
 private:
+    /// Put the sequencer's current ratio on its target operator.
+    ///
+    /// Called at every control chunk, so glide is heard at 32-sample
+    /// resolution, and again at every step edge, so a jump lands exactly on
+    /// the beat rather than up to a chunk late.
+    ///
+    /// When the sequencer is off -- or its target is out of range, which is
+    /// how "no destination" is spelt -- the operator goes back to the ratio
+    /// the patch asks for. Restoring rather than leaving it is what stops a
+    /// switched-off sequencer freezing a note on whichever step was playing.
+    void pushSequencedRatio() noexcept
+    {
+        const int target = sequencer_.getTarget();
+
+        if (target < 0 || target >= StrydaVoice::kNumOperators)
+            return;
+
+        const auto slot = static_cast<std::size_t> (target);
+        auto& settings = parameters_.operators[slot];
+
+        settings.ratio = sequencer_.isEnabled()
+                           ? sequencer_.currentRatio (
+                                 static_cast<RatioMode> (settings.ratioMode),
+                                 tuning_.getScale())
+                           : patchRatios_[slot];
+    }
+
     /// A free voice, or the best one to steal. `exclude` holds the indices
     /// already claimed by this note-on, which are not yet started and so would
     /// otherwise look free.
@@ -346,6 +576,19 @@ private:
     int chunkCountdown_ { 0 };
     int capChunksLeft_ { 1 };
     long long capResolutions_ { 0 };
+    long long silentSamples_ { 0 };
+
+    RatioSequencer sequencer_;
+    std::array<double, StrydaVoice::kNumOperators> patchRatios_ {};
+    double bpm_ { 120.0 };
+    int division_ { 7 };          ///< 1/16 in `dsp::divisions`
+    bool stepEdge_ { false };
+
+    MangleChain mangle_;
+    MangleParameters mangleParameters_ {};
+    dsp::StepSequencer vowelSteps_;
+    int vowelDivision_ { 6 };          ///< 1/8 in dsp::divisions
+    bool vowelSequenced_ { false };
 
     dsp::OversamplingMode mode_ { dsp::OversamplingMode::Auto };
     dsp::RenderOversampling render_ { dsp::RenderOversampling::sameAsLive };

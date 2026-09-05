@@ -635,24 +635,35 @@ The container's egress proxy blocks most of the web. `dafx.de`, `arxiv.org`,
 well as through the fetch tool, so `curl` is no help either. Web *search* works
 and returns useful snippets; fetching the actual paper does not.
 
-**So: whenever a needed source cannot be retrieved, stop and give the user the
-URLs.** They will fetch them and hand the contents back. This is not a fallback
-to reach for after exhausting alternatives — a paper read second-hand through
-search snippets is a paper not read, and the difference matters most exactly
-where §9 says copying beats deriving: a fitted coefficient table, a standard's
-defined behaviour, a documented edge case.
+**So: whenever a needed source cannot be retrieved, stop and tell the user —
+BEFORE progressing — and give them the URLs.** They will fetch the documents
+and hand the contents back. This is a standing instruction from the user
+(2026-09-05, given twice in one breath so it would not be missed): *"if you are
+blocked from downloading documents or accessing websites when researching, then
+you must let me know before progressing and I will get the documents for you."*
+It is not a fallback to reach for after exhausting alternatives — a paper read
+second-hand through search snippets is a paper not read, and the difference
+matters most exactly where §9 says copying beats deriving: a fitted coefficient
+table, a standard's defined behaviour, a documented edge case, a measured mode
+table.
 
 The rules that follow:
 
+- **Report the block the moment it happens, as the next thing said.** Not at
+  the end of the message, not after the design is half-built on a guess. The
+  user would rather fetch a PDF than review work that had to be redone.
 - **List the URLs explicitly**, prioritised, with one line each on what it would
   change. Do not bury the ask at the end of a long message.
 - **Say which claims rest on a source that was not read.** "Search snippets say
   X" and "the paper says X" are different statements and must not be blurred.
-- **Carry on with what does not depend on it.** Being blocked on one reference
-  is not a reason to stop; derive, build, measure, and mark the spot that a
-  source would settle.
+- **Only after the user has been told may work continue, and only on what does
+  not depend on the source.** Derive, build, measure, and mark the spot the
+  source would settle — and say that this is what is happening, so the user can
+  say "wait" instead. Never let a blocked fetch decide a design silently.
 - **`docs/DSP-REFERENCES.md` records the access, not just the citation.** A row
   for a paper that shaped a design without being read says so.
+- **Sources the user supplies land in `technical references/<plugin>/`** and are
+  read there first-hand; the row then says so, with the date.
 
 ### Our licence, and what we can take
 

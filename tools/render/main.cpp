@@ -166,6 +166,7 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
 
     int failures = 0;
     bool prepared = false;
+    juce::Array<juce::MidiMessage> queuedNotes;
 
     for (int i = 2; i < argc; ++i)
     {
@@ -210,6 +211,29 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
         // processor, so a display has something in it. Without this every
         // spectrum photographed here is a flat line at its floor, which is
         // enough to check a layout and useless for checking what it says.
+        // "note:<midi>[@<velocity>]" queues a note for the next `audio:` run,
+        // and "off:<midi>" a note-off partway through it.
+        //
+        // **Without this, `audio:` cannot test an instrument at all.** It feeds
+        // a test signal into the input, which is exactly right for an effect
+        // and completely silent on a synthesiser -- so a preset that produces
+        // nothing at all would have measured the same as one that works.
+        if (id.startsWith ("note:"))
+        {
+            const auto spec = id.fromFirstOccurrenceOf ("note:", false, false);
+            const int note = spec.upToFirstOccurrenceOf ("@", false, false).getIntValue();
+            const double velocity = spec.contains ("@")
+                                      ? spec.fromFirstOccurrenceOf ("@", false, false).getDoubleValue()
+                                      : 1.0;
+
+            queuedNotes.add (juce::MidiMessage::noteOn (
+                1, juce::jlimit (0, 127, note),
+                static_cast<float> (juce::jlimit (0.0, 1.0, velocity))));
+
+            std::printf ("  queued note %d at velocity %.2f\n", note, velocity);
+            continue;
+        }
+
         if (id.startsWith ("audio:"))
         {
             // "audio:<seconds>" or "audio:<seconds>@<gain>", so a run can get
@@ -236,6 +260,19 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
             juce::AudioBuffer<double> buffer (2, blockSize);
             juce::MidiBuffer midi;
 
+            // The queued notes go in at sample 0 of the first block and are
+            // released three quarters of the way through, so the run covers
+            // the release tail as well as the held part.
+            for (const auto& message : queuedNotes)
+                midi.addEvent (message, 0);
+
+            const int releaseAt = total * 3 / 4;
+            bool released = queuedNotes.isEmpty();
+
+            double peak = 0.0;
+            double sumOfSquares = 0.0;
+            std::size_t counted = 0;
+
             std::size_t index = 0;
 
             for (int written = 0; written < total; written += blockSize)
@@ -253,10 +290,40 @@ int runEditorCheck (juce::AudioProcessor& processor, int argc, char** argv)
                     buffer.setSample (1, n, value * 0.85);
                 }
 
+                if (! released && written + span > releaseAt)
+                {
+                    for (const auto& message : queuedNotes)
+                        midi.addEvent (juce::MidiMessage::noteOff (
+                            1, message.getNoteNumber()),
+                            juce::jlimit (0, span - 1, releaseAt - written));
+
+                    released = true;
+                }
+
                 processor.processBlock (buffer, midi);
+                midi.clear();
+
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                    for (int n = 0; n < span; ++n)
+                    {
+                        const double value = buffer.getSample (channel, n);
+
+                        peak = std::max (peak, std::abs (value));
+                        sumOfSquares += value * value;
+                        ++counted;
+                    }
             }
 
-            std::printf ("  ran %.2f s of audio through it at gain %.3f\n", seconds, gain);
+            const double rms = counted > 0 ? std::sqrt (sumOfSquares / static_cast<double> (counted))
+                                           : 0.0;
+
+            // **Peak and RMS printed, always.** "It ran" is not a measurement,
+            // and a preset that produces silence is the exact failure this
+            // command exists to catch.
+            std::printf ("  ran %.2f s of audio through it at gain %.3f: peak %.5f, rms %.5f\n",
+                         seconds, gain, peak, rms);
+
+            queuedNotes.clear();
             continue;
         }
 
@@ -803,16 +870,20 @@ int main (int argc, char** argv)
     const bool exerciseEditor = argc >= 2 && juce::String (argv[1]) == "editor";
 
     const bool auditDiceSections = argc >= 2 && juce::String (argv[1]) == "dice";
+    const bool auditPresets = argc >= 2 && juce::String (argv[1]) == "presets";
 
-    if (argc < 4 && ! dumpParameters && ! exerciseEditor && ! auditDiceSections)
+    if (argc < 4 && ! dumpParameters && ! exerciseEditor && ! auditDiceSections
+          && ! auditPresets)
     {
         std::printf ("usage: tezla-render <samples> <blockSize> <out.raw> [id=value ...]\n"
                      "       tezla-render params\n"
                      "       tezla-render dice\n"
+                     "       tezla-render presets\n"
                      "       tezla-render editor [componentId | id@x,y | press:id@x,y\n"
                      "                            | release:id@x,y | hit:id | shot:out.png\n"
                      "                            | wheel:id@x,y=delta[+shift] | dclick:id@x,y\n"
-                     "                            | audio:secs[@gain] | tick:n | size:WxH\n"
+                     "                            | note:midi[@vel] | audio:secs[@gain]\n"
+                     "                            | tick:n | size:WxH\n"
                      "                            | dump | dump:paramId | slider:id=value\n"
                      "                            | roundtrip\n"
                      "                            | id=value | reopen ...]\n");
@@ -821,7 +892,8 @@ int main (int argc, char** argv)
 
     // Guarded on both commands, not just one: argv[2] does not exist for either
     // of them, and atoi does not check.
-    const bool renderingAudio = ! dumpParameters && ! exerciseEditor && ! auditDiceSections;
+    const bool renderingAudio = ! dumpParameters && ! exerciseEditor
+                             && ! auditDiceSections && ! auditPresets;
 
     const int totalSamples = renderingAudio ? std::atoi (argv[1]) : 0;
     const int blockSize    = renderingAudio ? std::max (1, std::atoi (argv[2])) : 1;
@@ -870,6 +942,122 @@ int main (int argc, char** argv)
         return 0;
     }
 
+    // **`presets` -- every preset played, not just applied.**
+    //
+    // Applying a preset and reading the parameters back proves the ids are
+    // spelt right and nothing else. It does not prove the preset makes a
+    // sound, and it does not prove the sound fits in a file: the first pass of
+    // Stryda's twelve had five of them over full scale, one at **1.714** --
+    // 4.7 dB of clipping the moment a note is played at full velocity, and a
+    // five-note chord on another at 3.08.
+    //
+    // Nothing here could have caught that, because the only earlier command
+    // that made audio at all (`audio:`) feeds a test signal into the INPUT,
+    // which is silence on an instrument.
+    //
+    // So this plays every preset -- one low note at full velocity, held then
+    // released -- and gates on three claims: it is audible, it does not clip,
+    // and it has notes written for it. Exits non-zero on any of them.
+    if (auditPresets)
+    {
+        constexpr double kRate = 48000.0;
+        constexpr int kBlock = 512;
+        constexpr int kNote = 36;              // C2, where a bass patch lives
+        constexpr double kSeconds = 2.5;
+
+        // A ceiling rather than the target. The presets are trimmed to about
+        // -3 dBFS; this fails at anything that would actually clip, so a
+        // deliberate loud preset is allowed and an accident is not.
+        constexpr double kCeiling = 0.95;
+
+        // Below this a "preset" is a silent patch, which is a defect however
+        // carefully its parameters were set.
+        constexpr double kFloor = 0.02;
+
+        const int count = processor->getNumPrograms();
+
+        processor->setPlayConfigDetails (2, 2, kRate, kBlock);
+
+        int failures = 0;
+
+        std::printf ("PRESETS -- one note %d at velocity 1.0, %.1f s\n", kNote, kSeconds);
+        std::printf ("-------------------------------------------------------------\n");
+
+        for (int program = 0; program < count; ++program)
+        {
+            processor->setCurrentProgram (program);
+
+            // **Prepared per preset, not once.** prepareToPlay resets the
+            // engine, and a preset measured on top of the previous one's tail
+            // is measuring the wrong thing.
+            processor->prepareToPlay (kRate, kBlock);
+
+            juce::AudioBuffer<double> buffer (2, kBlock);
+            juce::MidiBuffer midi;
+
+            const auto total = static_cast<int> (kRate * kSeconds);
+            const int releaseAt = total * 3 / 4;
+
+            midi.addEvent (juce::MidiMessage::noteOn (1, kNote, 1.0f), 0);
+
+            double peak = 0.0;
+            double sumOfSquares = 0.0;
+            std::size_t counted = 0;
+            bool released = false;
+
+            for (int written = 0; written < total; written += kBlock)
+            {
+                const int span = juce::jmin (kBlock, total - written);
+                buffer.setSize (2, span, false, false, true);
+                buffer.clear();
+
+                if (! released && written + span > releaseAt)
+                {
+                    midi.addEvent (juce::MidiMessage::noteOff (1, kNote),
+                                   juce::jlimit (0, span - 1, releaseAt - written));
+                    released = true;
+                }
+
+                processor->processBlock (buffer, midi);
+                midi.clear();
+
+                for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                    for (int n = 0; n < span; ++n)
+                    {
+                        const double value = buffer.getSample (channel, n);
+
+                        peak = std::max (peak, std::abs (value));
+                        sumOfSquares += value * value;
+                        ++counted;
+                    }
+            }
+
+            const double rms = counted > 0
+                                 ? std::sqrt (sumOfSquares / static_cast<double> (counted))
+                                 : 0.0;
+
+            const auto name = processor->getProgramName (program);
+            const char* verdict = "ok";
+
+            // **Clipping fails; silence only warns.** Clipping is
+            // unambiguously wrong. Silence sometimes is not: Malleus ships an
+            // "Idle reference -- adds nothing" on purpose, and Svarayantra with
+            // no soundfont loaded is correctly silent. The tool cannot read
+            // intent, so it prints silence loudly and leaves the judgement to
+            // whoever is reading.
+            if (peak > kCeiling)      { verdict = "CLIPS";  ++failures; }
+            else if (peak < kFloor)   { verdict = "silent -- check this is meant"; }
+
+            std::printf ("  %2d  %-16s peak %.4f (%+6.1f dBFS)  rms %.4f  %s\n",
+                         program, name.toRawUTF8(), peak,
+                         20.0 * std::log10 (std::max (peak, 1.0e-9)), rms, verdict);
+        }
+
+        std::printf ("\n  %d presets, %d over %.2f\n", count, failures, kCeiling);
+
+        return failures == 0 ? 0 : 2;
+    }
+
     // **`dice` -- every published parameter against DICEROLL's classifier.**
     //
     // DICEROLL rolls every parameter except the ones the player locked, and it
@@ -887,7 +1075,7 @@ int main (int argc, char** argv)
     if (auditDiceSections)
     {
 #if TEZLA_HAS_DICE_SECTIONS
-        using tezla::sonitus::DiceSection;
+        using tezla::dice::DiceSection;
 
         int unknown = 0;
         int total = 0;
@@ -905,7 +1093,7 @@ int main (int argc, char** argv)
             ++total;
 
             const auto id = ranged->paramID.toStdString();
-            const auto section = tezla::sonitus::diceSectionFor (id);
+            const auto section = tezla::dice::diceSectionFor (id);
 
             if (section == DiceSection::unknown)
             {
@@ -915,7 +1103,7 @@ int main (int argc, char** argv)
             else
             {
                 std::printf ("  %-22s  %s\n", id.c_str(),
-                             tezla::sonitus::diceSectionName (section));
+                             tezla::dice::diceSectionName (section));
             }
         }
 
@@ -923,7 +1111,7 @@ int main (int argc, char** argv)
 
         if (unknown > 0)
             std::printf ("  FAIL: an unclassified parameter is never rolled by DICEROLL.\n"
-                         "        Classify it in plugins/Sonitus/Dsp/DiceSections.hpp.\n");
+                         "        Classify it in this plugin's Dsp/DiceSections.hpp.\n");
 
         return unknown == 0 ? 0 : 1;
 #else

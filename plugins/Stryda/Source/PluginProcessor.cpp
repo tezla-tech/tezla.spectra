@@ -31,6 +31,31 @@ namespace {
     return { id, schema };
 }
 
+constexpr const char* kScaleNameProperty = "scaleName";
+constexpr const char* kScaleTextProperty = "scaleText";
+constexpr const char* kKeyboardMapProperty = "keyboardMap";
+constexpr const char* kConcertPitchProperty = "concertPitch";
+
+/// The tempo divisions as a JUCE list, built once from the shared table.
+///
+/// **Append-only for the same reason every other choice list is**: a synced
+/// sequencer stores which division it chose, not what it means, and
+/// `dsp::divisions` carries a static_assert saying so.
+[[nodiscard]] const juce::StringArray& divisionNames()
+{
+    static const juce::StringArray names = []
+    {
+        juce::StringArray list;
+
+        for (int i = 0; i < dsp::numDivisions; ++i)
+            list.add (dsp::divisions[static_cast<std::size_t> (i)].name);
+
+        return list;
+    }();
+
+    return names;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -109,6 +134,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
         layout.add (std::make_unique<juce::AudioParameterChoice> (
             versioned (ids::op (op, "Mode"), kSchemaV2), label + "Mode",
             choices::operatorMode, 0));
+
+        // F5 appended the extras; F6 appends the ratio mode. Free at index 0
+        // returns the ratio bit for bit, so this is inert until asked for.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::op (op, "RatioMode"), kSchemaV4), label + "Ratio mode",
+            choices::ratioMode, 0));
     }
 
     // The thirty off-diagonal cells. The diagonal is Feedback, above.
@@ -183,6 +214,209 @@ juce::AudioProcessorValueTreeState::ParameterLayout StrydaProcessor::createParam
     add (ids::unisonIndex, "Unison index spread",
          skewed (0.0f, 2.0f, 0.3f), 0.0f, "cyc", 2, kSchemaV3);
 
+    // ---- F6, appended at schema 4 ------------------------------------------
+    //
+    // Sixteen steps whose value is a RATIO, plus the five controls that decide
+    // what the pattern does with them. Off by default and with no destination,
+    // so nothing here can touch an F5 project.
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        versioned (ids::seqOn, kSchemaV4), "Sequencer", false));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::seqTarget, kSchemaV4), "Sequencer target",
+        choices::seqTarget, 0));
+
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        versioned (ids::seqLength, kSchemaV4), "Sequencer steps",
+        1, RatioSequencer::kMaxSteps, 8));
+
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::seqDivision, kSchemaV4), "Sequencer division",
+        divisionNames(), 7));   // 1/16
+
+    add (ids::seqGlide, "Sequencer glide", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV4);
+
+    // Every step starts at 1.0 -- the ratio the operator would have had anyway,
+    // so switching the sequencer on with an untouched pattern changes nothing
+    // audible and the player hears the rhythm appear as they move steps.
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        add (ids::step (i), "Step " + juce::String (i + 1),
+             skewed (0.25f, 32.0f, 4.0f), 1.0f, {}, 2, kSchemaV4);
+
+    // ---- F7, appended at schema 5 ------------------------------------------
+    //
+    // Thirty-two, and every default is a value the stage is SKIPPED at rather
+    // than merely transparent at -- Split off, vowel mix 0, fold 0, 16 bits,
+    // downsample 1, comb and phaser mix 0, drive 0, compressor ratio 1 (which
+    // is `CompressorCore::isIdentity`). An F6 project is bit-identical.
+
+    add (ids::split, "Split", skewed (0.0f, 800.0f, 140.0f), 0.0f, "Hz", 0, kSchemaV5);
+
+    add (ids::vowelMix, "Vowel mix", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::vowelMorph, "Vowel", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::vowelTract, "Vowel tract", { 0.0f, 1.0f }, 0.5f, {}, 2, kSchemaV5);
+    add (ids::vowelSharp, "Vowel sharpness", { 0.0f, 1.0f }, 0.5f, {}, 2, kSchemaV5);
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        versioned (ids::vowelSeqOn, kSchemaV5), "Vowel sequencer", false));
+    layout.add (std::make_unique<juce::AudioParameterInt> (
+        versioned (ids::vowelSeqLength, kSchemaV5), "Vowel steps",
+        1, RatioSequencer::kMaxSteps, 8));
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        versioned (ids::vowelSeqDiv, kSchemaV5), "Vowel division", divisionNames(), 6));
+
+    add (ids::vowelSeqGlide, "Vowel glide", { 0.0f, 1.0f }, 0.3f, {}, 2, kSchemaV5);
+
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        add (ids::vowelStep (i), "Vowel step " + juce::String (i + 1),
+             { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::fold, "Fold", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::crushBits, "Crush bits", { 2.0f, 16.0f }, 16.0f, "bit", 1, kSchemaV5);
+    add (ids::crushAmount, "Crush", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::downsample, "Downsample", skewed (1.0f, 64.0f, 8.0f), 1.0f, "x", 1, kSchemaV5);
+
+    add (ids::combMix, "Comb mix", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::combHz, "Comb", skewed (20.0f, 4000.0f, 220.0f), 220.0f, "Hz", 0, kSchemaV5);
+    add (ids::combFeedback, "Comb feedback", { -0.95f, 0.95f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::phaserMix, "Phaser mix", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+    add (ids::phaserHz, "Phaser", skewed (60.0f, 8000.0f, 600.0f), 600.0f, "Hz", 0, kSchemaV5);
+    add (ids::phaserFeedback, "Phaser feedback", { 0.0f, 0.95f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::mangleDrive, "Drive", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV5);
+
+    add (ids::compThreshold, "Comp threshold", { -48.0f, 0.0f }, 0.0f, "dB", 1, kSchemaV5);
+    add (ids::compRatio, "Comp ratio", skewed (1.0f, 20.0f, 4.0f), 1.0f, ": 1", 2, kSchemaV5);
+    add (ids::compAttack, "Comp attack", skewed (0.1f, 200.0f, 10.0f), 10.0f, "ms", 1, kSchemaV5);
+    add (ids::compRelease, "Comp release",
+         skewed (5.0f, 2000.0f, 150.0f), 120.0f, "ms", 0, kSchemaV5);
+    add (ids::compMakeup, "Comp makeup", { 0.0f, 24.0f }, 0.0f, "dB", 1, kSchemaV5);
+
+    // ---- F9, appended at schema 7 ------------------------------------------
+    //
+    // One waveform choice per operator. Index 0 is Sine and is the default, and
+    // the operator branches to `std::sin` for it, so an F8 project is
+    // bit-identical.
+
+    for (int op = 0; op < kNumOperators; ++op)
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::op (op, "Shape"), kSchemaV7),
+            "Op " + juce::String (op + 1) + " shape", choices::fmShape, 0));
+
+    // ---- F8, appended at schema 6 ------------------------------------------
+    //
+    // Two ADV envelopes, two LFOs, four macros and eight slots. Every slot's
+    // source and destination default to Off, so the whole layer is skipped and
+    // an F7 project is bit-identical.
+
+    // Sixteen breakpoints each, and the defaults are a shape rather than a
+    // flat line -- an envelope assigned to a slot and never edited should do
+    // something audible, or the first thing anyone learns about the layer is
+    // that it appears not to work.
+    for (int e = 0; e < 2; ++e)
+    {
+        const juce::String label = "ADV " + juce::String (e + 1) + " \xc2\xb7 ";
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            versioned (ids::adv (e, "Points"), kSchemaV6), label + "Points",
+            2, dsp::MultiEnvelope::kMaxPoints, 4));
+
+        // Displayed 1-based, as on Sonitus's ADV page; the engine subtracts
+        // one. **Without a sustain point an ADV envelope is a one-shot**, and
+        // a held bass note is exactly what this instrument is for.
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            versioned (ids::adv (e, "Sustain"), kSchemaV6), label + "Sustain point",
+            1, dsp::MultiEnvelope::kMaxPoints, 3));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            versioned (ids::adv (e, "Loop"), kSchemaV6), label + "Loop", false));
+
+        layout.add (std::make_unique<juce::AudioParameterInt> (
+            versioned (ids::adv (e, "LoopStart"), kSchemaV6), label + "Loop from",
+            1, dsp::MultiEnvelope::kMaxPoints, 1));
+
+        // Points past the fourth are flat, level-0 legs, so raising Points
+        // adds time rather than a shape nobody asked for.
+        constexpr float defaultSeconds[] { 0.004f, 0.18f, 0.05f, 0.25f,
+                                           0.1f, 0.1f, 0.1f, 0.1f,
+                                           0.1f, 0.1f, 0.1f, 0.1f,
+                                           0.1f, 0.1f, 0.1f, 0.1f };
+        constexpr float defaultLevel[]   { 1.0f, 0.45f, 0.45f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f };
+        constexpr float defaultTension[] { 0.35f, 0.35f, 0.0f, 0.35f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f, 0.0f };
+
+        static_assert (static_cast<int> (std::size (defaultSeconds)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultLevel)) == dsp::MultiEnvelope::kMaxPoints);
+        static_assert (static_cast<int> (std::size (defaultTension)) == dsp::MultiEnvelope::kMaxPoints);
+
+        for (int p = 0; p < dsp::MultiEnvelope::kMaxPoints; ++p)
+        {
+            const juce::String point = label + juce::String (p + 1) + " ";
+            const auto i = static_cast<std::size_t> (p);
+
+            add (ids::advPoint (e, p, "Time"), point + "time",
+                 skewed (0.0f, 20.0f, 0.3f), defaultSeconds[i], "s", 3, kSchemaV6);
+
+            add (ids::advPoint (e, p, "Level"), point + "level",
+                 { 0.0f, 1.0f }, defaultLevel[i], {}, 2, kSchemaV6);
+
+            add (ids::advPoint (e, p, "Tens"), point + "tension",
+                 { -1.0f, 1.0f }, defaultTension[i], {}, 2, kSchemaV6);
+        }
+    }
+
+    for (int l = 0; l < 2; ++l)
+    {
+        const juce::String label = "LFO " + juce::String (l + 1) + " \xc2\xb7 ";
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::lfo (l, "Wave"), kSchemaV6), label + "Wave",
+            choices::lfoWave, 0));
+
+        add (ids::lfo (l, "Rate"), label + "Rate",
+             skewed (0.01f, 40.0f, 2.0f), 2.0f, "Hz", 2, kSchemaV6);
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            versioned (ids::lfo (l, "Sync"), kSchemaV6), label + "Sync", false));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::lfo (l, "Div"), kSchemaV6), label + "Division",
+            divisionNames(), 6));
+
+        add (ids::lfo (l, "Smooth"), label + "Smooth", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+        add (ids::lfo (l, "Phase"), label + "Phase", { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (
+            versioned (ids::lfo (l, "Retrig"), kSchemaV6), label + "Retrigger", true));
+    }
+
+    for (int m = 0; m < kNumMacros; ++m)
+        add (ids::macro (m), "Macro " + juce::String (m + 1),
+             { 0.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        const juce::String label = "Mod " + juce::String (s + 1) + " \xc2\xb7 ";
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::modSlot (s, "Src"), kSchemaV6), label + "Source",
+            choices::modSources, 0));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            versioned (ids::modSlot (s, "Dst"), kSchemaV6), label + "Destination",
+            choices::modDests, 0));
+
+        add (ids::modSlot (s, "Amt"), label + "Amount",
+             { -1.0f, 1.0f }, 0.0f, {}, 2, kSchemaV6);
+    }
+
     return layout;
 }
 
@@ -216,6 +450,10 @@ void StrydaProcessor::prepareToPlay (double sampleRate, int maximumExpectedSampl
     engine_.prepare (sampleRate, maximumExpectedSamplesPerBlock);
     scratch_.setSize (2, juce::jmax (1, maximumExpectedSamplesPerBlock), false, false, true);
 
+    // Half a second of history, which is four frames of the 4096-point FFT the
+    // display runs -- enough that a slow redraw never sees a gap.
+    outputCapture_.prepare (static_cast<int> (sampleRate * 0.5));
+
     prepared_ = true;
     reportedLatency_ = -1;
 }
@@ -239,6 +477,7 @@ void StrydaProcessor::pullParameters()
         settings.release = raw (ids::op (op, "Release"));
 
         settings.fold = raw (ids::op (op, "Fold"));
+        settings.shape = static_cast<int> (std::lround (raw (ids::op (op, "Shape"))));
         settings.mode = static_cast<int> (std::lround (raw (ids::op (op, "Mode"))));
         settings.formantHz = raw (ids::op (op, "Formant"));
         settings.formantDepth = raw (ids::op (op, "Width"));
@@ -249,6 +488,8 @@ void StrydaProcessor::pullParameters()
 
         settings.velLevel = raw (ids::op (op, "VelLevel"));
         settings.velIndex = raw (ids::op (op, "VelIndex"));
+
+        settings.ratioMode = static_cast<int> (std::lround (raw (ids::op (op, "RatioMode"))));
 
         for (int from = 0; from < kNumOperators; ++from)
             parameters_.indices[static_cast<std::size_t> (op)][static_cast<std::size_t> (from)]
@@ -296,6 +537,111 @@ void StrydaProcessor::pullParameters()
     extras.unisonSpread = raw (ids::unisonSpread);
     extras.unisonIndexSpread = raw (ids::unisonIndex);
 
+    auto& sequencer = engine_.getSequencer();
+
+    sequencer.setEnabled (raw (ids::seqOn) > 0.5f);
+
+    // Index 0 of the target list is "Off", so the operator index is one less --
+    // which is how a destination-less state is spelt without a magic number.
+    sequencer.setTarget (static_cast<int> (std::lround (raw (ids::seqTarget))) - 1);
+    sequencer.setLength (static_cast<int> (std::lround (raw (ids::seqLength))));
+    sequencer.setGlide (raw (ids::seqGlide));
+
+    engine_.setSequencerDivision (static_cast<int> (std::lround (raw (ids::seqDivision))));
+
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        sequencer.setStep (i, raw (ids::step (i)));
+
+    MangleParameters mangle;
+
+    mangle.splitHz = raw (ids::split);
+
+    mangle.vowelMix = raw (ids::vowelMix);
+    mangle.vowelMorph = raw (ids::vowelMorph);
+    mangle.vowelTract = raw (ids::vowelTract);
+    mangle.vowelSharpness = raw (ids::vowelSharp);
+
+    mangle.fold = raw (ids::fold);
+    mangle.crushBits = raw (ids::crushBits);
+    mangle.crushAmount = raw (ids::crushAmount);
+    mangle.downsample = raw (ids::downsample);
+
+    mangle.combMix = raw (ids::combMix);
+    mangle.combHz = raw (ids::combHz);
+    mangle.combFeedback = raw (ids::combFeedback);
+
+    mangle.phaserMix = raw (ids::phaserMix);
+    mangle.phaserHz = raw (ids::phaserHz);
+    mangle.phaserFeedback = raw (ids::phaserFeedback);
+
+    mangle.drive = raw (ids::mangleDrive);
+
+    mangle.compressThresholdDb = raw (ids::compThreshold);
+    mangle.compressRatio = raw (ids::compRatio);
+    mangle.compressAttackMs = raw (ids::compAttack);
+    mangle.compressReleaseMs = raw (ids::compRelease);
+    mangle.compressMakeupDb = raw (ids::compMakeup);
+
+    engine_.setMangleParameters (mangle);
+
+    engine_.setVowelSequence (raw (ids::vowelSeqOn) > 0.5f,
+                              static_cast<int> (std::lround (raw (ids::vowelSeqLength))),
+                              static_cast<int> (std::lround (raw (ids::vowelSeqDiv))),
+                              raw (ids::vowelSeqGlide));
+
+    for (int i = 0; i < RatioSequencer::kMaxSteps; ++i)
+        engine_.setVowelStep (i, raw (ids::vowelStep (i)));
+
+    auto& modulation = parameters_.modulation;
+
+    for (int e = 0; e < 2; ++e)
+    {
+        auto& shape = modulation.envelopes[static_cast<std::size_t> (e)];
+
+        shape.pointCount = static_cast<int> (std::lround (raw (ids::adv (e, "Points"))));
+        shape.loop = raw (ids::adv (e, "Loop")) > 0.5f;
+
+        // Both displayed 1-based; the envelope counts from zero.
+        shape.sustain = static_cast<int> (std::lround (raw (ids::adv (e, "Sustain")))) - 1;
+        shape.loopStart = static_cast<int> (std::lround (raw (ids::adv (e, "LoopStart")))) - 1;
+
+        for (int p = 0; p < dsp::MultiEnvelope::kMaxPoints; ++p)
+            shape.points[static_cast<std::size_t> (p)] = {
+                raw (ids::advPoint (e, p, "Time")),
+                raw (ids::advPoint (e, p, "Level")),
+                raw (ids::advPoint (e, p, "Tens"))
+            };
+    }
+
+    for (int l = 0; l < 2; ++l)
+    {
+        auto& shape = modulation.lfos[static_cast<std::size_t> (l)];
+
+        shape.wave = static_cast<int> (std::lround (raw (ids::lfo (l, "Wave"))));
+        shape.synced = raw (ids::lfo (l, "Sync")) > 0.5f;
+        shape.division = static_cast<int> (std::lround (raw (ids::lfo (l, "Div"))));
+        shape.smooth = raw (ids::lfo (l, "Smooth"));
+        shape.phaseOffset = raw (ids::lfo (l, "Phase"));
+        shape.retrigger = raw (ids::lfo (l, "Retrig")) > 0.5f;
+
+        // A synced LFO's rate is the division at the session's tempo, resolved
+        // here rather than in the voice so every voice agrees about it.
+        shape.rateHz = shape.synced ? dsp::divisionRateHz (shape.division, lastBpm_)
+                                    : raw (ids::lfo (l, "Rate"));
+    }
+
+    for (int m = 0; m < kNumMacros; ++m)
+        modulation.macros[static_cast<std::size_t> (m)] = raw (ids::macro (m));
+
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        auto& slot = modulation.slots[static_cast<std::size_t> (s)];
+
+        slot.source = static_cast<int> (std::lround (raw (ids::modSlot (s, "Src"))));
+        slot.destination = static_cast<int> (std::lround (raw (ids::modSlot (s, "Dst"))));
+        slot.amount = raw (ids::modSlot (s, "Amt"));
+    }
+
     engine_.setPolyphony (static_cast<int> (std::lround (raw (ids::polyphony))));
     engine_.setOversamplingMode (static_cast<dsp::OversamplingMode> (
         static_cast<int> (std::lround (raw (ids::oversampling)))));
@@ -331,6 +677,36 @@ void StrydaProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer, juc
     if (numSamples <= 0 || ! prepared_)
         return;
 
+    collectTuning();
+
+    // **The transport first**, because `pullParameters` resolves a synced
+    // LFO's rate from the tempo: reading it afterwards would leave every
+    // synced LFO one block behind the session.
+    //
+    // Once per block, so the ratio sequencer locks to the bar. The engine
+    // keeps its rate between anchors and free-runs, which is what
+    // makes the step edges sample-accurate inside the block rather than only
+    // at its head -- and a growl that is not in time with the drums is a
+    // mistake, not a texture.
+    double ppq = 0.0;
+    double bpm = 120.0;
+    bool playing = false;
+
+    if (auto* head = getPlayHead())
+        if (const auto position = head->getPosition())
+        {
+            ppq = position->getPpqPosition().orFallback (0.0);
+            bpm = position->getBpm().orFallback (120.0);
+            playing = position->getIsPlaying();
+        }
+
+    lastBpm_ = bpm;
+    engine_.setTransport (ppq, bpm, playing);
+
+    // **Before `setParameters`, not after.** The ratio modes are resolved
+    // against the scale inside `setParameters`, so a tuning that arrived this
+    // block has to be in place first or the ratios spend one block snapped to
+    // the previous scale.
     pullParameters();
     engine_.setParameters (parameters_);
     engine_.updateFactor (isNonRealtime());
@@ -374,6 +750,21 @@ void StrydaProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer, juc
         renderSpan (rendered, numSamples - rendered);
 
     activeVoices_.store (engine_.getActiveVoiceCount());
+
+    // The output into the display's ring, mono-summed. Real-time safe: one
+    // producer, no allocation, no lock.
+    //
+    // **From `buffer`, not from `scratch_`.** Sample-accurate MIDI splits the
+    // block into spans and `renderSpan` writes each one to `scratch_[0..count)`
+    // before copying it out, so after the loop the scratch holds only the LAST
+    // span with stale samples behind it. Pushing `numSamples` from there fed
+    // the display garbage, and the symptom was a flat curve at the floor
+    // rather than anything that looked like a bug.
+    for (int i = 0; i < numSamples; ++i)
+        engineLeft[i] = 0.5 * (static_cast<double> (buffer.getSample (0, i))
+                                 + static_cast<double> (buffer.getSample (1, i)));
+
+    outputCapture_.push (engineLeft, numSamples);
 
     // The bandwidth readout, computed once per block on the note last played --
     // never per sample, and never on the message thread, which cannot see the
@@ -481,7 +872,7 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
             "in the tests. Start here and turn one matrix cell up.\n\n"
             "To learn the instrument: set 2 -> 1 to about 1.0 and sweep Op 2's Ratio. "
             "Integer ratios fuse into one tone; 4.76 is a bell.",
-            {} });
+            { { ids::master, -3.0f } } });
 
         list.push_back ({
             "Neuro Growl",
@@ -518,7 +909,7 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
               { ids::unisonDetune, 11.0f },
               { ids::unisonSpread, 0.7f },
               { ids::unisonIndex, 0.35f },
-              { ids::master, -4.0f } } });
+              { ids::master, -10.0f } } });
 
         list.push_back ({
             "Bell",
@@ -562,7 +953,343 @@ const std::vector<Preset>& StrydaProcessor::getPresets()
               { ids::subOctave, 1.0f },
               { ids::subShape, 1.0f },
               { ids::subDecay, 8.0f },
-              { ids::master, -2.0f } } });
+              { ids::master, -10.0f } } });
+
+        list.push_back ({
+            "Talk Box",
+            "The bass says something. The vowel lane is three resonances placed where a vocal "
+            "tract puts them, and its own sixteen-step pattern sweeps VOWEL through ee - eh - "
+            "ah - oh - oo on a division of its own, so the growl talks in time without the "
+            "ratio sequencer having to agree with it.\n\n"
+            "SPLIT is the control that makes this usable on a bass rather than a lead. The low "
+            "band goes round the vowel lane and the whole mangle chain untouched, so the "
+            "formants only ever land on the top -- which is what stops a talking bass losing "
+            "its bottom the moment it opens its mouth. At 0 Hz the split is not merely flat, "
+            "it is skipped, because a Linkwitz-Riley crossover summed back together is an "
+            "allpass rather than an identity.\n\n"
+            "To play it: hold a low note and let the pattern run. TRACT is the length of the "
+            "throat -- short is a child, long is a cathedral -- and it is the one to automate "
+            "if you want a word rather than a vowel. Glide slides between vowels instead of "
+            "cutting, which is the difference between a word and a stutter.",
+            { { ids::op (1, "Ratio"), 2.0f },
+              { ids::op (2, "Ratio"), 5.0f },
+              { ids::cell (0, 1), 1.4f },
+              { ids::cell (1, 2), 0.5f },
+              { ids::op (1, "Character"), 0.7f },
+              { ids::op (0, "Decay"), 8.0f },
+              { ids::op (0, "Sustain"), 0.85f },
+              { ids::op (1, "Decay"), 3.0f },
+              { ids::op (1, "Sustain"), 0.6f },
+              { ids::subLevel, 0.5f },
+              { ids::subOctave, 1.0f },
+              { ids::split, 180.0f },
+              { ids::vowelMix, 0.8f },
+              { ids::vowelTract, 0.45f },
+              { ids::vowelSharp, 0.6f },
+              { ids::vowelSeqOn, 1.0f },
+              { ids::vowelSeqLength, 8.0f },
+              { ids::vowelSeqDiv, 7.0f },
+              { ids::vowelSeqGlide, 0.35f },
+              { ids::vowelStep (0), 0.05f },
+              { ids::vowelStep (1), 0.35f },
+              { ids::vowelStep (2), 0.55f },
+              { ids::vowelStep (3), 0.9f },
+              { ids::vowelStep (4), 0.6f },
+              { ids::vowelStep (5), 0.25f },
+              { ids::vowelStep (6), 0.75f },
+              { ids::vowelStep (7), 0.4f },
+              { ids::filterCutoff, 6000.0f },
+              { ids::master, -7.0f } } });
+
+        list.push_back ({
+            "Reese",
+            "Two things make a reese: copies of the same note detuned against each other, and "
+            "something that keeps the beating from settling into a single steady phase. This "
+            "one has both, and a third that no subtractive reese can do.\n\n"
+            "Unison is six copies at 18 cents with full stereo spread. INDEX SPREAD is the "
+            "third thing and it is the reason to build a reese in an FM synth at all: it "
+            "spreads the modulation index across the stack, so the copies differ in TIMBRE "
+            "and not only in pitch. Detune alone gives you six of the same sound beating; "
+            "index spread gives you six different sounds beating, and the movement never "
+            "quite repeats.\n\n"
+            "The copies start in phase, so the onset is coherent and the note has a front "
+            "edge; by two seconds they have walked apart into the 1/sqrt(n) sum a reese "
+            "wants. Measured: 7.91 of 8 at 85 ms, 3.03 of 8 by two seconds.\n\n"
+            "Automate the filter's cutoff, not the index -- this patch is already as bright "
+            "as it should be and the reese is in the beating, not the harmonics.",
+            { { ids::op (1, "Ratio"), 1.0f },
+              { ids::op (2, "Ratio"), 2.0f },
+              { ids::cell (0, 1), 0.85f },
+              { ids::cell (1, 2), 0.4f },
+              { ids::op (0, "Feedback"), 0.1f },
+              { ids::op (1, "Character"), 0.85f },
+              { ids::op (0, "Decay"), 10.0f },
+              { ids::op (0, "Sustain"), 1.0f },
+              { ids::op (1, "Decay"), 8.0f },
+              { ids::op (1, "Sustain"), 0.8f },
+              { ids::subLevel, 0.45f },
+              { ids::subOctave, 1.0f },
+              { ids::filterCutoff, 2600.0f },
+              { ids::filterReso, 0.25f },
+              { ids::filterMorph, 0.0f },
+              { ids::unison, 6.0f },
+              { ids::unisonDetune, 18.0f },
+              { ids::unisonSpread, 1.0f },
+              { ids::unisonIndex, 0.55f },
+              { ids::master, -10.0f } } });
+
+        list.push_back ({
+            "Step Growl",
+            "The growl as rhythm. The ratio sequencer jumps Op 2's ratio between eight values "
+            "in sixteenths, and because a ratio jump swaps one harmonic identity for another "
+            "it reads as a riff rather than as a filter moving.\n\n"
+            "Two things about it are deliberate and worth knowing. The phase accumulator is "
+            "NOT reset on a step: it is a frequency step, not a retrigger, so the spectrum "
+            "jumps while the note continues -- reset it and every step would click. And the "
+            "sample loop is cut at the step edge rather than at the host's buffer boundary, "
+            "so the jump lands in the same place whatever your buffer size is set to.\n\n"
+            "Set the ratio mode to Harmonic and every step snaps to a simple p:q, which keeps "
+            "the riff in tune with itself. Set it to Scale and the steps land on whatever "
+            "tuning is loaded -- that is the thing no other FM synth does, and 19-TET or a "
+            "Persian dastgah is where you will hear why it matters.\n\n"
+            "GLIDE at zero is the aggressive setting. Turn it up and the ratios slide, which "
+            "turns the riff into a siren.",
+            { { ids::op (1, "Ratio"), 2.0f },
+              { ids::op (2, "Ratio"), 3.0f },
+              { ids::cell (0, 1), 1.5f },
+              { ids::cell (1, 2), 0.6f },
+              { ids::op (0, "Feedback"), 0.2f },
+              { ids::op (1, "Character"), 0.5f },
+              { ids::op (0, "Decay"), 8.0f },
+              { ids::op (0, "Sustain"), 0.9f },
+              { ids::seqOn, 1.0f },
+              { ids::seqTarget, 2.0f },
+              { ids::seqLength, 8.0f },
+              { ids::seqDivision, 7.0f },
+              { ids::seqGlide, 0.0f },
+              { ids::step (0), 2.0f },
+              { ids::step (1), 2.0f },
+              { ids::step (2), 3.0f },
+              { ids::step (3), 2.0f },
+              { ids::step (4), 5.0f },
+              { ids::step (5), 2.0f },
+              { ids::step (6), 4.0f },
+              { ids::step (7), 7.0f },
+              { ids::subLevel, 0.6f },
+              { ids::subOctave, 1.0f },
+              { ids::filterCutoff, 5000.0f },
+              { ids::master, -7.0f } } });
+
+        list.push_back ({
+            "Saw Teeth",
+            "What the SHAPE control is for, and a warning about it in the same patch. Op 2 is "
+            "a sixteen-harmonic saw rather than a sine, and in FM that is not a brighter "
+            "modulator -- it is a modulator whose harmonics MULTIPLY the sideband ladder. The "
+            "index here is deliberately low for that reason.\n\n"
+            "Turn the Index cap to Hard and play this three octaves up: the cap has real work "
+            "to do, and the readout on the MATRIX page tells you how much. That is not the "
+            "cap being conservative, it is arithmetic -- the predicted top moves by a factor "
+            "of about sixteen the moment the shape changes, which the bandwidth predictor is "
+            "told and the cap acts on.\n\n"
+            "The wave strip above each operator shows the shape as it actually is, modulation "
+            "and folding included. Compare Op 2's strip with Op 1's: the carrier is a sine "
+            "being bent, the modulator is a saw doing the bending.\n\n"
+            "Try Square on Op 2 instead. Odd harmonics only, so the sidebands land in a "
+            "hollower pattern -- it is a different kind of aggression, and it is closer to "
+            "what a reese wants than the saw is.",
+            { { ids::op (1, "Ratio"), 1.0f },
+              { ids::op (1, "Shape"), 4.0f },
+              { ids::op (2, "Ratio"), 2.0f },
+              { ids::op (2, "Shape"), 3.0f },
+              { ids::cell (0, 1), 0.55f },
+              { ids::cell (1, 2), 0.3f },
+              { ids::op (0, "Decay"), 6.0f },
+              { ids::op (0, "Sustain"), 0.85f },
+              { ids::op (1, "Decay"), 4.0f },
+              { ids::op (1, "Sustain"), 0.6f },
+              { ids::indexCap, 1.0f },
+              { ids::subLevel, 0.5f },
+              { ids::subOctave, 1.0f },
+              { ids::filterCutoff, 3200.0f },
+              { ids::master, -6.0f } } });
+
+        list.push_back ({
+            "Tine Piano",
+            "The other half of what six operators are for. Two pairs: Op 2 modulates Op 1 at "
+            "ratio 14 for the strike, Op 4 modulates Op 3 at ratio 1 for the body, and the "
+            "strike's envelope is short where the body's is long. That is the whole trick, "
+            "and it is fifty years old.\n\n"
+            "The high ratio is what makes the attack metallic: at 14 : 1 the sidebands land "
+            "far above the note and the ear reads them as a strike rather than as pitch. "
+            "Because the modulator's envelope decays in a tenth of a second, the brightness "
+            "goes with it -- which is a filter sweep that costs no filter.\n\n"
+            "Play it soft and hard. VEL IDX on the MATRIX page routes velocity to the "
+            "modulation this operator sends, so a harder key gives a brighter strike rather "
+            "than only a louder one. That is the difference between this and a sample.\n\n"
+            "For a colder eighties version turn Op 2's Character to 0: the classic operator, "
+            "bit for bit, with the Bessel nulls that give the decay its flicker.",
+            { { ids::op (0, "Ratio"), 1.0f },
+              { ids::op (1, "Ratio"), 14.0f },
+              { ids::op (2, "Ratio"), 1.0f },
+              { ids::op (3, "Ratio"), 1.0f },
+              { ids::cell (0, 1), 1.1f },
+              { ids::cell (2, 3), 0.55f },
+              { ids::op (0, "Level"), 0.8f },
+              { ids::op (2, "Level"), 0.65f },
+              { ids::op (0, "Decay"), 3.5f },
+              { ids::op (0, "Sustain"), 0.0f },
+              { ids::op (1, "Decay"), 0.12f },
+              { ids::op (1, "Sustain"), 0.0f },
+              { ids::op (2, "Decay"), 5.0f },
+              { ids::op (2, "Sustain"), 0.0f },
+              { ids::op (3, "Decay"), 1.5f },
+              { ids::op (3, "Sustain"), 0.0f },
+              { ids::op (1, "VelIndex"), 0.7f },
+              { ids::op (0, "VelLevel"), 0.4f },
+              { ids::master, -6.0f } } });
+
+        list.push_back ({
+            "Macro Growl",
+            "One knob, five destinations. MACRO 1 on the MOD page opens the filter, deepens "
+            "the whole matrix, pulls Op 2's ratio up, adds feedback to Op 1 and drops the sub "
+            "-- all at once, some of them negative. That is what macros are for and it is why "
+            "they are worth four slots.\n\n"
+            "Play a note and sweep MACRO 1 from 0 to 1. It is one hand movement and it is a "
+            "whole arrangement's worth of change; assign it to your mod wheel and it is "
+            "playable rather than programmed.\n\n"
+            "MATRIX DEPTH is the destination doing most of the work. It scales every live cell "
+            "together rather than adding to them, which matters: adding a fixed amount to "
+            "thirty cells would switch on paths the patch never asked for, where scaling can "
+            "only ever move what is already there.\n\n"
+            "The index cap reads the MODULATED numbers, not the patch, so at the top of the "
+            "sweep it is protecting the spectrum you are actually hearing. Watch the readout "
+            "on the MATRIX page while you sweep.",
+            { { ids::op (1, "Ratio"), 2.0f },
+              { ids::op (2, "Ratio"), 4.0f },
+              { ids::cell (0, 1), 0.9f },
+              { ids::cell (1, 2), 0.45f },
+              { ids::op (1, "Character"), 0.6f },
+              { ids::op (0, "Decay"), 8.0f },
+              { ids::op (0, "Sustain"), 0.9f },
+              { ids::op (1, "Decay"), 5.0f },
+              { ids::op (1, "Sustain"), 0.7f },
+              { ids::subLevel, 0.55f },
+              { ids::subOctave, 1.0f },
+              { ids::filterCutoff, 1400.0f },
+              { ids::filterReso, 0.3f },
+              { ids::macro (0), 0.0f },
+              { ids::modSlot (0, "Src"), 7.0f },
+              { ids::modSlot (0, "Dst"), 32.0f },
+              { ids::modSlot (0, "Amt"), 2.2f },
+              { ids::modSlot (1, "Src"), 7.0f },
+              { ids::modSlot (1, "Dst"), 31.0f },
+              { ids::modSlot (1, "Amt"), 0.8f },
+              { ids::modSlot (2, "Src"), 7.0f },
+              { ids::modSlot (2, "Dst"), 2.0f },
+              { ids::modSlot (2, "Amt"), 0.5f },
+              { ids::modSlot (3, "Src"), 7.0f },
+              { ids::modSlot (3, "Dst"), 19.0f },
+              { ids::modSlot (3, "Amt"), 0.3f },
+              { ids::modSlot (4, "Src"), 7.0f },
+              { ids::modSlot (4, "Dst"), 37.0f },
+              { ids::modSlot (4, "Amt"), -0.35f },
+              { ids::master, -9.0f } } });
+
+        list.push_back ({
+            "Slow Bloom",
+            "The other half of the modulation layer: the ADV envelopes and the LFOs, on a "
+            "sound that has time to show them.\n\n"
+            "ADV 1 runs the matrix depth over about four seconds -- a shape rather than a "
+            "ramp, because a breakpoint envelope can go up, sit, and come back in a way an "
+            "attack-decay pair cannot. Its sustain point is the third breakpoint, so it holds "
+            "there while the key is down and plays the rest on release.\n\n"
+            "LFO 1 is slow, free-running and aimed at the filter. Free-running is the "
+            "interesting part: RETRIG is off, so two notes played a bar apart sit at different "
+            "points in the cycle and the pad never repeats itself exactly. Turn RETRIG on and "
+            "every note becomes the same note.\n\n"
+            "LFO 2 is synced to a bar and moves Op 3's ratio a little, which is a slow "
+            "inharmonic drift rather than a vibrato. Watch the ADV page while you hold a "
+            "chord -- the graph is the curve that plays, tension included.",
+            { { ids::op (1, "Ratio"), 1.0f },
+              { ids::op (2, "Ratio"), 3.0f },
+              { ids::cell (0, 1), 0.7f },
+              { ids::cell (1, 2), 0.35f },
+              { ids::op (1, "Character"), 0.9f },
+              { ids::op (0, "Attack"), 0.25f },
+              { ids::op (0, "Decay"), 10.0f },
+              { ids::op (0, "Sustain"), 0.9f },
+              { ids::op (0, "Release"), 1.6f },
+              { ids::op (1, "Attack"), 0.6f },
+              { ids::op (1, "Decay"), 8.0f },
+              { ids::op (1, "Sustain"), 0.7f },
+              { ids::op (1, "Release"), 1.6f },
+              { ids::filterCutoff, 1800.0f },
+              { ids::filterReso, 0.2f },
+              { ids::advPoint (0, 0, "Time"), 1.8f },
+              { ids::advPoint (0, 0, "Level"), 0.9f },
+              { ids::advPoint (0, 1, "Time"), 1.2f },
+              { ids::advPoint (0, 1, "Level"), 0.45f },
+              { ids::advPoint (0, 2, "Time"), 1.0f },
+              { ids::advPoint (0, 2, "Level"), 0.6f },
+              { ids::advPoint (0, 3, "Time"), 1.5f },
+              { ids::advPoint (0, 3, "Level"), 0.0f },
+              { ids::lfo (0, "Rate"), 0.18f },
+              { ids::lfo (0, "Retrig"), 0.0f },
+              { ids::lfo (1, "Sync"), 1.0f },
+              { ids::lfo (1, "Div"), 3.0f },
+              { ids::lfo (1, "Wave"), 1.0f },
+              { ids::modSlot (0, "Src"), 1.0f },
+              { ids::modSlot (0, "Dst"), 31.0f },
+              { ids::modSlot (0, "Amt"), 0.7f },
+              { ids::modSlot (1, "Src"), 3.0f },
+              { ids::modSlot (1, "Dst"), 32.0f },
+              { ids::modSlot (1, "Amt"), 1.1f },
+              { ids::modSlot (2, "Src"), 4.0f },
+              { ids::modSlot (2, "Dst"), 3.0f },
+              { ids::modSlot (2, "Amt"), 0.12f },
+              { ids::unison, 2.0f },
+              { ids::unisonDetune, 7.0f },
+              { ids::unisonSpread, 0.8f },
+              { ids::master, -5.0f } } });
+
+        list.push_back ({
+            "Mangled",
+            "Everything after the operators, switched on at once, so you can hear what each "
+            "stage costs before you use it on something you care about.\n\n"
+            "The chain in order: fold, crush, downsample, comb, phaser, drive, compressor. "
+            "Every one of them is bit-exactly the identity at its neutral setting -- not "
+            "nearly, exactly, and there is a test that feeds each one a signal and compares "
+            "sample for sample. So turning a stage down to zero really does take it out of "
+            "the path rather than leaving a transparent version of it in.\n\n"
+            "BITS, CRUSH and RATE are the one place in this plugin where aliasing is the "
+            "instrument rather than a defect. They run at the host rate with no oversampling "
+            "and no antialiasing at all, because the folded-back images ARE the sound. "
+            "Everything else that makes harmonics is antialiased.\n\n"
+            "SPLIT is set, so all of this only touches the top: the sub and the low band go "
+            "round it. Pull SPLIT to zero to hear what happens without that -- it is a lesson "
+            "in why a mangled bass usually loses its low end.",
+            { { ids::op (1, "Ratio"), 2.0f },
+              { ids::cell (0, 1), 1.2f },
+              { ids::op (0, "Feedback"), 0.15f },
+              { ids::op (0, "Decay"), 8.0f },
+              { ids::op (0, "Sustain"), 0.9f },
+              { ids::subLevel, 0.5f },
+              { ids::subOctave, 1.0f },
+              { ids::split, 200.0f },
+              { ids::fold, 0.35f },
+              { ids::crushBits, 9.0f },
+              { ids::crushAmount, 0.5f },
+              { ids::downsample, 3.0f },
+              { ids::combMix, 0.3f },
+              { ids::combHz, 220.0f },
+              { ids::combFeedback, 0.5f },
+              { ids::phaserMix, 0.35f },
+              { ids::mangleDrive, 0.4f },
+              { ids::compThreshold, -18.0f },
+              { ids::compRatio, 4.0f },
+              { ids::compMakeup, 4.0f },
+              { ids::filterCutoff, 7000.0f },
+              { ids::master, -9.0f } } });
 
         return list;
     }();
@@ -612,6 +1339,13 @@ void StrydaProcessor::getStateInformation (juce::MemoryBlock& destData)
     tree.setProperty ("schemaVersion", kStateSchemaVersion, nullptr);
     tree.setProperty ("tooltips", tooltipsEnabled_, nullptr);
 
+    // The scale travels with the project as .scl text, so a session opened on
+    // another machine does not need the file that made it.
+    tree.setProperty (kScaleNameProperty, scaleName_, nullptr);
+    tree.setProperty (kScaleTextProperty, scalaText_, nullptr);
+    tree.setProperty (kKeyboardMapProperty, keyboardMapText_, nullptr);
+    tree.setProperty (kConcertPitchProperty, concertPitchHz_, nullptr);
+
     if (auto xml = tree.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -623,8 +1357,210 @@ void StrydaProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             auto tree = juce::ValueTree::fromXml (*xml);
             tooltipsEnabled_ = tree.getProperty ("tooltips", true);
+
+            concertPitchHz_ = tree.getProperty (kConcertPitchProperty, 440.0);
+
+            const juce::String scaleText = tree.getProperty (kScaleTextProperty, juce::String());
+            const juce::String name = tree.getProperty (kScaleNameProperty, juce::String());
+
+            if (scaleText.isNotEmpty())
+                loadScalaText (scaleText, name);
+            else if (name.isNotEmpty())
+                selectBuiltInScale (name);
+            else
+                resetTuning();
+
+            const juce::String mapText = tree.getProperty (kKeyboardMapProperty, juce::String());
+
+            if (mapText.isNotEmpty())
+                loadKeyboardMapText (mapText);
+
+            publishTuning();
             state_.replaceState (tree);
         }
+}
+
+// ---------------------------------------------------------------------------
+// The tuning
+// ---------------------------------------------------------------------------
+//
+// Message-thread side, handed to the audio thread under a spin lock -- the
+// pattern Malleus established and Ictus follows. What is new here is what the
+// engine does with it: `resolveRatio` snaps an operator's RATIO to the scale's
+// degrees, so the whole sideband ladder lands in the session's tuning at every
+// key rather than only the notes doing so.
+
+void StrydaProcessor::publishTuning()
+{
+    const juce::SpinLock::ScopedLockType lock (tuningLock_);
+
+    pendingScale_ = scale_;
+    pendingMap_ = hasKeyboardMap_ ? keyboardMap_ : dsp::KeyboardMap {};
+    pendingConcertHz_ = concertPitchHz_;
+
+    tuningPending_.store (true, std::memory_order_release);
+}
+
+void StrydaProcessor::collectTuning() noexcept
+{
+    if (! tuningPending_.load (std::memory_order_acquire))
+        return;
+
+    const juce::SpinLock::ScopedTryLockType lock (tuningLock_);
+
+    // A try-lock, not a lock: the audio thread never waits on the message
+    // thread. Missing a swap costs one block of the old tuning and the flag
+    // stays set, so the next block takes it.
+    if (! lock.isLocked())
+        return;
+
+    auto& tuning = engine_.getTuning();
+
+    tuning.setScale (pendingScale_);
+    tuning.setKeyboardMap (pendingMap_);
+    tuning.setConcertPitch (pendingConcertHz_);
+
+    tuningPending_.store (false, std::memory_order_release);
+}
+
+juce::String StrydaProcessor::loadScalaText (const juce::String& text,
+                                             const juce::String& name)
+{
+    dsp::Scale parsed;
+
+    const auto result = dsp::parseScl (text.toStdString(), parsed);
+
+    if (! result.ok)
+        return "Line " + juce::String (result.line) + ": " + juce::String (result.message);
+
+    scale_ = parsed;
+    scalaText_ = text;
+    scaleName_ = name.isNotEmpty() ? name : juce::String (parsed.name);
+
+    publishTuning();
+    return {};
+}
+
+juce::String StrydaProcessor::loadKeyboardMapText (const juce::String& text)
+{
+    dsp::KeyboardMap parsed;
+
+    const auto result = dsp::parseKbm (text.toStdString(), parsed);
+
+    if (! result.ok)
+        return "Line " + juce::String (result.line) + ": " + juce::String (result.message);
+
+    keyboardMap_ = parsed;
+    keyboardMapText_ = text;
+    hasKeyboardMap_ = true;
+
+    publishTuning();
+    return {};
+}
+
+juce::String StrydaProcessor::selectBuiltInScale (const juce::String& name)
+{
+    for (const auto& scale : dsp::scales::all())
+    {
+        if (name == juce::String (scale.name))
+        {
+            scale_ = scale;
+            scaleName_ = name;
+            scalaText_.clear();
+
+            publishTuning();
+            return {};
+        }
+    }
+
+    return "No built-in scale is named \"" + name + "\".";
+}
+
+void StrydaProcessor::resetTuning()
+{
+    scale_ = dsp::scales::twelveToneEqual();
+    scaleName_ = scale_.name;
+    scalaText_.clear();
+    keyboardMap_ = {};
+    keyboardMapText_.clear();
+    hasKeyboardMap_ = false;
+
+    publishTuning();
+}
+
+void StrydaProcessor::setConcertPitch (double hz)
+{
+    concertPitchHz_ = std::clamp (hz, dsp::Tuning::kMinimumConcertHz,
+                                  dsp::Tuning::kMaximumConcertHz);
+    publishTuning();
+}
+
+double StrydaProcessor::getRootHz() const noexcept
+{
+    dsp::Tuning preview;
+    preview.setScale (scale_);
+    preview.setConcertPitch (concertPitchHz_);
+
+    return preview.frequencyFor (preview.getRootNote());
+}
+
+juce::String StrydaProcessor::describeTuning() const
+{
+    return scaleName_ + "  --  " + juce::String (scale_.ratios.size())
+             + " degrees, A4 = " + juce::String (concertPitchHz_, 2) + " Hz";
+}
+
+double StrydaProcessor::resolvedRatio (int op) const
+{
+    if (op < 0 || op >= kNumOperators)
+        return 1.0;
+
+    const auto value = [this] (const juce::String& id)
+    {
+        const auto* parameter = state_.getRawParameterValue (id);
+        return parameter != nullptr ? static_cast<double> (parameter->load()) : 0.0;
+    };
+
+    const auto mode = static_cast<RatioMode> (
+        static_cast<int> (std::lround (value (ids::op (op, "RatioMode")))));
+
+    return resolveRatio (value (ids::op (op, "Ratio")), mode, scale_);
+}
+
+void StrydaProcessor::applyBraid (int index)
+{
+    if (index < 0 || index >= braids::kCount)
+        return;
+
+    const auto& braid = braids::table()[static_cast<std::size_t> (index)];
+
+    const auto set = [this] (const juce::String& id, float value)
+    {
+        if (auto* parameter = state_.getParameter (id))
+            parameter->setValueNotifyingHost (
+                parameter->convertTo0to1 (value));
+    };
+
+    for (int to = 0; to < kNumOperators; ++to)
+    {
+        for (int from = 0; from < kNumOperators; ++from)
+        {
+            const auto amount = static_cast<float> (
+                braid.cells[static_cast<std::size_t> (to)][static_cast<std::size_t> (from)]);
+
+            // The diagonal is the operator's own feedback, which is the same
+            // idea as a cell but a different parameter -- OperatorMatrix keeps
+            // it on `Oscillator::setFeedback` because the recursion is
+            // bounded there and nowhere else.
+            if (to == from)
+                set (ids::op (to, "Feedback"), amount);
+            else
+                set (ids::cell (to, from), amount);
+        }
+
+        set (ids::op (to, "Level"),
+             static_cast<float> (braid.levels[static_cast<std::size_t> (to)]));
+    }
 }
 
 juce::AudioProcessorEditor* StrydaProcessor::createEditor()

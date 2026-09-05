@@ -333,9 +333,166 @@ message.
   the named braids.
 - **F7** — vowel lane and mangle chain, every stage bit-exact at neutral.
 - **F8** — two ADV envelopes, two LFOs, macros, the matrices, the dice gate.
-- **F9** — editor and close-out; validator 47/47 on all fourteen.
+- **F9** — editor and close-out; validator 47/47 on all fourteen. **Two items
+  were added to it by the user on 2026-09-04** and they lead it: a per-operator
+  waveform display, and a shape choice per operator. See "F9's two asks" below.
 
 ---
+
+## F9's two asks, and how each is answered
+
+Asked directly on 2026-09-04, while F8 was being finished: *"dont we have a
+choice of waveforms for the operators and some visual feedback of whats going on
+with the sound?"* and then *"visual feedback like how the waveform looks based
+on our choices"*.
+
+Both are fair. Neither exists today: every operator is a sine shaped by
+Character, Fold and Mode, and the only thing on the panel that says anything
+about the sound is the bandwidth readout on the MATRIX page.
+
+### 1. The waveform display — and it must be the real wave
+
+The tempting version draws a sine and bends it a bit. The honest one **runs a
+real `dsp::FmOperator` for one cycle**, and it costs nothing to do properly:
+256 samples times six operators, on the editor timer.
+
+What it has to be fed is the thing that makes it truthful. `OperatorMatrix`
+drives each operator with three numbers per sample:
+
+    pm   = sum over modulators of  index * sin(theta_from)
+    am   = sum over modulators of  index * cos(theta_from)
+    norm = sum over modulators of  index * gain_from
+
+So the display models the same three, from the patch: for each cell into this
+operator, a term at that modulator's ratio scaled by the cell's index. That
+gives the operator's actual output, feedback and phase distortion included —
+Fold bends the ramp before anything reads it, so it shows up exactly as it
+sounds.
+
+**And it teaches the thing the destination sweep found.** Character is the ModFM
+exponential `exp(r·k·cos - r·k)`; with nothing modulating an operator, k = 0 and
+the exponential is 1, so the wave stays a sine at every Character setting. A
+player turning CHAR on a carrier nobody modulates hears nothing and reasonably
+concludes the knob is broken. On a display that draws the real wave, they see
+the reason instead.
+
+### 2. The shape choice — additive, so the aliasing story stays honest
+
+A non-sine operator is not a cosmetic change: in FM the carrier's harmonics
+multiply the sideband ladder, so a saw modulator at index 4 is an aliasing
+catastrophe rather than a brighter sound. Two constraints follow:
+
+- **A BLEP oscillator cannot be used.** BLEP corrects a discontinuity using the
+  phase *increment*, and an FM operator is read at a phase that jumps around
+  under modulation. The correction is wrong the moment the phase is not walking
+  forward at a constant rate.
+- **So the shapes are built additively**, a fixed number of harmonics summed
+  into a one-cycle table read with linear interpolation at the modulated phase.
+  Band-limited by construction, readable at any phase, and — the point — the
+  harmonic count is a *known number* that `FmBandwidth` can multiply the
+  predicted top sideband by. The index cap then protects a non-sine operator
+  correctly rather than by luck.
+
+Shapes, all odd/even structure chosen for what a bass patch wants:
+sine (1 harmonic, the default and bit-exactly what ships today), half sine,
+triangle-ish (odd, 1/n²), square-ish (odd, 1/n), saw-ish (all, 1/n), and a
+two-harmonic "bright" that is the cheapest useful step away from a sine.
+
+**Built and measured** (`tests/test_FmShapes.cpp`, five tests):
+
+| claim | measured |
+|---|---|
+| Sine is the pre-shape operator, bit for bit | 0 of 48 000 samples differ, feedback and PM engaged |
+| Every shape stops at its promised harmonic | highest seen == promised for all six; energy above it −300 dB (the FFT floor) |
+| Every shape is unit peak and zero mean | peak 1.000000, mean < 3e-16 |
+| A saw modulator widens the prediction | 14 740 Hz → 232 540 Hz, **15.8×** |
+| …and the cap answers it | sine modulator **exactly 1.000000**, saw modulator 0.217701 |
+| Inharmonic energy in the audible band at the internal rate | sine −300.0, half sine −96.4, triangle −102.9, saw −90.7, square −88.3 dB — the gate is −60 |
+
+Two of those five tests were wrong on their first run and the code was right,
+which is worth writing down because both mistakes are easy to repeat:
+
+- **Half sine reported 255 harmonics and +11 dB of leak.** `|sin|`'s series has
+  only *even* harmonics — it has no first harmonic at all — and the test
+  referenced harmonic 1, so it was dividing every partial by the FFT's own
+  floor. Referencing the *strongest* partial instead gives 8, as promised.
+- **The aliasing test reported +13.3 dB for a pair that has none.** 220 Hz at
+  192 kHz over 65 536 samples is bin 75.09, not 75: every partial smeared
+  across neighbours and landed in the "inharmonic" pile. Putting the carrier
+  exactly on bin 75 (219.7265625 Hz) takes a clean sine pair to −300 dB.
+
+**The list is a choice parameter, so it is append-only and frozen from the
+commit it ships in** (CLAUDE.md section 8), and sine must be **index 0** and
+**bit-exactly** today's operator, or every existing Stryda patch changes.
+
+### 3. The spectrum, with the predicted edge drawn on it
+
+Already in the plan, and it is the other half of "what is going on with the
+sound": `dsp::SpectrumAnalyser` into `ui::SpectrumDisplay`, with the predicted
+top sideband, the internal Nyquist and the cap's current scale drawn over it.
+The predictor has been measured to 0 Hz against a real spectrum since F1
+(bin width 6.0 Hz); this is where that measurement becomes something a player
+can see.
+
+## F9b, and the gate the presets needed
+
+Twelve presets, each carrying its own notes (`Preset::notes` is not defaultable,
+so one added without them fails to compile): Init, Neuro Growl, Bell, Sub Stack,
+Talk Box, Reese, Step Growl, Saw Teeth, Tine Piano, Macro Growl, Slow Bloom,
+Mangled. A NOTES page that renders them with a glossary of the fourteen panel
+words a player would reasonably not know. A spectrum on the MATRIX page with the
+predicted top sideband, the internal Nyquist and the uncapped edge drawn on it.
+
+### `tezla-render presets`, and why applying a preset proves nothing
+
+Checking a preset by applying it and reading the parameters back proves the ids
+are spelt right. It does not prove the preset makes a sound, and it does not
+prove the sound fits in a file. **Five of the first twelve were over full
+scale**, one at **1.714** -- 4.7 dB of clipping the moment a note is played at
+full velocity -- and a five-note chord on another peaked at **3.08**.
+
+Nothing in the tree could have caught that. The only command that made audio at
+all, `audio:`, feeds a test signal into the *input*, which on an instrument is
+silence. So `note:<midi>[@vel]` was added to the render tool, `audio:` now
+prints peak and RMS, and `tezla-render presets` plays every preset -- one low
+note at full velocity, held then released -- and gates on three claims: it is
+audible, it does not clip, and it has notes. It exits non-zero on clipping.
+
+All twelve now sit between **-3.7 and -2.3 dBFS**. Seen to fail: three presets
+un-trimmed reports "3 over 0.95" and exits 2.
+
+**Silence only warns, it does not fail.** Malleus ships an "Idle reference --
+adds nothing" on purpose and Svarayantra with no soundfont is correctly silent;
+the tool cannot read intent, so it prints silence loudly and leaves the
+judgement to the reader.
+
+### What the gate found in the rest of the suite
+
+Run against the other instruments, unfixed and reported rather than changed --
+these are shipped plugins and retrimming them would change existing projects:
+
+| plugin | over full scale |
+|---|---|
+| Sonitus | **6 of 46** -- worst "One knob reese" at +2.4 dBFS, and Sonitus has been played on the rig |
+| Ictus | **2 of 6** -- "Jungle Snap" at +4.2 dBFS on a single kick at velocity 1 |
+| Malleus | 1 of 15 -- "Slendro Gongs" at -0.1 dBFS, marginal |
+
+### Two things fixed while wiring the display
+
+- **The bandwidth readout did not know about SHAPE.** F9a taught the index cap
+  that a non-sine operator carries n harmonics, and did not teach the readout
+  the same thing -- so the panel would have said "clear" about a patch the cap
+  was holding down hard. Both now call `setHarmonics`.
+- **The spectrum capture read `scratch_`, which holds only the last MIDI span.**
+  Sample-accurate MIDI splits a block into spans and `renderSpan` writes each to
+  `scratch_[0..count)`, so after the loop the scratch carries the final span
+  with stale samples behind it. The symptom was a flat curve at the floor rather
+  than anything that looked like a bug. It reads `buffer` now.
+
+And one thing that was **not** a bug, recorded because it cost twenty minutes:
+the analyser reading -96 dB after 1.5 s of audio was the `audio:` command doing
+its job -- it releases the note at 75 % of the run, so the last FFT window was
+the decayed tail. A 0.35 s run shows the spectrum.
 
 ## Continuity — how any session resumes this work
 
@@ -353,10 +510,12 @@ first `pending` row.**
 | F4 `PhaseShaper`, formant operator, key scaling, velocity | done in code; not yet played on the rig. **Exponential-FM cells deferred** — see below |
 | **FIX** index cap hung the audio thread; oversampling control attached | done — see "The rig freeze" below |
 | F5 sub lane, per-voice filter, unison index spread | done — **Split deferred to F7**, see below. Not yet played on the rig |
-| F6 microtuning at the ratio, ratio sequencer, named braids | pending |
-| F7 vowel lane + mangle chain | pending |
-| F8 modulation layer + dice gate | pending |
-| F9 editor + close-out | pending |
+| F6 microtuning at the ratio, ratio sequencer, named braids | done — and the panel is **paged**, at the user's request. Not yet played on the rig |
+| F7 vowel lane + mangle chain, and Split arrives | done — not yet played on the rig |
+| F8 modulation layer + dice gate | done — not yet played on the rig. Two new pages, ADV and MOD |
+| F9a operator waveform display + shape choice (the two the user asked for on 2026-09-04) | done — not yet played on the rig |
+| F9b presets, NOTES page, spectrum with the predicted edge, registry flip | done — not yet played on the rig |
+| **THE RIG** — F4 to F9b have never been heard. This is the next thing and it is overdue | **pending** |
 
 **Measured at F1** (`tezla-measure stryda`, `tezla-tests`; the reference
 operator is the published closed form written out as plain arithmetic, so what
@@ -377,6 +536,172 @@ is measured is the mathematics the predictor claims to predict):
 | Character 0 -> 1 at index 5: spectral centroid | 4.14 -> **2.69** harmonics |
 | Character 0 -> 1: partial-order reversals (the Bessel oscillation) | 2 -> **0** |
 | index needed at Character 1 to match Character 0's centroid | 11.12 vs 5.00 — **+122 %** |
+
+### F7, and what "bit-exact at neutral" costs to actually check
+
+Delivered: **Split** (the deferral from F5), the **vowel lane** with its own
+sixteen-step pattern and division, and the **mangle chain** — fold, crush,
+downsample, comb, phaser, drive, compressor. Thirty-two parameters at
+`kSchemaV5`, and a MANGLE page.
+
+**Split arrives now because now there is something to keep out of the low
+band.** A Linkwitz–Riley crossover summed straight back is an *allpass*, not an
+identity, so the chain deliberately does **not** count Split alone as engaged —
+with nothing after it, it would cost phase and buy nothing. The test asserts
+that inertness as the design rather than treating it as a failure.
+
+Measured, and it is the number the whole lane exists for: a 50 Hz sine and a
+3 kHz sine through a chain running the folder at full, drive at full and a
+3-bit crusher —
+
+| | 50 Hz component out |
+|---|---|
+| asked for | 0.4500 |
+| Split at 300 Hz | **0.4489** |
+| Split off | 0.0145 |
+
+The fundamental survives essentially untouched with Split on, and is destroyed
+without it.
+
+**Where the chain runs, and why.** After the decimator, at the **host rate**,
+not inside the oversampled section. Crush and downsample are CLAUDE.md §7's
+documented aliasing exception — their whole character is folded-back images, so
+oversampling them would remove the effect rather than clean it up. The fold and
+the drive are ADAA, which band-limits them where they are.
+
+**The rule, checked stage by stage.** Ten spellings of "do nothing" — each one
+*not* the struct's own default, so the test proves the skip rather than the
+initialiser — and every one returns its input to the last bit across 4096
+samples of noise plus a sine. Then the same nine stages engaged, each changing
+more than a quarter of the samples, because a chain that was never wired up
+would pass every bit-exactness check ever written.
+
+### F8, and the four things the sweep found
+
+The modulation layer is 146 parameters: two 16-point ADV envelopes with a
+sustain point and a loop, two LFOs (free or synced), four macros, and eight
+slots of source → destination → amount. `dest::` holds 37 continuous
+destinations and is frozen and append-only; `source::` the same. Two new pages,
+ADV and MOD.
+
+**The whole layer is skipped when no slot has all three of a source, a
+destination and a non-zero amount** — the destinations are not read, let alone
+written with a zero — so a project saved before F8 is bit-identical. Four
+spellings of "off" are asserted, each with two of the three so the guard is what
+is proved rather than the struct's initialiser.
+
+Four things the tests found, in the order they surfaced:
+
+1. **A step edge advanced the modulators.** The engine refreshes a voice twice
+   inside a chunk that contains a sequencer step edge — once for the edge, once
+   for the chunk. The edge is an *extra* refresh, so letting it run the
+   modulators makes an LFO's rate depend on the sequencer's division: a 1/32
+   sequence at 174 BPM ran every LFO in the patch fast, and the faster the
+   sequence the faster they went. `applyParameters` gained an
+   `advanceModulators` flag and the engine passes `chunkDue`.
+
+2. **The index cap read the patch, not the modulated copy.** `matrixDepth` and
+   an operator's feedback move exactly the numbers the bandwidth prediction is
+   made of, so a cap resolved from the patch protects a spectrum nobody is
+   hearing. `refreshIndexCap` now reads the voice's own modulated copy, which
+   `applyParameters` has always just written. Measured: a patch whose own index
+   needs no capping at all resolves to a scale of **exactly 1.0**, and the same
+   patch with a slot multiplying the matrix depth by 25 resolves to **0.320** —
+   the cap removing 68 % of the modulated index.
+
+3. **Two of my own tests were decorations, and the break-checks said so.**
+   - The step-edge test was a *unit* test on the voice. Changing the engine's
+     call site to a hard `true` left it green, so it proved the voice honours
+     the flag and nothing about whether the engine ever passes false. It now
+     also renders through the engine with a sequencer **enabled but targeting
+     nothing** — still cutting the loop, still firing the extra refresh,
+     changing no ratio — and asserts that against a sequencer switched off, bit
+     for bit.
+   - That engine assertion was itself a decoration on its first draft, because
+     it used division index **2**, which is "2 bars". At 174 BPM the next step
+     was 529,655 internal samples away and the render was 192,000 long: not one
+     edge fired and it compared two identical renders of nothing. 1/32 gives 23
+     edges across the same render.
+
+4. **The destination sweep needs a bed that can hear every destination.** The
+   first bed wired two operators of six and the sweep reported **18 of 37
+   destinations inert** — correctly, because "Op 5 ratio" cannot change a render
+   in which operator 5 has no level and no matrix cell. With a full
+   6 → 5 → 4 → 3 → 2 → 1 chain one remained: **Op 6 character**, and that one is
+   the mathematics rather than a defect. Character is the ModFM exponential
+   `exp(r·k·cos(ω_m t) − r·k)`, and `k` is the index *arriving* from the
+   operators that modulate this one. An operator nothing modulates has k = 0,
+   the exponential is exp(0) = 1, and its Character does nothing at any setting.
+   Operator 6 sat at the top of the chain with nothing reaching it. Closing the
+   chain into a ring (op 1 back round to op 6, one cell above the diagonal, so
+   one sample old and still computable) takes the sweep to **37 swept, 0
+   inert**.
+
+   Worth carrying into the panel: **Character only means something on an
+   operator that something else modulates.** A player who turns CHAR on a
+   carrier nobody modulates will hear exactly nothing, and will reasonably
+   conclude the knob is broken.
+
+Six tests, all six seen red against a matching break first.
+
+### F6, the paged panel, and a sequencer that was silently inert
+
+Delivered: `Scale::snapRatio` and the **three ratio modes** (Free / Harmonic /
+Scale) per operator, the **ratio sequencer** with the step-boundary loop cut,
+the **six named braids**, and the shared **tuning page** with the processor as
+its `ui::TuningHost`. Twenty-six parameters at `kSchemaV4`, appended, all inert
+by default.
+
+**The panel is now paged** — OPERATORS / MATRIX / VOICE / SEQ / TUNING — and the
+window minimum came back down from 980×760 to **860×520**. That was not a
+design preference: the user reported the F5 panel did not fit their screen, and
+one page of everything was also the wrong shape for a phase that adds a
+sequencer and a tuning page. Each page lays its rows out from the height it is
+given, so a small window gets denser rather than clipped.
+
+**Three bugs, and the shape of each is worth keeping.**
+
+1. **The sequencer was completely inert and three tests said it was fine.**
+   `dsp::StepSequencer` is a *modulation* sequencer: `setStep` clamps to −1..1,
+   because that is what a step driving a depth or a pan means. Handing it a
+   ratio of 4 stored 1. A block-size test, a phase-continuity test and an
+   is-it-enabled test all passed — the first two because a signal that never
+   changes is trivially smooth and trivially buffer-independent, the third
+   because step 0 still differed from the patch ratio. What caught it was a
+   test that asked **where** the jump landed. Steps are stored logarithmically
+   now, which also makes glide geometric: a glide from 1 to 4 passes through 2
+   at the halfway point, which is an octave a beat rather than an arbitrary
+   2.5.
+
+2. **The step-boundary cut reached the parameters but not the voices.** Pushing
+   the new ratio into `parameters_` and waiting for the next control chunk to
+   apply it puts the jump back where it would have been without the cut. The
+   engine now applies parameters at a step edge as well as at a chunk boundary;
+   the cap stays on its own coarser sub-grid, because it costs a bisection
+   where applying parameters costs arithmetic.
+
+3. **Harmonic mode snapped to the simplest ratio, not the nearest.**
+   `dsp::nearestRatio` returns the simplest p:q *inside the tolerance*, falling
+   back to the nearest when none qualifies — so a wide tolerance made
+   everything qualify and 3.49 snapped to 3/1 rather than 7/2. A quantiser
+   wants the nearest, always, so the tolerance is deliberately unreachable.
+
+**Two more decorations, found by breaking them.** The block-size test passes
+with the step cut removed — the control-chunk grid is already stream-anchored,
+so buffer independence was never what the cut protects. And the scale-mode test
+passed with the repeat-above scan removed, because none of its cases sat just
+under a repeat boundary. Both now assert what they claim: the first differing
+sample lands at the edge (4139 measured against a computed 4138, the difference
+being the decimator's own smear) rather than at the next chunk (4144), and 1.95
+snaps up to 2/1 rather than down to 3/2.
+
+**What Scale mode is for.** `Tuning::nearestScaleHz` snaps an absolute
+frequency against the root's pitch. A ratio is a different quantity — an
+interval above the note — so it snaps against 1/1 and the answer is the same at
+every key. That is the whole point: a modulator snapped to the loaded scale
+puts its entire sideband ladder on that scale's degrees, everywhere on the
+keyboard. Fixed-Hz operators and the formant mode are exempt and say so: a
+formant centre is a vocal-tract resonance, not a musical interval.
 
 ### F5, and the one thing it deliberately does not ship
 
@@ -556,7 +881,8 @@ may not err in.
 | voice retirement one second after note-off, sustain 0 | **0 active** |
 | 8 voices, 6 operators, x4, classic FM | 47-57 % of a core (container, noisy) |
 | 8 voices, 6 operators, x4, half ModFM | 41-50 % of a core |
-| idle instrument | **1.0 %** |
+| idle instrument, before the silent path | 1.96 % (0.0785 s per 4 s) |
+| idle instrument, after it | **1.08 %** (0.0431 s per 4 s) |
 
 **Three tests were decorations, and the break-checks are what said so.** Each
 passed while the thing it claimed to cover was removed:
