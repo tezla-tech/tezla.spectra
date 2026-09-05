@@ -47,7 +47,12 @@ constexpr int kSchemaV9 = 9;
 
 /// Schema 10: the hats' Plate and Grit (I4.3, the rig's "thin and tinny").
 constexpr int kSchemaV10 = 10;
-constexpr int kStateSchemaVersion = kSchemaV10;
+
+/// Schema 11: the rig's fourth round (I4.4) -- the hiss's tilt, attack and
+/// grain, the open pad's own hold, the kick's Under and Knock, the snares'
+/// Ring and Thump, and a Pan per pad.
+constexpr int kSchemaV11 = 11;
+constexpr int kStateSchemaVersion = kSchemaV11;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -455,6 +460,123 @@ const std::vector<Preset>& presets()
                 { ids::hoDecay, 450.0f },
                 { ids::htLevel, 85.0f },
                 { ids::htVelColour, 30.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The layering trick built in (I4.4): a punchy 48 Hz kick with a
+            // clean octave-down sub that blooms in behind it and outlives it,
+            // and the beater's knock under the click. Appended -- presets are
+            // recalled by index.
+            "Sub Kick",
+            {
+                { ids::k1Tune, 48.0f },
+                { ids::k1Start, 24.0f },
+                { ids::k1Drop, 25.0f },
+                { ids::k1Sigh, 1.0f },
+                { ids::k1Harmonics, 25.0f },
+                { ids::k1Even, 70.0f },
+                { ids::k1Click, 35.0f },
+                { ids::k1ClickTone, 2500.0f },
+                { ids::k1Noise, 15.0f },
+                { ids::k1Decay, 380.0f },
+                { ids::k1Shape, 10.0f },
+                { ids::k1Under, 70.0f },
+                { ids::k1UnderInterval, 12.0f },
+                { ids::k1UnderDecay, 160.0f },
+                { ids::k1UnderAttack, 12.0f },
+                { ids::k1Knock, 45.0f },
+                { ids::k1KnockTone, 300.0f },
+                { ids::k1KnockTime, 30.0f },
+                { ids::k1Level, 60.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // A snare with a kick in it (I4.4): a low thump under the shell,
+            // the upper pair damped towards a thud, wires held then let go,
+            // and a ghost that carries a little of the same thump. Appended.
+            "Thump Snare",
+            {
+                { ids::s1Tune, 190.0f },
+                { ids::s1Tone, 60.0f },
+                { ids::s1Decay, 220.0f },
+                { ids::s1Body, 80.0f },
+                { ids::s1Ring, -30.0f },
+                { ids::s1Thump, 60.0f },
+                { ids::s1ThumpTone, 90.0f },
+                { ids::s1ThumpDecay, 150.0f },
+                { ids::s1Wires, 65.0f },
+                { ids::s1Snappy, 3500.0f },
+                { ids::s1WiresHold, 20.0f },
+                { ids::s1WiresDecay, 160.0f },
+                { ids::s1Rattle, 25.0f },
+                { ids::s1Crack, 45.0f },
+                { ids::s1CrackTone, 4000.0f },
+                { ids::s1Noise, 25.0f },
+                { ids::g1Decay, 100.0f },
+                { ids::g1Start, 3.0f },
+                { ids::g1Body, 40.0f },
+                { ids::g1Thump, 30.0f },
+                { ids::g1ThumpTone, 90.0f },
+                { ids::g1ThumpDecay, 90.0f },
+                { ids::g1Wires, 55.0f },
+                { ids::g1WiresDecay, 80.0f },
+                { ids::g1Level, 45.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The washy open hat (I4.4): the plate most of the way, the hiss
+            // swelling up behind the strike and tilted dark, and an open pad
+            // that holds for a quarter of a second on its own before it
+            // falls. Appended.
+            "Wash Hats",
+            {
+                { ids::htPlate, 60.0f },
+                { ids::htGrit, 20.0f },
+                { ids::htTune, 230.0f },
+                { ids::htAir, 70.0f },
+                { ids::htAirTone, 3000.0f },
+                { ids::htAirTilt, -20.0f },
+                { ids::htAirAttack, 120.0f },
+                { ids::htAirDecay, 140.0f },
+                { ids::htSizzle, 50.0f },
+                { ids::htColour, 2500.0f },
+                { ids::htWidth, 90.0f },
+                { ids::htHighpass, 500.0f },
+                { ids::htDamp, 45.0f },
+                { ids::htStrike, 50.0f },
+                { ids::hcDecay, 70.0f },
+                { ids::hoDecay, 900.0f },
+                { ids::hoHold, 250.0f },
+                { ids::htHoldLink, 0.0f },
+                { ids::htLevel, 80.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The sandy hat (I4.4): the hiss thinned to a crackle and rung
+            // hard through the partials, tilted bright, with harder hits
+            // getting more of it. Appended.
+            "Crackle Hats",
+            {
+                { ids::htPlate, 40.0f },
+                { ids::htGrit, 45.0f },
+                { ids::htAir, 65.0f },
+                { ids::htAirTone, 4000.0f },
+                { ids::htAirTilt, 25.0f },
+                { ids::htGrain, 80.0f },
+                { ids::htSizzle, 85.0f },
+                { ids::htColour, 3400.0f },
+                { ids::htWidth, 70.0f },
+                { ids::htHighpass, 900.0f },
+                { ids::htDamp, 50.0f },
+                { ids::htStrike, 60.0f },
+                { ids::htVelAir, 50.0f },
+                { ids::hcDecay, 45.0f },
+                { ids::hoDecay, 400.0f },
+                { ids::htLevel, 80.0f },
             }
         },
     };
@@ -1082,6 +1204,100 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::htGrit, kSchemaV10 }, "Hats Grit",
         Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
 
+    // ---- schema 11: the rig's fourth round (I4.4) ------------------------------
+    //
+    // More say over the hiss, an open pad that can hold longer than the closed
+    // one, a thicker kick and snare, and the pads placed in the field. Every
+    // one of these is neutral by default -- 0, 100 % (a multiplier of one),
+    // or LINK lit -- so a project saved at schema 10 reopens bit for bit
+    // (CLAUDE.md section 8; the round's golden render is in
+    // plugins/Ictus/PLAN.md).
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htAirTilt, kSchemaV11 }, "Hats Air tilt",
+        Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htAirAttack, kSchemaV11 }, "Hats Air attack",
+        skewed (0.0f, 500.0f, 0.1f, 80.0f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htGrain, kSchemaV11 }, "Hats Grain",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htVelAir, kSchemaV11 }, "Hats Velocity to air",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::hoHold, kSchemaV11 }, "Hat open Hold",
+        skewed (0.0f, 1000.0f, 0.1f, 150.0f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Switch> (
+        juce::ParameterID { ids::htHoldLink, kSchemaV11 }, "Hats Hold link", true));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1Under, kSchemaV11 }, "Kick 1 Under",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1UnderInterval, kSchemaV11 }, "Kick 1 Under interval",
+        Range (0.0f, 24.0f, 0.01f), 12.0f, attributes ("st")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1UnderDecay, kSchemaV11 }, "Kick 1 Under decay",
+        skewed (25.0f, 400.0f, 0.1f, 100.0f), 100.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1UnderAttack, kSchemaV11 }, "Kick 1 Under attack",
+        skewed (0.0f, 200.0f, 0.1f, 30.0f), 0.0f, attributes ("ms")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1Knock, kSchemaV11 }, "Kick 1 Knock",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1KnockTone, kSchemaV11 }, "Kick 1 Knock tone",
+        skewed (150.0f, 800.0f, 1.0f, 350.0f), 350.0f, attributes ("Hz")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1KnockTime, kSchemaV11 }, "Kick 1 Knock time",
+        skewed (5.0f, 80.0f, 0.1f, 25.0f), 25.0f, attributes ("ms")));
+
+    for (const auto* snare : { &kSnare1Ids, &kGhostIds })
+    {
+        const juce::String who = snare->link == nullptr ? "Snare 1 " : "Ghost ";
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->ring, kSchemaV11 }, who + "Ring",
+            Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->thump, kSchemaV11 }, who + "Thump",
+            Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->thumpTone, kSchemaV11 }, who + "Thump tone",
+            skewed (40.0f, 200.0f, 0.1f, 100.0f), 100.0f, attributes ("Hz")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->thumpDecay, kSchemaV11 }, who + "Thump decay",
+            skewed (30.0f, 500.0f, 0.1f, 120.0f), 120.0f, attributes ("ms")));
+    }
+
+    // One pan per pad, in PadIndex order. -100 is hard left, +100 hard right,
+    // on a balance law: the centre is both channels at unity, the dual mono
+    // the instrument always rendered.
+    static const char* const panNames[kPadCount] {
+        "Kick 1 Pan", "Snare 1 Pan", "Hat closed Pan", "Hat open Pan",
+        "Clap Pan", "Perc Pan", "Kick 2 Pan", "Ghost Pan"
+    };
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { kPanIds[pad], kSchemaV11 }, panNames[pad],
+            Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -1160,6 +1376,14 @@ void IctusProcessor::pullParameters()
     k.gate = valueOf (state_, ids::k1Gate) > 0.5f;
     k.releaseSeconds = valueOf (state_, ids::k1Release) * 0.001;
 
+    k.under = valueOf (state_, ids::k1Under) * 0.01;
+    k.underSemitones = valueOf (state_, ids::k1UnderInterval);
+    k.underDecay = valueOf (state_, ids::k1UnderDecay) * 0.01;
+    k.underAttackSeconds = valueOf (state_, ids::k1UnderAttack) * 0.001;
+    k.knock = valueOf (state_, ids::k1Knock) * 0.01;
+    k.knockHz = valueOf (state_, ids::k1KnockTone);
+    k.knockSeconds = valueOf (state_, ids::k1KnockTime) * 0.001;
+
     pullSnare (parameters_.snare1, kSnare1Ids);
     pullSnare (parameters_.snare2, kGhostIds);
 
@@ -1211,6 +1435,13 @@ void IctusProcessor::pullParameters()
     h.velocityDecay = valueOf (state_, ids::htVelDecay) * 0.01;
     h.velocityColour = valueOf (state_, ids::htVelColour) * 0.01;
 
+    h.airTilt = valueOf (state_, ids::htAirTilt) * 0.01;
+    h.airAttackSeconds = valueOf (state_, ids::htAirAttack) * 0.001;
+    h.grain = valueOf (state_, ids::htGrain) * 0.01;
+    h.velocityAir = valueOf (state_, ids::htVelAir) * 0.01;
+    h.holdOpenSeconds = valueOf (state_, ids::hoHold) * 0.001;
+    h.holdLink = valueOf (state_, ids::htHoldLink) > 0.5f;
+
     // ---- the clap ----
     auto& c = parameters_.clap;
 
@@ -1234,7 +1465,10 @@ void IctusProcessor::pullParameters()
     c.velocityLevel = valueOf (state_, ids::cpVelLevel) * 0.01;
 
     for (int pad = 0; pad < kPadCount; ++pad)
+    {
         parameters_.padNotes[pad] = padNotes_[pad].load();
+        parameters_.pan[pad] = valueOf (state_, kPanIds[pad]) * 0.01;
+    }
 
     parameters_.masterDb = valueOf (state_, ids::output);
     parameters_.bassMode = valueOf (state_, ids::bassMode) > 0.5f;
@@ -1259,6 +1493,11 @@ void IctusProcessor::pullSnare (SnareSettings& n, const SnareIds& p)
     n.startSemitones = valueOf (state_, p.start);
     n.dropSeconds = valueOf (state_, p.drop) * 0.001;
     n.body = valueOf (state_, p.body) * 0.01;
+
+    n.ring = valueOf (state_, p.ring) * 0.01;
+    n.thump = valueOf (state_, p.thump) * 0.01;
+    n.thumpHz = valueOf (state_, p.thumpTone);
+    n.thumpDecaySeconds = valueOf (state_, p.thumpDecay) * 0.001;
 
     n.wires = valueOf (state_, p.wires) * 0.01;
     n.snappyHz = valueOf (state_, p.snappy);

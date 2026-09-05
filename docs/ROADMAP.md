@@ -301,7 +301,11 @@ change to anything already decided.
    plays one note at full velocity — note 36, the kick — which is the right
    gate for a synthesiser and blind for a drum machine: a hat-only preset reads
    as the default kick (found at I4.3, where *Lush Hats* and *Fat Hats* both
-   read −2.0 dBFS, identical to *Init Kit*). Would change: the gate strikes
+   read −2.0 dBFS, identical to *Init Kit*). At I4.4 the same gate read the
+   untouched kit presets *DnB Tight* at **+0.7 dBFS** and *Jungle Snap* at
+   **+4.2 dBFS** over the kick alone — pre-existing, since the kick path at
+   neutral is bit-identical (golden render), and left as they are because the
+   kit presets are the user's to trim (I4.2). Would change: the gate strikes
    every pad a preset touches, or all eight, and reports the loudest. Decided
    by: the next preset round on Ictus.
 

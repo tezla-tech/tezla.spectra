@@ -556,7 +556,8 @@ CLAUDE.md.
 | I4.1 the rig's verdict on the hats: depth, and the noise made part of the metal | **played on the rig**; the round's findings are the I4.2 row |
 | I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
 | I4.3 the rig's third round (2026-09-05): "thin and tinny" → **Plate** (a 64-mode cymbal from the published mode law) and **Grit**, six sources fetched by the user and read first-hand | done in code; not yet played on the rig. Plate 0 / Grit 0 is the old hat bit for bit (golden render) |
-| **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** I4.3 was a direct ask on 2026-09-05 (CLAUDE.md §1, the chat wins for that task) and does not lift the pause | — |
+| I4.4 the rig's fourth round (2026-09-05, the user's asks after hearing the plate): more say over the hiss (**Air tilt, Air attack, Grain, Vel > Air**), the open pad's own **Open hold** behind a Link lamp, **Under** and **Knock** on the kick, **Ring** and **Thump** on the snares, and a **Pan** per pad on a MIX page | done in code; not yet played on the rig. Every default neutral: the round's golden render (four rates, stereo, every existing stage on) is byte for byte the schema-10 engine |
+| **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** I4.3 and I4.4 were direct asks on 2026-09-05 (CLAUDE.md §1, the chat wins for that task) and do not lift the pause | — |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
 | I7 multi-out buses | pending |
@@ -1171,6 +1172,125 @@ back: the crossfade branch forced on at Plate 0 (the bank built at 0); the law's
 exponent set to Chladni's flat-plate 2; the jitter applied to the lowest mode;
 Grit's map made linear; the plate's modes made a harmonic series of Tune; the
 plate added outside the envelope so it rang past retirement.
+
+**I4.4 -- the fourth round** (2026-09-05, the user, after hearing the plate:
+*"what about some more control over the hiss/air/noise? also, an independent
+hold for the closed and open hat? ... any more ideas for the kick and snare to
+be able to create a different variety of thicker sounds?"*, and then *"go ahead
+with the first round, push so i can pull and test"*). Everything appended at
+`kSchemaV11`, every default neutral, so a schema-10 project reopens bit for bit.
+
+**The golden render.** Before a line was changed, the whole kit was rendered
+with every existing stage engaged -- harmonics, tone, click and tail on the
+kick, rattle and crack on the snare, plate at 0.5, grit, sizzle, ring and drive
+on the hats, body and drive on the clap, master at -3 dB, twelve hits over
+1.6 s -- at 44.1, 48, 96 and 192 kHz, both channels, 1 216 320 samples (a
+sixty-line program against `IctusEngine.hpp` in the session's scratch space,
+md5 `d933a800…`). After every change of the round the
+same program renders the same bytes. That is the whole neutrality claim, and
+it held through the pan path becoming stereo because the balance law's centre
+is a multiply by exactly 1.0 summed in the order the mono engine always summed.
+
+**The hats.** Four controls on the hiss and one on the envelope:
+
+- *Air tilt* (`htAirTilt`, -1..+1): a low shelf and a high shelf of opposite
+  sign about **6 kHz**, +-12 dB at the ends, `Biquad` shelves designed per hit
+  and branched out at 0. The pivot moved from 4 kHz: on a wide-open hiss the
+  4 kHz version had nearly all the noise above the pivot and Bright read
+  +10 dB -- a volume control, not a slope. At 6 kHz: RMS 0.078 / 0.063 / 0.182
+  for dark / flat / bright (still up 9 dB at full bright, because the hiss is
+  mostly above the pivot whatever the pivot; said in the tooltip).
+- *Air attack* (`htAirAttack`, 0..500 ms): the air envelope's own rise.
+- *Grain* (`htGrain`): the kept fraction of noise samples, geometric from 1 to
+  300 events a second **per second, not per sample** (`grainDensityFor`), with
+  make-up p^-0.25 -- half-way in dB between constant RMS and constant peak. At
+  constant RMS the far end is +-30 impulses into the soft clip; at constant
+  peak it is 30 dB quieter than the dense hiss. Grain 0 draws the old stream
+  exactly.
+- *Vel > Air* (`htVelAir`), default 0.
+- *Open hold* (`hoHold`, 0..1 s) behind *Link* (`htHoldLink`, lit by default).
+  The air envelope follows the pad it is on.
+
+**The kick.** *Under* (`k1Under`, `k1UnderInterval`, `k1UnderDecay`,
+`k1UnderAttack`): a second sine whose phase advances by the body's increment
+*of this sample* times 2^(-interval/12), so it is locked to the body through
+the drop and the sigh and can never beat; it joins after the harmonics and the
+tone filter with its own AHD (hold = the body's, decay = the body's times the
+multiple, released with the gate), and the hit stays active until it lands.
+*Knock* (`k1Knock`, `k1KnockTone`, `k1KnockTime`): one `ModalResonator` mode
+at 150..800 Hz with its own T60, struck with the hit, cut exactly after four
+T60s as the click is, scaled by Vel > Click.
+
+**The snares.** *Ring* (`s1Ring`/`g1Ring`): the upper two modes' T60s times
+3^ring, exactly 1.0 at 0 by branch. *Thump* (`s1Thump`, `s1ThumpTone`,
+`s1ThumpDecay`, and the ghost's): a one-mode `ModalResonator` under the shell,
+not dropped, not driving the rattle follower, retired at the shell's energy
+floor. Not part of LINK: a stroke property, like Decay.
+
+**The pans.** `EngineParameters::pan[kPadCount]`, smoothed per pad over 20 ms
+at the internal rate, on a **balance law** -- `balanceLeft (p) = p > 0 ? 1 - p
+: 1`, `balanceRight` mirrored -- rather than constant power, because the centre
+of a constant-power law sits 3 dB under the render every saved project was
+mixed against. The eight pad outputs are summed per channel in the mono
+engine's order with their gains applied; at centre every gain is exactly 1.0,
+so the two channels are the old render bit for bit. **Primed, not ramped, on
+the first block after a rebuild**: `prepare()` runs before any parameter is
+known, so a smoother started there sits at centre, and the first version of
+the test found a hard-left pad still 0.7 % into the right channel at its first
+hit 0.1 s in -- a pad saved hard left would have opened every project drifting
+across the field. The MIX page holds the eight knobs; Width and Mono Below
+were deliberately left for the next round, since on a mono source a side
+signal is zero and both would be inert.
+
+Measured (`tezla-tests`: `open_hold`, `air_tilt`, `air_attack`, `grain`,
+`velocity_to_air`, `under`, `knock`, `thump`, `ring`, `pan`; `tezla-measure
+ictus` tables 1, 2 and 4):
+
+| claim | figure |
+|---|---|
+| the schema-10 engine against this one, every new control at its default | **byte for byte** (md5 `d933a800…`, four rates, stereo, 1.6 s each) |
+| Open hold 0.5 s on a 0.3 s open decay, Link dark: level at 50 ms / 400 ms | **0.296 / 0.297** (test), 0.301 / 0.302 (measure); Link lit **0.000000** at 400 ms; the closed pad byte for byte the same either way |
+| Air tilt on a wide-open hiss, centroid dark / flat / bright | test (to 20 kHz) **5431 / 9965 / 12880 Hz**; measure (to 40 kHz) 3775 / 12877 / 18834 Hz; RMS 0.078 / 0.063 / 0.182 |
+| Air attack 200 ms, the hiss's first 20 ms / at 200 ms | **0.627 → 0.041 / 0.062 → 0.671** (Air 1); 0.146 → 0.009 / 0.015 → 0.163 (Air 0.3) |
+| Grain 1 at 192 kHz | **300 events/s**; crest factor **7.0 → 50.3**; level **−15.3 dB**; grain 0.5: 7589/s, crest 14.4, −7.1 dB |
+| Vel > Air 1 at velocity 0.5 | the layer's level exactly **0.15** against 0.3; the heard hiss **0.500009** of the hard hit -- the bands' rails, see below |
+| Under 1, an octave under a 50 Hz body | the sub alone peaks at **24.90 Hz** (0.37 Hz bins); through the whole engine its RMS **equals the body's** (0.2238); a fifth down lands at 33.33 Hz (33.41 expected) |
+| Under through a 24 st drop | `getUnderHz()` exactly half `currentHz()` at every control tick while the pitch is still moving |
+| Under with a 100 ms attack | the sub is **0.076** in the first 20 ms against 0.685 instant, and 0.685 at 100 ms |
+| a 0.1 s body with a x4 sub | last sounds at **0.400 s**, active 0 after |
+| Knock 350 Hz, 50 ms | peak **349.7 Hz**; cut at exactly **0.2000 s** (four T60s) at the engine; the host output silent from 0.201 s |
+| Thump 100 Hz, 200 ms | peak **99.98 Hz** (99.79 through the engine at 48 k); **−57.0 dB** at its T60 (a 20 ms window's average); not sounding at 1 s; not placed at 0 |
+| Ring −1 / 0 / +1 on a 0.4 s decay | the pair's T60s **0.093 / 0.067**, **0.280 / 0.200** (exactly), **0.840 / 0.600 s**; the fundamental 0.400 throughout; at 0.3 s the pair against the fundamental 85.6 at +1 vs 0.005 at −1 |
+| Pan | centre: both channels equal the mono `render` **bit for bit**; hard left: every right sample **exactly 0.0**, the left unchanged; +0.5: the left exactly half; 64- and 512-sample blocks identical |
+
+**Two things the measurement said that the design had not.** The SVF the
+bands are made of is *exactly linear to +-1 and saturates above it* (its op-amp
+rail, by design), and the hat's six pulses reach 1.0 where they coincide; add
+the hiss and the sum brushes the rail, so "the hiss alone" as a difference of
+two renders is not quite linear in the hiss's level: 0.500062 at Air 1,
+0.500009 at Air 0.3. The test asserts the layer's level exactly and the heard
+ratio to 1e-3, and says why. And a 20 ms one-pole smoother started at centre
+takes 0.4 s to snap to its target, which is what turned the pan priming from a
+nicety into a fix.
+
+**The presets gate.** *Sub Kick* first read **+1.1 dBFS** over the kick and
+its level came down from 78 to 60. The gate also read the untouched kit
+presets *DnB Tight* at +0.7 dBFS and *Jungle Snap* at +4.2 dBFS -- pre-existing
+(the kick path at neutral is the golden render) and left alone, since the kit
+presets are the user's to trim (I4.2); noted in `docs/ROADMAP.md` §9.10. The
+three hat-and-snare presets read as the default kick, as at I4.3.
+
+Break-checks, each seen red then reverted with the file checksummed back: the
+open hold forced to Hold whatever Link says; the tilt never applied; the air
+attack ignored; Grain never thinning the stream; Vel > Air ignored; Under not
+kept alive past the body; the knock never cut; the thump never retiring; the
+ring factor always 1; the pan on a constant-power law; and, before the fix,
+the pans ramped from centre (the hard-left check went red on its own).
+
+**Deferred to the second round, on purpose:** Width and Mono Below (inert on a
+mono source), the source spreads (plate modes, hiss, wires, clap bursts), Wash,
+Room, Bed, the clap layer under the snare, Drop curve, and the F&R 18.10/18.13
+reading for the snare head.
 
 **I4.3 -- a hold on the snares' wires** (2026-09-03, the user). The wires had
 a decay and nothing else, so the only way to get a long buzz was a long

@@ -51,8 +51,22 @@
 // size cannot bend the sweep (CLAUDE.md section 7).
 //
 // Neutral is bit-exact by construction: Start 0, Sigh 0, Phase 0,
-// Harmonics 0, Tail 0, Tone off, Click 0, Noise 0 leaves
+// Harmonics 0, Tail 0, Tone off, Click 0, Noise 0, Under 0, Knock 0 leaves
 // sin(2 pi phase) * envelope * level and not one more operation.
+//
+// Two layers from the rig's fourth round (I4.4, "thicker"), both exact at 0:
+//
+//   * UNDER: a second sine an interval below the landed pitch -- an octave by
+//     default -- locked to the body's phase increment, so it follows the drop
+//     and the sigh at a fixed ratio and can never beat against the body. It
+//     joins AFTER the harmonics and the tone filter: a clean sub under a
+//     dirty punch, which is the layering trick (an 808 under a hard kick)
+//     built in. Its own AHD -- an attack so it can bloom after the punch,
+//     a decay as a multiple of the body's.
+//   * KNOCK: a second, lower contact resonator, 150 to 800 Hz with its own
+//     ring time -- the beater on the head that sampled kicks have and the
+//     3 kHz click cannot give. One mode of a `ModalResonator`, cut exactly
+//     after four ring times as the click is.
 
 #include <algorithm>
 #include <cmath>
@@ -63,6 +77,7 @@
 #include <tezla/dsp/Adsr.hpp>
 #include <tezla/dsp/DcBlocker.hpp>
 #include <tezla/dsp/Exact.hpp>
+#include <tezla/dsp/ModalResonator.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/TensionDrop.hpp>
 #include <tezla/dsp/Waveshapers.hpp>
@@ -99,6 +114,17 @@ struct KickSettings
     double clickToneHz { 3000.0 };       ///< the resonator's pitch and the noise high-pass corner, 200..8000
     double clickNoise { 0.0 };           ///< noise burst level, 0..1
     double clickNoiseSeconds { 0.002 };  ///< the burst's fall to -60 dB, 0.0005..0.008
+
+    // ---- under: the sub layer -------------------------------------------
+    double under { 0.0 };                ///< the sub's level against the body, 0..1; exactly nothing at 0
+    double underSemitones { 12.0 };      ///< how far below the landed pitch, 0..24
+    double underDecay { 1.0 };           ///< its decay as a multiple of Decay, 0.25..4
+    double underAttackSeconds { 0.0 };   ///< its rise, 0..0.2; 0 is instant
+
+    // ---- knock: the beater's low contact --------------------------------
+    double knock { 0.0 };                ///< resonator level, 0..1; exactly nothing at 0
+    double knockHz { 350.0 };            ///< its pitch, 150..800
+    double knockSeconds { 0.025 };       ///< its ring-down T60, 0.005..0.08
 
     // ---- amplitude ------------------------------------------------------
     double attackSeconds { 0.0 };        ///< 0..0.02
@@ -145,6 +171,10 @@ public:
 
     static constexpr double kTwoPi = 2.0 * std::numbers::pi;
 
+    /// The knock is cut exactly this many of its own T60s after the strike
+    /// (-240 dB), as the click is at ClickPair::kTailSeconds / kT60Seconds.
+    static constexpr double kKnockTailT60s = 4.0;
+
     void prepare (double internalRate) noexcept
     {
         rate_ = internalRate > 0.0 ? internalRate : 48000.0;
@@ -159,6 +189,9 @@ public:
         tone_.setResonance (kToneResonance);
 
         click_.prepare (rate_);
+        knock_.prepare (rate_);
+        knock_.setModeCount (1);
+        underEnv_.prepare (rate_);
 
         blocker_.prepare (rate_, 10.0);
 
@@ -178,11 +211,16 @@ public:
 
         tone_.reset();
         click_.reset();
+        knock_.reset();
+        knockSamplesLeft_ = 0;
+        underEnv_.kill();
+        underOn_ = false;
         blocker_.reset();
         adaaEven_.reset();
         adaaOdd_.reset();
 
         phase_ = 0.0;
+        underPhase_ = 0.0;
         inc_ = 0.0;
         incTarget_ = 0.0;
         incStep_ = 0.0;
@@ -288,6 +326,38 @@ public:
                       scaled (std::clamp (s.clickNoise, 0.0, 1.0), s.velocityClick),
                       s.clickNoiseSeconds, seed);
 
+        // ---- knock: the beater's low contact, velocity's as the click is ----
+        const double knock = scaled (std::clamp (s.knock, 0.0, 1.0), s.velocityClick);
+
+        if (! dsp::isExactlyZero (knock))
+        {
+            const double t60 = std::clamp (s.knockSeconds, 0.005, 0.08);
+            knock_.setMode (0, std::clamp (s.knockHz, 150.0, std::min (800.0, rate_ * 0.4)), t60, 1.0);
+            knock_.excite (0, knock);
+            knockSamplesLeft_ = static_cast<int> (std::ceil (kKnockTailT60s * t60 * rate_));
+        }
+
+        // ---- under: the sub, locked to the body ----
+        under_ = std::clamp (s.under, 0.0, 1.0);
+        underOn_ = ! dsp::isExactlyZero (under_);
+
+        if (underOn_)
+        {
+            underRatio_ = std::exp2 (-std::clamp (s.underSemitones, 0.0, 24.0) / 12.0);
+            underPhase_ = phase_ * underRatio_;
+
+            underEnv_.setAttackSeconds (std::clamp (s.underAttackSeconds, 0.0, 0.2));
+            underEnv_.setAttackTension (0.0);
+            underEnv_.setHoldSeconds (std::clamp (s.holdSeconds, 0.0, 0.05));
+            underEnv_.setDecaySeconds (scaled (std::clamp (s.decaySeconds, 0.02, 2.0), s.velocityDecay)
+                                       * std::clamp (s.underDecay, 0.25, 4.0));
+            underEnv_.setDecayTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
+            underEnv_.setSustain (0.0);
+            underEnv_.setReleaseSeconds (release_);
+            underEnv_.setReleaseTension (1.0 - std::clamp (s.shape, 0.0, 1.0));
+            underEnv_.noteOn();
+        }
+
         gain_ = scaled (std::clamp (s.level, 0.0, 1.0), s.velocityLevel);
 
         active_ = true;
@@ -335,6 +405,9 @@ public:
 
         if (tailOn_ && tail_.isActive())
             tail_.noteOff();
+
+        if (underOn_ && underEnv_.isActive())
+            underEnv_.noteOff();
     }
 
     [[nodiscard]] bool isGated() const noexcept { return gate_; }
@@ -347,6 +420,8 @@ public:
 
         // ---- body ----
         double x = std::sin (kTwoPi * phase_);
+
+        const double bodyInc = inc_;
 
         phase_ += inc_;
         inc_ += incStep_;
@@ -398,10 +473,43 @@ public:
         if (toneOn_)
             x = tone_.process (x);
 
+        // ---- under: the clean sub, after the dirt ----
+        if (underOn_)
+        {
+            double env = 0.0;
+
+            if (underEnv_.isActive())
+            {
+                env = underEnv_.process();
+
+                if (underEnv_.getStage() == dsp::AdsrStage::sustain)
+                    underEnv_.kill();
+            }
+
+            x += under_ * env * std::sin (kTwoPi * underPhase_);
+
+            // The body's increment this sample, scaled: locked to it through
+            // the drop, so the two can never beat.
+            underPhase_ += bodyInc * underRatio_;
+
+            if (underPhase_ >= 1.0)
+                underPhase_ -= 1.0;
+        }
+
         // ---- click and noise ----
         click_.addTo (x);
 
-        if (! amp_.isActive() && ! (tailOn_ && tail_.isActive()) && ! click_.isActive())
+        // ---- knock ----
+        if (knockSamplesLeft_ > 0)
+        {
+            x += knock_.process();
+
+            if (--knockSamplesLeft_ == 0)
+                knock_.reset();
+        }
+
+        if (! amp_.isActive() && ! (tailOn_ && tail_.isActive()) && ! click_.isActive()
+            && ! (underOn_ && underEnv_.isActive()) && knockSamplesLeft_ == 0)
             active_ = false;
 
         return x * gain_;
@@ -416,6 +524,13 @@ public:
     {
         return endHz_ * drop_.multiplier() * sigh_.multiplier();
     }
+
+    /// Under's pitch at the last control boundary: the body's times the
+    /// interval's ratio, so it drops and sighs with it. 0 with Under off.
+    [[nodiscard]] double getUnderHz() const noexcept { return underOn_ ? currentHz() * underRatio_ : 0.0; }
+
+    /// Whether the knock is still ringing -- its own countdown, cut exactly.
+    [[nodiscard]] bool isKnockActive() const noexcept { return knockSamplesLeft_ > 0; }
 
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
@@ -459,6 +574,17 @@ private:
 
     // click
     ClickPair click_;
+
+    // knock
+    dsp::ModalResonator knock_;
+    int knockSamplesLeft_ { 0 };
+
+    // under
+    bool underOn_ { false };
+    double under_ { 0.0 };
+    double underRatio_ { 0.5 };
+    double underPhase_ { 0.0 };
+    dsp::Adsr underEnv_;
 };
 
 } // namespace tezla::ictus

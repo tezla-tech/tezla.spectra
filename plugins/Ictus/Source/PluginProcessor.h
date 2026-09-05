@@ -28,6 +28,13 @@
 // Schema 3 (I3): Snare 1's 24 controls. Snare 2 and the Perc pad run the
 // same engine on their defaults until their pages arrive with the editor
 // close-out (I9).
+//
+// Schema 11 (I4.4, the rig's fourth round): the hats' Air tilt, Air attack,
+// Grain, Vel > Air and the open pad's own Hold behind a LINK; the kick's Under
+// and Knock; the snares' Ring and Thump; and a Pan per pad, the first control
+// every pad has whether or not its page exists yet. Every one neutral by
+// default, so a schema-10 project reopens bit for bit (the round's golden
+// render is in plugins/Ictus/PLAN.md).
 
 #include <atomic>
 #include <vector>
@@ -234,7 +241,52 @@ inline constexpr auto g1WiresHold = "g1WiresHold";
 // a low-resolution sample path (I4.3, the rig's "thin and tinny")
 inline constexpr auto htPlate      = "htPlate";
 inline constexpr auto htGrit       = "htGrit";
+
+// ---- schema 11: the rig's fourth round (I4.4) --------------------------------
+// HATS -- more say over the hiss, and the open pad's own hold
+inline constexpr auto htAirTilt    = "htAirTilt";
+inline constexpr auto htAirAttack  = "htAirAttack";
+inline constexpr auto htGrain      = "htGrain";
+inline constexpr auto htVelAir     = "htVelAir";
+inline constexpr auto hoHold       = "hoHold";
+inline constexpr auto htHoldLink   = "htHoldLink";
+
+// KICK 1 -- the sub under the body, and the beater's low contact
+inline constexpr auto k1Under         = "k1Under";
+inline constexpr auto k1UnderInterval = "k1UnderInterval";
+inline constexpr auto k1UnderDecay    = "k1UnderDecay";
+inline constexpr auto k1UnderAttack   = "k1UnderAttack";
+inline constexpr auto k1Knock         = "k1Knock";
+inline constexpr auto k1KnockTone     = "k1KnockTone";
+inline constexpr auto k1KnockTime     = "k1KnockTime";
+
+// SNARE 1 and GHOST -- a low mode under the shell, and the upper modes' ring
+inline constexpr auto s1Ring       = "s1Ring";
+inline constexpr auto s1Thump      = "s1Thump";
+inline constexpr auto s1ThumpTone  = "s1ThumpTone";
+inline constexpr auto s1ThumpDecay = "s1ThumpDecay";
+inline constexpr auto g1Ring       = "g1Ring";
+inline constexpr auto g1Thump      = "g1Thump";
+inline constexpr auto g1ThumpTone  = "g1ThumpTone";
+inline constexpr auto g1ThumpDecay = "g1ThumpDecay";
+
+// PAN -- one per pad, the first per-pad control the pads without a page get
+inline constexpr auto k1Pan = "k1Pan";
+inline constexpr auto s1Pan = "s1Pan";
+inline constexpr auto hcPan = "hcPan";
+inline constexpr auto hoPan = "hoPan";
+inline constexpr auto cpPan = "cpPan";
+inline constexpr auto pcPan = "pcPan";
+inline constexpr auto k2Pan = "k2Pan";
+inline constexpr auto g1Pan = "g1Pan";
 } // namespace ids
+
+/// The pans, indexed by PadIndex -- the order the engine reads them in.
+inline constexpr const char* kPanIds[kPadCount] {
+    ids::k1Pan, ids::s1Pan, ids::hcPan, ids::hoPan, ids::cpPan, ids::pcPan, ids::k2Pan, ids::g1Pan
+};
+
+static_assert (kPadCount == 8, "a ninth pad needs a pan id appended to kPanIds");
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and
 /// the parameter pull are written once and run for Snare 1 and the ghost
@@ -267,6 +319,10 @@ struct SnareIds
     const char* velWires;
     const char* velCrack;
     const char* velDrop;
+    const char* ring;
+    const char* thump;
+    const char* thumpTone;
+    const char* thumpDecay;
     const char* link;
 };
 
@@ -277,6 +333,7 @@ inline constexpr SnareIds kSnare1Ids {
     ids::s1Crack, ids::s1CrackTone, ids::s1Noise, ids::s1NoiseTime,
     ids::s1Level, ids::s1Gate, ids::s1Release,
     ids::s1VelLevel, ids::s1VelWires, ids::s1VelCrack, ids::s1VelDrop,
+    ids::s1Ring, ids::s1Thump, ids::s1ThumpTone, ids::s1ThumpDecay,
     nullptr
 };
 
@@ -287,6 +344,7 @@ inline constexpr SnareIds kGhostIds {
     ids::g1Crack, ids::g1CrackTone, ids::g1Noise, ids::g1NoiseTime,
     ids::g1Level, ids::g1Gate, ids::g1Release,
     ids::g1VelLevel, ids::g1VelWires, ids::g1VelCrack, ids::g1VelDrop,
+    ids::g1Ring, ids::g1Thump, ids::g1ThumpTone, ids::g1ThumpDecay,
     ids::g1Link
 };
 

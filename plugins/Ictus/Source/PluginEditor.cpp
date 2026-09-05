@@ -109,6 +109,21 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
     bassAttachment_ = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         ictus_.getState(), ids::bassMode, bassButton_);
 
+    mixTab_.setComponentID ("page-mix");
+    mixTab_.setTooltip ("Where the eight pads sit in the field: a Pan per pad on a balance law, so "
+                        "the centre is the dual mono the instrument always rendered and a pad "
+                        "hard left leaves the right channel exactly empty. Width and a mono-below "
+                        "corner arrive with the next round, once the pads make a side signal of "
+                        "their own. Click a pad to go back to its page.");
+    mixTab_.onClick = [this]
+    {
+        if (currentPage_ != 6)
+            showPage (6);
+        else
+            selectPad (currentPad_);
+    };
+    addAndMakeVisible (mixTab_);
+
     tuningTab_.setComponentID ("page-tuning");
     tuningTab_.setTooltip ("The tuning that Bass mode, Follow key and Note snap play through: built-in "
                            "scales, Scala .scl and .kbm files, concert pitch. It travels with the "
@@ -141,6 +156,7 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
 
     buildHatPage();
     buildClapPage();
+    buildMixPage();
     buildTuningPage();
     showPage (0);
 
@@ -269,6 +285,52 @@ void IctusEditor::buildKickPage()
         "How long the noise burst takes to fall 60 dB, 0.5 to 8 ms. Below 2 ms it "
         "is part of the click; above 5 ms it starts to sound like a snare's wires.",
         Emphasis::trim);
+
+    // ---- under ----
+    page.beginPlate ("Under", "a clean sub beneath the punch", kTintPitch);
+
+    page.addKnob (ids::k1Under, "Under",
+        "A second sine an interval below the landed pitch -- an octave by "
+        "default -- locked to the body's own phase increment, so it follows the "
+        "drop and the sigh at a fixed ratio and can never beat against the body. "
+        "It joins AFTER Harmonics and Tone: a clean sub under a dirty punch, the "
+        "layering trick built in. At 100 it is as loud as the body. 0 is exact "
+        "off and costs nothing.", Emphasis::lead);
+
+    page.addKnob (ids::k1UnderInterval, "Interval",
+        "How far below the landed pitch the sub sits, 0 to 24 semitones. 12 is "
+        "the octave -- a 50 Hz kick puts it at 25 Hz, which is felt rather than "
+        "heard and wants headroom; 7 is a fifth below, which reads as a note; 0 "
+        "doubles the body.");
+
+    page.addKnob (ids::k1UnderDecay, "Under decay",
+        "The sub's decay as a percentage of Decay, 25 to 400%. Over 100 the sub "
+        "outlives the punch and fills the bar behind it, the way an 808 under a "
+        "short kick does; under 100 it is weight in the attack only.");
+
+    page.addKnob (ids::k1UnderAttack, "Under attack",
+        "The sub's own rise, 0 to 200 ms. A few tens of milliseconds lets the "
+        "punch land clean and the sub bloom in behind it -- the two arrive as "
+        "one hit but the low end does not smear the transient. 0 is instant.",
+        Emphasis::trim);
+
+    // ---- knock ----
+    page.beginPlate ("Knock", "the beater on the head", kTintClick, true);
+
+    page.addKnob (ids::k1Knock, "Knock",
+        "A second, lower contact resonator -- the beater landing on the head, "
+        "150 to 800 Hz, which sampled kicks have and the 3 kHz click cannot give. "
+        "Struck with the hit, ringing for Knock time, cut exactly after four ring "
+        "times. Velocity moves it with the click (Vel > Click). 0 is exact off.",
+        Emphasis::lead);
+
+    page.addKnob (ids::k1KnockTone, "Knock tone",
+        "The knock's pitch, 150 to 800 Hz. Around 300 is a felt beater on a "
+        "tight head; lower is a boxier thud, higher a wooden tock.");
+
+    page.addKnob (ids::k1KnockTime, "Knock time",
+        "How long the knock rings to -60 dB, 5 to 80 ms. Short is a tick under "
+        "the click; long is a boxy body of its own.", Emphasis::trim);
 
     // ---- amplitude ----
     page.beginPlate ("Amplitude", "the hit's shape", kTintAmplitude);
@@ -432,6 +494,13 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
         "sum: with Rattle at 0 there is nothing between them, bit for bit."
         + juce::String (ghost ? " A ghost is mostly wire, so this sits low." : ""));
 
+    page.addKnob (ids.ring, "Ring",
+        "The upper two modes' decay against the fundamental's. They sit at 0.7 "
+        "and 0.5 of Decay by measurement; this scales both by up to three "
+        "times either way. -100 is a dead thud with the upper pair gone in a "
+        "third of the time; +100 a rimshot ring three times as long. 0 is "
+        "exactly the drum as measured and costs nothing.");
+
     views.modes = static_cast<ModesView*> (
         page.addDisplay (std::make_unique<ModesView> (ictus_, palette_, page.tintOf (kTintPitch), ids, pad), 3));
 
@@ -505,6 +574,26 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
 
     page.addKnob (ids.noiseTime, "Noise time",
         "How long the burst takes to fall 60 dB, 0.5 to 8 ms.", Emphasis::trim);
+
+    // ---- thump ----
+    page.beginPlate ("Thump", "the body under the head", kTintPitch, true);
+
+    page.addKnob (ids.thump, "Thump",
+        "A low mode under the shell, 40 to 200 Hz with its own decay -- the "
+        "shell-and-air resonance a drum has below its head's fundamental, and "
+        "the body a DnB snare gets when a kick is layered under it. It is not "
+        "dropped with the shell and does not throw the wires. At 100 it is "
+        "struck as hard as the fundamental. 0 is exact off and runs no mode.",
+        Emphasis::lead);
+
+    page.addKnob (ids.thumpTone, "Thump tone",
+        "Where the thump sits, 40 to 200 Hz. 80 to 110 is a snare with weight; "
+        "below 60 it is a kick hiding in the snare, and the two will fight "
+        "unless the kick has moved.");
+
+    page.addKnob (ids.thumpDecay, "Thump decay",
+        "How long the thump rings to -60 dB, 30 to 500 ms. Short is a knock in "
+        "the attack; long is a tom's body under the snare.", Emphasis::trim);
 
     // ---- out ----
     page.beginPlate ("Out", "the hit's shape", kTintAmplitude);
@@ -666,6 +755,29 @@ void IctusEditor::buildHatPage()
         "100 is a fast chiff on the front of a longer metal ring; over 100 is a "
         "shimmer that outlives it, which is most of what a long open hat is.");
 
+    // ---- the hiss's texture ----
+    page.beginPlate ("Texture", "what kind of hiss", kTintColour, true);
+
+    page.addKnob (ids::htAirTilt, "Air tilt",
+        "The hiss's slope about 6 kHz, dark to bright. Air tone is a high-pass "
+        "and could only ever thin the hiss; this can dull it. A low shelf and a "
+        "high shelf of opposite sign, 12 dB each at the ends, designed per hit. "
+        "0 is exact and runs nothing.");
+
+    page.addKnob (ids::htAirAttack, "Air attack",
+        "The hiss's own rise, 0 to 500 ms. The metal is struck and the wash "
+        "comes up behind it -- the swell of a real open hat's first 50 ms, and "
+        "the reverse-hat feel further up. 0 is instant, as it always was.");
+
+    page.addKnob (ids::htGrain, "Grain",
+        "The hiss's density, from an event every sample at 0 to a sparse "
+        "crackle of 300 a second at 100 -- per second, so it is the same "
+        "texture at every session rate. A cymbal's sizzle is chaotic rather "
+        "than Gaussian, and the sandy, gritty hat lives at the sparse end; with "
+        "Sizzle up each event rings the partials, a metallic crackle rather "
+        "than a click. Quieter as it thins, by about 15 dB at the far end. 0 is "
+        "exact.");
+
     // ---- the band ----
     page.beginPlate ("Colour", "the band it is heard through", kTintClick, true);
 
@@ -712,7 +824,20 @@ void IctusEditor::buildHatPage()
     page.addKnob (ids::htHold, "Hold",
         "A plateau before the decay starts, 0 to 200 ms: the hit stays at full "
         "level for this long first. A little of it is the difference between a "
-        "tick and a chick.", Emphasis::trim);
+        "tick and a chick. Both pads, while Link is lit.", Emphasis::trim);
+
+    page.addKnob (ids::hoHold, "Open hold",
+        "The OPEN pad's own plateau, 0 to 1 s, in force while Link is dark. A "
+        "long hold on the open hat and none on the closed is a pattern's "
+        "sustain without touching the key; on a plate hat the envelope holds "
+        "while the plate darkens underneath, its high modes dying first, which "
+        "is how a real open hat behaves -- the six pulses hold flat.",
+        Emphasis::trim);
+
+    page.addLamp (ids::htHoldLink, "Hold link", "Link",
+        "Lit: the open pad's hold is Hold, as it always was, and Open hold is "
+        "greyed. Dark: the open pad holds for Open hold and the closed pad for "
+        "Hold. A project saved before this existed opens lit and sounds the same.");
 
     page.addKnob (ids::htShape, "Shape",
         "The decay's curve: 0 exponential, the way a struck thing falls; 100 "
@@ -761,6 +886,11 @@ void IctusEditor::buildHatPage()
     page.addKnob (ids::htVelStrike, "Vel > Strike",
         "How much velocity moves the stick, 0 to 100%: harder hits get more "
         "attack, softer ones almost none.", Emphasis::trim);
+
+    page.addKnob (ids::htVelAir, "Vel > Air",
+        "How much velocity moves the hiss, 0 to 100%: a soft tap with less "
+        "spray, a hard one with more. 0 -- the default -- gives every hit the "
+        "same hiss.", Emphasis::trim);
 
     page.setNote ("One pair of cymbals, struck two ways: the closed pad (F#1) and the open one "
                   "(A#1) share every control but their decay. Six band-limited pulses or a "
@@ -912,6 +1042,67 @@ void IctusEditor::buildClapPage()
     addChildComponent (page);
 }
 
+// ---------------------------------------------------------------------------
+// The mix page: where the pads sit in the field
+// ---------------------------------------------------------------------------
+
+void IctusEditor::buildMixPage()
+{
+    mixPage_ = std::make_unique<PlatePage> (ictus_.getState(), palette_);
+    auto& page = *mixPage_;
+
+    page.beginPlate ("Pan", "where each pad sits, left to right", kTintAmplitude);
+
+    struct PanEntry
+    {
+        PadIndex pad;
+        const char* name;
+        const char* note;
+    };
+
+    static const PanEntry entries[] {
+        { PadIndex::kick1,     "Kick",   "The kick belongs in the centre, and so does anything under 100 Hz: a sub that leans is a sub that halves in mono." },
+        { PadIndex::kick2,     "Kick 2", "The second kick, on B0 by default." },
+        { PadIndex::snare1,    "Snare",  "The snare is the second anchor: its body and its attack stay centred so it hits with the kick." },
+        { PadIndex::snare2,    "Ghost",  "The ghost can sit a little off the main snare, which is where a drummer's hand would be." },
+        { PadIndex::perc,      "Perc",   "Percussion is usually placed opposite the hats, for balance." },
+        { PadIndex::hatClosed, "Hat C",  "A closed hat a little off centre -- 10 to 25% -- is where a drummer's hat is, and where a break sounds played." },
+        { PadIndex::hatOpen,   "Hat O",  "The open hat the same side as the closed one, or a touch wider." },
+        { PadIndex::clap,      "Clap",   "A clap's width is in its bursts, which the next round spreads; its centre of mass can sit anywhere." },
+    };
+
+    for (const auto& entry : entries)
+    {
+        const int index = static_cast<int> (entry.pad);
+
+        page.addKnob (kPanIds[index], entry.name,
+            juce::String (entry.name) + " pan, -100 (hard left) to +100 (hard right), on a balance law: "
+            "the near channel stays at unity and the far one falls to nothing, so the centre is "
+            "both channels at unity -- the dual mono this instrument always rendered, bit for bit -- "
+            "and nothing gets 3 dB quieter for being centred. Smoothed over 20 ms, so it can be "
+            "automated. " + juce::String (entry.note), Emphasis::trim);
+
+        page.setValueText (kPanIds[index], [] (double value)
+        {
+            const int amount = juce::roundToInt (std::abs (value));
+
+            if (amount == 0)
+                return juce::String ("C");
+
+            return juce::String (value < 0.0 ? "L " : "R ") + juce::String (amount);
+        });
+    }
+
+    page.setNote ("The pads in the field, so the kit does not need a mixer to be placed. Pan is a balance: "
+                  "the centre is exactly the mono render every saved project was mixed against, and a pad "
+                  "hard left leaves the right channel exactly empty. The pads are still mono sources; the "
+                  "width that needs a side signal from the drum itself -- the plate's modes spread, the "
+                  "hiss decorrelated, the clap's bursts placed -- arrives with the next round, together "
+                  "with a Width and a mono-below corner per pad and a correlation readout.");
+
+    addChildComponent (page);
+}
+
 void IctusEditor::buildTuningPage()
 {
     // The shared microtuning panel: the processor is its TuningHost, exactly
@@ -941,7 +1132,7 @@ void IctusEditor::styleTab (juce::TextButton& tab, bool active)
 
 void IctusEditor::showPage (int index)
 {
-    currentPage_ = juce::jlimit (0, 5, index);
+    currentPage_ = juce::jlimit (0, 6, index);
 
     kickPage_->setVisible (currentPage_ == 0);
     snarePage_->setVisible (currentPage_ == 1);
@@ -949,6 +1140,7 @@ void IctusEditor::showPage (int index)
     tuningPage_->setVisible (currentPage_ == 3);
     hatPage_->setVisible (currentPage_ == 4);
     clapPage_->setVisible (currentPage_ == 5);
+    mixPage_->setVisible (currentPage_ == 6);
 
     if (currentPage_ == 0)
         currentPad_ = PadIndex::kick1;
@@ -965,6 +1157,7 @@ void IctusEditor::showPage (int index)
         currentPad_ = PadIndex::hatClosed;
 
     styleTab (tuningTab_, currentPage_ == 3);
+    styleTab (mixTab_, currentPage_ == 6);
     padStrip_->setSelected (currentPad_);
     refreshPadStrip();
 
@@ -1070,9 +1263,11 @@ void IctusEditor::updateSnareGreying (PlatePage& page, const SnareIds& ids, Snar
     now.gate = read (ids.gate) > 0.5f;
     now.linked = ids.link != nullptr && read (ids.link) > 0.5f;
     now.keyed = (now.linked ? read (kSnare1Ids.followKey) : read (ids.followKey)) > 0.5f;
+    now.thump = read (ids.thump) > 0.0f;
 
     if (now.wires == shown.wires && now.crack == shown.crack && now.noise == shown.noise
-        && now.gate == shown.gate && now.keyed == shown.keyed && now.linked == shown.linked)
+        && now.gate == shown.gate && now.keyed == shown.keyed && now.linked == shown.linked
+        && now.thump == shown.thump)
         return;
 
     shown = now;
@@ -1093,6 +1288,8 @@ void IctusEditor::updateSnareGreying (PlatePage& page, const SnareIds& ids, Snar
     page.setControlEnabled (ids.followKey, ! now.linked);
     page.setControlEnabled (ids.spread, ! now.linked);
     page.setControlEnabled (ids.tone, ! now.linked);
+    page.setControlEnabled (ids.thumpTone, now.thump);
+    page.setControlEnabled (ids.thumpDecay, now.thump);
 }
 
 void IctusEditor::updateGreying()
@@ -1109,19 +1306,23 @@ void IctusEditor::updateGreying()
     const bool harmonics = read (ids::k1Harmonics) > 0.0f;
     const bool tail = read (ids::k1Tail) > 0.0f;
     const bool gate = read (ids::k1Gate) > 0.5f;
+    const bool under = read (ids::k1Under) > 0.0f;
+    const bool knock = read (ids::k1Knock) > 0.0f;
 
     // Tune does nothing while the key sets the pitch -- Follow key lit, or
     // Bass mode, which keys every hit.
     const bool keyed = read (ids::k1FollowKey) > 0.5f || read (ids::bassMode) > 0.5f;
 
     if (toneOn != shownToneOn_ || harmonics != shownHarmonics_ || tail != shownTail_
-        || gate != shownGate_ || keyed != shownKeyed_)
+        || gate != shownGate_ || keyed != shownKeyed_ || under != shownUnder_ || knock != shownKnock_)
     {
         shownToneOn_ = toneOn;
         shownHarmonics_ = harmonics;
         shownTail_ = tail;
         shownGate_ = gate;
         shownKeyed_ = keyed;
+        shownUnder_ = under;
+        shownKnock_ = knock;
 
         kickPage_->setControlEnabled (ids::k1Tone, toneOn);
         kickPage_->setControlEnabled (ids::k1Even, harmonics);
@@ -1129,6 +1330,11 @@ void IctusEditor::updateGreying()
         kickPage_->setControlEnabled (ids::k1Release, gate);
         kickPage_->setControlEnabled (ids::k1Tune, ! keyed);
         kickPage_->setControlEnabled (ids::k1NoteSnap, ! keyed);
+        kickPage_->setControlEnabled (ids::k1UnderInterval, under);
+        kickPage_->setControlEnabled (ids::k1UnderDecay, under);
+        kickPage_->setControlEnabled (ids::k1UnderAttack, under);
+        kickPage_->setControlEnabled (ids::k1KnockTone, knock);
+        kickPage_->setControlEnabled (ids::k1KnockTime, knock);
     }
 
     updateSnareGreying (*snarePage_, kSnare1Ids, shownSnare_);
@@ -1144,6 +1350,7 @@ void IctusEditor::updateGreying()
 
         const bool air = value (ids::htAir) > 0.0;
         const bool hatGate = value (ids::htGate) > 0.5;
+        const bool holdLink = value (ids::htHoldLink) > 0.5;
 
         if (air != shownHatAir_)
         {
@@ -1151,12 +1358,22 @@ void IctusEditor::updateGreying()
             hatPage_->setControlEnabled (ids::htSizzle, air);
             hatPage_->setControlEnabled (ids::htAirTone, air);
             hatPage_->setControlEnabled (ids::htAirDecay, air);
+            hatPage_->setControlEnabled (ids::htAirTilt, air);
+            hatPage_->setControlEnabled (ids::htAirAttack, air);
+            hatPage_->setControlEnabled (ids::htGrain, air);
+            hatPage_->setControlEnabled (ids::htVelAir, air);
         }
 
         if (hatGate != shownHatGate_)
         {
             shownHatGate_ = hatGate;
             hatPage_->setControlEnabled (ids::htRelease, hatGate);
+        }
+
+        if (holdLink != shownHatHoldLink_)
+        {
+            shownHatHoldLink_ = holdLink;
+            hatPage_->setControlEnabled (ids::hoHold, ! holdLink);
         }
 
         const bool body = value (ids::cpBody) > 0.0;
@@ -1276,6 +1493,7 @@ void IctusEditor::resized()
 
     hitsLabel_.setBounds (strip.removeFromRight (84));
     tuningTab_.setBounds (strip.removeFromRight (84).reduced (2, 2));
+    mixTab_.setBounds (strip.removeFromRight (64).reduced (2, 2));
     strip.removeFromRight (6);
     bassButton_.setBounds (ui::LampButton::sized (64, 26).withCentre (strip.removeFromRight (72).getCentre()));
     strip.removeFromRight (6);
@@ -1288,6 +1506,7 @@ void IctusEditor::resized()
     ghostPage_->setBounds (bounds);
     hatPage_->setBounds (bounds);
     clapPage_->setBounds (bounds);
+    mixPage_->setBounds (bounds);
     tuningPage_->setBounds (bounds);
 }
 

@@ -427,6 +427,46 @@ cymbal has hundreds of modes a few tens of hertz apart (Fletcher & Rossing;
 Perrin et al.), so the plate gets there by modelling the metal rather than by
 sampling anything — and Grit is the six bits.
 
+### The fourth round: thicker drums, more say over the hiss, and the pads in the field
+
+**What it is.** Ten controls and a page, all neutral by default. On the **hats**:
+*Air tilt* slopes the hiss dark or bright about 6 kHz (Air tone could only ever
+thin it); *Air attack* lets the hiss swell up behind the strike; *Grain* thins
+it from an event every sample to a crackle of 300 a second; *Vel > Air* lets
+velocity reach it; and *Open hold*, behind a *Link* lamp that is lit by default,
+gives the open pad a plateau of its own, up to a second. On the **kick**: *Under*
+is a clean sine an interval below the body, locked to its pitch so it drops and
+sighs with it and never beats, with its own attack and decay; *Knock* is a
+second, lower contact resonator, the beater on the head. On the **snares**:
+*Thump* is a low mode under the shell, and *Ring* lengthens or kills the upper
+pair against the fundamental. And a **MIX** page carries a *Pan* per pad.
+
+**How to use it.** For a sub kick, turn *Under* up with the interval at 12 and
+give it 10 to 20 ms of attack so the punch lands clean and the low end blooms in
+behind it; a *Knock* around 300 Hz under the click is what a sampled kick has and
+a synthesised one usually lacks. For a snare with weight, *Thump* at 80 to
+110 Hz with a 100 to 150 ms decay, and *Ring* a little negative to damp the
+upper pair into a thud; positive is a rimshot. On the hats, *Air attack* around
+100 ms with *Open hold* unlinked at 250 ms is the washy open hat; *Grain* at 80
+with *Sizzle* high is a sandy crackle rung through the partials. Pan the kick
+centre and leave it there; a closed hat 10 to 25 % off centre is where a
+drummer's hat is. *Sub Kick*, *Thump Snare*, *Wash Hats* and *Crackle Hats* are
+these recipes as presets.
+
+**Where it comes from.** Layering an 808 under a harder kick is how most dubstep
+and drum and bass kicks have been built since the late nineties, and it is a
+phase problem the moment the two are separate samples; a sub generated from the
+same phase increment as the body cannot beat. The knock and the thump are what
+sampled drums carry from the room and the shell that a circuit-model does not: a
+beater's contact on a head, and the cavity resonance a drum has below its head's
+fundamental. A cymbal's sizzle is chaotic rather than Gaussian (Chaigne, Touzé
+and Thomas), which is what Grain reaches for. And the pan law is a balance
+rather than constant power on purpose: the centre is exactly the mono render
+every existing project was mixed against, so nothing gets 3 dB quieter for
+staying where it was.
+
+---
+
 ### Ghost snare with LINK
 
 **What it is.** A second snare pad on its own key that can follow the main

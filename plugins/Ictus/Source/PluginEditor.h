@@ -63,6 +63,7 @@ private:
     struct SnareShown
     {
         bool wires { true }, crack { true }, noise { true }, gate { true }, keyed { true }, linked { false };
+        bool thump { true };
     };
 
     void timerCallback() override;
@@ -70,6 +71,7 @@ private:
     SnareViews buildSnarePage (PlatePage& page, const SnareIds& ids, PadIndex pad);
     void buildHatPage();
     void buildClapPage();
+    void buildMixPage();
     void buildTuningPage();
     void updateSnareGreying (PlatePage& page, const SnareIds& ids, SnareShown& shown);
     void showPage (int index);
@@ -96,6 +98,7 @@ private:
     ui::LampButton bassButton_ { "Bass" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bassAttachment_;
     juce::TextButton tuningTab_ { "TUNING" };
+    juce::TextButton mixTab_ { "MIX" };
     juce::Label hitsLabel_;
 
     std::unique_ptr<PlatePage> kickPage_;
@@ -103,6 +106,7 @@ private:
     std::unique_ptr<PlatePage> ghostPage_;
     std::unique_ptr<PlatePage> hatPage_;
     std::unique_ptr<PlatePage> clapPage_;
+    std::unique_ptr<PlatePage> mixPage_;
     std::unique_ptr<ui::TuningPanel> tuningPage_;
 
     // The pictures, owned by their pages; kept for the timer's refresh.
@@ -130,6 +134,8 @@ private:
     bool shownTail_ { true };
     bool shownGate_ { true };
     bool shownKeyed_ { true };
+    bool shownUnder_ { true };
+    bool shownKnock_ { true };
 
     SnareShown shownSnare_;
     SnareShown shownGhost_;
@@ -137,6 +143,7 @@ private:
     /// What the hat and clap pages' greying was last set to.
     bool shownHatAir_ { true };
     bool shownHatGate_ { true };
+    bool shownHatHoldLink_ { false };
     bool shownClapBody_ { true };
     bool shownClapNoise_ { true };
     bool shownClapGate_ { true };

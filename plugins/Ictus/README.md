@@ -50,6 +50,8 @@ circuit's values (`docs/DSP-REFERENCES.md`, "Drum synthesis — Ictus"):
 | **Click**, Click tone, **Noise**, Noise time | The beater: a 3 ms resonant mode plus a seeded noise burst — the 909's Attack. |
 | Attack, Hold, **Decay**, Shape | The amplitude. A hit retires *exactly* when the decay lands. |
 | **Tail**, Tail time | A longer envelope on the same body so the landed pitch rings on. |
+| **Under**, Interval, Under decay, Under attack | A clean sine an interval below the landed pitch (an octave by default), locked to the body's own phase increment so it drops and sighs with it and can never beat against it, joining *after* Harmonics and Tone: the 808-under-a-hard-kick layering built in. Its own attack lets the sub bloom in behind the punch; its decay is a multiple of *Decay*. Exact off at 0. |
+| **Knock**, Knock tone, Knock time | A second, lower contact resonator, 150–800 Hz with its own ring time: the beater landing on the head, which sampled kicks have and the 3 kHz click cannot give. Cut exactly after four ring times. Velocity moves it with the click. Exact off at 0. |
 | **Gate**, Release | Lit, a note-off releases the hit from wherever its envelope is, over *Release* (0–2 s), so a fast fill never piles each tail onto the next. Release 0 is a 1 ms cut — the shortest that does not click. Dark, the pad is a one-shot that ignores note-off; the HIT button always plays the whole hit. |
 | Level, Vel > Level / Click / Drop / Decay | Level and what velocity moves. |
 
@@ -70,6 +72,8 @@ into the noise filter's cutoff and the tuned/noise mix.
 | **Tune** / Follow key / Note | The shell's fundamental, 60–800 Hz, or the MIDI note through the tuning; **Note** snaps it to the tuning's nearest note, the upper modes keeping their ratios to it. |
 | **Spread**, **Tone** | Three modes at 1 : 1.6 : 2.2 of the fundamental at Spread 100 (measured 1.601 and 2.201), one tone at 0; Tone is how hard the upper two are struck, and at 0 only one mode runs. |
 | **Decay** | The fundamental's ring-down; the upper modes die at 0.7 and 0.5 of it, as on the drum. The shell is cut exactly at −120 dB. |
+| **Ring** | The upper two modes' decay against the fundamental's, scaled by up to three times either way: −100 is a dead thud, +100 a rimshot ring. 0 is exactly the drum as measured. |
+| **Thump**, Thump tone, Thump decay | A low mode under the shell, 40–200 Hz with its own decay — the shell-and-air resonance a drum has below its head's fundamental, and the body a DnB snare gets when a kick is layered under it. Not dropped with the shell, does not throw the wires. Exact off at 0. |
 | **Start**, **Drop** | The crack of the strike: the shell starts *Start* semitones up and glides down over *Drop*, the three modes retuned every 32 internal samples with their ring intact and never once it has landed. |
 | **Body**, **Wires** | Two levels, a plain sum. |
 | **Snappy**, **Shape**, Wires decay | The wires' filter corner, its shape from high-pass (open hiss) to band-pass (a pitched buzz), and the stick's burst on them. |
@@ -163,6 +167,33 @@ fixed pattern that sums to zero, so the set loosens without moving.
   With Damp up it is automatically the brightest part of the hit.
 - **Hold** and **Shape** give the envelope a plateau and a curve, exponential
   through to linear.
+
+### The fourth round: the hiss, and the open pad's own hold
+
+Four more controls on the noise layer and one on the envelope, every one exact
+at its neutral setting:
+
+- **Air tilt** slopes the hiss about 6 kHz, dark to bright — a low shelf and a
+  high shelf of opposite sign, 12 dB each at the ends. Air tone is a high-pass
+  and could only ever thin the hiss; this can dull it. Measured on a wide-open
+  hiss: centroid **5.4 kHz** dark, **10.0 kHz** flat, **12.9 kHz** bright.
+- **Air attack** is the hiss's own rise, 0 to 500 ms: the metal is struck and
+  the wash comes up behind it, which is what an open hat does in its first
+  50 ms. Measured with a 200 ms rise: the first 20 ms fall from 0.627 to
+  0.041, and at 200 ms the swelled hiss is at 0.671 where the instant one has
+  fallen to 0.062.
+- **Grain** thins the hiss from an event every sample to a sparse crackle of
+  **300 a second** — per second, so it is the same texture at every rate — with
+  the level following by p^−0.25 (measured **−15 dB** at the far end, the crest
+  factor rising from 7 to 50). Through Sizzle's band-passes each event rings the
+  partials: a metallic crackle rather than a click.
+- **Vel > Air** lets velocity reach the hiss; it is off by default.
+- **Open hold** is the open pad's own plateau, up to a second, behind a
+  **Link** lamp lit by default. Lit, both pads share Hold as they always did;
+  dark, the open pad holds for its own time. Measured: with a 0.5 s Open hold
+  on a 0.3 s open decay the pad reads 0.296 at 50 ms and 0.297 at 400 ms;
+  linked, 0.000000 at 400 ms. The closed pad's render is byte for byte the
+  same either way.
 
 ### Plate — the cymbal the six pulses could never be
 
@@ -290,6 +321,17 @@ when struck as bright as the hit was hard, and opens its page; HIT strikes
 whichever pad is selected. With Note snap lit, a Tune knob reads as the note
 it lands on.
 
+The **MIX** page carries a **Pan** per pad — the first control every pad has
+whether or not its own page exists yet — on a **balance law**: the near channel
+stays at unity and the far one falls to nothing, so the centre is both channels
+at unity, the dual mono this instrument always rendered, bit for bit, and a pad
+hard left leaves the right channel exactly empty. Smoothed over 20 ms, so it can
+be automated; jumped to on the first block after a project loads, so a pad saved
+hard left does not drift across the field for its first hits. The pads are
+still mono sources; the width that needs a side signal from the drum itself —
+the plate's modes spread, the hiss decorrelated, the clap's bursts placed — is
+the next round's, together with a Width and a mono-below corner per pad.
+
 ## Bass mode and the tuning page
 
 **BASS**, in the strip, turns the instrument into a tuned sub-bass made of the
@@ -325,8 +367,14 @@ step; a note-off after the hit has landed changes nothing, bit for bit.
 kit now, with its own snare, ghost, hats and clap — then *Lush Hats* (a long
 open hat with the noise rung through the metal, damped and gated, and a soft
 wide clap under it) and *Bass Keys* (Bass mode, gated, a 40 ms release, no
-sigh so the pitch holds). A preset resets every parameter to its default
-first, so it is a complete kit, not a patch over the last one.
+sigh so the pitch holds), *Fat Hats* (the plate), and from the fourth round
+*Sub Kick* (a punch with a clean octave-down sub blooming in behind it and a
+knock under the click), *Thump Snare* (a low thump under the shell, the upper
+pair damped, a ghost carrying a little of the same thump), *Wash Hats* (the
+hiss swelling and tilted dark, the open pad holding a quarter of a second on
+its own) and *Crackle Hats* (the hiss thinned to a crackle and rung hard through
+the partials). A preset resets every parameter to its default first, so it is a
+complete kit, not a patch over the last one.
 
 ## Building and installing
 
