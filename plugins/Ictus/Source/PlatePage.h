@@ -50,6 +50,12 @@ public:
     void addLamp (const char* parameterId, const juce::String& name,
                   const juce::String& legend, const juce::String& tooltip);
 
+    /// A choice parameter as a drop-down in the house look -- for the
+    /// settings that are a pick from a short list (an output bus), where a
+    /// knob would hide the names.
+    void addChoice (const char* parameterId, const juce::String& name,
+                    const juce::StringArray& options, const juce::String& tooltip);
+
     /// A display spanning `columns` cells of the current plate. The page
     /// owns it; the returned pointer is for the caller's refresh calls.
     juce::Component* addDisplay (std::unique_ptr<juce::Component> display, int columns);
@@ -72,6 +78,12 @@ public:
     void refreshValueText (const char* parameterId);
 
     [[nodiscard]] juce::Colour tintOf (int tintIndex) const noexcept;
+
+    /// The height below which the plates would overflow: every band at the
+    /// smallest cell, plus the note. The editor scrolls the page when the
+    /// window is shorter than this rather than letting the last rows fall off
+    /// the bottom (the snare page grew to six rows at I4.5).
+    [[nodiscard]] int minimumHeight() const noexcept;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -96,9 +108,18 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
+    struct Choice
+    {
+        juce::String id;
+        juce::ComboBox box;
+        juce::Label label;
+        juce::Colour tint;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> attachment;
+    };
+
     struct Cell
     {
-        enum class Kind { knob, lamp, display } kind {};
+        enum class Kind { knob, lamp, display, choice } kind {};
         int index {};
         int columns { 1 };
     };
@@ -124,6 +145,7 @@ private:
     std::vector<Plate> plates_;
     std::vector<std::unique_ptr<Knob>> knobs_;
     std::vector<std::unique_ptr<Lamp>> lamps_;
+    std::vector<std::unique_ptr<Choice>> choices_;
     std::vector<std::unique_ptr<juce::Component>> displays_;
 
     juce::String note_;

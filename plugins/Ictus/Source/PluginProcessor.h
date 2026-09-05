@@ -350,6 +350,17 @@ inline constexpr auto cpRoomTone = "cpRoomTone";
 // SNARE 1 -- the clap engine layered under it
 inline constexpr auto s1Clap       = "s1Clap";
 inline constexpr auto s1ClapOffset = "s1ClapOffset";
+
+// ---- schema 13: the output buses (I7) ----------------------------------------
+// OUTPUT -- one per pad, which of the five buses it renders into
+inline constexpr auto k1Out = "k1Out";
+inline constexpr auto s1Out = "s1Out";
+inline constexpr auto hcOut = "hcOut";
+inline constexpr auto hoOut = "hoOut";
+inline constexpr auto cpOut = "cpOut";
+inline constexpr auto pcOut = "pcOut";
+inline constexpr auto k2Out = "k2Out";
+inline constexpr auto g1Out = "g1Out";
 } // namespace ids
 
 /// The pans, indexed by PadIndex -- the order the engine reads them in.
@@ -371,6 +382,13 @@ inline constexpr const char* kMonoBelowIds[kPadCount] {
 };
 
 static_assert (kPadCount == 8, "a ninth pad needs a width and a mono-below id appended");
+
+/// The outputs, indexed by PadIndex like the pans.
+inline constexpr const char* kOutputIds[kPadCount] {
+    ids::k1Out, ids::s1Out, ids::hcOut, ids::hoOut, ids::cpOut, ids::pcOut, ids::k2Out, ids::g1Out
+};
+
+static_assert (kPadCount == 8, "a ninth pad needs an output id appended to kOutputIds");
 
 /// One room's three parameter IDs, indexed by RoomIndex.
 struct RoomIds
@@ -465,7 +483,12 @@ namespace choices
 {
 inline const juce::StringArray oversampling { "Auto", "Off", "x2", "x4", "x8" };
 inline const juce::StringArray renderOversampling { "Same as live", "Auto", "x2", "x4", "x8" };
+
+/// The output buses, in OutputBus order -- the engine's own names.
+inline const juce::StringArray output { kBusNames[0], kBusNames[1], kBusNames[2], kBusNames[3], kBusNames[4] };
 } // namespace choices
+
+static_assert (kBusCount == 5, "the output option list is indexed straight into OutputBus");
 
 static_assert (static_cast<int> (dsp::OversamplingMode::Auto) == 0
             && static_cast<int> (dsp::OversamplingMode::Off)  == 1

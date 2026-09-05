@@ -288,23 +288,52 @@ stage bit-exact at neutral, tested bit for bit as Sonitus tests its tilt.
 
 ### Oversampling and multi-out — one `Oversampler` per bus
 
-Each pad renders into a scratch at the internal rate, its chain runs, and the
-result is panned into its bus's `internalBuffers()`; each of the five buses
-owns a stereo `Oversampler` at the shared factor (Auto / manual, plus
-`RenderOversampling` from day one), `downsample`d only when the bus is enabled.
-A bus with no active hit routed to it and ≥ 95 × factor internal samples of
-zeros is skipped exactly (its FIR line is all zeros by then). Decimation at ×4
-from 48 k ≈ 0.5 % of a core per channel — All-to-Main costs one bus, four pads
-on four buses cost five; the Output tooltip says so.
+**Built at I7 (2026-09-05, pulled forward at the user's request after the
+fifth round: "can you do the FX channel sends so we can split the drums across
+different mixer channels?").** Each pad renders mid and side at the internal
+rate and is placed by the balance law into its bus's `internalBuffers()`; each
+of the five buses -- Main, Kick, Snare, Hats, Perc (`OutputBus`, append-only)
+-- owns a stereo `Oversampler` at the shared factor, `downsample`d one by one
+(`Engine::processBuses`), and every pad has an **Output** choice (schema 13,
+`k1Out` ... `g1Out`, Main by default). The first pad on a bus assigns and the
+rest add, in the order the mono engine always summed, so a bus carrying the
+whole kit is the old render bit for bit: the golden render is unchanged
+(md5 `d933a800…`) and the first bus test says so. The mono-era `process()`
+returns the buses' sum, which is what the tests and the tools listen to.
 
-`BusesProperties().withOutput("Main", stereo, true).withOutput("Kick", …)
-.withOutput("Snare", …).withOutput("Hats", …).withOutput("Perc", …)`;
-`isBusesLayoutSupported` = no inputs, Main stereo (never disabled — it is the
-fallback), every other bus disabled or stereo. Per block a pad's bus that the
-host disabled falls back to Main; nothing goes silent. Tests: (i) a lone pad on
-its own bus is **bit-identical** to the same pad on Main alone; (ii) with other
-pads sounding, `main' + aux` nulls against `main` at the double-rounding floor
-— not bit-exact, because two linear-phase decimators sum only to rounding.
+**The skip, and the rule it took a bug to find.** A bus whose decimators have
+*seen* `kBusFlushSamples` (1024) exactly-zero internal samples in a row holds
+nothing, so its decimation is skipped and the host gets zeros. The decision is
+made on the zeros that went through *before* the block: decided on the block's
+own zeros -- the first version -- a silent block after a hit had retired at
+the very end of the block before was skipped with the last 224 internal
+samples of that hit's response still in the filters, and the tail was cut: at
+block sizes of 256 and up only, and only when the retirement fell in a block's
+last 56 host samples at ×4. The 64 / 97 / 512 block test did **not** catch it
+(the break-check said so: still green), because nothing in its break retired
+at that phase; the test that does, `a_bus_delivers_the_decimators_tail_
+whatever_the_block_size`, finds where a lone hat's tail ends and picks the
+block sizes that spill it across a boundary, and that one went red on the old
+decision. Measured, the chain empties in 96 / 224 / 480 internal samples at
+×2 / ×4 / ×8; 1024 is the margin. All-on-Main skips four buses on
+every block (392 of 392 in the test). Measured cost of the split: the busy
+eight-pad kit at 48 k ×4 reads 17.2 % of a core on five buses against 14.1 %
+on one -- **3.1 % for four extra stereo decimations**, under 1 % each; the
+Output tooltip says so.
+
+`BusesProperties()` declares the five stereo outputs, enabled from the
+constructor; `isBusesLayoutSupported` = no inputs, Main stereo (never disabled
+-- it is the fallback), every other bus disabled or stereo. Per block a bus the
+host disabled, or gave no channels, is folded into Main; nothing goes silent.
+Tests, as built: (i) every pad on Main is `process()` bit for bit, the other
+buses exactly silent and skipped on every block; (ii) a lone kick on the Kick
+bus is bit-identical to the same kick on Main alone; (iii) the whole kit split
+across five buses sums to the unsplit render within 1.8e-15, and `process()`
+is that sum bit for bit; (iv) all ten channels identical at 64 / 97 / 512;
+(v) a tail spilled across a block boundary delivered whole; (vi) the flush
+length measured against the constant; (vii) the CPU above. Each was seen red
+first, by breaking the thing it covers -- except (iv), whose breaks are the
+others' (it is the block rule, and nothing single breaks only it).
 
 **FL Studio routing, from the manual's own words**: *"Auto map outputs —
 Auto-assign plugin outputs to mixer tracks following the plugin's own Mixer
@@ -485,8 +514,9 @@ tools), validator on the bundle, and "the qemu-aarch64 cross-check was not run
   bit-exact at neutral, transient gain on a synthetic hit, Smash loop, clip
   excess; table 2.
 - **I6 — Humanise and velocity**; vary/replay test, humanise 0 bit-exact.
-- **I7 — Multi-out buses** and the per-pad Output choice; the two bus tests
-  and the disabled-bus fallback; **tested on the rig with Auto map outputs**.
+- **I7 — Multi-out buses** and the per-pad Output choice; the bus tests and
+  the disabled-bus fallback -- **built 2026-09-05**; the rig test with Auto
+  map outputs is what remains.
 - **I8a — Sample DSP**: `WavFile`, `upsample2x`, `SincInterpolator`,
   `SampleVoice`; WAV round trips, the interpolation sweep (droop and image
   floor at five tune ratios, quoted), onset tests. **I8b — Loader**: slots,
@@ -557,11 +587,11 @@ CLAUDE.md.
 | I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
 | I4.3 the rig's third round (2026-09-05): "thin and tinny" → **Plate** (a 64-mode cymbal from the published mode law) and **Grit**, six sources fetched by the user and read first-hand | done in code; not yet played on the rig. Plate 0 / Grit 0 is the old hat bit for bit (golden render) |
 | I4.4 the rig's fourth round (2026-09-05, the user's asks after hearing the plate): more say over the hiss (**Air tilt, Air attack, Grain, Vel > Air**), the open pad's own **Open hold** behind a Link lamp, **Under** and **Knock** on the kick, **Ring** and **Thump** on the snares, and a **Pan** per pad on a MIX page | done in code; not yet played on the rig. Every default neutral: the round's golden render (four rates, stereo, every existing stage on) is byte for byte the schema-10 engine |
-| I4.5 the rig's fifth round (2026-09-05, after playing I4.4: "amazing stuff"): the pads render **mid and side** -- **Air stereo, Metal stereo** (hats), **Wires stereo** (snares), **Stereo** (clap), a **Width** and a **Mono below** per pad and a **correlation readout** on the MIX page; a **Room** (shared early reflections) on the kick, the snares and the clap; the plate's **Wash**; the snare's **Head**, **Wires tilt** and **Bed**; the rattle's own **Rattle decay, Rattle tone** and **Tension** (asked for while the round was in flight); the kick's **Drop curve**; the **clap layered under Snare 1** | done in code; not yet played on the rig. Every default neutral: the golden render still byte for byte (md5 `d933a800…`) with the whole mid/side path in place. Measure rows and a full docs pass still to do -- pushed early at the user's request |
+| I4.5 the rig's fifth round (2026-09-05, after playing I4.4: "amazing stuff"): the pads render **mid and side** -- **Air stereo, Metal stereo** (hats), **Wires stereo** (snares), **Stereo** (clap), a **Width** and a **Mono below** per pad and a **correlation readout** on the MIX page; a **Room** (shared early reflections) on the kick, the snares and the clap; the plate's **Wash**; the snare's **Head**, **Wires tilt** and **Bed**; the rattle's own **Rattle decay, Rattle tone** and **Tension** (asked for while the round was in flight); the kick's **Drop curve**; the **clap layered under Snare 1** | done in code; not yet played on the rig. Every default neutral: the golden render still byte for byte (md5 `d933a800…`) with the whole mid/side path in place. `tezla-measure ictus` table 5 carries the round's numbers; the plate pages scroll when taller than the window |
 | **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** I4.3 and I4.4 were direct asks on 2026-09-05 (CLAUDE.md §1, the chat wins for that task) and do not lift the pause | — |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
-| I7 multi-out buses | pending |
+| I7 multi-out buses (2026-09-05, pulled forward at the user's request after the fifth round): **five stereo outputs** Main / Kick / Snare / Hats / Perc, an **Output** choice per pad on the MIX page, schema 13 | done in code; **not yet loaded in FL Studio** -- the point of the phase is the rig test with *Auto map outputs*, and JUCE typing every synth output bus as main is the one thing that cannot be verified from here. Every default Main: the golden render still byte for byte (md5 `d933a800…`), the split kit sums to the unsplit one within 1.8e-15 |
 | I8a sample DSP (WavFile, upsample2x, SincInterpolator, SampleVoice) | pending |
 | I8b sample loader (slots, Align, Render, pad UI) | pending |
 | I9 editor close-out | pending |
@@ -573,11 +603,29 @@ Nothing is abandoned and nothing is half-applied: the tree is green, the
 validator passes 47/47, and every phase through I4.2 is committed. **The resume
 point is I5** (the per-pad punch chain), and the rows below it are untouched.
 
+**Resumed out of the plan's order, 2026-09-05.** The user's ear rounds
+(I4.3–I4.5) and then I7 were built at their request while I5 and I6 stayed
+pending; the resume point for the plan's own order is still I5, and I7 is
+done, so the order from here is I5, I6, I8a, I8b, I9.
+
 What is worth knowing on resuming, beyond the table: **I2.1, I3, the rounds
 after I3, I4 and I4.2 are done in code but have not been played on the rig**, so
 the first thing an ear round should cover is everything after the hats. The six
 presets still ship Drive at 20–55 % and were voiced through the broken Drive
 stage that I4.2 fixed, so they need re-voicing before they mean anything.
+
+**Measured at I7** (`tezla-tests bus`, 48 kHz ×4, the container's CPU figures
+noisy and quoted as read):
+
+| claim | figure |
+|---|---|
+| every pad on Main: Main against the one-output `process()` render, both channels | **bit-identical**; the other four buses exactly zero, skipped **392 of 392** bus-blocks |
+| a lone kick on the Kick bus against the same kick on Main alone | **bit-identical**; Main exactly zero |
+| the kit split across five buses, summed, against the unsplit render | worst difference **1.78e-15**; `process()` of the split kit is that sum bit for bit |
+| all ten channels across 64 / 97 / 512-sample blocks | **bit-identical** |
+| a lone closed hat's tail (ends at host sample 3151) across the block sizes that spill it over a boundary (259 / 260 / 261 / 283) | **bit-identical** -- went red with the skip decided on the block's own zeros |
+| decimated impulse exactly zero after, at ×2 / ×4 / ×8 | **96 / 224 / 480** internal samples (`kBusFlushSamples` 1024) |
+| the busy eight-pad kit, five buses against one | **17.2 % against 14.1 %** of a core: 3.1 % for four extra stereo decimations |
 
 **Measured at I1** (`tezla-measure ictus` and `tezla-tests kick`, 48 kHz
 host unless said; the container's CPU figures are noisy, quoted as a range):
@@ -1302,9 +1350,12 @@ mixer effects chain"*). Everything appended at `kSchemaV12`, every default
 neutral: the round-1 golden render (the same sixty-line program, four rates,
 stereo, every existing stage on) is still md5 `d933a800…` with the whole
 mid/side path, the rooms, the clap layer and the rattle controls in place.
-**Pushed before the measure rows and the full docs pass were written**, at the
-user's request (a usage limit was closing); this section is the record until
-that pass lands.
+Pushed first without the measure rows, at the user's request (a usage limit
+was closing); the follow-up commit added `tezla-measure ictus` **table 5** --
+the spreads' levels, the wash's energy, the rattle's tone, decay and tension,
+the room, Width, Mono below and the drop curve, in one run -- and put the plate
+pages in a **viewport**, so the snare page (six rows now) scrolls rather than
+losing its last row off the bottom of the default window.
 
 **The field.** Every engine's `process (double& side)` returns its mid and
 writes a side that is exactly 0.0 unless a spread control is up, so a pad with
@@ -1384,6 +1435,21 @@ velocity hit at 19 ms against 29, and Tension 0 never evaluates a lift.
 **Kick.** *Drop curve*: `TensionDrop`'s new third argument -- at half the drop
 1.4142 (a line, exactly 2^(6/12)), 1.0585 (exponential), 1.6605 (snap).
 
+**Table 5, as the tool prints it** (96 kHz engines; the engine at 48 kHz x4):
+Air stereo 100: hiss mid x0.707, left x0.991, right x1.006 of the mono hiss;
+Wires stereo 100: mid x0.707, left x1.003, right x0.984. Wash 100: the hit's
+energy x1.925 on a 100 ms plate-only hat, x1.775 on 500 ms, the drive over at
+half the decay exactly. Rattle tone (power centroid 200 Hz-20 kHz, 100-400 ms
+in): 1106 / 6372 / 7558 / 8999 / 13415 Hz at -2 / -1 / 0 / +1 / +2 octaves, RMS
+within +-1 dB of the flat throw at every setting. Rattle decay: 0.0456 RMS
+200-300 ms in with the shell's, exactly 0 with 50 ms of its own. Tension: the
+lift ends at 119 / 74 / 29 ms at 25 / 50 / 100 %, 19 ms for a 0.4-velocity hit
+at 100 %, never at 0. Room 100 (200 ms) on a 400 ms kick: 0.45-0.5 s RMS
+0.000000 dry, 0.00157 wet; left-right RMS 0 dry, 0.0418 wet. Mono below: the
+low band's correlation 0.504 open, 0.990 at 150 Hz. Width: side RMS 0 (left ==
+right bit for bit), 0.0418, 0.0835 at 0 / 100 / 200 %. Drop curve at half the
+drop: 1.4142 / 1.0585 / 1.6605 for -1 / 0 / +1.
+
 **Tests.** Sixteen in `tests/test_Ictus.cpp` under the I4.5 rule, five shared
 (`test_TensionDrop.cpp`, `test_EarlyReflections.cpp`); the whole kit with
 everything spread bit-identical across 64-, 97- and 512-sample blocks. Twenty
@@ -1391,9 +1457,14 @@ break-checks run, each seen red then reverted with the engine files
 checksummed: three stayed green the first time and were re-done -- two were
 weak breaks (the clap's tail still had a side; a 7 ms offset that happened to
 sit on the 32-sample grid) and one was the room-level guard above, a real
-defect. Not yet done: `tools/measure_main.cpp` rows for the round, the
-`qemu-aarch64` cross-check (CLAUDE.md section 2.3 gate), and nothing of this
-has been heard on the rig.
+defect. The clang build is warning-free and its suite passes but for the eight-pad
+CPU budget: 15.2-15.7 % of a core against the 15 % budget, where gcc reads
+13.7 % -- a compiler margin on a budget set at I4 with 2.5x headroom over a
+6 % kit, not a defect the round introduced (the round-1 build read 14.4-15.3 %
+under clang before I4.5 added 0.5-0.9 %). The budget is re-based to 22 %, 1.5x
+the clang figure, with the history in the test's comment. The `qemu-aarch64`
+cross-check was not run (CLAUDE.md section 2.3 gate), and nothing of this has
+been heard on the rig.
 
 **I4.3 -- a hold on the snares' wires** (2026-09-03, the user). The wires had
 a decay and nothing else, so the only way to get a long buzz was a long

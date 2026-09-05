@@ -84,6 +84,10 @@ private:
     void refreshDisplays();
     void updateGreying();
 
+    /// The plate page the viewport shows, sized to the viewport or to its own
+    /// minimum height, whichever is taller -- the taller one scrolls.
+    void layoutViewedPage();
+
     IctusProcessor& ictus_;
 
     ui::TooltipHost tooltips_ { *this };
@@ -109,6 +113,10 @@ private:
     std::unique_ptr<PlatePage> clapPage_;
     std::unique_ptr<PlatePage> mixPage_;
     std::unique_ptr<ui::TuningPanel> tuningPage_;
+
+    /// One viewport shows whichever plate page is current; a page taller than
+    /// the window scrolls in it (the wheel scrolls the panel, never a knob).
+    juce::Viewport pageView_;
 
     // The pictures, owned by their pages; kept for the timer's refresh.
     PitchView* pitchView_ { nullptr };

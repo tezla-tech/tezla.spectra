@@ -37,6 +37,7 @@
 #include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/Oscillator.hpp>
 #include <tezla/dsp/Biquad.hpp>
+#include <tezla/dsp/Correlation.hpp>
 #include <tezla/dsp/Decibels.hpp>
 #include <tezla/dsp/Scales.hpp>
 #include <tezla/dsp/TruePeakDetector.hpp>
@@ -6136,6 +6137,339 @@ int runIctus (const Args& args)
                              HatEngine::grainDensityFor (grain, r) * r, peakOf (hiss) / rms, denseCrest,
                              20.0 * std::log10 (rms / denseRms));
             }
+        }
+    }
+
+
+    // ======================================================================
+    // table 5, the fifth round: the field, the rooms, the wash, the rattle (I4.5)
+    // ======================================================================
+
+    std::printf ("\n\ntezla-measure ictus -- table 5, the fifth round\n\n");
+
+    {
+        const double r = 96000.0;
+        const auto at = [&] (double seconds) { return static_cast<std::size_t> (seconds * r); };
+
+        const auto rmsOf = [] (const std::vector<double>& x)
+        {
+            double sum = 0.0;
+            for (const double v : x)
+                sum += v * v;
+            return std::sqrt (sum / static_cast<double> (std::max<std::size_t> (x.size(), 1)));
+        };
+
+        const auto slice = [&] (const std::vector<double>& x, double from, double to)
+        {
+            const auto a = std::min (x.size(), at (from));
+            const auto b = std::min (x.size(), at (to));
+            return std::vector<double> (x.begin() + static_cast<std::ptrdiff_t> (a),
+                                        x.begin() + static_cast<std::ptrdiff_t> (b));
+        };
+
+        // One hit of an engine with its side alongside.
+        struct MidSide { std::vector<double> mid, side; };
+
+        const auto renderMidSide = [&] (auto& engine, double seconds, auto&& start)
+        {
+            engine.prepare (r);
+            start (engine);
+            const int total = static_cast<int> (seconds * r);
+            MidSide out;
+            out.mid.resize (static_cast<std::size_t> (total));
+            out.side.resize (static_cast<std::size_t> (total));
+
+            for (int n = 0; n < total; ++n)
+            {
+                if (n % Engine::kControlIntervalSamples == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+
+                out.mid[static_cast<std::size_t> (n)] = engine.process (out.side[static_cast<std::size_t> (n)]);
+            }
+
+            return out;
+        };
+
+        // 1. The spreads. Air: the hat with Air minus the hat without, Drive
+        // and Grit off, so the difference is the hiss (the R1 rig). Wires: a
+        // snare that is wires only.
+        {
+            HatSettings s;
+            s.spread = 0.0; s.ring = 0.0; s.drive = 0.0; s.grit = 0.0; s.sizzle = 0.0; s.damp = 0.0; s.strike = 0.0;
+            s.level = 1.0; s.velocityLevel = 0.0; s.velocityDecay = 0.0; s.velocityColour = 0.0; s.velocityStrike = 0.0;
+            s.air = 0.3; s.airToneHz = 1000.0; s.airDecay = 1.0; s.colourHz = 4000.0; s.width = 1.0;
+            s.highpassHz = 200.0; s.decayClosedSeconds = 0.3;
+
+            HatSettings quiet = s;
+            quiet.air = 0.0;
+
+            HatEngine a, b;
+            const auto plain = renderMidSide (a, 0.3, [&] (HatEngine& e) { e.start (s, false, 1.0, 21u, 0); });
+            const auto none = renderMidSide (b, 0.3, [&] (HatEngine& e) { e.start (quiet, false, 1.0, 21u, 0); });
+
+            std::vector<double> hissMono (plain.mid.size());
+            for (std::size_t n = 0; n < hissMono.size(); ++n)
+                hissMono[n] = plain.mid[n] - none.mid[n];
+
+            s.airStereo = 1.0;
+            quiet.airStereo = 1.0;
+            HatEngine c, d;
+            const auto spread = renderMidSide (c, 0.3, [&] (HatEngine& e) { e.start (s, false, 1.0, 21u, 0); });
+            const auto silent = renderMidSide (d, 0.3, [&] (HatEngine& e) { e.start (quiet, false, 1.0, 21u, 0); });
+
+            std::vector<double> mid (spread.mid.size()), left (spread.mid.size()), right (spread.mid.size());
+            for (std::size_t n = 0; n < mid.size(); ++n)
+            {
+                mid[n] = spread.mid[n] - silent.mid[n];
+                left[n] = mid[n] + spread.side[n];
+                right[n] = mid[n] - spread.side[n];
+            }
+
+            const double mono = rmsOf (slice (hissMono, 0.02, 0.3));
+            std::printf ("Air stereo 100: hiss RMS mono %.5f, mid %.5f (x%.3f), left %.5f (x%.3f), right %.5f (x%.3f)\n",
+                         mono, rmsOf (slice (mid, 0.02, 0.3)), rmsOf (slice (mid, 0.02, 0.3)) / mono,
+                         rmsOf (slice (left, 0.02, 0.3)), rmsOf (slice (left, 0.02, 0.3)) / mono,
+                         rmsOf (slice (right, 0.02, 0.3)), rmsOf (slice (right, 0.02, 0.3)) / mono);
+        }
+
+        {
+            SnareSettings w;
+            w.tuneHz = 200.0; w.spread = 1.0; w.tone = 1.0; w.decaySeconds = 1.0; w.startSemitones = 0.0;
+            w.body = 0.0; w.wires = 0.6; w.snappyHz = 3000.0; w.wiresHoldSeconds = 0.1; w.wiresDecaySeconds = 0.2;
+            w.rattle = 0.0; w.crack = 0.0; w.crackNoise = 0.0; w.level = 1.0;
+            w.velocityLevel = 0.0; w.velocityWires = 0.0; w.velocityCrack = 0.0; w.velocityDrop = 0.0;
+
+            SnareEngine a;
+            const auto plain = renderMidSide (a, 0.3, [&] (SnareEngine& e) { e.start (w, 200.0, 1.0, 99u, 0); });
+            w.wiresStereo = 1.0;
+            SnareEngine b;
+            const auto spread = renderMidSide (b, 0.3, [&] (SnareEngine& e) { e.start (w, 200.0, 1.0, 99u, 0); });
+
+            std::vector<double> left (spread.mid.size()), right (spread.mid.size());
+            for (std::size_t n = 0; n < left.size(); ++n)
+            {
+                left[n] = spread.mid[n] + spread.side[n];
+                right[n] = spread.mid[n] - spread.side[n];
+            }
+
+            const double mono = rmsOf (slice (plain.mid, 0.01, 0.1));
+            std::printf ("Wires stereo 100: wires RMS mono %.5f, mid x%.3f, left x%.3f, right x%.3f\n", mono,
+                         rmsOf (slice (spread.mid, 0.01, 0.1)) / mono, rmsOf (slice (left, 0.01, 0.1)) / mono,
+                         rmsOf (slice (right, 0.01, 0.1)) / mono);
+        }
+
+        // 2. The wash: the plate-only hat's energy with and without.
+        for (const double decay : { 0.1, 0.5 })
+        {
+            HatSettings h;
+            h.spread = 0.0; h.ring = 0.0; h.drive = 0.0; h.air = 0.0; h.sizzle = 0.0; h.damp = 0.0; h.strike = 0.0;
+            h.level = 1.0; h.velocityLevel = 0.0; h.velocityDecay = 0.0; h.velocityColour = 0.0; h.velocityStrike = 0.0;
+            h.plate = 1.0; h.decayClosedSeconds = decay;
+
+            double energy[2] {};
+            double washedUntil = 0.0;
+
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                h.wash = pass == 0 ? 0.0 : 1.0;
+                HatEngine e;
+                e.prepare (r);
+                e.start (h, false, 1.0, 99u, 0);
+                const int total = static_cast<int> (1.0 * r);
+
+                for (int n = 0; n < total; ++n)
+                {
+                    if (n % Engine::kControlIntervalSamples == 0)
+                        e.advanceControl (Engine::kControlIntervalSamples);
+
+                    const double v = e.process();
+                    energy[pass] += v * v;
+
+                    if (pass == 1 && e.isWashing())
+                        washedUntil = n / r;
+                }
+            }
+
+            std::printf ("Wash 100 on a %.1f s plate-only hat: energy x%.3f, the drive over at %.3f s (half the decay by design)\n",
+                         decay, energy[1] / energy[0], washedUntil);
+        }
+
+        // 3. The rattle: the shell's throw on its own (Rattle 1 minus Rattle 0,
+        // the shell path identical), 100 ms in and after, as tone moves.
+        {
+            SnareSettings s;
+            s.tuneHz = 200.0; s.spread = 1.0; s.tone = 0.6; s.decaySeconds = 1.0; s.startSemitones = 0.0;
+            s.body = 1.0; s.wires = 0.6; s.wiresHoldSeconds = 0.0; s.wiresDecaySeconds = 0.05; s.rattle = 1.0;
+            s.crack = 0.0; s.crackNoise = 0.0; s.level = 1.0;
+            s.velocityLevel = 0.0; s.velocityWires = 0.0; s.velocityCrack = 0.0; s.velocityDrop = 0.0;
+
+            const auto rattleOnly = [&] (const SnareSettings& t)
+            {
+                SnareSettings quiet = t;
+                quiet.rattle = 0.0;
+                SnareEngine a, b;
+                const auto with = renderMidSide (a, 0.4, [&] (SnareEngine& e) { e.start (t, 180.0, 1.0, 99u, 0); });
+                const auto without = renderMidSide (b, 0.4, [&] (SnareEngine& e) { e.start (quiet, 180.0, 1.0, 99u, 0); });
+                std::vector<double> d (with.mid.size());
+                for (std::size_t n = 0; n < d.size(); ++n)
+                    d[n] = with.mid[n] - without.mid[n];
+                return d;
+            };
+
+            std::printf ("Rattle tone, the shell's throw 100-400 ms in (centroid 200 Hz-20 kHz; RMS):\n");
+
+            for (const double octaves : { -2.0, -1.0, 0.0, 1.0, 2.0 })
+            {
+                SnareSettings t = s;
+                t.rattleToneOctaves = octaves;
+                const auto tail = slice (rattleOnly (t), 0.1, 0.4);
+                std::printf ("  %+.0f oct: %6.0f Hz  RMS %.5f\n", octaves, ictusMeasure::centroidHz (tail, r, 200.0, 20000.0), rmsOf (tail));
+            }
+
+            // Rattle decay: with the shell's, and with 50 ms of its own.
+            {
+                const auto forever = rattleOnly (s);
+                SnareSettings t = s;
+                t.rattleDecaySeconds = 0.05;
+                const auto falling = rattleOnly (t);
+                std::printf ("Rattle decay: throw RMS 200-300 ms %.6f with the shell's decay, %.9f with 50 ms of its own\n",
+                             ictusMeasure::rmsBetween (forever, at (0.2), at (0.3)),
+                             ictusMeasure::rmsBetween (falling, at (0.2), at (0.3)));
+            }
+
+            // Tension: where the lift ends, by tension and by velocity.
+            {
+                SnareSettings t = s;
+                t.decaySeconds = 0.25;
+                t.velocityWires = 0.4;
+
+                std::printf ("Tension on a 250 ms snare (last sample the snares lift; -1 never):\n");
+
+                for (const auto& [tension, velocity] : { std::pair { 0.0, 1.0 }, std::pair { 0.25, 1.0 }, std::pair { 0.5, 1.0 },
+                                                        std::pair { 1.0, 1.0 }, std::pair { 1.0, 0.4 } })
+                {
+                    SnareSettings u = t;
+                    u.rattleTension = tension;
+                    SnareEngine e;
+                    e.prepare (r);
+                    e.start (u, 180.0, velocity, 99u, 0);
+                    int last = -1;
+
+                    for (int n = 0; n < static_cast<int> (0.4 * r); ++n)
+                    {
+                        if (n % Engine::kControlIntervalSamples == 0)
+                            e.advanceControl (Engine::kControlIntervalSamples);
+                        (void) e.process();
+                        if (! dsp::isExactlyZero (e.getLiftLevel()))
+                            last = n;
+                    }
+
+                    std::printf ("  tension %.2f velocity %.1f: lift ends %.4f s\n", tension, velocity, last / r);
+                }
+            }
+        }
+
+        // 4. The engine: a room on the kick, Width, Mono below -- at 48 kHz
+        // with Auto (x4), the engine as the plugin runs it.
+        {
+            const double host = 48000.0;
+            const int samples = 24000;
+
+            struct Stereo { std::vector<double> left, right; };
+
+            const auto renderKit = [&] (const EngineParameters& parameters)
+            {
+                auto engine = std::make_unique<Engine>();
+                engine->prepare (host, 512);
+                engine->setParameters (parameters);
+                Stereo out;
+                out.left.assign (static_cast<std::size_t> (samples), 0.0);
+                out.right.assign (static_cast<std::size_t> (samples), 0.0);
+                int done = 0;
+
+                while (done < samples)
+                {
+                    if (done == 100)
+                        engine->noteOn (36, 1.0);
+                    const int take = std::min (done < 100 ? 100 - done : 256, samples - done);
+                    double* block[2] = { out.left.data() + done, out.right.data() + done };
+                    engine->process (block, take);
+                    done += take;
+                }
+
+                return out;
+            };
+
+            EngineParameters p;
+            p.kick1.decaySeconds = 0.4;
+            const auto dry = renderKit (p);
+
+            auto& room = p.room[static_cast<int> (RoomIndex::kick1)];
+            room.level = 1.0;
+            room.seconds = 0.2;
+            room.toneHz = 0.0;
+            const auto wet = renderKit (p);
+
+            const auto hostAt = [&] (double seconds) { return static_cast<std::size_t> (seconds * host); };
+            std::printf ("Room 100 (200 ms) on a 400 ms kick: RMS 0.45-0.5 s %.6f dry, %.5f wet; left-right RMS %.5f dry, %.5f wet\n",
+                         ictusMeasure::rmsBetween (dry.left, hostAt (0.45), hostAt (0.5)),
+                         ictusMeasure::rmsBetween (wet.left, hostAt (0.45), hostAt (0.5)),
+                         [&] { std::vector<double> d (samples); for (int n = 0; n < samples; ++n) d[static_cast<std::size_t> (n)] = 0.5 * (dry.left[static_cast<std::size_t> (n)] - dry.right[static_cast<std::size_t> (n)]); return rmsOf (d); }(),
+                         [&] { std::vector<double> d (samples); for (int n = 0; n < samples; ++n) d[static_cast<std::size_t> (n)] = 0.5 * (wet.left[static_cast<std::size_t> (n)] - wet.right[static_cast<std::size_t> (n)]); return rmsOf (d); }());
+
+            for (const double monoBelow : { 0.0, 150.0 })
+            {
+                p.monoBelowHz[static_cast<int> (PadIndex::kick1)] = monoBelow;
+                const auto rendered = renderKit (p);
+                dsp::StereoAnalyser analyser;
+                analyser.prepare (host, 0.4);
+                const double* channels[2] = { rendered.left.data(), rendered.right.data() };
+                analyser.process (channels, 2, samples);
+                std::printf ("  Mono below %3.0f Hz: low-band correlation %.3f, full %.3f\n", monoBelow,
+                             analyser.getBandCorrelation (dsp::StereoAnalyser::low), analyser.getCorrelation());
+            }
+
+            p.monoBelowHz[static_cast<int> (PadIndex::kick1)] = 150.0;
+
+            for (const double width : { 0.0, 1.0, 2.0 })
+            {
+                p.width[static_cast<int> (PadIndex::kick1)] = width;
+                const auto rendered = renderKit (p);
+                std::vector<double> side (samples);
+                for (int n = 0; n < samples; ++n)
+                    side[static_cast<std::size_t> (n)] = 0.5 * (rendered.left[static_cast<std::size_t> (n)] - rendered.right[static_cast<std::size_t> (n)]);
+                std::printf ("  Width %.0f %%: side RMS %.6f%s\n", width * 100.0, rmsOf (side),
+                             width == 0.0 && rendered.left == rendered.right ? "  (left == right bit for bit)" : "");
+            }
+        }
+
+        // 5. The drop's curve: the pitch ratio at half the stated time.
+        {
+            KickSettings k;
+            k.startSemitones = 12.0;
+            k.dropSeconds = 0.1;
+            k.sighSemitones = 0.0;   // the drop alone: the default sigh would add its own pitch
+            k.velocityDrop = 0.0;
+            std::printf ("Drop curve, pitch ratio at half a 12 st / 100 ms drop:");
+
+            for (const double curve : { -1.0, 0.0, 1.0 })
+            {
+                k.dropCurve = curve;
+                KickEngine e;
+                e.prepare (r);
+                e.start (k, 50.0, 1.0, 5u, 0);
+
+                for (int n = 0; n < static_cast<int> (0.05 * r); ++n)
+                {
+                    if (n % Engine::kControlIntervalSamples == 0)
+                        e.advanceControl (Engine::kControlIntervalSamples);
+                    (void) e.process();
+                }
+
+                std::printf ("  %+.0f -> %.4f", curve, e.currentHz() / 50.0);
+            }
+
+            std::printf ("  (a line lands 1.4142 = 2^(6/12); the exponential leaves 8 %%)\n");
         }
     }
 

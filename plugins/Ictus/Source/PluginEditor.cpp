@@ -158,6 +158,13 @@ IctusEditor::IctusEditor (IctusProcessor& owner)
     buildClapPage();
     buildMixPage();
     buildTuningPage();
+
+    // The plate pages live in one viewport: a page taller than the window
+    // scrolls rather than losing its last rows off the bottom.
+    pageView_.setScrollBarsShown (true, false);
+    pageView_.setScrollBarThickness (14);
+    addAndMakeVisible (pageView_);
+
     showPage (0);
 
     tooltips_.setEnabled (ictus_.getTooltipsEnabled());
@@ -466,7 +473,6 @@ void IctusEditor::buildKickPage()
         return juce::String (hz, 1);
     });
 
-    addChildComponent (page);
 }
 
 // ---------------------------------------------------------------------------
@@ -814,7 +820,6 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
         return hz >= 19999.0 ? juce::String ("Off") : juce::String (juce::roundToInt (hz));
     });
 
-    addChildComponent (page);
 
     return views;
 }
@@ -1094,7 +1099,6 @@ void IctusEditor::buildHatPage()
              + juce::String (100.0 * fraction, 0) + "%";
     });
 
-    addChildComponent (page);
 }
 
 void IctusEditor::buildClapPage()
@@ -1247,7 +1251,6 @@ void IctusEditor::buildClapPage()
         return juce::String (juce::roundToInt (count));
     });
 
-    addChildComponent (page);
 }
 
 // ---------------------------------------------------------------------------
@@ -1336,6 +1339,29 @@ void IctusEditor::buildMixPage()
         });
     }
 
+    // ---- outputs ----
+    page.beginPlate ("Output", "which of the five outputs each pad leaves by", kTintVelocity);
+
+    for (const auto& entry : entries)
+    {
+        const int index = static_cast<int> (entry.pad);
+
+        page.addChoice (kOutputIds[index], entry.name, choices::output,
+            juce::String (entry.name) + " output: which of the instrument's five stereo outputs "
+            "this pad is rendered to -- Main, Kick, Snare, Hats or Perc. The names are labels, "
+            "nothing more: any pad can go to any output, and several pads can share one. Every "
+            "pad is on Main by default, which is the one-output instrument every saved project "
+            "was mixed against, bit for bit. In FL Studio the outputs appear once the plugin is "
+            "told to use them: in the wrapper's PROCESSING tab, turn on 'Process inactive inputs "
+            "and outputs' (or the corresponding output enable), then right-click the "
+            "instrument's mixer track and choose 'Auto map outputs' to lay Kick, Snare, Hats and "
+            "Perc onto the next four mixer tracks -- or set them by hand in the wrapper's "
+            "mixer-track offsets. An output nobody is routed to is silent and costs nothing "
+            "once its last hit has gone; each output in use costs one more decimation, under "
+            "1 % of a core per stereo pair at x4 (the whole kit on five outputs measured 3.1 % "
+            "more than on one). Takes effect at the next hit.");
+    }
+
     // ---- the readout ----
     page.beginPlate ("Field", "what the output's correlation is doing", kTintAmplitude);
 
@@ -1351,9 +1377,10 @@ void IctusEditor::buildMixPage()
                   "nothing spread has no side and is the mono render bit for bit. For a drum and bass "
                   "mix: the kick centred and mono, the snare's body centred with only its wires and room "
                   "opening, the hats 10 to 25 % off and spread, the clap wide -- the readout's low band "
-                  "lit throughout.");
+                  "lit throughout. Output splits the kit across up to five stereo outputs so each drum "
+                  "can have its own mixer track and its own processing; with everything on Main, which "
+                  "is the default, the instrument is the single-output one it always was, bit for bit.");
 
-    addChildComponent (page);
 }
 
 void IctusEditor::buildTuningPage()
@@ -1387,13 +1414,26 @@ void IctusEditor::showPage (int index)
 {
     currentPage_ = juce::jlimit (0, 6, index);
 
-    kickPage_->setVisible (currentPage_ == 0);
-    snarePage_->setVisible (currentPage_ == 1);
-    ghostPage_->setVisible (currentPage_ == 2);
+    PlatePage* const pages[] = { kickPage_.get(), snarePage_.get(), ghostPage_.get(), nullptr,
+                                 hatPage_.get(), clapPage_.get(), mixPage_.get() };
+
+    if (auto* page = pages[currentPage_])
+    {
+        if (pageView_.getViewedComponent() != page)
+        {
+            pageView_.setViewedComponent (page, false);
+            pageView_.setViewPosition (0, 0);
+        }
+
+        page->setVisible (true);
+        pageView_.setVisible (true);
+    }
+    else
+    {
+        pageView_.setVisible (false);
+    }
+
     tuningPage_->setVisible (currentPage_ == 3);
-    hatPage_->setVisible (currentPage_ == 4);
-    clapPage_->setVisible (currentPage_ == 5);
-    mixPage_->setVisible (currentPage_ == 6);
 
     if (currentPage_ == 0)
         currentPad_ = PadIndex::kick1;
@@ -1826,13 +1866,24 @@ void IctusEditor::resized()
     padStrip_->setBounds (strip);
 
     bounds.reduce (8, 4);
-    kickPage_->setBounds (bounds);
-    snarePage_->setBounds (bounds);
-    ghostPage_->setBounds (bounds);
-    hatPage_->setBounds (bounds);
-    clapPage_->setBounds (bounds);
-    mixPage_->setBounds (bounds);
+    pageView_.setBounds (bounds);
+    layoutViewedPage();
     tuningPage_->setBounds (bounds);
+}
+
+void IctusEditor::layoutViewedPage()
+{
+    auto* page = dynamic_cast<PlatePage*> (pageView_.getViewedComponent());
+
+    if (page == nullptr)
+        return;
+
+    const auto area = pageView_.getLocalBounds();
+    const int needed = page->minimumHeight();
+    const bool scrolls = needed > area.getHeight();
+    const int width = area.getWidth() - (scrolls ? pageView_.getScrollBarThickness() : 0);
+
+    page->setSize (juce::jmax (1, width), scrolls ? needed : area.getHeight());
 }
 
 } // namespace tezla::ictus

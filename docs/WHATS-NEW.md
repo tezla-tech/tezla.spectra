@@ -527,6 +527,39 @@ Tension is their §18.13 read first-hand. Wide Kit, Room Kit, Chatter Snare,
 Clap Snare and Laser Kick are the presets that show each off. None of it has
 been heard on the rig yet.
 
+### Outputs -- the kit across five mixer tracks (new)
+
+**What it does.** Every pad has an *Output* on the MIX page: *Main*, *Kick*,
+*Snare*, *Hats* or *Perc* -- five stereo outputs the instrument now declares to
+the host. The names are labels; any pad can go to any output, and pads can
+share one. Every pad starts on Main, so a saved project sounds exactly as it
+did: with everything on Main the instrument is the single-output one it always
+was, bit for bit.
+
+**How to use it, in FL Studio.** Open the plugin's wrapper settings and, on the
+*Processing* tab, make sure the extra outputs are active (*Process inactive
+inputs and outputs* if they do not show). Right-click the instrument's mixer
+track and choose *Auto map outputs*: Kick, Snare, Hats and Perc land on the
+mixer tracks following the plugin's own -- or set them by hand in the wrapper's
+*Mixer-track offsets*. Then treat each as its own drum: a compressor on the
+kick alone, sidechained from nothing else; a reverb on the snare that the kick
+never enters; the hats on a bus with their own tilt and their own width. The
+split changes nothing about the sound: the outputs summed at unity are the
+single output to within rounding, and a drum alone on an output is bit-identical
+to the same drum on Main.
+
+**What it costs.** Nothing while everything is on Main: the four unused outputs
+are skipped exactly once their last hit has gone. Each output in use is one more
+decimation -- the busy eight-pad kit measured 3.1 % of a core more on five
+outputs than on one, at 48 kHz x4.
+
+**Where it comes from.** Plumbing, not physics: no source, and nothing to
+attribute. It was asked for straight after the fifth round ("can you do the FX
+channel sends so we can split the drums across different mixer channels?").
+Not yet loaded in FL Studio -- how FL lays out a JUCE instrument's five outputs
+is the one point that could not be verified from here; the worst case is the
+extra outputs not appearing, never silence.
+
 ## Where the numbers live
 
 Every claim above is measured, and the measurements are in the repository rather

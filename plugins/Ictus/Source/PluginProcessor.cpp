@@ -59,7 +59,11 @@ constexpr int kSchemaV11 = 11;
 /// the wires' colour, the rattle's own decay, tone and tension, the drop's
 /// curve, and the clap layered under the snare.
 constexpr int kSchemaV12 = 12;
-constexpr int kStateSchemaVersion = kSchemaV12;
+
+/// Schema 13: the output buses (I7) -- an Output choice per pad, Main by
+/// default, so the kit stays on the one output it always had until told.
+constexpr int kSchemaV13 = 13;
+constexpr int kStateSchemaVersion = kSchemaV13;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -710,7 +714,15 @@ const std::vector<Preset>& presets()
 
 IctusProcessor::IctusProcessor()
     : juce::AudioProcessor (BusesProperties()
-                                .withOutput ("Main", juce::AudioChannelSet::stereo(), true)),
+                                // Every bus enabled from the start: FL Studio skips outputs a
+                                // plugin marks inactive unless told to process them
+                                // (docs/DSP-REFERENCES.md, the Image-Line rows). Main is the
+                                // fallback and is never disabled.
+                                .withOutput (kBusNames[0], juce::AudioChannelSet::stereo(), true)
+                                .withOutput (kBusNames[1], juce::AudioChannelSet::stereo(), true)
+                                .withOutput (kBusNames[2], juce::AudioChannelSet::stereo(), true)
+                                .withOutput (kBusNames[3], juce::AudioChannelSet::stereo(), true)
+                                .withOutput (kBusNames[4], juce::AudioChannelSet::stereo(), true)),
       state_ (*this, nullptr, kStateTypeName, createParameterLayout())
 {
     for (int pad = 0; pad < kPadCount; ++pad)
@@ -1527,6 +1539,15 @@ IctusProcessor::createParameterLayout()
         juce::ParameterID { ids::s1ClapOffset, kSchemaV12 }, "Snare 1 Clap offset",
         Range (0.0f, 50.0f, 0.1f), 0.0f, attributes ("ms")));
 
+    // ---- schema 13: the output buses (I7) -------------------------------------
+    //
+    // One Output per pad, Main by default: a project saved before the buses
+    // existed keeps the whole kit on the one output it always had.
+    for (int pad = 0; pad < kPadCount; ++pad)
+        parameters.push_back (std::make_unique<ChoiceParameter> (
+            juce::ParameterID { kOutputIds[pad], kSchemaV13 }, juce::String (padNames[pad]) + " Output",
+            choices::output, 0));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -1536,7 +1557,26 @@ IctusProcessor::createParameterLayout()
 
 bool IctusProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    // No inputs; Main stereo, never disabled; every other bus stereo or
+    // disabled -- a pad routed to a bus the host has turned off falls back
+    // to Main in processBlock, so nothing goes silent.
+    if (! layouts.inputBuses.isEmpty())
+        for (const auto& input : layouts.inputBuses)
+            if (! input.isDisabled())
+                return false;
+
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+
+    for (int bus = 1; bus < layouts.outputBuses.size(); ++bus)
+    {
+        const auto& set = layouts.outputBuses.getReference (bus);
+
+        if (! set.isDisabled() && set != juce::AudioChannelSet::stereo())
+            return false;
+    }
+
+    return true;
 }
 
 void IctusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock)
@@ -1558,7 +1598,7 @@ void IctusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSample
     // it here and the first block already plays through it.
     collectTuning();
 
-    scratch_.setSize (2, std::max (maximumExpectedSamplesPerBlock, 1), false, false, true);
+    scratch_.setSize (2 * kBusCount, std::max (maximumExpectedSamplesPerBlock, 1), false, false, true);
 
     analyser_.prepare (sampleRate_, 0.4);
     rmsAccumulator_ = 0.0;
@@ -1730,6 +1770,10 @@ void IctusProcessor::pullParameters()
     parameters_.snareClap = valueOf (state_, ids::s1Clap) * 0.01;
     parameters_.snareClapOffsetSeconds = valueOf (state_, ids::s1ClapOffset) * 0.001;
 
+    for (int pad = 0; pad < kPadCount; ++pad)
+        parameters_.output[pad] = juce::jlimit (0, kBusCount - 1,
+                                                static_cast<int> (std::lround (valueOf (state_, kOutputIds[pad]))));
+
     parameters_.masterDb = valueOf (state_, ids::output);
     parameters_.bassMode = valueOf (state_, ids::bassMode) > 0.5f;
 
@@ -1839,11 +1883,27 @@ void IctusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
     engine_.setOffline (isNonRealtime());
 
     if (scratch_.getNumSamples() < numSamples)
-        scratch_.setSize (2, numSamples, false, false, true);
+        scratch_.setSize (2 * kBusCount, numSamples, false, false, true);
 
-    double* const engineLeft = scratch_.getWritePointer (0);
-    double* const engineRight = scratch_.getWritePointer (1);
-    double* const engineOut[2] { engineLeft, engineRight };
+    double* engineOut[2 * kBusCount];
+
+    for (int channel = 0; channel < 2 * kBusCount; ++channel)
+        engineOut[channel] = scratch_.getWritePointer (channel);
+
+    // Where each bus lands in the host's buffer: its own channels when the
+    // host gave it any, else folded into Main. A tool that hands us a
+    // two-channel buffer, or a host that disabled a bus, hears everything.
+    const int hostChannels = buffer.getNumChannels();
+    int busChannel[kBusCount];
+
+    for (int bus = 0; bus < kBusCount; ++bus)
+    {
+        const auto* layout = getBus (false, bus);
+        const int first = layout != nullptr && layout->isEnabled() ? getChannelIndexInProcessBlockBuffer (false, bus, 0) : -1;
+        busChannel[bus] = first >= 0 && first + 1 < hostChannels ? first : -1;
+    }
+
+    busChannel[0] = hostChannels >= 2 ? 0 : -1;
 
     // The HIT button lands at the top of the block, at full velocity.
     if (const unsigned hits = pendingHits_.exchange (0); hits != 0)
@@ -1858,18 +1918,47 @@ void IctusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
 
     auto renderSpan = [&] (int from, int count)
     {
-        engine_.process (engineOut, count);
+        engine_.processBuses (engineOut, count);
 
-        // The field readout reads the Main output as the host hears it.
-        const double* const analysed[2] { engineLeft, engineRight };
+        // Every bus to its channels, or into Main when it has none.
+        for (int bus = 0; bus < kBusCount; ++bus)
+        {
+            const int target = busChannel[bus] >= 0 ? busChannel[bus] : busChannel[0];
+
+            if (target < 0)
+                continue;
+
+            for (int channel = 0; channel < 2; ++channel)
+            {
+                const double* source = engineOut[2 * bus + channel];
+                auto* destination = buffer.getWritePointer (target + channel) + from;
+
+                if (busChannel[bus] >= 0)
+                    for (int i = 0; i < count; ++i)
+                        destination[i] = static_cast<FloatType> (source[i]);
+                else
+                    for (int i = 0; i < count; ++i)
+                        destination[i] += static_cast<FloatType> (source[i]);
+            }
+        }
+
+        // The field readout reads the whole kit -- every bus summed, the mix
+        // as it would be with the mixer channels at unity.
+        double* const sumLeft = engineOut[0];
+        double* const sumRight = engineOut[1];
+
+        for (int bus = 1; bus < kBusCount; ++bus)
+            for (int i = 0; i < count; ++i)
+            {
+                sumLeft[i] += engineOut[2 * bus][i];
+                sumRight[i] += engineOut[2 * bus + 1][i];
+            }
+
+        const double* const analysed[2] { sumLeft, sumRight };
         analyser_.process (analysed, 2, count);
 
         for (int i = 0; i < count; ++i)
-        {
-            buffer.setSample (0, from + i, static_cast<FloatType> (engineLeft[i]));
-            buffer.setSample (1, from + i, static_cast<FloatType> (engineRight[i]));
-            rmsAccumulator_ += 0.5 * (engineLeft[i] * engineLeft[i] + engineRight[i] * engineRight[i]);
-        }
+            rmsAccumulator_ += 0.5 * (sumLeft[i] * sumLeft[i] + sumRight[i] * sumRight[i]);
 
         rmsSamples_ += count;
     };
