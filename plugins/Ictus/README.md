@@ -168,6 +168,46 @@ fixed pattern that sums to zero, so the set loosens without moving.
 - **Hold** and **Shape** give the envelope a plateau and a curve, exponential
   through to linear.
 
+### The fifth round: the field, the rooms, the rattle's own controls
+
+Every one of these is exact at its neutral setting; a project saved before
+them reopens bit for bit.
+
+- **Air stereo** and **Metal stereo** (HATS), **Wires stereo** (SNARE, GHOST),
+  **Stereo** (CLAP): the drum itself makes a side signal. The metal and the
+  bursts are placed left and right without touching the mid, so a mono fold is
+  the old hat or clap exactly; the hiss and the wires get a second, independent
+  stream on the side and their mid falls by 1 / sqrt (1 + s^2), so a channel
+  holds its level and the mono fold of a full spread is 3 dB down on that
+  layer -- the price of decorrelation, and the MIX page's readout shows it.
+- **Width** and **Mono below**, one per pad on the MIX page: a gain on the side
+  alone (100 % exact, 0 folds to mono, 200 doubles) and a second-order
+  high-pass on the side (150 Hz by default, Off at 0) so the low end stays
+  centred whatever is spread above it. Both grey on a pad with no side.
+- **Field**, on the MIX page: the output's correlation over the last 400 ms,
+  full band and under 120 Hz, with a lamp while the low band would survive a
+  fold to mono.
+- **Room**, **Size**, **Tone** on the kick, the snare, the ghost and the clap:
+  early reflections of the pad's own mid (48 taps a side, random, falling
+  30 dB), returned as mid and side. Mono under Mono below.
+- **Wash** (HATS): noise driving the plate's modes for half the pad's decay;
+  at 100 the plate gets the strike's energy again -- a noisier strike, a
+  shimmer in the tail.
+- **Head** (SNARE): the upper modes from the snare's ratios (1.6, 2.2) to a
+  tom's (2.16, 3.14, the drum-physics literature's measurement). **Wires tilt**
+  and **Bed**: the wires' slope about Snappy, and six resonances under them.
+- **Rattle decay**, **Rattle tone**, **Tension** on a plate of their own with
+  Rattle: the shell's throw on the wires can now end before the shell does
+  (Shell at 0 is the old behaviour), have a corner of its own (down is a
+  low, pitched chatter; up is sizzle), and lift only while the head's motion
+  exceeds a threshold that rises with tension -- a train of strikes at the
+  head's period that stops early and that a soft hit reaches less of.
+- **Drop curve** (KICK): the drop as the exponential (0), a straight line to
+  the landing (the laser, -100), or a hold-then-snap (+100).
+- **Clap** and **Offset** on the SNARE page: the CLAP page's sound under the
+  snare, a few milliseconds behind, at the snare's pan and through its room.
+- Presets appended: Wide Kit, Room Kit, Chatter Snare, Clap Snare, Laser Kick.
+
 ### The fourth round: the hiss, and the open pad's own hold
 
 Four more controls on the noise layer and one on the envelope, every one exact

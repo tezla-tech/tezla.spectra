@@ -64,6 +64,7 @@ private:
     {
         bool wires { true }, crack { true }, noise { true }, gate { true }, keyed { true }, linked { false };
         bool thump { true };
+        bool rattle { true }, room { true }, clap { true };
     };
 
     void timerCallback() override;
@@ -116,6 +117,7 @@ private:
     SnareViews ghostViews_;
     PartialsView* partialsView_ { nullptr };
     BurstView* burstView_ { nullptr };
+    FieldView* fieldView_ { nullptr };
 
     int currentPage_ { 0 };
 
@@ -136,6 +138,7 @@ private:
     bool shownKeyed_ { true };
     bool shownUnder_ { true };
     bool shownKnock_ { true };
+    bool shownKickRoom_ { true };
 
     SnareShown shownSnare_;
     SnareShown shownGhost_;
@@ -147,6 +150,12 @@ private:
     bool shownClapBody_ { true };
     bool shownClapNoise_ { true };
     bool shownClapGate_ { true };
+    bool shownClapRoom_ { true };
+    bool shownHatPlate_ { true };
+
+    /// Per pad, whether the MIX page's Width and Mono below were last shown
+    /// live -- a pad with nothing spread and no room has no side for them.
+    bool shownPadField_[kPadCount] { true, true, true, true, true, true, true, true };
 
     // The live key tooltips and the Tune readouts are rebuilt only when
     // what they describe moves.

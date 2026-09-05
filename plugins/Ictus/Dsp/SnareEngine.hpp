@@ -70,6 +70,7 @@
 #include <cstdint>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/ModalResonator.hpp>
 #include <tezla/dsp/SvfFilter.hpp>
@@ -98,6 +99,7 @@ struct SnareSettings
     double thump { 0.0 };                ///< a low mode under the shell, 0..1; exactly nothing at 0
     double thumpHz { 100.0 };            ///< its pitch, 40..200
     double thumpDecaySeconds { 0.12 };   ///< its T60, 0.03..0.5
+    double head { 0.0 };                 ///< the upper modes' ratios from the snare's set (0) to a tom's (1); 0 is exact
 
     // ---- wires ----------------------------------------------------------
     double wires { 0.6 };                ///< the wires' level, 0..1; exactly nothing at 0
@@ -106,6 +108,12 @@ struct SnareSettings
     double wiresHoldSeconds { 0.0 };     ///< the wires sit at full level this long first, 0..0.3
     double wiresDecaySeconds { 0.15 };   ///< 0.05..0.4
     double rattle { 0.0 };               ///< how much the shell's motion drives the wires, 0..1
+    double wiresTilt { 0.0 };            ///< the wires' slope about the Snappy corner, -1 (dark) .. +1 (bright); 0 is exact
+    double bed { 0.0 };                  ///< the wires rung through a bank of resonances above the corner, 0..1; 0 is exact
+    double wiresStereo { 0.0 };          ///< the wires placed across the field: a second stream as the side, 0..1; 0 is exact
+    double rattleDecaySeconds { 0.0 };   ///< the shell's drive on the wires falls 60 dB in this, 0.01..2; 0 follows the shell exactly
+    double rattleToneOctaves { 0.0 };    ///< the rattle's own corner, in octaves about Snappy, -2..+2; 0 is the snap's filter exactly
+    double rattleTension { 0.0 };        ///< the snares' tension: how much head motion it takes to lift them, 0..1; 0 is exact
 
     // ---- crack ----------------------------------------------------------
     double crack { 0.0 };                ///< the stick's contact: resonator level, 0..1
@@ -152,6 +160,33 @@ public:
     static constexpr double kModeRatios[kModes] { 1.0, 1.6, 2.2 };
     static constexpr double kModeDecays[kModes] { 1.0, 0.7, 0.5 };
 
+    /// HEAD's far end: a single-headed tom's (11) and (21) modes against its
+    /// (01), 2.16 and 3.14 -- TAKEN from Fletcher & Rossing, The Physics of
+    /// Musical Instruments, Table 18.7 (Rossing 1977, a 30 cm tom without a
+    /// centre dot), read first-hand 2026-09-05 (docs/DSP-REFERENCES.md).
+    /// A tom's upper partials sit near the harmonic 2 and 3, which is why a
+    /// tom carries a pitch where a snare's 1.6 and 2.2 do not; Head morphs
+    /// the two ratios geometrically from the snare's set to the tom's, and
+    /// Spread then pulls them towards the fundamental as it always has.
+    static constexpr double kTomRatios[kModes] { 1.0, 2.16, 3.14 };
+
+    /// BED: the wire noise rung through six band-passes above the Snappy
+    /// corner, at these ratios of it -- deliberately incommensurate, so the
+    /// buzz has a pitched, wiry character rather than a note. Fletcher &
+    /// Rossing 18.13: through the snares' impact "higher modes of vibration
+    /// are excited in the snares as well as the snare head". Q and make-up
+    /// as Sizzle's arrangement on the hats.
+    static constexpr double kBedRatios[6] { 0.71, 0.93, 1.19, 1.53, 1.88, 2.31 };
+    static constexpr double kBedQ = 8.0;
+    static constexpr double kBedMakeup = 0.9;
+
+    /// Wires tilt: a low shelf and a high shelf of opposite sign about the
+    /// Snappy corner, +-12 dB at the ends.
+    static constexpr double kWiresTiltRangeDb = 12.0;
+    static constexpr double kWiresTiltQ = 0.707;
+
+    static constexpr std::uint64_t kWiresStereoSalt = 0x7F4A7C159E3779B9ull;
+
     /// The shell is cut exactly once its energy is this far below a unit
     /// strike: -120 dB in amplitude, a millionth. Checked per control chunk.
     static constexpr double kShellEnergyFloor = 1.0e-12;
@@ -164,6 +199,22 @@ public:
     /// puts the shell's drive at about half the stick's burst at the strike
     /// (measured: x1.5 to x1.8 RMS over the first 20 ms, by the burst's own decay).
     static constexpr double kRattleGain = 2.0;
+
+    /// The rattle's own decay (Rattle decay above 0) is cut exactly once it
+    /// is 120 dB down -- the shell's rule.
+    static constexpr double kRattleEnvFloor = 1.0e-6;
+
+    /// The snares' critical amplitude at Tension 1, against a unit strike's
+    /// normalised motion (`shell * strikeNorm_`, which peaks near 0.5 on the
+    /// default snare -- measured in tests/test_Ictus.cpp). Fletcher & Rossing
+    /// 18.13: the snares leave the head only above a certain head amplitude,
+    /// and that amplitude rises with their tension.
+    static constexpr double kLiftThresholdMax = 0.25;
+
+    /// The lifted snares' drive against the follower's: a half-wave
+    /// rectified sine averages 1/pi of its amplitude, the follower's
+    /// full-wave 2/pi, so the two meet at x2.
+    static constexpr double kLiftGain = 2.0;
 
     /// The wires' filter resonance: a little peak at the corner, so a
     /// band-passed snap has a pitch and a high-passed one a presence.
@@ -202,6 +253,25 @@ public:
         wiresFilter_.setMode (dsp::SvfMode::highpass);
         wiresFilter_.setResonance (kWiresResonance);
 
+        wiresFilter2_.prepare (rate_);
+        wiresFilter2_.setMode (dsp::SvfMode::highpass);
+        wiresFilter2_.setResonance (kWiresResonance);
+
+        for (auto* filter : { &rattleFilter_, &rattleFilter2_ })
+        {
+            filter->prepare (rate_);
+            filter->setMode (dsp::SvfMode::highpass);
+            filter->setResonance (kWiresResonance);
+        }
+
+        for (auto* bank : { bedBank_, bedBank2_ })
+            for (int i = 0; i < 6; ++i)
+            {
+                bank[i].prepare (rate_);
+                bank[i].setMode (dsp::SvfMode::bandpass);
+                bank[i].setResonance (dsp::SvfFilter::resonanceForQ (kBedQ));
+            }
+
         gateEnv_.prepare (rate_);
         crack_.prepare (rate_);
         thump_.prepare (rate_);
@@ -227,6 +297,33 @@ public:
         drop_.reset();
         wiresEnv_.kill();
         wiresFilter_.reset();
+        wiresFilter2_.reset();
+        wiresTiltLow_.reset();
+        wiresTiltHigh_.reset();
+        wiresTiltLow2_.reset();
+        wiresTiltHigh2_.reset();
+
+        for (auto* bank : { bedBank_, bedBank2_ })
+            for (int i = 0; i < 6; ++i)
+                bank[i].reset();
+
+        wiresTiltOn_ = false;
+        bedOn_ = false;
+        wiresStereoOn_ = false;
+
+        rattleFilter_.reset();
+        rattleFilter2_.reset();
+        rattleDecayOn_ = false;
+        rattleEnv_ = 1.0;
+        rattleDecayCoefficient_ = 1.0;
+        rattleToneOn_ = false;
+        rattleToneMakeup_ = 1.0;
+        tensionOn_ = false;
+        tension_ = 0.0;
+        liftThreshold_ = 0.0;
+        motionScale_ = 1.0;
+        lift_ = 0.0;
+
         gateEnv_.kill();
         crack_.reset();
         thump_.reset();
@@ -267,9 +364,17 @@ public:
         // Ring scales the upper two modes' decays and leaves the fundamental's.
         const double ringFactor = ringFactorFor (s.ring);
 
+        // Head morphs the upper two ratios from the snare's set to the tom's;
+        // exactly the snare's at 0 by branch.
+        const double head = std::clamp (s.head, 0.0, 1.0);
+        const bool headOn = ! dsp::isExactlyZero (head);
+
         for (int mode = 0; mode < kModes; ++mode)
         {
-            base_[mode] = fundamental_ * (1.0 + (kModeRatios[mode] - 1.0) * spread);
+            const double ratio = headOn ? kModeRatios[mode] * std::pow (kTomRatios[mode] / kModeRatios[mode], head)
+                                        : kModeRatios[mode];
+
+            base_[mode] = fundamental_ * (1.0 + (ratio - 1.0) * spread);
             t60_[mode] = decay * kModeDecays[mode] * (mode > 0 ? ringFactor : 1.0);
         }
 
@@ -324,6 +429,57 @@ public:
             // (0.5): a morph of -0.5 lands exactly on the band-pass.
             wiresFilter_.setMorph (-0.5 * std::clamp (s.snap, 0.0, 1.0));
 
+            // ---- the wires in the field, their tilt and their bed (I4.5) ----
+            //
+            // Each exact at 0 by branch: no second draw, no shelf, no bank.
+            wiresStereo_ = std::clamp (s.wiresStereo, 0.0, 1.0);
+            wiresStereoOn_ = ! dsp::isExactlyZero (wiresStereo_);
+
+            {
+                // A channel's wire level is kept constant across the spread:
+                // the mid's share falls by 1 / sqrt (1 + s^2), exactly 1.0 at 0.
+                const double spreadAmount = wiresStereoOn_ ? wiresStereo_ : 0.0;
+                const double norm = 1.0 / std::sqrt (1.0 + spreadAmount * spreadAmount);
+                wiresMid_ = norm;
+                wiresSide_ = spreadAmount * norm;
+            }
+
+            if (wiresStereoOn_)
+            {
+                random2_.seed (seed ^ kWiresStereoSalt);
+                wiresFilter2_.setCutoffHz (corner);
+                wiresFilter2_.setMorph (-0.5 * std::clamp (s.snap, 0.0, 1.0));
+            }
+
+            const double tilt = std::clamp (s.wiresTilt, -1.0, 1.0);
+            wiresTiltOn_ = ! dsp::isExactlyZero (tilt);
+
+            if (wiresTiltOn_)
+            {
+                const double gainDb = tilt * kWiresTiltRangeDb;
+                wiresTiltLow_.setCoefficients (dsp::design::lowShelf (corner, kWiresTiltQ, -gainDb, rate_));
+                wiresTiltHigh_.setCoefficients (dsp::design::highShelf (corner, kWiresTiltQ, gainDb, rate_));
+
+                if (wiresStereoOn_)
+                {
+                    wiresTiltLow2_.setCoefficients (wiresTiltLow_.getCoefficients());
+                    wiresTiltHigh2_.setCoefficients (wiresTiltHigh_.getCoefficients());
+                }
+            }
+
+            bed_ = std::clamp (s.bed, 0.0, 1.0);
+            bedOn_ = ! dsp::isExactlyZero (bed_);
+
+            if (bedOn_)
+                for (int i = 0; i < 6; ++i)
+                {
+                    const double hz = std::min (corner * kBedRatios[i], rate_ * 0.45);
+                    bedBank_[i].setCutoffHz (hz);
+
+                    if (wiresStereoOn_)
+                        bedBank2_[i].setCutoffHz (hz);
+                }
+
             wiresEnv_.setAttackSeconds (0.0);
             wiresEnv_.setAttackTension (0.0);
             // HOLD: the wires sit at full level before they start falling.
@@ -344,6 +500,77 @@ public:
 
             rattle_ = std::clamp (s.rattle, 0.0, 1.0);
             rattleOn_ = ! dsp::isExactlyZero (rattle_);
+
+            // ---- the rattle's own decay, tone and tension (I4.5) ----
+            //
+            // Each exact at 0 by branch. Rattle decay 0 is "the shell's":
+            // the drive is the follower as it always was, for as long as the
+            // drum rings; a time multiplies it by a fall of its own, so a
+            // shell that rings long (Ring, Decay) can carry a short buzz.
+            // Rattle tone 0 is the snap's own filter; an offset gives the
+            // shell's throw a corner of its own, in octaves about Snappy,
+            // through a second filter on the same white sample. Tension 0
+            // is the smooth follower; up, the snares lift only while the
+            // head's motion exceeds a critical amplitude that rises with it
+            // (Fletcher & Rossing 18.13, read first-hand), so the buzz
+            // becomes a train of strikes at the head's period, needs a
+            // harder hit, and stops before the shell does.
+            if (rattleOn_)
+            {
+                const double rattleDecay = std::clamp (s.rattleDecaySeconds, 0.0, 2.0);
+                rattleDecayOn_ = ! dsp::isExactlyZero (rattleDecay);
+                rattleEnv_ = 1.0;
+                rattleDecayCoefficient_ = rattleDecayOn_
+                    ? std::exp (-std::log (1000.0) / (std::max (rattleDecay, 0.01) * rate_))
+                    : 1.0;
+
+                const double rattleTone = std::clamp (s.rattleToneOctaves, -2.0, 2.0);
+                rattleToneOn_ = ! dsp::isExactlyZero (rattleTone);
+
+                if (rattleToneOn_)
+                {
+                    // Up, the throw's high-pass corner rises above the snap's,
+                    // to four times Snappy: sizzle. Down, the corner falls to a
+                    // quarter of Snappy AND the filter narrows toward the
+                    // band-pass on the way -- a high-pass lowered only adds
+                    // low end under the same top, which is not darker
+                    // (measured: the centroid did not move); the band-pass at
+                    // the low corner is the wires' own low chatter, a buzz
+                    // with a pitch, and it is.
+                    const double rattleCorner = std::clamp (corner * std::exp2 (rattleTone), 20.0, rate_ * 0.45);
+                    const double snapMorph = -0.5 * std::clamp (s.snap, 0.0, 1.0);
+                    const double rattleMorph = rattleTone < 0.0
+                        ? snapMorph + (-0.5 - snapMorph) * (-0.5 * rattleTone)
+                        : snapMorph;
+
+                    for (auto* filter : { &rattleFilter_, &rattleFilter2_ })
+                    {
+                        filter->setCutoffHz (rattleCorner);
+                        filter->setMorph (rattleMorph);
+                    }
+
+                    // The band-pass passes far less of the noise than the
+                    // high-pass did: measured 0.50 of the level an octave
+                    // down, 0.25 two octaves down. Made up by 2^-tone, so the
+                    // knob is judged as tone, not loudness (CLAUDE.md
+                    // section 7). Nothing is made up going up.
+                    rattleToneMakeup_ = rattleTone < 0.0 ? std::exp2 (-rattleTone) : 1.0;
+                }
+
+                // The critical amplitude rises with the SQUARE of Tension, so
+                // the first half of the knob is subtle: measured on the
+                // default snare, the lift ends at 117 / 73 / 28 ms at 25 / 50 /
+                // 100 %, against a shell audible for 250.
+                tension_ = std::clamp (s.rattleTension, 0.0, 1.0);
+                tensionOn_ = ! dsp::isExactlyZero (tension_);
+                liftThreshold_ = tension_ * tension_ * kLiftThresholdMax;
+
+                // A soft hit moves the head less, by the wires' own velocity
+                // amount, so with tension up it rattles less and for less
+                // long -- the drum's behaviour (F&R Fig. 18.10).
+                motionScale_ = scaled (1.0, s.velocityWires) * strikeNorm_;
+                lift_ = 0.0;
+            }
         }
 
         // ---- crack ----
@@ -421,6 +648,48 @@ public:
     /// One internal sample. Exactly 0.0 when the hit is over.
     [[nodiscard]] double process() noexcept
     {
+        double side = 0.0;
+        return process (side);
+    }
+
+    /// The wires' side, through their own filter, tilt and bed, applied to
+    /// a `w` of raw noise: what the second stream goes through.
+    [[nodiscard]] double wiresColour (double w, dsp::SvfFilter& filter, dsp::Biquad<double>& tiltLow,
+                                      dsp::Biquad<double>& tiltHigh, dsp::SvfFilter* bank) noexcept
+    {
+        return colourAfterFilter (filter.process (w), tiltLow, tiltHigh, bank);
+    }
+
+    /// The tilt and the bed on an already filtered wire sample -- the rattle
+    /// path with a corner of its own sums two filtered streams before this.
+    [[nodiscard]] double colourAfterFilter (double filtered, dsp::Biquad<double>& tiltLow,
+                                            dsp::Biquad<double>& tiltHigh, dsp::SvfFilter* bank) noexcept
+    {
+        double out = filtered;
+
+        if (wiresTiltOn_)
+            out = tiltHigh.process (tiltLow.process (out));
+
+        if (bedOn_)
+        {
+            double resonated = 0.0;
+
+            for (int i = 0; i < 6; ++i)
+                resonated += bank[i].process (out);
+
+            resonated *= kBedMakeup / 6.0;
+            out += bed_ * (resonated - out);
+        }
+
+        return out;
+    }
+
+    /// One internal sample with the side signal alongside: the wires' second
+    /// stream, placed across the field by Wires stereo. Exactly 0.0 at 0.
+    [[nodiscard]] double process (double& side) noexcept
+    {
+        side = 0.0;
+
         if (! active_)
             return 0.0;
 
@@ -437,6 +706,15 @@ public:
                 // The drum's motion, which is what throws the wires.
                 const double magnitude = shell < 0.0 ? -shell : shell;
                 follower_ += followerCoefficient_ * (magnitude - follower_);
+
+                // With tension, the snares lift only while the head's motion
+                // exceeds the critical amplitude: half-wave, since they are
+                // thrown once a cycle, and exactly 0.0 below it.
+                if (tensionOn_)
+                {
+                    const double motion = shell * motionScale_ - liftThreshold_;
+                    lift_ = motion > 0.0 ? motion : 0.0;
+                }
             }
         }
 
@@ -460,11 +738,68 @@ public:
                 gain = wiresLevel_ * env;
             }
 
-            // The shell's drive on the wires, on top of the stick's.
-            if (rattleOn_)
-                gain += wiresLevel_ * rattle_ * kRattleGain * (follower_ * strikeNorm_);
+            // The shell's drive on the wires, on top of the stick's. With
+            // every rattle control at 0 this is the follower's product as it
+            // always was, term for term.
+            double rattleGain = 0.0;
 
-            x += gain * wiresFilter_.process (random_.bipolar());
+            if (rattleOn_)
+            {
+                double drive = follower_ * strikeNorm_;
+
+                if (tensionOn_)
+                    drive += tension_ * (kLiftGain * lift_ - drive);
+
+                if (rattleDecayOn_)
+                {
+                    drive *= rattleEnv_;
+                    rattleEnv_ *= rattleDecayCoefficient_;
+
+                    if (rattleEnv_ < kRattleEnvFloor)
+                    {
+                        // The rattle is over; the shell may ring on without it.
+                        rattleEnv_ = 0.0;
+                        rattleOn_ = false;
+                    }
+                }
+
+                rattleGain = wiresLevel_ * rattle_ * kRattleGain * drive;
+            }
+
+            if (rattleToneOn_)
+            {
+                rattleGain *= rattleToneMakeup_;
+
+                // The shell's throw through a corner of its own: the stick's
+                // and the shell's streams are filtered apart from the same
+                // white sample and summed before the tilt and the bed.
+                const double w = random_.bipolar();
+                const double pre = gain * wiresFilter_.process (w) + rattleGain * rattleFilter_.process (w);
+                x += wiresMid_ * colourAfterFilter (pre, wiresTiltLow_, wiresTiltHigh_, bedBank_);
+
+                if (wiresStereoOn_)
+                {
+                    const double w2 = random2_.bipolar();
+                    const double preSide = gain * wiresFilter2_.process (w2) + rattleGain * rattleFilter2_.process (w2);
+                    side += wiresSide_ * colourAfterFilter (preSide, wiresTiltLow2_, wiresTiltHigh2_, bedBank2_);
+                }
+            }
+            else
+            {
+                gain += rattleGain;
+
+                // The mid's wires: the filter as it always was, then the tilt
+                // and the bed when they are up. `wiresMid_` is exactly 1.0 with
+                // no spread, so the sum is the old one bit for bit.
+                if (wiresTiltOn_ || bedOn_)
+                    x += gain * wiresMid_ * wiresColour (random_.bipolar(), wiresFilter_, wiresTiltLow_, wiresTiltHigh_, bedBank_);
+                else
+                    x += gain * wiresMid_ * wiresFilter_.process (random_.bipolar());
+
+                if (wiresStereoOn_)
+                    side += gain * wiresSide_
+                          * wiresColour (random2_.bipolar(), wiresFilter2_, wiresTiltLow2_, wiresTiltHigh2_, bedBank2_);
+            }
 
             // Over when the burst has landed -- unless the shell is still
             // throwing them.
@@ -478,18 +813,23 @@ public:
         // ---- the gate's release ramp ----
         if (releasing_)
         {
-            x *= gateEnv_.process();
+            const double gate = gateEnv_.process();
+            x *= gate;
+            side *= gate;
 
             if (! gateEnv_.isActive())
             {
                 // Landed at exactly 0: the hit is over, whatever was ringing.
                 reset();
+                side = 0.0;
                 return 0.0;
             }
         }
 
         if (! shellOn_ && ! wiresOn_ && ! crack_.isActive() && ! thumpOn_)
             active_ = false;
+
+        side *= gain_;
 
         return x * gain_;
     }
@@ -508,8 +848,34 @@ public:
     /// because it is never evaluated.
     [[nodiscard]] double getFollowerLevel() const noexcept { return follower_; }
 
+    /// Whether the shell is still throwing the wires: false once Rattle
+    /// decay has landed, whatever the shell is doing.
+    [[nodiscard]] bool isRattling() const noexcept { return rattleOn_; }
+
+    /// The rattle's own envelope: exactly 1.0 with Rattle decay at 0.
+    [[nodiscard]] double getRattleEnvelope() const noexcept { return rattleEnv_; }
+
+    /// The snares' lift this sample -- the head's normalised motion above
+    /// the critical amplitude, exactly 0.0 with Tension at 0.
+    [[nodiscard]] double getLiftLevel() const noexcept { return lift_; }
+
+    /// The head's normalised motion scale the lift is judged on.
+    [[nodiscard]] double getMotionScale() const noexcept { return motionScale_; }
+
+    [[nodiscard]] bool isRattleToneOn() const noexcept { return rattleToneOn_; }
+
     [[nodiscard]] bool isShellSounding() const noexcept { return shellOn_; }
     [[nodiscard]] bool isThumpSounding() const noexcept { return thumpOn_; }
+
+    /// Whether the wires' second stream runs for the hit that is sounding.
+    [[nodiscard]] bool isWiresSideOn() const noexcept { return wiresStereoOn_; }
+
+    /// One shell mode's landed ratio to the fundamental for the hit that is
+    /// sounding -- what Head and Spread placed it at.
+    [[nodiscard]] double getModeRatio (int mode) const noexcept
+    {
+        return mode >= 0 && mode < kModes && fundamental_ > 0.0 ? base_[mode] / fundamental_ : 0.0;
+    }
 
     /// One shell mode's T60 for the hit that is sounding, in seconds -- what
     /// Ring moved, or did not.
@@ -551,11 +917,37 @@ private:
     dsp::Adsr wiresEnv_;
     dsp::SvfFilter wiresFilter_;
     dsp::SmallRandom random_;
+    double wiresMid_ { 1.0 };
+    double wiresSide_ { 0.0 };
+    double wiresStereo_ { 0.0 };
+    bool wiresStereoOn_ { false };
+    dsp::SmallRandom random2_;
+    dsp::SvfFilter wiresFilter2_;
+    bool wiresTiltOn_ { false };
+    dsp::Biquad<double> wiresTiltLow_, wiresTiltHigh_, wiresTiltLow2_, wiresTiltHigh2_;
+    bool bedOn_ { false };
+    double bed_ { 0.0 };
+    dsp::SvfFilter bedBank_[6];
+    dsp::SvfFilter bedBank2_[6];
     bool rattleOn_ { false };
     double rattle_ { 0.0 };
     double follower_ { 0.0 };
     double followerCoefficient_ { 0.0 };
     double strikeNorm_ { 1.0 };
+
+    // the rattle's own decay, tone and tension (I4.5)
+    bool rattleDecayOn_ { false };
+    double rattleEnv_ { 1.0 };
+    double rattleDecayCoefficient_ { 1.0 };
+    bool rattleToneOn_ { false };
+    double rattleToneMakeup_ { 1.0 };
+    dsp::SvfFilter rattleFilter_;
+    dsp::SvfFilter rattleFilter2_;
+    bool tensionOn_ { false };
+    double tension_ { 0.0 };
+    double liftThreshold_ { 0.0 };
+    double motionScale_ { 1.0 };
+    double lift_ { 0.0 };
 
     // crack
     ClickPair crack_;

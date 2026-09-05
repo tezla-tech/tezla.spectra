@@ -12,8 +12,24 @@
 #include <cstring>
 
 #include <tezla/dsp/Decibels.hpp>
+#include <tezla/dsp/Exact.hpp>
 
 namespace tezla::ictus {
+
+namespace
+{
+/// The order the mono engine always summed the pads in -- kept, so that with
+/// nothing spread and every pan at centre the two channels are the old
+/// render bit for bit (the golden renders in plugins/Ictus/PLAN.md).
+constexpr int kSumOrder[kPadCount] = {
+    static_cast<int> (PadIndex::kick1),  static_cast<int> (PadIndex::kick2),
+    static_cast<int> (PadIndex::snare1), static_cast<int> (PadIndex::snare2),
+    static_cast<int> (PadIndex::perc),   static_cast<int> (PadIndex::hatClosed),
+    static_cast<int> (PadIndex::hatOpen), static_cast<int> (PadIndex::clap)
+};
+
+constexpr int kSnare1 = static_cast<int> (PadIndex::snare1);
+} // namespace
 
 void Engine::prepare (double sampleRate, int maxBlockSize)
 {
@@ -26,6 +42,12 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     // against the one the parameters ask for (CLAUDE.md section 7).
     oversampler_.prepare (maxBlockSize_, 2,
                           dsp::oversamplingFactor (effectiveOversampling(), sampleRate_));
+
+    // The rooms' lines are sized for the largest internal rate the factor
+    // can reach, here, off the audio thread; rebuildForRate() then only
+    // re-aims them.
+    for (auto& room : room_)
+        room.prepare (sampleRate_ * kMaxFactor, dsp::EarlyReflections::kMaxSeconds);
 
     rebuildForRate();
 }
@@ -42,6 +64,7 @@ void Engine::rebuildForRate() noexcept
     hatClosed_.prepare (internalRate_);
     hatOpen_.prepare (internalRate_);
     clap_.prepare (internalRate_);
+    snareClap_.prepare (internalRate_);
 
     masterGain_.prepare (internalRate_, 0.02);
     masterGain_.setCurrentAndTarget (dsp::dbToGain (parameters_.masterDb));
@@ -50,6 +73,30 @@ void Engine::rebuildForRate() noexcept
     {
         pan_[pad].prepare (internalRate_, 0.02);
         pan_[pad].setCurrentAndTarget (std::clamp (parameters_.pan[pad], -1.0, 1.0));
+
+        width_[pad].prepare (internalRate_, 0.02);
+        width_[pad].setCurrentAndTarget (std::clamp (parameters_.width[pad], 0.0, 2.0));
+
+        monoBelow_[pad].prepare (internalRate_);
+        monoBelow_[pad].setMode (dsp::SvfMode::highpass);
+        monoBelow_[pad].setResonance (dsp::SvfFilter::resonanceForQ (kMonoBelowQ));
+    }
+
+    sideRingSamples_ = std::max (1, static_cast<int> (kSideRingSeconds * internalRate_));
+
+    for (int index = 0; index < kRoomCount; ++index)
+    {
+        auto& room = room_[index];
+        const auto& settings = parameters_.room[index];
+
+        room.setSampleRate (internalRate_);
+        room.design (std::clamp (settings.seconds, dsp::EarlyReflections::kMinSeconds,
+                                 dsp::EarlyReflections::kMaxSeconds),
+                     kRoomSeeds[index]);
+        room.setToneHz (settings.toneHz);
+
+        roomLevel_[index].prepare (internalRate_, 0.02);
+        roomLevel_[index].setCurrentAndTarget (std::clamp (settings.level, 0.0, 1.0));
     }
 
     pansPrimed_ = false;
@@ -67,7 +114,21 @@ void Engine::reset() noexcept
     hatClosed_.reset();
     hatOpen_.reset();
     clap_.reset();
+    snareClap_.reset();
     oversampler_.reset();
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+    {
+        monoBelow_[pad].reset();
+        sideRing_[pad] = 0;
+    }
+
+    for (auto& room : room_)
+        room.reset();
+
+    snareClapPending_ = -1;
+    snareClapNote_ = -1;
+    snareClapVelocity_ = 0.0;
 
     sinceControl_ = 0;
     idleSamples_ = 0;
@@ -104,6 +165,28 @@ std::uint64_t Engine::nextSeed (PadIndex index) noexcept
          + kHitGolden * hitCount_;
 }
 
+void Engine::aimRoom (PadIndex pad) noexcept
+{
+    const int index = roomIndexFor (pad);
+
+    if (index < 0)
+        return;
+
+    const auto& settings = parameters_.room[index];
+
+    // Not run at all with the level at 0 and nothing ringing, so a room
+    // nobody has turned up costs nothing -- not even a redesign.
+    if (dsp::isExactlyZero (std::clamp (settings.level, 0.0, 1.0)) && ! room_[index].isActive()
+        && dsp::isExactlyZero (roomLevel_[index].getCurrent()))
+        return;
+
+    const double wanted = std::clamp (settings.seconds, dsp::EarlyReflections::kMinSeconds,
+                                      dsp::EarlyReflections::kMaxSeconds);
+
+    if (! dsp::isExactly (wanted, room_[index].getLengthSeconds()))
+        room_[index].design (wanted, kRoomSeeds[index]);
+}
+
 void Engine::startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings& settings,
                         int note, double velocity, bool keyed) noexcept
 {
@@ -125,6 +208,7 @@ void Engine::startKick (Pad<KickEngine>& pad, PadIndex index, const KickSettings
     // partial chunk. Zero means the tick is due and will serve it.
     const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
 
+    aimRoom (index);
     pad.start (note, settings, endHz, velocity, seed, toBoundary);
 }
 
@@ -142,7 +226,11 @@ void Engine::startSnare (Pad<SnareEngine>& pad, PadIndex index, const SnareSetti
 
     const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
 
+    aimRoom (index);
     pad.start (note, settings, fundamentalHz, velocity, seed, toBoundary);
+
+    if (index == PadIndex::snare1)
+        scheduleSnareClapLayer (note, velocity);
 }
 
 void Engine::startHat (Pad<HatEngine>& pad, PadIndex index, bool open,
@@ -167,7 +255,45 @@ void Engine::startClap (int note, double velocity) noexcept
 
     const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
 
+    aimRoom (PadIndex::clap);
     clap_.start (note, parameters_.clap, velocity, seed, toBoundary);
+}
+
+void Engine::scheduleSnareClapLayer (int note, double velocity) noexcept
+{
+    const double amount = std::clamp (parameters_.snareClap, 0.0, 1.0);
+
+    if (dsp::isExactlyZero (amount))
+    {
+        snareClapPending_ = -1;
+        return;
+    }
+
+    snareClapNote_ = note;
+    snareClapVelocity_ = velocity;
+
+    const int offset = static_cast<int> (std::lround (
+        std::clamp (parameters_.snareClapOffsetSeconds, 0.0, 0.05) * internalRate_));
+
+    if (offset <= 0)
+        startSnareClapLayer();
+    else
+        snareClapPending_ = offset;
+}
+
+void Engine::startSnareClapLayer() noexcept
+{
+    snareClapPending_ = -1;
+
+    // The CLAP page's sound at the snare's own Clap level, whatever the clap
+    // pad's Level is doing -- muting the clap pad must not mute the snare.
+    ClapSettings layer = parameters_.clap;
+    layer.level = std::clamp (parameters_.snareClap, 0.0, 1.0);
+
+    const std::uint64_t seed = (kSeedBase ^ (kPadSalt * kSnareClapSalt)) + kHitGolden * hitCount_;
+    const int toBoundary = sinceControl_ > 0 ? sinceControl_ : 0;
+
+    snareClap_.start (snareClapNote_, layer, snareClapVelocity_, seed, toBoundary);
 }
 
 void Engine::noteOn (int note, double velocity) noexcept
@@ -230,7 +356,10 @@ void Engine::noteOff (int note) noexcept
         kick2_.release (note);
 
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::snare1)])
+    {
         snare1_.release (note);
+        snareClap_.release (note);
+    }
 
     if (note == parameters_.padNotes[static_cast<int> (PadIndex::snare2)])
         snare2_.release (note);
@@ -260,6 +389,8 @@ void Engine::allNotesOff() noexcept
     hatClosed_.choke();
     hatOpen_.choke();
     clap_.choke();
+    snareClap_.choke();
+    snareClapPending_ = -1;
 }
 
 void Engine::choke (PadIndex pad) noexcept
@@ -268,7 +399,13 @@ void Engine::choke (PadIndex pad) noexcept
     {
         case PadIndex::kick1:  kick1_.choke();  break;
         case PadIndex::kick2:  kick2_.choke();  break;
-        case PadIndex::snare1: snare1_.choke(); break;
+
+        case PadIndex::snare1:
+            snare1_.choke();
+            snareClap_.choke();
+            snareClapPending_ = -1;
+            break;
+
         case PadIndex::snare2: snare2_.choke(); break;
         case PadIndex::perc:   perc_.choke();   break;
 
@@ -286,7 +423,8 @@ int Engine::activeHitCount() const noexcept
 {
     return kick1_.activeHits() + kick2_.activeHits()
          + snare1_.activeHits() + snare2_.activeHits() + perc_.activeHits()
-         + hatClosed_.activeHits() + hatOpen_.activeHits() + clap_.activeHits();
+         + hatClosed_.activeHits() + hatOpen_.activeHits() + clap_.activeHits()
+         + snareClap_.activeHits();
 }
 
 void Engine::controlTick() noexcept
@@ -299,62 +437,130 @@ void Engine::controlTick() noexcept
     hatClosed_.advanceControl (kControlIntervalSamples);
     hatOpen_.advanceControl (kControlIntervalSamples);
     clap_.advanceControl (kControlIntervalSamples);
+    snareClap_.advanceControl (kControlIntervalSamples);
+
+    // The continuous filters are re-aimed here, state intact: Mono below's
+    // corner and a room's tone are automatable and move under a ringing
+    // pad without a step (both setters refuse a no-op).
+    for (int pad = 0; pad < kPadCount; ++pad)
+    {
+        const double hz = std::clamp (parameters_.monoBelowHz[pad], 0.0, 2000.0);
+        monoBelowOn_[pad] = ! dsp::isExactlyZero (hz);
+
+        if (monoBelowOn_[pad])
+            monoBelow_[pad].setCutoffHz (hz);
+    }
+
+    for (int index = 0; index < kRoomCount; ++index)
+        room_[index].setToneHz (parameters_.room[index].toneHz);
 }
 
 void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
 {
     bool silent = true;
 
-    constexpr int iKick1 = static_cast<int> (PadIndex::kick1);
-    constexpr int iKick2 = static_cast<int> (PadIndex::kick2);
-    constexpr int iSnare1 = static_cast<int> (PadIndex::snare1);
-    constexpr int iSnare2 = static_cast<int> (PadIndex::snare2);
-    constexpr int iPerc = static_cast<int> (PadIndex::perc);
-    constexpr int iHatClosed = static_cast<int> (PadIndex::hatClosed);
-    constexpr int iHatOpen = static_cast<int> (PadIndex::hatOpen);
-    constexpr int iClap = static_cast<int> (PadIndex::clap);
+    // Which rooms run this chunk: one with its level at exactly 0, not on
+    // its way anywhere, and nothing left in its line costs nothing and
+    // changes nothing.
+    bool roomOn[kRoomCount];
+
+    for (int index = 0; index < kRoomCount; ++index)
+        roomOn[index] = ! dsp::isExactlyZero (roomLevel_[index].getCurrent())
+                     || roomLevel_[index].isSmoothing()
+                     || room_[index].isActive();
+
+    const bool layerOn = snareClap_.isActive();
 
     for (int i = 0; i < numSamples; ++i)
     {
-        const double kick1 = kick1_.process();
-        const double kick2 = kick2_.process();
-        const double snare1 = snare1_.process();
-        const double snare2 = snare2_.process();
-        const double perc = perc_.process();
-        const double hatClosed = hatClosed_.process();
-        const double hatOpen = hatOpen_.process();
-        const double clap = clap_.process();
+        double mid[kPadCount];
+        double side[kPadCount];
 
-        const double pKick1 = pan_[iKick1].next();
-        const double pKick2 = pan_[iKick2].next();
-        const double pSnare1 = pan_[iSnare1].next();
-        const double pSnare2 = pan_[iSnare2].next();
-        const double pPerc = pan_[iPerc].next();
-        const double pHatClosed = pan_[iHatClosed].next();
-        const double pHatOpen = pan_[iHatOpen].next();
-        const double pClap = pan_[iClap].next();
+        mid[static_cast<int> (PadIndex::kick1)] = kick1_.process (side[static_cast<int> (PadIndex::kick1)]);
+        mid[static_cast<int> (PadIndex::kick2)] = kick2_.process (side[static_cast<int> (PadIndex::kick2)]);
+        mid[static_cast<int> (PadIndex::snare1)] = snare1_.process (side[static_cast<int> (PadIndex::snare1)]);
+        mid[static_cast<int> (PadIndex::snare2)] = snare2_.process (side[static_cast<int> (PadIndex::snare2)]);
+        mid[static_cast<int> (PadIndex::perc)] = perc_.process (side[static_cast<int> (PadIndex::perc)]);
+        mid[static_cast<int> (PadIndex::hatClosed)] = hatClosed_.process (side[static_cast<int> (PadIndex::hatClosed)]);
+        mid[static_cast<int> (PadIndex::hatOpen)] = hatOpen_.process (side[static_cast<int> (PadIndex::hatOpen)]);
+        mid[static_cast<int> (PadIndex::clap)] = clap_.process (side[static_cast<int> (PadIndex::clap)]);
 
-        // The balance law, pad by pad, summed in the order the mono engine
-        // always summed in: with every pan at centre each gain is exactly 1.0
-        // and both channels are the old render bit for bit (the round-1
-        // golden render in plugins/Ictus/PLAN.md).
-        double l = kick1 * balanceLeft (pKick1);
-        l += kick2 * balanceLeft (pKick2);
-        l += snare1 * balanceLeft (pSnare1);
-        l += snare2 * balanceLeft (pSnare2);
-        l += perc * balanceLeft (pPerc);
-        l += hatClosed * balanceLeft (pHatClosed);
-        l += hatOpen * balanceLeft (pHatOpen);
-        l += clap * balanceLeft (pClap);
+        // The clap layer sits under Snare 1: its placement, its room.
+        if (layerOn)
+        {
+            double layerSide = 0.0;
+            mid[kSnare1] += snareClap_.process (layerSide);
+            side[kSnare1] += layerSide;
+        }
 
-        double r = kick1 * balanceRight (pKick1);
-        r += kick2 * balanceRight (pKick2);
-        r += snare1 * balanceRight (pSnare1);
-        r += snare2 * balanceRight (pSnare2);
-        r += perc * balanceRight (pPerc);
-        r += hatClosed * balanceRight (pHatClosed);
-        r += hatOpen * balanceRight (pHatOpen);
-        r += clap * balanceRight (pClap);
+        // The rooms, fed by their pad's mid, returned as mid and side.
+        for (int index = 0; index < kRoomCount; ++index)
+        {
+            if (! roomOn[index])
+                continue;
+
+            const int pad = static_cast<int> (kRoomPads[index]);
+            double roomLeft = 0.0;
+            double roomRight = 0.0;
+
+            room_[index].process (mid[pad], roomLeft, roomRight);
+
+            const double level = roomLevel_[index].next();
+            mid[pad] += level * (0.5 * (roomLeft + roomRight));
+            side[pad] += level * (0.5 * (roomLeft - roomRight));
+        }
+
+        double l = 0.0;
+        double r = 0.0;
+
+        // Per pad: the side through Width and Mono below, then the two
+        // channels formed and placed by the balance law, summed in the order
+        // the mono engine always used. A pad whose side is exactly 0.0 skips
+        // the side path and both channels are its mid -- the old render.
+        for (int n = 0; n < kPadCount; ++n)
+        {
+            const int pad = kSumOrder[n];
+            const double widthNow = width_[pad].isSmoothing() ? width_[pad].next() : width_[pad].getCurrent();
+            const double panNow = pan_[pad].isSmoothing() ? pan_[pad].next() : pan_[pad].getCurrent();
+            const double m = mid[pad];
+            double s = side[pad];
+
+            if (! dsp::isExactlyZero (s) || sideRing_[pad] > 0)
+            {
+                s *= widthNow;
+
+                if (monoBelowOn_[pad])
+                    s = monoBelow_[pad].process (s);
+
+                if (! dsp::isExactlyZero (side[pad]))
+                {
+                    sideRing_[pad] = sideRingSamples_;
+                }
+                else if (--sideRing_[pad] <= 0)
+                {
+                    // The side has been exactly zero for the ring time: the
+                    // filter's tail is below anything, so it is cleared and
+                    // the pad is mono again, exactly.
+                    sideRing_[pad] = 0;
+                    monoBelow_[pad].reset();
+                    s = 0.0;
+                }
+            }
+
+            const double padLeft = dsp::isExactlyZero (s) ? m : m + s;
+            const double padRight = dsp::isExactlyZero (s) ? m : m - s;
+
+            if (n == 0)
+            {
+                l = padLeft * balanceLeft (panNow);
+                r = padRight * balanceRight (panNow);
+            }
+            else
+            {
+                l += padLeft * balanceLeft (panNow);
+                r += padRight * balanceRight (panNow);
+            }
+        }
 
         const double master = masterGain_.next();
 
@@ -364,7 +570,12 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
         silent = silent && std::abs (left[i]) < kIdleThreshold && std::abs (right[i]) < kIdleThreshold;
     }
 
-    if (silent && activeHitCount() == 0)
+    bool roomsRinging = false;
+
+    for (int index = 0; index < kRoomCount; ++index)
+        roomsRinging = roomsRinging || (roomOn[index] && room_[index].isActive());
+
+    if (silent && activeHitCount() == 0 && ! roomsRinging)
         idleSamples_ += numSamples;
     else
         idleSamples_ = 0;
@@ -381,18 +592,48 @@ void Engine::process (double* const* output, int numSamples) noexcept
 
     masterGain_.setTarget (dsp::dbToGain (parameters_.masterDb));
 
-    // The pans: jumped to on the first call after a rebuild, ramped after.
-    // prepare() runs before any parameter is known, so a smoother primed
-    // there starts at centre, and a pad saved hard left would open every
-    // project drifting across the field for its first hits.
+    // The pans, the widths and the room levels: jumped to on the first call
+    // after a rebuild, ramped after. prepare() runs before any parameter is
+    // known, so a smoother primed there starts at its default, and a pad
+    // saved hard left would open every project drifting across the field
+    // for its first hits.
     for (int pad = 0; pad < kPadCount; ++pad)
     {
-        const double wanted = std::clamp (parameters_.pan[pad], -1.0, 1.0);
+        const double wantedPan = std::clamp (parameters_.pan[pad], -1.0, 1.0);
+        const double wantedWidth = std::clamp (parameters_.width[pad], 0.0, 2.0);
 
-        if (pansPrimed_)
-            pan_[pad].setTarget (wanted);
+        // Guarded like the rooms': a smoother re-targeted every block reads
+        // as moving every block, and a moving smoother costs a step a sample
+        // for every pad. At rest the render reads the value it holds.
+        if (! pansPrimed_)
+        {
+            pan_[pad].setCurrentAndTarget (wantedPan);
+            width_[pad].setCurrentAndTarget (wantedWidth);
+        }
         else
-            pan_[pad].setCurrentAndTarget (wanted);
+        {
+            if (! dsp::isExactly (wantedPan, pan_[pad].getTarget()))
+                pan_[pad].setTarget (wantedPan);
+
+            if (! dsp::isExactly (wantedWidth, width_[pad].getTarget()))
+                width_[pad].setTarget (wantedWidth);
+        }
+    }
+
+    for (int index = 0; index < kRoomCount; ++index)
+    {
+        const double wanted = std::clamp (parameters_.room[index].level, 0.0, 1.0);
+
+        // Guarded: setTarget marks the smoother as moving until next() has
+        // run, and a room that is "moving" is a room that runs. Pushed every
+        // block unguarded, a room at 0 would have been fed for the first
+        // chunk of every block a pad sounded in -- and then kept running by
+        // its own line for the rest of the hit (CLAUDE.md section 7, the
+        // setter that must refuse a no-op).
+        if (! pansPrimed_)
+            roomLevel_[index].setCurrentAndTarget (wanted);
+        else if (! dsp::isExactly (wanted, roomLevel_[index].getTarget()))
+            roomLevel_[index].setTarget (wanted);
     }
 
     pansPrimed_ = true;
@@ -404,7 +645,7 @@ void Engine::process (double* const* output, int numSamples) noexcept
     // every stage is a hit that has retired exactly or a filter parked below
     // -240 dBFS, and the counter resets the instant a hit starts.
     if (idleSamples_ >= static_cast<int> (internalRate_ * kIdleSecondsBeforeSkipping)
-        && activeHitCount() == 0)
+        && activeHitCount() == 0 && snareClapPending_ < 0)
     {
         for (int channel = 0; channel < 2; ++channel)
             std::fill (output[channel], output[channel] + numSamples, 0.0);
@@ -424,12 +665,23 @@ void Engine::process (double* const* output, int numSamples) noexcept
             sinceControl_ = kControlIntervalSamples;
         }
 
-        const int take = std::min (sinceControl_, internalSamples - done);
+        // A clap layer counting down to its start lands on a chunk edge cut
+        // for it, so its offset is exact whatever the block size.
+        if (snareClapPending_ == 0)
+            startSnareClapLayer();
+
+        int take = std::min (sinceControl_, internalSamples - done);
+
+        if (snareClapPending_ > 0)
+            take = std::min (take, snareClapPending_);
 
         renderChunk (internal[0] + done, internal[1] + done, take);
 
         done += take;
         sinceControl_ -= take;
+
+        if (snareClapPending_ > 0)
+            snareClapPending_ -= take;
     }
 
     // Half a host sample of delay before the decimators, so the latency the

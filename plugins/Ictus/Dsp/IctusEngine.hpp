@@ -15,9 +15,10 @@
 // Two decisions shape everything here (plugins/Ictus/PLAN.md):
 //
 //   1. Every engine knob is snapshotted into the hit at note-on. The engine
-//      keeps the latest parameters; a hit reads them once. Only the master
-//      level and the eight pads' pans are continuous, and they are smoothed:
-//      a pan is a mixing gesture, not part of the hit.
+//      keeps the latest parameters; a hit reads them once. Only the mixing
+//      gestures are continuous, and they are smoothed: the master level, and
+//      per pad the pan, the width and a room's level. A pan is not part of
+//      the hit.
 //   2. Everything renders at the internal rate. A drum's click is an 8 kHz
 //      resonance and its harmonics come from nonlinear curves; both belong
 //      inside the oversampled section, and an instrument has nothing to
@@ -41,17 +42,29 @@
 // at centre both channels carry the pad at unity, exactly the dual mono the
 // engine rendered before pans existed; hard left leaves the right channel
 // exactly 0.0 -- rather than a constant-power law, whose centre would sit
-// 3 dB under the render every saved project was mixed against. The engines
-// themselves are still mono; the width work that needs a side signal from
-// the source (spreading a plate's modes, decorrelating a hiss) is the next
-// round's, and Width and Mono Below arrive with it, since on a mono source
-// they would do nothing.
+// 3 dB under the render every saved project was mixed against.
+//
+// I4.5: the pads render MID and SIDE. Every engine's `process (double& side)`
+// returns its mid and writes a side that is exactly 0.0 unless one of its
+// spread controls is up (the hats' air and metal, the snare's wires, the
+// clap's bursts), so a pad with nothing spread is the mono render bit for
+// bit: the engine only forms `mid + side` and `mid - side` when the side is
+// not exactly zero. On the side alone, per pad, sit WIDTH (a gain on the
+// side, 1.0 exact) and MONO BELOW (a second-order high-pass on the side, so
+// the low end stays in the centre whatever is spread above it); then the
+// balance pan as before. A ROOM -- shared early reflections
+// (dsp::EarlyReflections) fed by the pad's mid -- adds its own mid and side
+// to the kick, the snare, the ghost and the clap; and the clap engine can
+// play a LAYER under Snare 1, started with it after an offset, so the
+// classic snare-plus-clap of the sampled drum machines is one pad.
 
 #include <cstdint>
 
 #include <tezla/dsp/Denormals.hpp>
+#include <tezla/dsp/EarlyReflections.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/SmoothedValue.hpp>
+#include <tezla/dsp/SvfFilter.hpp>
 #include <tezla/dsp/Tuning.hpp>
 
 #include "ClapEngine.hpp"
@@ -85,6 +98,43 @@ constexpr int kPadCount = static_cast<int> (PadIndex::count);
 /// snare 2 on 40.
 constexpr int kDefaultPadNotes[kPadCount] = { 36, 38, 42, 46, 39, 37, 35, 40 };
 
+/// The pads that have a room (I4.5). **Append-only** too: the parameter
+/// tables are indexed by it.
+enum class RoomIndex
+{
+    kick1 = 0,
+    snare1,
+    snare2,
+    clap,
+
+    count
+};
+
+constexpr int kRoomCount = static_cast<int> (RoomIndex::count);
+
+/// Which pad each room belongs to, in RoomIndex order.
+constexpr PadIndex kRoomPads[kRoomCount] = {
+    PadIndex::kick1, PadIndex::snare1, PadIndex::snare2, PadIndex::clap
+};
+
+/// The room of a pad, or -1 for a pad that has none.
+[[nodiscard]] constexpr int roomIndexFor (PadIndex pad) noexcept
+{
+    for (int room = 0; room < kRoomCount; ++room)
+        if (kRoomPads[room] == pad)
+            return room;
+
+    return -1;
+}
+
+/// One pad's room: early reflections of its mid, added back as mid and side.
+struct RoomSettings
+{
+    double level { 0.0 };     ///< 0..1; exactly nothing at 0 -- the room is not even run
+    double seconds { 0.08 };  ///< the reflections' span, 0.01..0.25 -- a booth to a hall's first wall
+    double toneHz { 4000.0 }; ///< a low-pass on the reflections, 500 Hz..20 kHz; 20 kHz is off exactly
+};
+
 struct EngineParameters
 {
     KickSettings kick1;
@@ -112,6 +162,29 @@ struct EngineParameters
     /// balance: 0 is both channels at unity, the dual mono the engine always
     /// rendered, bit for bit.
     double pan[kPadCount] {};
+
+    /// Per pad, 0..2: a gain on the pad's SIDE signal only. 1.0 is the field
+    /// the pad's own spread controls make, exactly (a multiply by 1.0); 0
+    /// folds it to mono; 2 doubles the spread. A pad with nothing spread has
+    /// no side and this does nothing at all.
+    double width[kPadCount] { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+
+    /// Per pad, Hz: the pad's side is high-passed here (second order), so
+    /// whatever is spread, the low end stays in the centre. 0 is off exactly.
+    /// 150 Hz is the default because a club system cannot place anything
+    /// below it and a folded sub must not lose level.
+    double monoBelowHz[kPadCount] { 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0 };
+
+    /// The rooms, indexed by RoomIndex.
+    RoomSettings room[kRoomCount] {};
+
+    /// The clap engine played under Snare 1 as a layer, 0..1: 0 starts no
+    /// layer at all. It takes the CLAP page's sound and this level, the
+    /// snare's velocity and the snare's placement.
+    double snareClap { 0.0 };
+
+    /// How far behind the snare the layer lands, 0..0.05 s: 0 is together.
+    double snareClapOffsetSeconds { 0.0 };
 
     /// Bass mode: the whole keyboard plays Kick 1, tuned to the key through
     /// the tuning (12-TET at A4 = 440 Hz unless a scale is loaded), and the
@@ -141,6 +214,28 @@ public:
     static constexpr std::uint64_t kSeedBase   = 0x1C7A5D2B9E4F6013ull;
     static constexpr std::uint64_t kPadSalt    = 0x9E3779B97F4A7C15ull;
     static constexpr std::uint64_t kHitGolden  = 0xD1B54A32D192ED03ull;
+
+    /// The clap layer's salt, past the eight pads', so its stream differs
+    /// from the clap pad's on the same hit count.
+    static constexpr std::uint64_t kSnareClapSalt = 9;
+
+    /// A room's taps are drawn once, from a seed fixed per room, so a room
+    /// keeps its shape from hit to hit and from session to session.
+    static constexpr std::uint64_t kRoomSeeds[kRoomCount] = {
+        0x243F6A8885A308D3ull, 0x13198A2E03707344ull, 0xA4093822299F31D0ull, 0x082EFA98EC4E6C89ull
+    };
+
+    /// After a pad's side has been exactly zero for this long its Mono
+    /// below filter is reset and skipped, so a pad with nothing spread costs
+    /// nothing on the side and renders its mono self bit for bit.
+    static constexpr double kSideRingSeconds = 0.5;
+
+    /// Mono below's Q: Butterworth, so the fold is flat above the corner.
+    static constexpr double kMonoBelowQ = 0.7071067811865476;
+
+    /// The oversampler's largest factor -- what the rooms' lines are sized
+    /// for at prepare(), so a factor change later allocates nothing.
+    static constexpr int kMaxFactor = 8;
 
     void prepare (double sampleRate, int maxBlockSize);
     void reset() noexcept;
@@ -210,7 +305,37 @@ public:
         return pan_[static_cast<int> (pad)].getCurrent();
     }
 
+    /// A pad's width as the smoother currently has it, 0..2.
+    [[nodiscard]] double getWidthNow (PadIndex pad) const noexcept
+    {
+        return width_[static_cast<int> (pad)].getCurrent();
+    }
+
+    /// Whether a pad's Mono below filter is running this control chunk --
+    /// false for a pad whose side has been exactly zero for kSideRingSeconds.
+    [[nodiscard]] bool isSideRinging (PadIndex pad) const noexcept
+    {
+        return sideRing_[static_cast<int> (pad)] > 0;
+    }
+
+    [[nodiscard]] const dsp::EarlyReflections& room (RoomIndex index) const noexcept
+    {
+        return room_[static_cast<int> (index)];
+    }
+
+    /// A room's level as the smoother currently has it.
+    [[nodiscard]] double getRoomLevelNow (RoomIndex index) const noexcept
+    {
+        return roomLevel_[static_cast<int> (index)].getCurrent();
+    }
+
+    /// The clap layer under Snare 1, and whether one is counting down to
+    /// its start.
+    [[nodiscard]] const Pad<ClapEngine>& snareClapLayer() const noexcept { return snareClap_; }
+    [[nodiscard]] bool isSnareClapPending() const noexcept { return snareClapPending_ >= 0; }
+
     /// Hits sounding across every pad -- the activity count, not a silence.
+    /// The clap layer counts as a hit of its own.
     [[nodiscard]] int activeHitCount() const noexcept;
 
     [[nodiscard]] std::uint64_t getHitCount() const noexcept { return hitCount_; }
@@ -256,6 +381,16 @@ private:
                    int note, double velocity) noexcept;
     void startClap (int note, double velocity) noexcept;
 
+    /// Re-draws a pad's room at the length its settings ask for, if that
+    /// differs from what it has: done at the pad's note-on, where the new
+    /// taps land under a transient rather than across a ringing tail.
+    void aimRoom (PadIndex pad) noexcept;
+
+    /// The clap layer: scheduled by a Snare 1 hit, started `offset` internal
+    /// samples later at a chunk edge the render loop cuts for it.
+    void scheduleSnareClapLayer (int note, double velocity) noexcept;
+    void startSnareClapLayer() noexcept;
+
     /// The seed rule shared by every pad: a base, a per-pad salt, and the hit
     /// counter times a golden-ratio constant.
     [[nodiscard]] std::uint64_t nextSeed (PadIndex index) noexcept;
@@ -283,6 +418,23 @@ private:
     dsp::SmoothedValue<double> masterGain_;
     dsp::SmoothedValue<double> pan_[kPadCount];
     bool pansPrimed_ { false };
+
+    // the field (I4.5)
+    dsp::SmoothedValue<double> width_[kPadCount];
+    dsp::SvfFilter monoBelow_[kPadCount];
+    bool monoBelowOn_[kPadCount] {};
+    int sideRing_[kPadCount] {};
+    int sideRingSamples_ { 24000 };
+
+    // the rooms
+    dsp::EarlyReflections room_[kRoomCount];
+    dsp::SmoothedValue<double> roomLevel_[kRoomCount];
+
+    // the clap layer under Snare 1
+    Pad<ClapEngine> snareClap_;
+    int snareClapPending_ { -1 };
+    int snareClapNote_ { -1 };
+    double snareClapVelocity_ { 0.0 };
 
     int sinceControl_ { 0 };
     int idleSamples_ { 0 };

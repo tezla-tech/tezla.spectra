@@ -210,6 +210,26 @@ private:
     double flamSeconds_ { 0.011 };
 };
 
+/// The MIX page's field readout: the Main output's correlation over the last
+/// 400 ms, full band and under 120 Hz, from the processor's StereoAnalyser.
+/// +1 is mono, 0 uncorrelated, -1 out of phase; the low band's lamp is lit
+/// while it would survive a fold to mono (correlation of 0.5 or more).
+class FieldView final : public DrumDisplay
+{
+public:
+    FieldView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint);
+
+    void paint (juce::Graphics&) override;
+
+private:
+    void gather (std::vector<double>& inputs) override;
+    void update() override;
+
+    double full_ { 1.0 };
+    double low_ { 1.0 };
+    bool quiet_ { true };
+};
+
 class WiresView final : public DrumDisplay
 {
 public:
