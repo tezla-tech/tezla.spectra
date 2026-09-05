@@ -5040,6 +5040,61 @@ int runIctus (const Args& args)
                      nsFull, nsNeutral, nsFull * 192000.0 / 1.0e7, nsNeutral * 192000.0 / 1.0e7, sink);
     }
 
+    // ---- 5. Under and Knock (I4.4) ----------------------------------------
+    //
+    // The sub alone is the hit with Under minus the same hit without it: the
+    // body is identical in both, so the difference is the layer.
+    {
+        KickSettings plain;
+        plain.tuneHz = 50.0;
+        plain.startSemitones = 0.0;
+        plain.sighSemitones = 0.0;
+        plain.decaySeconds = 1.0;
+        plain.level = 1.0;
+        plain.velocityDrop = 0.0;
+
+        EngineParameters parameters;
+        parameters.kick1 = plain;
+        const auto body = renderPattern (parameters, rate, 1.5, { { 0.0, 36, 1.0 } });
+
+        const auto subFor = [&] (double semitones)
+        {
+            parameters.kick1.under = 1.0;
+            parameters.kick1.underSemitones = semitones;
+            const auto with = renderPattern (parameters, rate, 1.5, { { 0.0, 36, 1.0 } });
+
+            std::vector<double> sub (with.size());
+            for (std::size_t n = 0; n < sub.size(); ++n)
+                sub[n] = with[n] - body[n];
+            return sub;
+        };
+
+        const auto octave = subFor (12.0);
+        const auto fifth = subFor (7.0);
+
+        std::printf ("\nUnder at 100 %%, a 50 Hz body at %.0f Hz host (Auto): the sub alone peaks at %.2f Hz an octave\n"
+                     "down (RMS %.4f against the body's %.4f) and at %.2f Hz a fifth down (33.41 expected)\n",
+                     rate, peakHzBetween (octave, rate, 15.0, 35.0),
+                     rmsBetween (octave, 0, octave.size()), rmsBetween (body, 0, body.size()),
+                     peakHzBetween (fifth, rate, 25.0, 45.0));
+
+        parameters.kick1 = plain;
+        parameters.kick1.decaySeconds = 0.02;
+        parameters.kick1.knock = 1.0;
+        parameters.kick1.knockHz = 350.0;
+        parameters.kick1.knockSeconds = 0.05;
+        const auto knock = renderPattern (parameters, rate, 0.5, { { 0.0, 36, 1.0 } });
+
+        std::size_t last = 0;
+        for (std::size_t n = 0; n < knock.size(); ++n)
+            if (knock[n] != 0.0)
+                last = n;
+
+        std::printf ("Knock at 350 Hz, 50 ms T60, on a 20 ms body: peak at %.1f Hz; the output is silent from %.3f s\n"
+                     "(the engine cuts the knock at four T60s, 0.200 s, and the decimators ring on a little)\n",
+                     peakHzBetween (knock, rate, 200.0, 600.0), static_cast<double> (last + 1) / rate);
+    }
+
     // ======================================================================
     // table 2, the snare
     // ======================================================================
@@ -5253,6 +5308,39 @@ int runIctus (const Args& args)
         std::printf ("\nSnare engine, one second at 192 kHz: %.1f ns/sample everything on (0.5 s shell), %.1f ns/sample"
                      " a bare tom (2 s shell, wires off) -- %.2f%% / %.2f%% of a core at 192 kHz; sink %g\n",
                      nsFull, nsTom, nsFull * 192000.0 / 1.0e7, nsTom * 192000.0 / 1.0e7, sink);
+    }
+
+    // ---- 5. Thump and Ring (I4.4) -----------------------------------------
+    {
+        EngineParameters parameters;
+        parameters.snare1 = shell;
+        parameters.snare1.body = 0.0;
+        parameters.snare1.tone = 0.0;
+        parameters.snare1.thump = 1.0;
+        parameters.snare1.thumpHz = 100.0;
+        parameters.snare1.thumpDecaySeconds = 0.2;
+
+        const auto out = renderPattern (parameters, rate, 1.0, { { 0.0, 38, 1.0 } });
+        const auto at = [&] (double seconds) { return static_cast<std::size_t> (seconds * rate); };
+        const double start = rmsBetween (out, at (0.0), at (0.02));
+        const double later = rmsBetween (out, at (0.19), at (0.21));
+
+        std::printf ("\nThump at 100 Hz, 200 ms T60, the shell silent: peak at %.2f Hz, %.1f dB down at 200 ms\n",
+                     peakHzBetween (out, rate, 60.0, 140.0), 20.0 * std::log10 (later / start));
+
+        SnareEngine engine;
+        engine.prepare (192000.0);
+        SnareSettings s = shell;
+        s.decaySeconds = 0.4;
+
+        for (const double ring : { -1.0, 0.0, 1.0 })
+        {
+            s.ring = ring;
+            engine.start (s, 200.0, 1.0, 1u, 0);
+            std::printf ("  Ring %+.0f: mode T60s %.3f / %.3f / %.3f s (fundamental untouched; the pair at 0.7 and 0.5 of it times %.3f)\n",
+                         ring, engine.getModeT60 (0), engine.getModeT60 (1), engine.getModeT60 (2),
+                         SnareEngine::ringFactorFor (ring));
+        }
     }
 
     // ======================================================================
@@ -5915,6 +6003,140 @@ int runIctus (const Args& args)
                          " sixteenth hats; %.0f Hz)\n", args.outPath.c_str(), rate);
         else
             std::printf ("\nCould not write %s\n", args.outPath.c_str());
+    }
+
+    // ======================================================================
+    // table 4, the fourth round on the hats (I4.4)
+    // ======================================================================
+
+    std::printf ("\n\ntezla-measure ictus -- table 4, the hats' fourth round\n\n");
+
+    {
+        const double r = 192000.0;
+
+        const auto renderHatOnly = [&] (const HatSettings& s, double seconds, bool open, double velocity, std::uint64_t seed)
+        {
+            HatEngine engine;
+            engine.prepare (r);
+            engine.start (s, open, velocity, seed, 0);
+
+            const int total = static_cast<int> (seconds * r);
+            std::vector<double> out (static_cast<std::size_t> (total));
+
+            for (int n = 0; n < total; ++n)
+            {
+                if (n % Engine::kControlIntervalSamples == 0)
+                    engine.advanceControl (Engine::kControlIntervalSamples);
+
+                out[static_cast<std::size_t> (n)] = engine.process();
+            }
+
+            return out;
+        };
+
+        // The hiss alone: Air on minus Air off, same seed, Drive and Grit off
+        // so the chain after the layers meet is linear (the test's rig).
+        const auto hissOnly = [&] (HatSettings s, double seconds, double velocity = 1.0)
+        {
+            s.drive = 0.0;
+            s.grit = 0.0;
+            HatSettings quiet = s;
+            quiet.air = 0.0;
+            const auto a = renderHatOnly (s, seconds, false, velocity, 21u);
+            const auto b = renderHatOnly (quiet, seconds, false, velocity, 21u);
+            std::vector<double> hiss (a.size());
+            for (std::size_t n = 0; n < a.size(); ++n)
+                hiss[n] = a[n] - b[n];
+            return hiss;
+        };
+
+        const auto at = [&] (double seconds) { return static_cast<std::size_t> (seconds * r); };
+
+        HatSettings bare;
+        bare.spread = 0.0;
+        bare.ring = 0.0;
+        bare.drive = 0.0;
+        bare.air = 0.0;
+        bare.sizzle = 0.0;
+        bare.damp = 0.0;
+        bare.strike = 0.0;
+        bare.level = 1.0;
+        bare.velocityLevel = 0.0;
+        bare.velocityDecay = 0.0;
+        bare.velocityColour = 0.0;
+        bare.velocityStrike = 0.0;
+
+        // Open hold
+        {
+            HatSettings s = bare;
+            s.decayOpenSeconds = 0.3;
+            s.holdOpenSeconds = 0.5;
+            s.holdLink = true;
+            const auto linked = renderHatOnly (s, 1.0, true, 1.0, 3u);
+            s.holdLink = false;
+            const auto own = renderHatOnly (s, 1.0, true, 1.0, 3u);
+
+            std::printf ("Open hold 0.5 s on a 0.3 s open decay: RMS at 50 ms %.4f; at 400 ms %.4f with Link dark,\n"
+                         "%.6f with Link lit (the old shared Hold of 0)\n",
+                         rmsBetween (own, at (0.05), at (0.10)), rmsBetween (own, at (0.40), at (0.45)),
+                         rmsBetween (linked, at (0.40), at (0.45)));
+        }
+
+        HatSettings rig = bare;
+        rig.air = 0.3;
+        rig.airToneHz = 1000.0;
+        rig.airDecay = 1.0;
+        rig.sizzle = 0.0;
+        rig.colourHz = 4000.0;
+        rig.width = 1.0;
+        rig.highpassHz = 200.0;
+        rig.decayClosedSeconds = 0.3;
+
+        // Air tilt
+        {
+            std::printf ("Air tilt on a wide-open hiss (Air tone 1 kHz, bands at 4 kHz open, high-pass 200):\n");
+
+            for (const double tilt : { -1.0, -0.5, 0.0, 0.5, 1.0 })
+            {
+                HatSettings s = rig;
+                s.airTilt = tilt;
+                const auto hiss = hissOnly (s, 0.3);
+                std::printf ("  tilt %+.1f: centroid %6.0f Hz, RMS %.4f\n", tilt,
+                             centroidHz (hiss, r, 20.0, 40000.0), rmsBetween (hiss, 0, hiss.size()));
+            }
+        }
+
+        // Air attack
+        {
+            HatSettings s = rig;
+            const auto instant = hissOnly (s, 0.5);
+            s.airAttackSeconds = 0.2;
+            const auto swelled = hissOnly (s, 0.5);
+
+            std::printf ("Air attack 200 ms: the hiss's first 20 ms %.4f -> %.4f; at 200 ms %.4f -> %.4f\n",
+                         rmsBetween (instant, at (0.0), at (0.02)), rmsBetween (swelled, at (0.0), at (0.02)),
+                         rmsBetween (instant, at (0.19), at (0.21)), rmsBetween (swelled, at (0.19), at (0.21)));
+        }
+
+        // Grain
+        {
+            std::printf ("Grain (events per second, crest factor peak/RMS, level against dense):\n");
+            HatSettings s = rig;
+            s.grain = 0.0;
+            const auto dense = hissOnly (s, 0.3);
+            const double denseRms = rmsBetween (dense, 0, dense.size());
+            const double denseCrest = peakOf (dense) / denseRms;
+
+            for (const double grain : { 0.0, 0.5, 0.8, 1.0 })
+            {
+                s.grain = grain;
+                const auto hiss = hissOnly (s, 0.3);
+                const double rms = rmsBetween (hiss, 0, hiss.size());
+                std::printf ("  grain %.1f: %8.0f events/s, crest %5.1f (dense %.1f), level %+.1f dB\n", grain,
+                             HatEngine::grainDensityFor (grain, r) * r, peakOf (hiss) / rms, denseCrest,
+                             20.0 * std::log10 (rms / denseRms));
+            }
+        }
     }
 
     return 0;

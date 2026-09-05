@@ -86,6 +86,34 @@
 //            hiss can shimmer over a short metal body, or a fast chiff can
 //            sit on a long one, which is how a sampled hat is put together.
 //
+// The rig's fourth round (I4.4) asked for more say over the hiss, and for an
+// open pad that can hold longer than the closed one. Four controls on the
+// noise, one on the envelope, every one exact at its neutral setting:
+//
+//   AIR TILT  a slope about 6 kHz, dark to bright. Air tone is a high-pass
+//             and could only ever thin the hiss; this can dull it. A low
+//             shelf and a high shelf of opposite sign, +-12 dB at the ends,
+//             designed per hit and not run at all at 0.
+//   AIR ATTACK the hiss's own rise, up to half a second. The metal is struck
+//             and the wash comes up behind it -- what an open hat does in its
+//             first 50 ms (F&R 20.3), and the cheap standing-in for the
+//             build-up parked in docs/ROADMAP.md section 9.
+//   GRAIN     the hiss's density, from an event every sample to a sparse
+//             crackle of 300 a second. A cymbal's sizzle is chaotic rather
+//             than Gaussian (Chaigne, Touze & Thomas), and the sandy, gritty
+//             hat lives at the sparse end; through Sizzle's band-passes each
+//             impulse rings the partials, which is a metallic crackle rather
+//             than a click. Per second, not per sample, so it is the same
+//             texture at every rate. See kGrainMakeupExponent for the level.
+//   VEL > AIR velocity to the hiss, off by default: a soft tap with less
+//             spray, or a pedal chick with more.
+//   OPEN HOLD the open pad's own plateau, up to a second, behind a LINK lamp
+//             that is lit by default -- lit, both pads share Hold as they
+//             always did; dark, the open pad holds for its own time. On a
+//             plate hat a long hold plateaus the envelope while the plate
+//             darkens underneath it, its high modes dying first, which is how
+//             a real open hat behaves; the six pulses hold flat.
+//
 // ---------------------------------------------------------------------------
 // The chain
 // ---------------------------------------------------------------------------
@@ -94,7 +122,8 @@
 //        |                                                      |
 //        | the same six frequencies                             +--> Drive
 //        v                                                      |    -> the
-//   noise -> Air tone -> (Sizzle: through them) -> x air env ---'     two
+//   noise -> Air tone -> Air tilt -> (Sizzle) -> x air env ---------'     two
+//   (Grain thins the noise before any of it)
 //                                                                    bands
 //                                                                    -> the
 //                                                                    high-pass
@@ -194,6 +223,7 @@
 
 #include <tezla/dsp/Adaa.hpp>
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Biquad.hpp>
 #include <tezla/dsp/Bitcrusher.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/ModalResonator.hpp>
@@ -224,6 +254,9 @@ struct HatSettings
     double airToneHz { 5000.0 };         ///< its own high-pass, 200..12000 Hz
     double airDecay { 1.0 };             ///< its decay as a multiple of the pad's, 0.1..3
     double sizzle { 0.6 };               ///< how much of the hiss rings through the six partials, 0..1
+    double airTilt { 0.0 };              ///< the hiss's slope about 6 kHz, -1 (dark) .. +1 (bright); 0 is exact
+    double airAttackSeconds { 0.0 };     ///< the hiss's rise, 0..0.5; 0 is instant and exact
+    double grain { 0.0 };                ///< the hiss's density: 0 every sample, 1 a sparse crackle; 0 is exact
 
     // ---- the band the whole thing is heard through -----------------------
     double colourHz { 3440.0 };          ///< the lower band-pass's centre, 800..12000 Hz
@@ -234,6 +267,8 @@ struct HatSettings
     // ---- the envelope ----------------------------------------------------
     double strike { 0.4 };               ///< the stick: a short transient over the body, 0..1
     double holdSeconds { 0.0 };          ///< a plateau before the decay, 0..0.2
+    double holdOpenSeconds { 0.0 };      ///< the OPEN pad's own plateau when `holdLink` is off, 0..1
+    bool   holdLink { true };            ///< lit: the open pad's hold IS `holdSeconds`; dark: `holdOpenSeconds`
     double shape { 0.0 };                ///< 0 exponential, 1 linear
     double decayClosedSeconds { 0.06 };  ///< the closed pad's fall, 0.01..0.4
     double decayOpenSeconds { 0.5 };     ///< the open pad's, 0.1..3
@@ -248,6 +283,7 @@ struct HatSettings
     double velocityDecay { 0.3 };
     double velocityColour { 0.4 };
     double velocityStrike { 0.5 };
+    double velocityAir { 0.0 };          ///< velocity to the hiss's level; 0 is exact
 };
 
 class HatEngine
@@ -416,6 +452,39 @@ public:
     /// The noise stream is salted so a hat and a snare with the same hit seed
     /// do not draw the same numbers.
     static constexpr std::uint64_t kAirSalt = 0x2545F4914F6CDD1Dull;
+
+    /// Air Tilt's pivot and range: a low shelf and a high shelf of opposite
+    /// sign about 6 kHz, each +-12 dB at the ends of the knob. Sonitus's
+    /// tilt, moved up three octaves. The pivot is placed where the hiss's
+    /// weight sits once Air tone and the two bands have shaped it (measured
+    /// centroid about 10 kHz on a wide-open rig, lower through the default
+    /// bands), so the knob reads as a slope and not as a volume: at 4 kHz
+    /// nearly all of the hiss was above the pivot and Bright was +10 dB. The
+    /// pivot sits under Fs/8 at every internal rate the Auto policy runs
+    /// (CLAUDE.md section 6), so the slope is the same at 44.1 k and at
+    /// 192 k; and a 0 dB shelf is bit-exactly the identity by `Biquad`'s
+    /// a0/a0 normalise, on top of which the stage is branched out at 0.
+    static constexpr double kAirTiltPivotHz = 6000.0;
+    static constexpr double kAirTiltRangeDb = 12.0;
+    static constexpr double kAirTiltQ = 0.7071067811865476;
+
+    /// Grain's far end, in events per second. The hiss is white noise at the
+    /// internal rate -- an event every sample -- and Grain thins it to a
+    /// sparse stream of single-sample impulses, geometrically, down to this
+    /// many a second at 1: a distinct crackle, the vinyl end. Per second
+    /// rather than per sample, so the same knob is the same texture at every
+    /// rate (CLAUDE.md section 6); half way is about 7 600 a second at the
+    /// rates Auto runs, which is sand.
+    static constexpr double kGrainMinEventsPerSecond = 300.0;
+
+    /// How the kept impulses are made up for the ones dropped. Constant RMS
+    /// would be p^-0.5 -- 25x at the sparse end, and a 25x impulse into a
+    /// band-pass is a click at +28 dBFS whatever Drive does. Constant peak
+    /// (no make-up) loses 25 dB of level over the knob. Half way between the
+    /// two in dB, p^-0.25, keeps a sparse crackle within about 13 dB of the
+    /// dense hiss, which is roughly how much louder impulsive sounds read
+    /// per unit of RMS anyway. Measured in tests/test_Ictus.cpp.
+    static constexpr double kGrainMakeupExponent = 0.25;
 
     // ---- the plate ------------------------------------------------------
 
@@ -603,6 +672,25 @@ public:
         return dsp::Bitcrusher::kMaxBits * std::pow (kGritMinBits / dsp::Bitcrusher::kMaxBits, g);
     }
 
+    /// Grain's kept fraction at `rate`: 1 (every sample) at 0, geometrically
+    /// down to `kGrainMinEventsPerSecond / rate` at 1. Exactly 1.0 at 0.
+    [[nodiscard]] static double grainDensityFor (double grain, double rate) noexcept
+    {
+        const double g = std::clamp (grain, 0.0, 1.0);
+
+        if (dsp::isExactlyZero (g))
+            return 1.0;
+
+        const double floor = std::clamp (kGrainMinEventsPerSecond / std::max (rate, 1000.0), 1.0e-6, 1.0);
+        return std::pow (floor, g);
+    }
+
+    /// The make-up applied to each kept impulse at density `p`.
+    [[nodiscard]] static double grainMakeupFor (double density) noexcept
+    {
+        return std::pow (std::clamp (density, 1.0e-6, 1.0), -kGrainMakeupExponent);
+    }
+
     void prepare (double internalRate) noexcept
     {
         rate_ = internalRate > 0.0 ? internalRate : 48000.0;
@@ -678,6 +766,10 @@ public:
         highBand_.reset();
         highpass_.reset();
         airFilter_.reset();
+        airTiltLow_.reset();
+        airTiltHigh_.reset();
+        airTiltOn_ = false;
+        grainOn_ = false;
 
         for (auto& band : sizzleBank_)
             band.reset();
@@ -855,9 +947,15 @@ public:
         // ---- the envelopes ----
         const double tension = 1.0 - std::clamp (s.shape, 0.0, 1.0);
 
+        // The plateau: Hold for the closed pad, and for the open pad too
+        // while LINK is lit; Open hold -- its own, longer range -- when it is
+        // dark. An old project has LINK lit, so it reopens as it was.
+        const double hold = (open && ! s.holdLink) ? std::clamp (s.holdOpenSeconds, 0.0, 1.0)
+                                                   : std::clamp (s.holdSeconds, 0.0, 0.2);
+
         body_.setAttackSeconds (0.0);
         body_.setAttackTension (0.0);
-        body_.setHoldSeconds (std::clamp (s.holdSeconds, 0.0, 0.2));
+        body_.setHoldSeconds (hold);
         body_.setDecaySeconds (bodySeconds);
         body_.setDecayTension (tension);
         body_.setSustain (0.0);
@@ -867,13 +965,37 @@ public:
         strikeLevel_ = dsp::isExactlyZero (strike_) ? 0.0 : 1.0;
 
         // ---- air ----
-        air_ = std::clamp (s.air, 0.0, 1.0);
+        air_ = scaled (std::clamp (s.air, 0.0, 1.0), s.velocityAir);
         airOn_ = ! dsp::isExactlyZero (air_);
 
         if (airOn_)
         {
             random_.seed (seed ^ kAirSalt);
             airFilter_.setCutoffHz (std::clamp (s.airToneHz, 200.0, std::min (12000.0, rate_ * 0.4)));
+
+            // Air tilt: a low shelf and a high shelf of opposite sign about
+            // the pivot. Designed per hit -- two shelf designs, nothing per
+            // sample beyond two biquads -- and not run at all at 0.
+            const double tilt = std::clamp (s.airTilt, -1.0, 1.0);
+            airTiltOn_ = ! dsp::isExactlyZero (tilt);
+
+            if (airTiltOn_)
+            {
+                const double gainDb = tilt * kAirTiltRangeDb;
+                airTiltLow_.setCoefficients (dsp::design::lowShelf (kAirTiltPivotHz, kAirTiltQ, -gainDb, rate_));
+                airTiltHigh_.setCoefficients (dsp::design::highShelf (kAirTiltPivotHz, kAirTiltQ, gainDb, rate_));
+            }
+
+            // Grain: the fraction of samples that carry an impulse, and what
+            // each is made up by. At 0 the old draw runs, bit for bit.
+            const double grain = std::clamp (s.grain, 0.0, 1.0);
+            grainOn_ = ! dsp::isExactlyZero (grain);
+
+            if (grainOn_)
+            {
+                grainDensity_ = grainDensityFor (grain, rate_);
+                grainMakeup_ = grainMakeupFor (grainDensity_);
+            }
 
             // Sizzle: the hiss through the metal's own partials as HEARD --
             // their harmonics nearest the two bands, at whatever Tune,
@@ -889,9 +1011,12 @@ public:
                     sizzleBank_[static_cast<std::size_t> (i)].setCutoffHz (sizzleHz_[i]);
             }
 
-            airEnvelope_.setAttackSeconds (0.0);
+            // Air attack: the hiss can rise after the metal -- the wash of an
+            // open hat, the cheap cousin of the cascade parked in
+            // docs/ROADMAP.md section 9. 0 is instant, as it always was.
+            airEnvelope_.setAttackSeconds (std::clamp (s.airAttackSeconds, 0.0, 0.5));
             airEnvelope_.setAttackTension (0.0);
-            airEnvelope_.setHoldSeconds (std::clamp (s.holdSeconds, 0.0, 0.2));
+            airEnvelope_.setHoldSeconds (hold);
             airEnvelope_.setDecaySeconds (bodySeconds * std::clamp (s.airDecay, 0.1, 3.0));
             airEnvelope_.setDecayTension (tension);
             airEnvelope_.setSustain (0.0);
@@ -1034,7 +1159,23 @@ public:
 
         if (airOn_)
         {
-            double hiss = airFilter_.process (random_.bipolar());
+            // The noise: every sample at Grain 0 -- the draw the engine has
+            // always made -- or, with Grain up, a single-sample impulse with
+            // probability `grainDensity_`, made up by `grainMakeup_`, and
+            // exact zero otherwise. Two draws per kept event, one per dropped
+            // one, from the same seeded stream: a hit is still a pure
+            // function of its seed.
+            double noise;
+
+            if (grainOn_)
+                noise = random_.next() < grainDensity_ ? random_.bipolar() * grainMakeup_ : 0.0;
+            else
+                noise = random_.bipolar();
+
+            double hiss = airFilter_.process (noise);
+
+            if (airTiltOn_)
+                hiss = airTiltHigh_.process (airTiltLow_.process (hiss));
 
             // The hiss rung through the six partials: the plate speaking
             // rather than a second instrument playing alongside it. Exact at
@@ -1165,6 +1306,22 @@ public:
     /// The bit depth Grit resolved to for this hit; 16 is the exact bypass.
     [[nodiscard]] double getGritBits() const noexcept { return crusher_.getBits(); }
 
+    /// The hiss's level for the hit that is sounding, velocity applied.
+    [[nodiscard]] double getAirLevel() const noexcept { return air_; }
+
+    /// The plateau the body envelope was given for this hit, in seconds --
+    /// Hold, or Open hold on the open pad with LINK dark.
+    [[nodiscard]] double getHoldSeconds() const noexcept { return body_.getHoldSeconds(); }
+
+    /// The hiss's rise for this hit, in seconds.
+    [[nodiscard]] double getAirAttackSeconds() const noexcept { return airEnvelope_.getAttackSeconds(); }
+
+    /// Whether the tilt shelves are in the hiss's path for this hit.
+    [[nodiscard]] bool isAirTiltOn() const noexcept { return airTiltOn_; }
+
+    /// Grain's kept fraction for this hit; exactly 1.0 at Grain 0.
+    [[nodiscard]] double getGrainDensity() const noexcept { return grainOn_ ? grainDensity_ : 1.0; }
+
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
 private:
@@ -1209,6 +1366,11 @@ private:
     double strikeCoefficient_ { 0.0 };
 
     dsp::SvfFilter airFilter_;
+    dsp::Biquad<double> airTiltLow_, airTiltHigh_;
+    bool airTiltOn_ { false };
+    bool grainOn_ { false };
+    double grainDensity_ { 1.0 };
+    double grainMakeup_ { 1.0 };
     dsp::SvfFilter sizzleBank_[kOscillators];
     double sizzleHz_[kOscillators] {};
     bool sizzleOn_ { false };

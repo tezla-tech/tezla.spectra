@@ -16,7 +16,8 @@
 //
 //   1. Every engine knob is snapshotted into the hit at note-on. The engine
 //      keeps the latest parameters; a hit reads them once. Only the master
-//      level is continuous, and it is smoothed.
+//      level and the eight pads' pans are continuous, and they are smoothed:
+//      a pan is a mixing gesture, not part of the hit.
 //   2. Everything renders at the internal rate. A drum's click is an 8 kHz
 //      resonance and its harmonics come from nonlinear curves; both belong
 //      inside the oversampled section, and an instrument has nothing to
@@ -35,6 +36,16 @@
 // of controls with a decay each, and the clap. The Main bus is still the only
 // bus; the four others are declared so that I7 adds them without
 // restructuring.
+//
+// I4.4: the pads are placed in the field. Each has a PAN on a BALANCE law --
+// at centre both channels carry the pad at unity, exactly the dual mono the
+// engine rendered before pans existed; hard left leaves the right channel
+// exactly 0.0 -- rather than a constant-power law, whose centre would sit
+// 3 dB under the render every saved project was mixed against. The engines
+// themselves are still mono; the width work that needs a side signal from
+// the source (spreading a plate's modes, decorrelating a hiss) is the next
+// round's, and Width and Mono Below arrive with it, since on a mono source
+// they would do nothing.
 
 #include <cstdint>
 
@@ -96,6 +107,11 @@ struct EngineParameters
     int padNotes[kPadCount] { 36, 38, 42, 46, 39, 37, 35, 40 };
 
     double masterDb { 0.0 };
+
+    /// Per pad, -1 (hard left) .. +1 (hard right), indexed by PadIndex. A
+    /// balance: 0 is both channels at unity, the dual mono the engine always
+    /// rendered, bit for bit.
+    double pan[kPadCount] {};
 
     /// Bass mode: the whole keyboard plays Kick 1, tuned to the key through
     /// the tuning (12-TET at A4 = 440 Hz unless a scale is loaded), and the
@@ -181,6 +197,19 @@ public:
                                                parameters_.renderOversampling, offline_);
     }
 
+    /// The balance law's two gains for a pan position: the near channel at
+    /// exactly 1.0, the far one falling linearly to exactly 0.0 at the end
+    /// stop. Centre is 1.0 and 1.0, so a pad at rest renders as it always
+    /// did (a multiply by 1.0 is exact).
+    [[nodiscard]] static double balanceLeft (double pan) noexcept { return pan > 0.0 ? 1.0 - pan : 1.0; }
+    [[nodiscard]] static double balanceRight (double pan) noexcept { return pan < 0.0 ? 1.0 + pan : 1.0; }
+
+    /// A pad's pan as the smoother currently has it, -1..+1.
+    [[nodiscard]] double getPanNow (PadIndex pad) const noexcept
+    {
+        return pan_[static_cast<int> (pad)].getCurrent();
+    }
+
     /// Hits sounding across every pad -- the activity count, not a silence.
     [[nodiscard]] int activeHitCount() const noexcept;
 
@@ -252,6 +281,8 @@ private:
     dsp::Tuning tuning_;
 
     dsp::SmoothedValue<double> masterGain_;
+    dsp::SmoothedValue<double> pan_[kPadCount];
+    bool pansPrimed_ { false };
 
     int sinceControl_ { 0 };
     int idleSamples_ { 0 };

@@ -46,6 +46,14 @@ void Engine::rebuildForRate() noexcept
     masterGain_.prepare (internalRate_, 0.02);
     masterGain_.setCurrentAndTarget (dsp::dbToGain (parameters_.masterDb));
 
+    for (int pad = 0; pad < kPadCount; ++pad)
+    {
+        pan_[pad].prepare (internalRate_, 0.02);
+        pan_[pad].setCurrentAndTarget (std::clamp (parameters_.pan[pad], -1.0, 1.0));
+    }
+
+    pansPrimed_ = false;
+
     reset();
 }
 
@@ -297,18 +305,63 @@ void Engine::renderChunk (double* left, double* right, int numSamples) noexcept
 {
     bool silent = true;
 
+    constexpr int iKick1 = static_cast<int> (PadIndex::kick1);
+    constexpr int iKick2 = static_cast<int> (PadIndex::kick2);
+    constexpr int iSnare1 = static_cast<int> (PadIndex::snare1);
+    constexpr int iSnare2 = static_cast<int> (PadIndex::snare2);
+    constexpr int iPerc = static_cast<int> (PadIndex::perc);
+    constexpr int iHatClosed = static_cast<int> (PadIndex::hatClosed);
+    constexpr int iHatOpen = static_cast<int> (PadIndex::hatOpen);
+    constexpr int iClap = static_cast<int> (PadIndex::clap);
+
     for (int i = 0; i < numSamples; ++i)
     {
-        const double x = (kick1_.process() + kick2_.process()
-                          + snare1_.process() + snare2_.process() + perc_.process()
-                          + hatClosed_.process() + hatOpen_.process() + clap_.process())
-                       * masterGain_.next();
+        const double kick1 = kick1_.process();
+        const double kick2 = kick2_.process();
+        const double snare1 = snare1_.process();
+        const double snare2 = snare2_.process();
+        const double perc = perc_.process();
+        const double hatClosed = hatClosed_.process();
+        const double hatOpen = hatOpen_.process();
+        const double clap = clap_.process();
 
-        // Mono into both channels until the chain and the pan arrive (I5).
-        left[i] = x;
-        right[i] = x;
+        const double pKick1 = pan_[iKick1].next();
+        const double pKick2 = pan_[iKick2].next();
+        const double pSnare1 = pan_[iSnare1].next();
+        const double pSnare2 = pan_[iSnare2].next();
+        const double pPerc = pan_[iPerc].next();
+        const double pHatClosed = pan_[iHatClosed].next();
+        const double pHatOpen = pan_[iHatOpen].next();
+        const double pClap = pan_[iClap].next();
 
-        silent = silent && std::abs (x) < kIdleThreshold;
+        // The balance law, pad by pad, summed in the order the mono engine
+        // always summed in: with every pan at centre each gain is exactly 1.0
+        // and both channels are the old render bit for bit (the round-1
+        // golden render in plugins/Ictus/PLAN.md).
+        double l = kick1 * balanceLeft (pKick1);
+        l += kick2 * balanceLeft (pKick2);
+        l += snare1 * balanceLeft (pSnare1);
+        l += snare2 * balanceLeft (pSnare2);
+        l += perc * balanceLeft (pPerc);
+        l += hatClosed * balanceLeft (pHatClosed);
+        l += hatOpen * balanceLeft (pHatOpen);
+        l += clap * balanceLeft (pClap);
+
+        double r = kick1 * balanceRight (pKick1);
+        r += kick2 * balanceRight (pKick2);
+        r += snare1 * balanceRight (pSnare1);
+        r += snare2 * balanceRight (pSnare2);
+        r += perc * balanceRight (pPerc);
+        r += hatClosed * balanceRight (pHatClosed);
+        r += hatOpen * balanceRight (pHatOpen);
+        r += clap * balanceRight (pClap);
+
+        const double master = masterGain_.next();
+
+        left[i] = l * master;
+        right[i] = r * master;
+
+        silent = silent && std::abs (left[i]) < kIdleThreshold && std::abs (right[i]) < kIdleThreshold;
     }
 
     if (silent && activeHitCount() == 0)
@@ -327,6 +380,22 @@ void Engine::process (double* const* output, int numSamples) noexcept
     reconcileFactor();
 
     masterGain_.setTarget (dsp::dbToGain (parameters_.masterDb));
+
+    // The pans: jumped to on the first call after a rebuild, ramped after.
+    // prepare() runs before any parameter is known, so a smoother primed
+    // there starts at centre, and a pad saved hard left would open every
+    // project drifting across the field for its first hits.
+    for (int pad = 0; pad < kPadCount; ++pad)
+    {
+        const double wanted = std::clamp (parameters_.pan[pad], -1.0, 1.0);
+
+        if (pansPrimed_)
+            pan_[pad].setTarget (wanted);
+        else
+            pan_[pad].setCurrentAndTarget (wanted);
+    }
+
+    pansPrimed_ = true;
 
     const int factor = oversampler_.getFactor();
     const int internalSamples = numSamples * factor;

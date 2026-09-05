@@ -3359,3 +3359,641 @@ TEZLA_TEST (the_wires_hold_at_full_level_before_they_start_to_fall)
     for (std::size_t n = static_cast<std::size_t> (lastNonZeroSample (with)) + 1; n < with.size(); ++n)
         CHECK (isExactlyZero (with[n]));
 }
+
+// ---------------------------------------------------------------------------
+// I4.4 -- the rig's fourth round: more say over the hiss, an open hold of its
+// own, a thicker kick and snare, and the pads placed in the field
+// ---------------------------------------------------------------------------
+
+namespace
+{
+/// The kick engine on its own at an internal rate, stepped on the control
+/// grid exactly as the engine steps it: `seconds` of one hit.
+std::vector<double> renderKickEngine (KickEngine& engine, const KickSettings& s, double rate,
+                                      double seconds, double endHz = 50.0, double velocity = 1.0)
+{
+    engine.prepare (rate);
+    engine.start (s, endHz, velocity, 5u, 0);
+
+    const int total = static_cast<int> (seconds * rate);
+    std::vector<double> out (static_cast<std::size_t> (total));
+
+    for (int n = 0; n < total; ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            engine.advanceControl (Engine::kControlIntervalSamples);
+
+        out[static_cast<std::size_t> (n)] = engine.process();
+    }
+
+    return out;
+}
+
+/// Both channels of the engine, the notes on their exact samples. The mono
+/// `render` returns the left channel only, which was the whole story until
+/// the pads had pans.
+struct StereoRender
+{
+    std::vector<double> left, right;
+};
+
+StereoRender renderBoth (const EngineParameters& parameters, double rate, int samples,
+                         const std::vector<Hit>& hits, int blockSize = 256)
+{
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+    engine->setParameters (parameters);
+
+    StereoRender out;
+    out.left.assign (static_cast<std::size_t> (samples), 0.0);
+    out.right.assign (static_cast<std::size_t> (samples), 0.0);
+
+    int done = 0;
+
+    while (done < samples)
+    {
+        for (const auto& hit : hits)
+            if (hit.sample == done)
+                engine->noteOn (hit.note, hit.velocity);
+
+        int take = std::min (blockSize, samples - done);
+
+        for (const auto& hit : hits)
+            if (hit.sample > done)
+                take = std::min (take, hit.sample - done);
+
+        double* block[2] = { out.left.data() + done, out.right.data() + done };
+        engine->process (block, take);
+
+        done += take;
+    }
+
+    return out;
+}
+
+/// The RMS of `x` between two instants, in seconds.
+double rmsBetween (const std::vector<double>& x, double rate, double from, double to)
+{
+    const auto first = std::min (x.size(), static_cast<std::size_t> (from * rate));
+    const auto last = std::min (x.size(), static_cast<std::size_t> (to * rate));
+
+    double sum = 0.0;
+
+    for (std::size_t n = first; n < last; ++n)
+        sum += x[n] * x[n];
+
+    return std::sqrt (sum / static_cast<double> (std::max<std::size_t> (last - first, 1)));
+}
+
+/// The hiss on its own: the hat with Air at 1 minus the same hit with Air at
+/// 0. Same seed, same metal, and with Drive and Grit off the chain after the
+/// layers meet is linear, so the difference IS the filtered noise and nothing
+/// else -- there is no other way to hear the layer alone.
+std::vector<double> hissOnly (HatSettings s, double rate, double seconds, bool open = false,
+                              double velocity = 1.0)
+{
+    s.drive = 0.0;
+    s.grit = 0.0;
+
+    HatSettings quiet = s;
+    quiet.air = 0.0;
+
+    HatEngine withAir, withoutAir;
+    const auto a = renderHatEngine (withAir, s, rate, seconds, open, velocity, 21u);
+    const auto b = renderHatEngine (withoutAir, quiet, rate, seconds, open, velocity, 21u);
+
+    std::vector<double> hiss (a.size());
+
+    for (std::size_t n = 0; n < a.size(); ++n)
+        hiss[n] = a[n] - b[n];
+
+    return hiss;
+}
+
+/// A hat whose hiss can be heard whole: wide bands at 4 kHz, the high-pass
+/// down at 200 Hz, Air tone at 1 kHz so there is hiss on both sides of the
+/// tilt's pivot, and no Sizzle so the noise is not rung into lines.
+HatSettings hissRig()
+{
+    HatSettings s = bareHat();
+    s.air = 1.0;
+    s.airToneHz = 1000.0;
+    s.airDecay = 1.0;
+    s.sizzle = 0.0;
+    s.colourHz = 4000.0;
+    s.width = 1.0;
+    s.highpassHz = 200.0;
+    s.decayClosedSeconds = 0.3;
+    s.decayOpenSeconds = 0.5;
+    return s;
+}
+} // namespace
+
+TEZLA_TEST (open_hold_is_the_open_pads_own_when_link_is_dark)
+{
+    // One Hold has always fed both pads. Open hold is the open pad's own,
+    // with a longer range, behind a LINK lamp lit by default: lit, the two
+    // share Hold as they did; dark, the open pad plateaus for its own time.
+    const double rate = 96000.0;
+
+    HatSettings s = bareHat();
+    s.decayOpenSeconds = 0.3;
+    s.decayClosedSeconds = 0.1;
+    s.holdSeconds = 0.0;
+    s.holdOpenSeconds = 0.5;
+
+    s.holdLink = true;
+    HatEngine linked;
+    linked.prepare (rate);
+    linked.start (s, true, 1.0, 3u, 0);
+    CHECK (isExactlyZero (linked.getHoldSeconds()));
+    const auto linkedOpen = renderHatEngine (linked, s, rate, 1.0, true);
+    const auto linkedClosed = renderHatEngine (linked, s, rate, 0.5, false);
+
+    s.holdLink = false;
+    HatEngine own;
+    own.prepare (rate);
+    own.start (s, true, 1.0, 3u, 0);
+    CHECK (isExactly (own.getHoldSeconds(), 0.5));
+    own.start (s, false, 1.0, 3u, 0);
+    CHECK (isExactlyZero (own.getHoldSeconds()));
+
+    const auto ownOpen = renderHatEngine (own, s, rate, 1.0, true);
+    const auto ownClosed = renderHatEngine (own, s, rate, 0.5, false);
+
+    // The closed pad never reads Open hold: byte for byte the same hit.
+    CHECK (linkedClosed == ownClosed);
+
+    // Inside the open pad's plateau, 0.4 s in, the unlinked hit is still at
+    // its early level, and the linked one -- a 0.3 s decay -- is long gone.
+    const double early = rmsBetween (ownOpen, rate, 0.05, 0.10);
+    const double late = rmsBetween (ownOpen, rate, 0.40, 0.45);
+    const double lateLinked = rmsBetween (linkedOpen, rate, 0.40, 0.45);
+
+    std::printf ("        [open hold] open pad at 50 ms %.4f, at 400 ms %.4f with its own 0.5 s hold, %.6f linked\n",
+                 early, late, lateLinked);
+
+    CHECK (late > early * 0.8);
+    CHECK (lateLinked < early * 0.05);
+}
+
+TEZLA_TEST (air_tilt_moves_the_hiss_dark_and_bright_and_is_out_of_the_path_at_zero)
+{
+    // Air tone is a high-pass and could only thin the hiss; Air tilt can
+    // dull it. A low shelf and a high shelf of opposite sign about 4 kHz,
+    // designed per hit, not run at 0.
+    const double rate = 192000.0;
+
+    HatSettings s = hissRig();
+
+    // Under the bands' rails, as in the velocity test.
+    s.air = 0.3;
+
+    const auto centroidAt = [&] (double tilt)
+    {
+        HatSettings t = s;
+        t.airTilt = tilt;
+        return centroidHz (hissOnly (t, rate, 0.3), rate, 0.25);
+    };
+
+    const double dark = centroidAt (-1.0);
+    const double flat = centroidAt (0.0);
+    const double bright = centroidAt (1.0);
+
+    std::printf ("        [air tilt] hiss centroid %.0f Hz dark, %.0f flat, %.0f bright\n", dark, flat, bright);
+
+    CHECK (dark < flat * 0.85);
+    CHECK (bright > flat * 1.15);
+
+    HatEngine engine;
+    engine.prepare (rate);
+    engine.start (s, false, 1.0, 1u, 0);
+    CHECK (! engine.isAirTiltOn());
+
+    s.airTilt = 0.3;
+    engine.start (s, false, 1.0, 1u, 0);
+    CHECK (engine.isAirTiltOn());
+
+    // Level: a slope, not a volume control. The two shelves pull in
+    // opposite directions about the pivot, so the hiss stays within a few dB.
+    s.airTilt = -1.0;
+    const double darkRms = rmsOf (hissOnly (s, rate, 0.3));
+    s.airTilt = 0.0;
+    const double flatRms = rmsOf (hissOnly (s, rate, 0.3));
+    s.airTilt = 1.0;
+    const double brightRms = rmsOf (hissOnly (s, rate, 0.3));
+
+    std::printf ("        [air tilt] hiss RMS %.4f dark, %.4f flat, %.4f bright\n", darkRms, flatRms, brightRms);
+
+    CHECK (darkRms > flatRms * 0.25 && darkRms < flatRms * 4.0);
+    CHECK (brightRms > flatRms * 0.25 && brightRms < flatRms * 4.0);
+}
+
+TEZLA_TEST (air_attack_brings_the_hiss_up_after_the_metal)
+{
+    const double rate = 96000.0;
+
+    HatSettings s = hissRig();
+    s.airAttackSeconds = 0.0;
+    const auto instant = hissOnly (s, rate, 0.5);
+
+    s.airAttackSeconds = 0.2;
+    const auto swelled = hissOnly (s, rate, 0.5);
+
+    HatEngine engine;
+    engine.prepare (rate);
+    engine.start (s, false, 1.0, 1u, 0);
+    CHECK (isExactly (engine.getAirAttackSeconds(), 0.2));
+
+    // The first 20 ms: a 200 ms linear rise is a tenth of the way up.
+    const double earlyInstant = rmsBetween (instant, rate, 0.0, 0.02);
+    const double earlySwelled = rmsBetween (swelled, rate, 0.0, 0.02);
+
+    // ...and at 200 ms the swelled hiss has arrived where the instant one has
+    // already fallen.
+    const double lateInstant = rmsBetween (instant, rate, 0.19, 0.21);
+    const double lateSwelled = rmsBetween (swelled, rate, 0.19, 0.21);
+
+    std::printf ("        [air attack] first 20 ms %.4f -> %.4f with a 200 ms rise; at 200 ms %.4f -> %.4f\n",
+                 earlyInstant, earlySwelled, lateInstant, lateSwelled);
+
+    CHECK (earlySwelled < earlyInstant * 0.12);
+    CHECK (lateSwelled > lateInstant);
+}
+
+TEZLA_TEST (grain_thins_the_hiss_to_a_crackle_and_says_how_many_a_second)
+{
+    // Per second, not per sample: the same knob is the same texture at every
+    // rate. Exactly every sample at 0.
+    CHECK (isExactly (HatEngine::grainDensityFor (0.0, 192000.0), 1.0));
+
+    for (double rate : { 176400.0, 192000.0, 96000.0 })
+        CHECK (std::abs (HatEngine::grainDensityFor (1.0, rate) * rate - HatEngine::kGrainMinEventsPerSecond) < 1.0e-9);
+
+    CHECK (std::abs (HatEngine::grainDensityFor (0.5, 192000.0)
+                     - std::sqrt (HatEngine::kGrainMinEventsPerSecond / 192000.0)) < 1.0e-12);
+
+    const double rate = 192000.0;
+    HatSettings s = hissRig();
+
+    HatEngine engine;
+    engine.prepare (rate);
+    engine.start (s, false, 1.0, 1u, 0);
+    CHECK (isExactly (engine.getGrainDensity(), 1.0));
+
+    s.grain = 1.0;
+    engine.start (s, false, 1.0, 1u, 0);
+    CHECK (std::abs (engine.getGrainDensity() * rate - HatEngine::kGrainMinEventsPerSecond) < 1.0e-9);
+
+    // A crackle is the same noise with most of its samples exactly zero: the
+    // crest factor (peak over RMS) is what says so once the filters have
+    // smeared each impulse into a few samples. And the level stays within
+    // bounds -- p^-0.25 of make-up, see kGrainMakeupExponent.
+    s.grain = 0.0;
+    const auto dense = hissOnly (s, rate, 0.3);
+    s.grain = 1.0;
+    const auto sparse = hissOnly (s, rate, 0.3);
+
+    const double denseCrest = peakOf (dense) / rmsOf (dense);
+    const double sparseCrest = peakOf (sparse) / rmsOf (sparse);
+    const double levelDb = 20.0 * std::log10 (rmsOf (sparse) / rmsOf (dense));
+
+    std::printf ("        [grain] crest factor %.1f dense -> %.1f at 300 events a second; level %.1f dB\n",
+                 denseCrest, sparseCrest, levelDb);
+
+    CHECK (sparseCrest > denseCrest * 3.0);
+    CHECK (levelDb > -18.0 && levelDb < 3.0);
+}
+
+TEZLA_TEST (velocity_to_air_scales_the_hiss_and_nothing_else)
+{
+    const double rate = 96000.0;
+    HatSettings s = hissRig();
+
+    // Under the bands' rails: the SVF is exactly linear to +-1 and saturates
+    // above it, and a full-level hiss through 1.4x of make-up brushes that
+    // rail -- measured 0.500062 at Air 1, which is the filter being an
+    // analogue filter rather than the control being wrong.
+    s.air = 0.3;
+
+    // At 0 -- the default -- a soft hit has the same hiss as a hard one.
+    s.velocityAir = 0.0;
+    const auto hard = hissOnly (s, rate, 0.3, false, 1.0);
+    const auto softUnscaled = hissOnly (s, rate, 0.3, false, 0.5);
+    CHECK (hard == softUnscaled);
+
+    // At 1, the hiss IS the velocity: exactly half at the layer, and half
+    // to within the bands' rails once heard -- the SVF is exactly linear to
+    // +-1 and saturates above it, and the metal alone reaches 1.0 where its
+    // six pulses coincide, so adding the hiss brushes the rail and the
+    // difference of two renders is not quite the hiss alone (measured
+    // 0.500009 here, 0.500062 at Air 1).
+    s.velocityAir = 1.0;
+
+    HatEngine engine;
+    engine.prepare (rate);
+    engine.start (s, false, 0.5, 1u, 0);
+    CHECK (isExactly (engine.getAirLevel(), 0.15));
+    engine.start (s, false, 1.0, 1u, 0);
+    CHECK (isExactly (engine.getAirLevel(), 0.3));
+
+    const auto soft = hissOnly (s, rate, 0.3, false, 0.5);
+    const double ratio = rmsOf (soft) / rmsOf (hard);
+
+    std::printf ("        [vel > air] hiss RMS at velocity 0.5 against 1.0: %.6f\n", ratio);
+
+    CHECK (std::abs (ratio - 0.5) < 1.0e-3);
+}
+
+TEZLA_TEST (under_is_a_sub_locked_to_the_body_and_exact_at_zero)
+{
+    const double rate = 96000.0;
+
+    KickSettings s = neutralKick();
+    s.decaySeconds = 1.0;
+    s.under = 1.0;
+    s.underSemitones = 12.0;
+
+    KickEngine engine;
+    const auto with = renderKickEngine (engine, s, rate, 1.0);
+
+    KickSettings off = s;
+    off.under = 0.0;
+    KickEngine plain;
+    const auto without = renderKickEngine (plain, off, rate, 1.0);
+
+    // The difference is the sub alone: an octave under the 50 Hz body.
+    std::vector<double> sub (with.size());
+    for (std::size_t n = 0; n < sub.size(); ++n)
+        sub[n] = with[n] - without[n];
+
+    const double hz = peakHzBetween (sub, rate, 15.0, 35.0);
+    std::printf ("        [under] the sub's peak at %.2f Hz under a 50 Hz body, RMS %.4f\n", hz, rmsOf (sub));
+
+    CHECK (std::abs (hz - 25.0) < 0.5);
+    CHECK (rmsOf (sub) > 0.2);
+
+    // Locked: through a drop the sub is the body's pitch times the interval's
+    // ratio at every control boundary, so the two can never beat.
+    s.startSemitones = 24.0;
+    s.dropSeconds = 0.1;
+    engine.prepare (rate);
+    engine.start (s, 50.0, 1.0, 1u, 0);
+
+    int moving = 0;
+
+    for (int tick = 0; tick < 40; ++tick)
+    {
+        engine.advanceControl (Engine::kControlIntervalSamples);
+
+        CHECK (isExactly (engine.getUnderHz(), engine.currentHz() * 0.5));
+
+        if (engine.currentHz() > 50.5)
+            ++moving;
+
+        for (int n = 0; n < Engine::kControlIntervalSamples; ++n)
+            (void) engine.process();
+    }
+
+    CHECK (moving > 10);
+
+    // Exact at 0: no sub is placed at all.
+    plain.prepare (rate);
+    plain.start (off, 50.0, 1.0, 1u, 0);
+    CHECK (isExactlyZero (plain.getUnderHz()));
+
+    // Its own attack: with a 100 ms rise the sub is absent from the first
+    // 20 ms and at full strength once the rise is done. (The rise delays
+    // the whole envelope, so the bloomed sub is measured on its own -- the
+    // hit minus the same hit with Under at 0 -- rather than against the
+    // instant one, whose decay is already 100 ms further along.)
+    KickSettings bloom = s;
+    bloom.startSemitones = 0.0;
+    bloom.underAttackSeconds = 0.1;
+    KickEngine blooming;
+    const auto late = renderKickEngine (blooming, bloom, rate, 1.0);
+
+    std::vector<double> bloomedSub (late.size());
+    for (std::size_t n = 0; n < bloomedSub.size(); ++n)
+        bloomedSub[n] = late[n] - without[n];
+
+    const double first = rmsBetween (bloomedSub, rate, 0.0, 0.02);
+    const double risen = rmsBetween (bloomedSub, rate, 0.10, 0.12);
+    const double subEarly = rmsBetween (sub, rate, 0.0, 0.02);
+
+    std::printf ("        [under] with a 100 ms rise the sub is %.4f in the first 20 ms and %.4f at 100 ms (instant: %.4f)\n",
+                 first, risen, subEarly);
+
+    CHECK (first < subEarly * 0.15);
+    CHECK (risen > subEarly * 0.6);
+
+    // A long sub outlives a short body and the hit still retires exactly.
+    KickSettings tail = neutralKick();
+    tail.decaySeconds = 0.1;
+    tail.under = 0.5;
+    tail.underDecay = 4.0;
+    KickEngine lingering;
+    const auto out = renderKickEngine (lingering, tail, rate, 1.0);
+    const double lastSecond = static_cast<double> (lastNonZeroSample (out)) / rate;
+
+    std::printf ("        [under] a 0.1 s body with a x4 sub last sounds at %.3f s, active %d\n",
+                 lastSecond, lingering.isActive() ? 1 : 0);
+
+    CHECK (lastSecond > 0.3 && lastSecond < 0.6);
+    CHECK (! lingering.isActive());
+}
+
+TEZLA_TEST (knock_rings_at_its_pitch_and_is_cut_exactly)
+{
+    const double rate = 96000.0;
+
+    KickSettings s = neutralKick();
+    s.decaySeconds = 0.02;
+    s.knock = 1.0;
+    s.knockHz = 350.0;
+    s.knockSeconds = 0.05;
+
+    KickEngine engine;
+    const auto out = renderKickEngine (engine, s, rate, 0.5);
+
+    const double hz = peakHzBetween (out, rate, 200.0, 600.0);
+    const int last = lastNonZeroSample (out);
+    const double cutAt = static_cast<double> (last + 1) / rate;
+
+    std::printf ("        [knock] peak at %.1f Hz; cut at %.4f s against %.4f s (four T60s), active %d\n",
+                 hz, cutAt, KickEngine::kKnockTailT60s * s.knockSeconds, engine.isActive() ? 1 : 0);
+
+    CHECK (std::abs (hz - 350.0) < 4.0);
+    CHECK (std::abs (cutAt - KickEngine::kKnockTailT60s * s.knockSeconds) < 0.001);
+    CHECK (! engine.isActive());
+
+    for (std::size_t n = static_cast<std::size_t> (last) + 1; n < out.size(); ++n)
+        CHECK (isExactlyZero (out[n]));
+
+    // Nothing rings at 0.
+    s.knock = 0.0;
+    engine.prepare (rate);
+    engine.start (s, 50.0, 1.0, 1u, 0);
+    CHECK (! engine.isKnockActive());
+
+    s.knock = 0.4;
+    engine.start (s, 50.0, 1.0, 1u, 0);
+    CHECK (engine.isKnockActive());
+}
+
+TEZLA_TEST (thump_is_a_low_mode_under_the_shell_that_retires_exactly)
+{
+    const double rate = 96000.0;
+
+    SnareSettings s = neutralSnare();
+    s.body = 0.0;
+    s.tone = 0.0;
+    s.thump = 1.0;
+    s.thumpHz = 100.0;
+    s.thumpDecaySeconds = 0.2;
+
+    SnareEngine engine;
+    engine.prepare (rate);
+    engine.start (s, 200.0, 1.0, 1u, 0);
+    CHECK (engine.isThumpSounding());
+
+    const auto out = renderSnareEngine (engine, s, rate, 1.0);
+
+    const double hz = peakHzBetween (out, rate, 60.0, 140.0);
+    const double start = rmsBetween (out, rate, 0.0, 0.02);
+    const double atT60 = rmsBetween (out, rate, 0.19, 0.21);
+    const double fallDb = 20.0 * std::log10 (atT60 / start);
+
+    std::printf ("        [thump] peak at %.2f Hz; %.1f dB down at its 0.2 s T60; sounding at 1 s: %d\n",
+                 hz, fallDb, engine.isThumpSounding() ? 1 : 0);
+
+    CHECK (std::abs (hz - 100.0) < 1.0);
+    CHECK (fallDb < -50.0 && fallDb > -70.0);
+    CHECK (! engine.isThumpSounding());
+
+    // Exact at 0: the mode is never placed.
+    s.thump = 0.0;
+    engine.prepare (rate);
+    engine.start (s, 200.0, 1.0, 1u, 0);
+    CHECK (! engine.isThumpSounding());
+}
+
+TEZLA_TEST (ring_scales_the_upper_modes_decay_and_leaves_the_fundamental)
+{
+    CHECK (isExactly (SnareEngine::ringFactorFor (0.0), 1.0));
+    CHECK (std::abs (SnareEngine::ringFactorFor (1.0) - SnareEngine::kRingRange) < 1.0e-12);
+    CHECK (std::abs (SnareEngine::ringFactorFor (-1.0) - 1.0 / SnareEngine::kRingRange) < 1.0e-12);
+
+    const double rate = 96000.0;
+    SnareSettings s = neutralSnare();
+    s.decaySeconds = 0.4;
+
+    SnareEngine engine;
+    engine.prepare (rate);
+
+    for (double ring : { 0.0, 1.0, -1.0, 0.5 })
+    {
+        s.ring = ring;
+        engine.start (s, 200.0, 1.0, 1u, 0);
+
+        const double factor = SnareEngine::ringFactorFor (ring);
+
+        CHECK (isExactly (engine.getModeT60 (0), 0.4));
+        CHECK (std::abs (engine.getModeT60 (1) - 0.4 * SnareEngine::kModeDecays[1] * factor) < 1.0e-12);
+        CHECK (std::abs (engine.getModeT60 (2) - 0.4 * SnareEngine::kModeDecays[2] * factor) < 1.0e-12);
+
+        if (isExactlyZero (ring))
+        {
+            CHECK (isExactly (engine.getModeT60 (1), 0.4 * SnareEngine::kModeDecays[1]));
+            CHECK (isExactly (engine.getModeT60 (2), 0.4 * SnareEngine::kModeDecays[2]));
+        }
+    }
+
+    // Heard: with Ring at +1 the upper pair is still there at 0.3 s where at
+    // -1 it has gone, the fundamental the same either way.
+    s.tone = 1.0;
+    s.ring = 1.0;
+    SnareEngine ringing;
+    const auto rung = renderSnareEngine (ringing, s, rate, 0.6);
+    s.ring = -1.0;
+    SnareEngine dead;
+    const auto thud = renderSnareEngine (dead, s, rate, 0.6);
+
+    // The upper modes sit at 320 and 440 Hz: their share of the energy at 0.3 s.
+    const auto upperShare = [&] (const std::vector<double>& x)
+    {
+        std::vector<double> window (x.begin() + static_cast<long> (0.3 * rate),
+                                    x.begin() + static_cast<long> (0.4 * rate));
+        std::vector<double> padded (1u << 16, 0.0);
+        std::copy (window.begin(), window.end(), padded.begin());
+        const auto spectrum = fftOfReal (padded);
+        const double binWidth = rate / static_cast<double> (padded.size());
+
+        double low = 0.0, upper = 0.0;
+        for (std::size_t bin = static_cast<std::size_t> (150.0 / binWidth); bin < static_cast<std::size_t> (250.0 / binWidth); ++bin)
+            low += std::norm (spectrum[bin]);
+        for (std::size_t bin = static_cast<std::size_t> (280.0 / binWidth); bin < static_cast<std::size_t> (500.0 / binWidth); ++bin)
+            upper += std::norm (spectrum[bin]);
+        return upper / std::max (low, 1.0e-300);
+    };
+
+    const double rungShare = upperShare (rung);
+    const double thudShare = upperShare (thud);
+
+    std::printf ("        [ring] upper modes against the fundamental at 0.3 s: %.4f at +1, %.6f at -1\n", rungShare, thudShare);
+
+    CHECK (rungShare > thudShare * 100.0);
+}
+
+TEZLA_TEST (pan_is_a_balance_whose_centre_is_the_dual_mono_render)
+{
+    CHECK (isExactly (Engine::balanceLeft (0.0), 1.0));
+    CHECK (isExactly (Engine::balanceRight (0.0), 1.0));
+    CHECK (isExactlyZero (Engine::balanceRight (-1.0)));
+    CHECK (isExactlyZero (Engine::balanceLeft (1.0)));
+    CHECK (isExactly (Engine::balanceLeft (-1.0), 1.0));
+    CHECK (isExactly (Engine::balanceRight (0.5), 1.0));
+    CHECK (isExactly (Engine::balanceLeft (0.5), 0.5));
+
+    const double rate = 48000.0;
+    const int samples = 24000;
+    const std::vector<Hit> hits { { 4800, 36, 1.0 } };   // after the smoothers have settled
+
+    EngineParameters p;
+    p.kick1 = everythingOn();
+
+    const auto centre = renderBoth (p, rate, samples, hits);
+
+    // Centre: both channels carry the pad at unity -- the old dual mono, and
+    // the left channel is what the mono `render` always returned.
+    CHECK (centre.left == centre.right);
+    CHECK (centre.left == render (p, rate, samples, hits));
+    CHECK (rmsOf (centre.left) > 0.01);
+
+    // Hard left: the right channel is exactly nothing, the left untouched.
+    p.pan[static_cast<int> (PadIndex::kick1)] = -1.0;
+    const auto left = renderBoth (p, rate, samples, hits);
+    CHECK (left.left == centre.left);
+
+    for (const double sample : left.right)
+        CHECK (isExactlyZero (sample));
+
+    // Half right: the right channel untouched, the left exactly half --
+    // a multiply by 0.5 is exact, so this is bit for bit too.
+    p.pan[static_cast<int> (PadIndex::kick1)] = 0.5;
+    const auto half = renderBoth (p, rate, samples, hits);
+    CHECK (half.right == centre.right);
+
+    bool halved = true;
+    for (std::size_t n = 0; n < half.left.size(); ++n)
+        halved = halved && isExactly (half.left[n], centre.left[n] * 0.5);
+    CHECK (halved);
+
+    // The pan is smoothed per sample, so the block size cannot reach it.
+    p.pan[static_cast<int> (PadIndex::kick1)] = 0.3;
+    const auto small = renderBoth (p, rate, samples, hits, 64);
+    const auto large = renderBoth (p, rate, samples, hits, 512);
+    CHECK (small.left == large.left && small.right == large.right);
+
+    std::printf ("        [pan] centre dual mono; hard left leaves the right channel exact zeros; 64 vs 512 blocks identical\n");
+}

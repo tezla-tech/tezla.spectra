@@ -46,6 +46,18 @@
 //     wires' level and corner together (the article's recipe), the crack,
 //     and the drop's depth.
 //
+// Two more from the rig's fourth round (I4.4, "thicker"), both exact at 0:
+//
+//   * THUMP: one low mode under the shell, 40 to 200 Hz with its own decay --
+//     the shell-and-air resonance a drum has below its head's fundamental,
+//     and the body a DnB snare gets when a kick is layered under it. It is
+//     not dropped with the shell (a cavity does not retune with the head)
+//     and does not throw the wires.
+//   * RING: the upper two modes' decays against the fundamental's. They sit
+//     at 0.7 and 0.5 of Decay by measurement; Ring scales both by 3^ring, so
+//     -1 is a dead thud with the upper pair gone in a third of the time and
+//     +1 a rimshot ring three times as long. Exactly 1 at 0.
+//
 // EVERYTHING IS SNAPSHOTTED AT `start()`, as in the kick. The gate is the
 // kick's idea with one difference: a snare has no amplitude envelope of its
 // own -- the shell rings down on its modes' T60s -- so the release is a ramp
@@ -82,6 +94,10 @@ struct SnareSettings
     double startSemitones { 4.0 };       ///< the drop starts this far above, 0..24
     double dropSeconds { 0.02 };         ///< landing time of the drop, 0.002..0.2
     double body { 0.8 };                 ///< the shell's level, 0..1
+    double ring { 0.0 };                 ///< the upper modes' decay, -1 (dead) .. +1 (ringing); 0 is exact
+    double thump { 0.0 };                ///< a low mode under the shell, 0..1; exactly nothing at 0
+    double thumpHz { 100.0 };            ///< its pitch, 40..200
+    double thumpDecaySeconds { 0.12 };   ///< its T60, 0.03..0.5
 
     // ---- wires ----------------------------------------------------------
     double wires { 0.6 };                ///< the wires' level, 0..1; exactly nothing at 0
@@ -161,6 +177,18 @@ public:
     /// which gets the hit's seed as it is.
     static constexpr std::uint64_t kWiresSalt = 0x5851F42D4C957F2Dull;
 
+    /// Ring's reach: the upper modes' decays are multiplied by this to the
+    /// power of Ring, so the ends of the knob are a third and three times.
+    static constexpr double kRingRange = 3.0;
+
+    /// Ring's multiplier on the upper two modes' T60s. Exactly 1.0 at 0 by
+    /// branch, so a snare with Ring at rest is the snare that shipped.
+    [[nodiscard]] static double ringFactorFor (double ring) noexcept
+    {
+        const double r = std::clamp (ring, -1.0, 1.0);
+        return dsp::isExactlyZero (r) ? 1.0 : std::pow (kRingRange, r);
+    }
+
     void prepare (double internalRate) noexcept
     {
         rate_ = internalRate > 0.0 ? internalRate : 48000.0;
@@ -176,6 +204,8 @@ public:
 
         gateEnv_.prepare (rate_);
         crack_.prepare (rate_);
+        thump_.prepare (rate_);
+        thump_.setModeCount (1);
 
         followerCoefficient_ = 1.0 - std::exp (-1.0 / (kFollowerSeconds * rate_));
 
@@ -199,6 +229,8 @@ public:
         wiresFilter_.reset();
         gateEnv_.kill();
         crack_.reset();
+        thump_.reset();
+        thumpOn_ = false;
 
         follower_ = 0.0;
         retunes_ = 0;
@@ -232,10 +264,13 @@ public:
         const double tone = std::clamp (s.tone, 0.0, 1.0);
         const double decay = std::clamp (s.decaySeconds, 0.05, 2.0);
 
+        // Ring scales the upper two modes' decays and leaves the fundamental's.
+        const double ringFactor = ringFactorFor (s.ring);
+
         for (int mode = 0; mode < kModes; ++mode)
         {
             base_[mode] = fundamental_ * (1.0 + (kModeRatios[mode] - 1.0) * spread);
-            t60_[mode] = decay * kModeDecays[mode];
+            t60_[mode] = decay * kModeDecays[mode] * (mode > 0 ? ringFactor : 1.0);
         }
 
         // Tone 0 strikes only the fundamental, so only it is run.
@@ -259,6 +294,17 @@ public:
         bodyGain_ = std::clamp (s.body, 0.0, 1.0);
         strikeNorm_ = 1.0 / (1.0 + 2.0 * tone);
         shellOn_ = true;
+
+        // ---- thump: the low mode under the shell, its own and not dropped ----
+        const double thump = std::clamp (s.thump, 0.0, 1.0);
+        thumpOn_ = ! dsp::isExactlyZero (thump);
+
+        if (thumpOn_)
+        {
+            thump_.setMode (0, std::clamp (s.thumpHz, 40.0, 200.0),
+                            std::clamp (s.thumpDecaySeconds, 0.03, 0.5), 1.0);
+            thump_.excite (0, thump);
+        }
 
         // ---- wires ----
         wiresLevel_ = scaled (std::clamp (s.wires, 0.0, 1.0), s.velocityWires);
@@ -339,6 +385,12 @@ public:
             shell_.reset();
             shellOn_ = false;
         }
+
+        if (thumpOn_ && thump_.energy() < kShellEnergyFloor)
+        {
+            thump_.reset();
+            thumpOn_ = false;
+        }
     }
 
     /// Note-off. A gated hit ramps the whole thing out over the release
@@ -388,6 +440,10 @@ public:
             }
         }
 
+        // ---- thump ----
+        if (thumpOn_)
+            x += thump_.process();
+
         // ---- wires ----
         if (wiresOn_)
         {
@@ -432,7 +488,7 @@ public:
             }
         }
 
-        if (! shellOn_ && ! wiresOn_ && ! crack_.isActive())
+        if (! shellOn_ && ! wiresOn_ && ! crack_.isActive() && ! thumpOn_)
             active_ = false;
 
         return x * gain_;
@@ -453,6 +509,14 @@ public:
     [[nodiscard]] double getFollowerLevel() const noexcept { return follower_; }
 
     [[nodiscard]] bool isShellSounding() const noexcept { return shellOn_; }
+    [[nodiscard]] bool isThumpSounding() const noexcept { return thumpOn_; }
+
+    /// One shell mode's T60 for the hit that is sounding, in seconds -- what
+    /// Ring moved, or did not.
+    [[nodiscard]] double getModeT60 (int mode) const noexcept
+    {
+        return mode >= 0 && mode < kModes ? t60_[mode] : 0.0;
+    }
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
 private:
@@ -495,6 +559,10 @@ private:
 
     // crack
     ClickPair crack_;
+
+    // thump
+    dsp::ModalResonator thump_;
+    bool thumpOn_ { false };
 
     // level and gate
     double gain_ { 1.0 };
