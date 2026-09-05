@@ -309,6 +309,33 @@ change to anything already decided.
    every pad a preset touches, or all eight, and reports the loudest. Decided
    by: the next preset round on Ictus.
 
+11. **The velvet-noise reverberation papers, read first-hand.** `dsp::EarlyReflections`
+   (Ictus I4.5's Room) has the *shape* of velvet noise -- sparse random-sign taps at
+   random positions within equal cells -- known second-hand: the proxy refuses
+   dafx.de and aes.org, so neither paper was read (CLAUDE.md §9; the row in
+   `docs/DSP-REFERENCES.md` says so). Nothing numeric was taken; the tap count, the
+   30 dB fall and the normalisation are this project's. Would change: the row's
+   status, and possibly the tap density or the decay law if the papers argue for
+   different ones. Decided by: the user fetching M. Karjalainen & H. Järveläinen,
+   "Reverberation Modeling Using Velvet Noise", AES 30th International Conference
+   (2007), and V. Välimäki, H.-M. Lehtonen & M. Takanen, "A Perceptual Study on
+   Velvet Noise and Its Variants at Different Pulse Densities", DAFx-13 -- both
+   into `technical references/drumsynth/`.
+12. **Kick 2 and Perc have no pages, so they have no side.** Kick 2 plays the kick
+   engine's defaults and Perc the tom defaults; neither is pulled from a parameter
+   set of its own, so neither can spread or have a room, and their Width and Mono
+   below on the MIX page stay greyed by construction. Would change: a KICK 2 page
+   (a second `k2*` parameter set at the next schema) and a PERC page, each with a
+   room; the MIX page's greying then lights up on its own. Decided by: the user
+   wanting a second kick or a tom that is not the defaults -- I4's plan always
+   meant them to arrive with I9's per-pad pages.
+13. **The clap layer through its own room, and a layer under the ghost.** The clap
+   under Snare 1 goes through the snare's room, at the snare's pan, which is what a
+   layered hit should do; a second clap under the ghost, or the layer with the CLAP
+   page's own room instead, are one parameter each. Would change: `g1Clap` /
+   `g1ClapOffset`, and a Layer room choice. Decided by: the user hearing Clap Snare
+   and asking.
+
 **What would unpark each:** the user saying so, per item.
 
 ## 10. Sonitus declares twice its latency

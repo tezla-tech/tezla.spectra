@@ -73,6 +73,12 @@ public:
 
     [[nodiscard]] juce::Colour tintOf (int tintIndex) const noexcept;
 
+    /// The height below which the plates would overflow: every band at the
+    /// smallest cell, plus the note. The editor scrolls the page when the
+    /// window is shorter than this rather than letting the last rows fall off
+    /// the bottom (the snare page grew to six rows at I4.5).
+    [[nodiscard]] int minimumHeight() const noexcept;
+
     void paint (juce::Graphics&) override;
     void resized() override;
 

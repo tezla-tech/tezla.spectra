@@ -557,7 +557,7 @@ CLAUDE.md.
 | I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
 | I4.3 the rig's third round (2026-09-05): "thin and tinny" → **Plate** (a 64-mode cymbal from the published mode law) and **Grit**, six sources fetched by the user and read first-hand | done in code; not yet played on the rig. Plate 0 / Grit 0 is the old hat bit for bit (golden render) |
 | I4.4 the rig's fourth round (2026-09-05, the user's asks after hearing the plate): more say over the hiss (**Air tilt, Air attack, Grain, Vel > Air**), the open pad's own **Open hold** behind a Link lamp, **Under** and **Knock** on the kick, **Ring** and **Thump** on the snares, and a **Pan** per pad on a MIX page | done in code; not yet played on the rig. Every default neutral: the round's golden render (four rates, stereo, every existing stage on) is byte for byte the schema-10 engine |
-| I4.5 the rig's fifth round (2026-09-05, after playing I4.4: "amazing stuff"): the pads render **mid and side** -- **Air stereo, Metal stereo** (hats), **Wires stereo** (snares), **Stereo** (clap), a **Width** and a **Mono below** per pad and a **correlation readout** on the MIX page; a **Room** (shared early reflections) on the kick, the snares and the clap; the plate's **Wash**; the snare's **Head**, **Wires tilt** and **Bed**; the rattle's own **Rattle decay, Rattle tone** and **Tension** (asked for while the round was in flight); the kick's **Drop curve**; the **clap layered under Snare 1** | done in code; not yet played on the rig. Every default neutral: the golden render still byte for byte (md5 `d933a800…`) with the whole mid/side path in place. Measure rows and a full docs pass still to do -- pushed early at the user's request |
+| I4.5 the rig's fifth round (2026-09-05, after playing I4.4: "amazing stuff"): the pads render **mid and side** -- **Air stereo, Metal stereo** (hats), **Wires stereo** (snares), **Stereo** (clap), a **Width** and a **Mono below** per pad and a **correlation readout** on the MIX page; a **Room** (shared early reflections) on the kick, the snares and the clap; the plate's **Wash**; the snare's **Head**, **Wires tilt** and **Bed**; the rattle's own **Rattle decay, Rattle tone** and **Tension** (asked for while the round was in flight); the kick's **Drop curve**; the **clap layered under Snare 1** | done in code; not yet played on the rig. Every default neutral: the golden render still byte for byte (md5 `d933a800…`) with the whole mid/side path in place. `tezla-measure ictus` table 5 carries the round's numbers; the plate pages scroll when taller than the window |
 | **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** I4.3 and I4.4 were direct asks on 2026-09-05 (CLAUDE.md §1, the chat wins for that task) and do not lift the pause | — |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
@@ -1302,9 +1302,12 @@ mixer effects chain"*). Everything appended at `kSchemaV12`, every default
 neutral: the round-1 golden render (the same sixty-line program, four rates,
 stereo, every existing stage on) is still md5 `d933a800…` with the whole
 mid/side path, the rooms, the clap layer and the rattle controls in place.
-**Pushed before the measure rows and the full docs pass were written**, at the
-user's request (a usage limit was closing); this section is the record until
-that pass lands.
+Pushed first without the measure rows, at the user's request (a usage limit
+was closing); the follow-up commit added `tezla-measure ictus` **table 5** --
+the spreads' levels, the wash's energy, the rattle's tone, decay and tension,
+the room, Width, Mono below and the drop curve, in one run -- and put the plate
+pages in a **viewport**, so the snare page (six rows now) scrolls rather than
+losing its last row off the bottom of the default window.
 
 **The field.** Every engine's `process (double& side)` returns its mid and
 writes a side that is exactly 0.0 unless a spread control is up, so a pad with
@@ -1384,6 +1387,21 @@ velocity hit at 19 ms against 29, and Tension 0 never evaluates a lift.
 **Kick.** *Drop curve*: `TensionDrop`'s new third argument -- at half the drop
 1.4142 (a line, exactly 2^(6/12)), 1.0585 (exponential), 1.6605 (snap).
 
+**Table 5, as the tool prints it** (96 kHz engines; the engine at 48 kHz x4):
+Air stereo 100: hiss mid x0.707, left x0.991, right x1.006 of the mono hiss;
+Wires stereo 100: mid x0.707, left x1.003, right x0.984. Wash 100: the hit's
+energy x1.925 on a 100 ms plate-only hat, x1.775 on 500 ms, the drive over at
+half the decay exactly. Rattle tone (power centroid 200 Hz-20 kHz, 100-400 ms
+in): 1106 / 6372 / 7558 / 8999 / 13415 Hz at -2 / -1 / 0 / +1 / +2 octaves, RMS
+within +-1 dB of the flat throw at every setting. Rattle decay: 0.0456 RMS
+200-300 ms in with the shell's, exactly 0 with 50 ms of its own. Tension: the
+lift ends at 119 / 74 / 29 ms at 25 / 50 / 100 %, 19 ms for a 0.4-velocity hit
+at 100 %, never at 0. Room 100 (200 ms) on a 400 ms kick: 0.45-0.5 s RMS
+0.000000 dry, 0.00157 wet; left-right RMS 0 dry, 0.0418 wet. Mono below: the
+low band's correlation 0.504 open, 0.990 at 150 Hz. Width: side RMS 0 (left ==
+right bit for bit), 0.0418, 0.0835 at 0 / 100 / 200 %. Drop curve at half the
+drop: 1.4142 / 1.0585 / 1.6605 for -1 / 0 / +1.
+
 **Tests.** Sixteen in `tests/test_Ictus.cpp` under the I4.5 rule, five shared
 (`test_TensionDrop.cpp`, `test_EarlyReflections.cpp`); the whole kit with
 everything spread bit-identical across 64-, 97- and 512-sample blocks. Twenty
@@ -1391,9 +1409,13 @@ break-checks run, each seen red then reverted with the engine files
 checksummed: three stayed green the first time and were re-done -- two were
 weak breaks (the clap's tail still had a side; a 7 ms offset that happened to
 sit on the 32-sample grid) and one was the room-level guard above, a real
-defect. Not yet done: `tools/measure_main.cpp` rows for the round, the
-`qemu-aarch64` cross-check (CLAUDE.md section 2.3 gate), and nothing of this
-has been heard on the rig.
+defect. The clang build is warning-free and its suite passes but for the eight-pad
+CPU budget: 15.2-15.7 % of a core against the 15 % budget, where gcc reads
+13.7 % -- a compiler margin on a budget set at I4 with 2.5x headroom over a
+6 % kit, not a defect the round introduced; the budget is being re-based against
+the measured cost of both compilers. The `qemu-aarch64`
+cross-check was not run (CLAUDE.md section 2.3 gate), and nothing of this has
+been heard on the rig.
 
 **I4.3 -- a hold on the snares' wires** (2026-09-03, the user). The wires had
 a decay and nothing else, so the only way to get a long buzz was a long

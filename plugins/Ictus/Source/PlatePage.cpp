@@ -276,6 +276,20 @@ void PlatePage::resized()
     }
 }
 
+int PlatePage::minimumHeight() const noexcept
+{
+    int bands = 0;
+
+    for (const auto& plate : plates_)
+        if (! plate.sameRow)
+            ++bands;
+
+    // Mirrors resized(): the 2 px margins, the note, and per band the heading,
+    // the smallest cell, its 6 px and the gap.
+    const int chrome = ui::kPlateHeadingHeight + 6 + kPlateGap;
+    return 4 + (note_.isEmpty() ? 0 : kNoteHeight) + bands * (chrome + kCellHeightMin);
+}
+
 void PlatePage::layoutBand (std::size_t first, std::size_t last, juce::Rectangle<int> band,
                             int cellHeight)
 {
