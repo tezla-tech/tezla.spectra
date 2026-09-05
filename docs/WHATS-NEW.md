@@ -399,6 +399,34 @@ and predates synthesis entirely — a kit is tuned to the key of the song, and a
 kick whose fundamental clashes with the bass is the most common reason a mix
 will not sit down.
 
+### Plate and Grit on the hats
+
+**What it is.** *Plate* crossfades the hats' six oscillators against a plate of
+metal — 64 modes placed by the law the cymbal literature fits real cymbals to,
+struck all at once, each dying at its own rate with the high ones first. *Grit*
+quantises the hat before its drive, from 16 bits down to 4, with about six bits
+two thirds of the way up.
+
+**How to use it.** Turn Plate up and drop *Colour* to around 1.5–2 kHz, open
+*Width*, lower *Highpass* to 300–400 Hz: that is where the chunky hat lives, and
+the *Fat Hats* preset is that recipe. Leave Plate at 0 and nothing has changed —
+the classic six-oscillator hat is exactly what it was. Grit at 50–70 is the
+texture of a sampled drum machine; at 100 the steps are the sound.
+
+Also in this round: **Sizzle** now rings the hiss where the metal is actually
+heard — at the partials' harmonics inside the two bands — rather than at the six
+fundamentals under the high-pass, where it was cutting the hiss by 16 dB and
+placing none of it. Presets with Sizzle up sound different, and fuller.
+
+**Where it comes from.** Two families of hi-hat. The analogue drum machines of
+the early eighties made theirs from six square-wave oscillators through a
+band-pass — the metallic, tinny "tss" — and that is the hat this plugin had. The
+machines that followed *sampled* a real pair of cymbals and stored them at six
+bits, which is why their hats are dense and chunky and slightly gritty. A real
+cymbal has hundreds of modes a few tens of hertz apart (Fletcher & Rossing;
+Perrin et al.), so the plate gets there by modelling the metal rather than by
+sampling anything — and Grit is the six bits.
+
 ### Ghost snare with LINK
 
 **What it is.** A second snare pad on its own key that can follow the main

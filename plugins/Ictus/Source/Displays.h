@@ -178,6 +178,15 @@ private:
     std::vector<float> responseDb_;
     double air_ { 0.0 };
     double sizzle_ { 0.0 };
+    double colour_ { 3440.0 };
+
+    /// The plate's modes for the current Tune and Spread -- the same table
+    /// the engine rings, from the same static -- and how far the crossfade
+    /// has moved towards them.
+    double plate_ { 0.0 };
+    int plateCount_ { 0 };
+    double plateHz_[64] {};
+    double plateAmplitude_[64] {};
 };
 
 class BurstView final : public DrumDisplay

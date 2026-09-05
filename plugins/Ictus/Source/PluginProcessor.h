@@ -229,6 +229,11 @@ inline constexpr auto cpRelease   = "cpRelease";
 // SNARES, schema 9 -- a hold on the wires, so a buzz has a length of its own
 inline constexpr auto s1WiresHold = "s1WiresHold";
 inline constexpr auto g1WiresHold = "g1WiresHold";
+
+// HATS, schema 10 -- the plate the six pulses could never be, and the grit of
+// a low-resolution sample path (I4.3, the rig's "thin and tinny")
+inline constexpr auto htPlate      = "htPlate";
+inline constexpr auto htGrit       = "htGrit";
 } // namespace ids
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and

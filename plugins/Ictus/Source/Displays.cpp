@@ -733,8 +733,10 @@ PartialsView::PartialsView (IctusProcessor& processor, ui::Palette palette, juce
     setTooltip ("The hat's six partials on a log-frequency axis, drawn as tall as the "
                 "filters let them through, with the two band-passes and the high-pass "
                 "over them. Harmonics slides the whole set from one ratio table to the "
-                "next; Spread pulls the six apart; Colour moves the bands. The curve is "
-                "the engine's own filters, evaluated at 192 kHz.");
+                "next; Spread pulls the six apart; Colour moves the bands. With Plate up "
+                "the plate's 64 modes appear as bright lines -- the very table the engine "
+                "rings -- and the six fade. The curve is the engine's own filters, "
+                "evaluated at 192 kHz.");
 
     lowBand_.prepare (192000.0);
     lowBand_.setMode (dsp::SvfMode::bandpass);
@@ -759,6 +761,7 @@ void PartialsView::gather (std::vector<double>& inputs)
     inputs.push_back (read (ids::htHighpass));
     inputs.push_back (read (ids::htAir));
     inputs.push_back (read (ids::htSizzle));
+    inputs.push_back (read (ids::htPlate));
 }
 
 void PartialsView::update()
@@ -767,6 +770,7 @@ void PartialsView::update()
     const double position = read (ids::htHarmonics);
     const double spread = 0.01 * read (ids::htSpread);
     const double colour = read (ids::htColour);
+    colour_ = colour;
     air_ = 0.01 * read (ids::htAir);
 
     double ratios[HatEngine::kOscillators] {};
@@ -831,8 +835,24 @@ void PartialsView::update()
 
     sizzle_ = 0.01 * read (ids::htSizzle);
 
+    // The plate: the same static the engine places its modes with, at the
+    // internal rate Auto runs, so the picture and the sound cannot disagree.
+    plate_ = 0.01 * read (ids::htPlate);
+    plateCount_ = plate_ > 0.0
+        ? HatEngine::plateModesAt (tune, spread, 192000.0 * 0.45, plateHz_, plateAmplitude_)
+        : 0;
+
     captionRight_ = "bands " + juce::String (colour / 1000.0, 2) + " / "
                   + juce::String (colour * HatEngine::kUpperBandRatio / 1000.0, 2) + " kHz";
+
+    if (plateCount_ > 0)
+    {
+        captionRight_ += "  ·  plate ";
+        captionRight_ += juce::String (plateCount_);
+        captionRight_ += " modes to ";
+        captionRight_ += juce::String (plateHz_[plateCount_ - 1] / 1000.0, 1);
+        captionRight_ += " kHz";
+    }
 }
 
 void PartialsView::paint (juce::Graphics& g)
@@ -876,13 +896,16 @@ void PartialsView::paint (juce::Graphics& g)
         g.setColour (palette_.secondary.withAlpha (static_cast<float> (0.06 + 0.18 * air_)));
         g.fillPath (wash);
 
-        // Sizzle: the hiss rings at the partials rather than lying flat, so
-        // the wash grows a spike on each of them.
+        // Sizzle: the hiss rings at the partials' harmonics nearest the two
+        // bands rather than lying flat, so the wash grows a spike on each.
         if (sizzle_ > 0.0)
         {
             g.setColour (palette_.secondary.withAlpha (static_cast<float> (0.25 + 0.5 * sizzle_ * air_)));
 
-            for (const double hz : partials_)
+            double centres[HatEngine::kOscillators] {};
+            HatEngine::sizzleCentres (partials_, colour_, 192000.0, centres);
+
+            for (const double hz : centres)
             {
                 if (hz < kLowHz || hz > kHighHz)
                     continue;
@@ -933,9 +956,41 @@ void PartialsView::paint (juce::Graphics& g)
             const float height = plot.getHeight() * static_cast<float> (juce::jlimit (0.0, 1.0, level));
             const float x = xOf (hz);
 
-            g.setColour (harmonic == 1 ? palette_.accentBright.withAlpha (0.9f)
-                                       : tint_.withAlpha (0.55f));
+            // The six fade as the crossfade moves to the plate -- never quite
+            // out, because the sizzle bank still rings at them.
+            const auto fade = static_cast<float> (1.0 - 0.8 * plate_);
+
+            g.setColour (harmonic == 1 ? palette_.accentBright.withAlpha (0.9f * fade)
+                                       : tint_.withAlpha (0.55f * fade));
             g.fillRect (juce::Rectangle<float> (x - 0.6f, plot.getBottom() - height, 1.2f, height));
+        }
+    }
+
+    // The plate's modes: one line each, as tall as the filters let them
+    // through, at the strike's own amplitude profile against its loudest.
+    if (plateCount_ > 0)
+    {
+        const double loudest = std::max (plateAmplitude_[0], 1.0e-12);
+
+        g.setColour (palette_.accentBright.withAlpha (static_cast<float> (0.3 + 0.6 * plate_)));
+
+        for (int k = 0; k < plateCount_; ++k)
+        {
+            const double hz = plateHz_[k];
+
+            if (hz < kLowHz || hz > kHighHz)
+                continue;
+
+            const double db = gainAt (hz) + 20.0 * std::log10 (plateAmplitude_[k] / loudest);
+            const double level = (db + 42.0) / 54.0;
+
+            if (level <= 0.02)
+                continue;
+
+            const float height = plot.getHeight() * static_cast<float> (juce::jlimit (0.0, 1.0, level));
+            const float x = xOf (hz);
+
+            g.fillRect (juce::Rectangle<float> (x - 0.5f, plot.getBottom() - height, 1.0f, height));
         }
     }
 
