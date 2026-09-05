@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <tezla/dsp/Adsr.hpp>
+#include <tezla/dsp/Correlation.hpp>
 #include <tezla/dsp/Exact.hpp>
 #include <tezla/dsp/Fft.hpp>
 #include <tezla/dsp/Scales.hpp>
@@ -3996,4 +3997,915 @@ TEZLA_TEST (pan_is_a_balance_whose_centre_is_the_dual_mono_render)
     CHECK (small.left == large.left && small.right == large.right);
 
     std::printf ("        [pan] centre dual mono; hard left leaves the right channel exact zeros; 64 vs 512 blocks identical\n");
+}
+
+// ---------------------------------------------------------------------------
+// I4.5 -- the rig's fifth round: the pads render mid and side, the sources
+// spread across the field, a room, a clap layer under the snare, a wash on
+// the plate, and the rattle's own decay, tone and tension
+// ---------------------------------------------------------------------------
+
+namespace
+{
+struct MidSide
+{
+    std::vector<double> mid, side;
+};
+
+/// One hit of any engine, stepped on the control grid, with its side
+/// alongside. `start` is the engine's own start call.
+template <typename EngineType, typename Start>
+MidSide renderMidSide (EngineType& engine, double rate, double seconds, Start&& start)
+{
+    engine.prepare (rate);
+    start (engine);
+
+    const int total = static_cast<int> (seconds * rate);
+    MidSide out;
+    out.mid.resize (static_cast<std::size_t> (total));
+    out.side.resize (static_cast<std::size_t> (total));
+
+    for (int n = 0; n < total; ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            engine.advanceControl (Engine::kControlIntervalSamples);
+
+        out.mid[static_cast<std::size_t> (n)] = engine.process (out.side[static_cast<std::size_t> (n)]);
+    }
+
+    return out;
+}
+
+bool allExactlyZero (const std::vector<double>& x)
+{
+    return std::all_of (x.begin(), x.end(), [] (double v) { return isExactlyZero (v); });
+}
+
+/// A copy of `x` between two instants, so the spectral helpers -- which look
+/// at the START of what they are given -- can look at a tail.
+std::vector<double> slice (const std::vector<double>& x, double rate, double from, double to)
+{
+    const auto first = std::min (x.size(), static_cast<std::size_t> (from * rate));
+    const auto last = std::min (x.size(), static_cast<std::size_t> (to * rate));
+    return std::vector<double> (x.begin() + static_cast<std::ptrdiff_t> (first),
+                                x.begin() + static_cast<std::ptrdiff_t> (last));
+}
+
+std::vector<double> difference (const std::vector<double>& a, const std::vector<double>& b)
+{
+    std::vector<double> d (a.size());
+
+    for (std::size_t n = 0; n < a.size(); ++n)
+        d[n] = a[n] - b[n];
+
+    return d;
+}
+
+std::vector<double> sum (const std::vector<double>& a, const std::vector<double>& b, double signOfB)
+{
+    std::vector<double> d (a.size());
+
+    for (std::size_t n = 0; n < a.size(); ++n)
+        d[n] = a[n] + signOfB * b[n];
+
+    return d;
+}
+
+/// The side of a stereo render, (L - R) / 2, and its mid, (L + R) / 2.
+std::vector<double> sideOf (const StereoRender& r)
+{
+    std::vector<double> s (r.left.size());
+
+    for (std::size_t n = 0; n < s.size(); ++n)
+        s[n] = 0.5 * (r.left[n] - r.right[n]);
+
+    return s;
+}
+
+std::vector<double> midOf (const StereoRender& r)
+{
+    std::vector<double> m (r.left.size());
+
+    for (std::size_t n = 0; n < m.size(); ++n)
+        m[n] = 0.5 * (r.left[n] + r.right[n]);
+
+    return m;
+}
+
+/// A snare that is wires and nothing else, so the wires can be measured
+/// whole: no shell, no crack, a long burst.
+SnareSettings wiresOnlySnare()
+{
+    SnareSettings s = neutralSnare();
+    s.body = 0.0;
+    s.wires = 0.6;
+    s.snappyHz = 3000.0;
+    s.wiresHoldSeconds = 0.1;
+    s.wiresDecaySeconds = 0.2;
+    return s;
+}
+
+/// A snare whose rattle can be heard on its own: a long shell, a short stick
+/// burst, and Rattle at 1, so that from 100 ms on the wires are the shell's
+/// throw and nothing else. `rattleOnly` renders it with and without Rattle
+/// and returns the difference -- the shell's path is the same in both.
+SnareSettings rattleRig()
+{
+    SnareSettings s = neutralSnare();
+    s.body = 1.0;
+    s.decaySeconds = 1.0;
+    s.tone = 0.6;
+    s.wires = 0.6;
+    s.wiresHoldSeconds = 0.0;
+    s.wiresDecaySeconds = 0.05;
+    s.rattle = 1.0;
+    return s;
+}
+
+std::vector<double> rattleOnly (const SnareSettings& s, double rate, double seconds)
+{
+    SnareSettings quiet = s;
+    quiet.rattle = 0.0;
+
+    SnareEngine with, without;
+    return difference (renderSnareEngine (with, s, rate, seconds, 180.0),
+                       renderSnareEngine (without, quiet, rate, seconds, 180.0));
+}
+} // namespace
+
+TEZLA_TEST (every_engine_writes_an_exact_zero_side_when_nothing_is_spread)
+{
+    // The side is the new thing in the path, and a pad that has nothing
+    // spread must not have one: exactly 0.0 at every sample, and the mid it
+    // returns is the mono render bit for bit -- the round's golden render in
+    // plugins/Ictus/PLAN.md is the same claim over the whole kit.
+    const double rate = 96000.0;
+
+    {
+        HatSettings s = bareHat();
+        s.plate = 0.5;
+        s.air = 0.5;
+        s.grit = 0.3;
+        s.drive = 0.4;
+        HatEngine mono, stereo;
+        const auto reference = renderHatEngine (mono, s, rate, 0.4);
+        const auto ms = renderMidSide (stereo, rate, 0.4, [&] (HatEngine& e) { e.start (s, false, 1.0, 99u, 0); });
+        CHECK (ms.mid == reference);
+        CHECK (allExactlyZero (ms.side));
+        CHECK (! stereo.isSideOn());
+    }
+
+    {
+        SnareSettings s = snareEverythingOn();
+        SnareEngine mono, stereo;
+        const auto reference = renderSnareEngine (mono, s, rate, 0.4, 200.0);
+        const auto ms = renderMidSide (stereo, rate, 0.4, [&] (SnareEngine& e) { e.start (s, 200.0, 1.0, 99u, 0); });
+        CHECK (ms.mid == reference);
+        CHECK (allExactlyZero (ms.side));
+        CHECK (! stereo.isWiresSideOn());
+    }
+
+    {
+        ClapSettings s;
+        ClapEngine mono, stereo;
+        const auto reference = renderClapEngine (mono, s, rate, 0.4);
+        const auto ms = renderMidSide (stereo, rate, 0.4, [&] (ClapEngine& e) { e.start (s, 1.0, 99u, 0); });
+        CHECK (ms.mid == reference);
+        CHECK (allExactlyZero (ms.side));
+        CHECK (! stereo.isSideOn());
+    }
+
+    {
+        KickSettings s = everythingOn();
+        KickEngine mono, stereo;
+        const auto reference = renderKickEngine (mono, s, rate, 0.4);
+        const auto ms = renderMidSide (stereo, rate, 0.4, [&] (KickEngine& e) { e.start (s, 50.0, 1.0, 5u, 0); });
+        CHECK (ms.mid == reference);
+        CHECK (allExactlyZero (ms.side));
+    }
+}
+
+TEZLA_TEST (metal_spread_leaves_the_mid_untouched_and_air_spread_holds_the_channel_level)
+{
+    const double rate = 96000.0;
+
+    // METAL: the six pulses and the plate's modes weighted across the field.
+    // A linear spread -- the mid is the mono render bit for bit, so a mono
+    // fold of the pair is exactly the hat that was there before.
+    {
+        HatSettings s = bareHat();
+        s.plate = 0.6;
+        HatEngine mono;
+        const auto reference = renderHatEngine (mono, s, rate, 0.4);
+
+        s.metalStereo = 1.0;
+        HatEngine spread;
+        const auto ms = renderMidSide (spread, rate, 0.4, [&] (HatEngine& e) { e.start (s, false, 1.0, 99u, 0); });
+
+        const double sideRms = rmsOf (ms.side);
+        const double midRms = rmsOf (ms.mid);
+        std::printf ("        [metal spread] mid RMS %.5f (mono %.5f), side RMS %.5f\n", midRms, rmsOf (reference), sideRms);
+
+        CHECK (ms.mid == reference);
+        CHECK (sideRms > 0.1 * midRms);
+    }
+
+    // AIR: a second, independent hiss on the side, the mid scaled by
+    // 1 / sqrt (1 + s^2) so a channel's hiss holds its level whatever the
+    // spread; the mono fold of a full spread is 3 dB down, and the tooltip
+    // says so. Heard through the same subtraction as the R1 hiss tests: the
+    // hat with Air minus the hat without, which with Drive and Grit off is
+    // the hiss and nothing else.
+    {
+        HatSettings s = hissRig();
+        s.air = 0.3;
+
+        HatSettings quiet = s;
+        quiet.air = 0.0;
+
+        HatEngine plain, none;
+        const auto hissMono = difference (renderHatEngine (plain, s, rate, 0.3, false, 1.0, 21u),
+                                          renderHatEngine (none, quiet, rate, 0.3, false, 1.0, 21u));
+
+        s.airStereo = 1.0;
+        HatEngine spread, noneSpread;
+        const auto ms = renderMidSide (spread, rate, 0.3, [&] (HatEngine& e) { e.start (s, false, 1.0, 21u, 0); });
+        quiet.airStereo = 1.0;
+        const auto silentMid = renderHatEngine (noneSpread, quiet, rate, 0.3, false, 1.0, 21u);
+
+        const auto hissMid = difference (ms.mid, silentMid);
+        const auto hissLeft = sum (hissMid, ms.side, 1.0);
+        const auto hissRight = sum (hissMid, ms.side, -1.0);
+
+        const double mono = rmsOf (slice (hissMono, rate, 0.02, 0.3));
+        const double mid = rmsOf (slice (hissMid, rate, 0.02, 0.3));
+        const double left = rmsOf (slice (hissLeft, rate, 0.02, 0.3));
+        const double right = rmsOf (slice (hissRight, rate, 0.02, 0.3));
+
+        std::printf ("        [air spread] hiss RMS: mono %.5f, mid %.5f (x%.3f), left %.5f, right %.5f\n",
+                     mono, mid, mid / mono, left, right);
+
+        CHECK (spread.isSideOn());
+        CHECK (isExactly (spread.getAirMidLevel(), 0.3 / std::sqrt (2.0)));
+        CHECK (std::abs (mid / mono - 1.0 / std::sqrt (2.0)) < 0.08);
+        CHECK (std::abs (left / mono - 1.0) < 0.12);
+        CHECK (std::abs (right / mono - 1.0) < 0.12);
+    }
+}
+
+TEZLA_TEST (wash_feeds_the_plate_for_half_the_decay_and_is_over_exactly)
+{
+    // The plate struck by six pulses rings 64 pure lines; a real pair is fed
+    // and re-fed for as long as it moves. Wash drives every mode with noise
+    // that falls away over half the pad's decay, weighted so that at 1 it
+    // puts about as much energy into the plate as the strike did, and is
+    // then over exactly -- a noisier strike and a shimmer in the tail.
+    const double rate = 96000.0;
+
+    const auto energyOf = [] (const std::vector<double>& x)
+    {
+        double e = 0.0;
+        for (double v : x)
+            e += v * v;
+        return e;
+    };
+
+    for (double decay : { 0.1, 0.5 })
+    {
+        HatSettings s = bareHat();
+        s.plate = 1.0;
+        s.wash = 0.0;
+        s.decayClosedSeconds = decay;
+
+        HatEngine dry;
+        dry.prepare (rate);
+        dry.start (s, false, 1.0, 99u, 0);
+        CHECK (! dry.isWashing());
+        const auto without = renderHatEngine (dry, s, rate, 1.0);
+
+        s.wash = 1.0;
+        HatEngine wet;
+        wet.prepare (rate);
+        wet.start (s, false, 1.0, 99u, 0);
+        CHECK (wet.isWashing());
+
+        // Still feeding at 0.3 of the decay, over by 0.7 of it.
+        std::vector<double> with (static_cast<std::size_t> (rate));
+        bool washingAtThird = false;
+        bool washingAtTwoThirds = true;
+
+        for (std::size_t n = 0; n < with.size(); ++n)
+        {
+            if (n % static_cast<std::size_t> (Engine::kControlIntervalSamples) == 0)
+                wet.advanceControl (Engine::kControlIntervalSamples);
+
+            with[n] = wet.process();
+
+            if (n == static_cast<std::size_t> (0.3 * decay * rate))
+                washingAtThird = wet.isWashing();
+
+            if (n == static_cast<std::size_t> (0.7 * decay * rate))
+                washingAtTwoThirds = wet.isWashing();
+        }
+
+        const double ratio = energyOf (with) / energyOf (without);
+
+        std::printf ("        [wash] %.1f s pad: the hit's energy x%.3f with Wash at 1 (2.0 by design); feeding at 0.3 of the decay: %s, at 0.7: %s\n",
+                     decay, ratio, washingAtThird ? "yes" : "no", washingAtTwoThirds ? "yes" : "no");
+
+        CHECK (ratio > 1.6 && ratio < 2.3);
+        CHECK (washingAtThird);
+        CHECK (! washingAtTwoThirds);
+        CHECK (! wet.isWashing());
+    }
+}
+
+TEZLA_TEST (wire_spread_is_a_second_stream_on_the_side_that_holds_the_channel_level)
+{
+    const double rate = 96000.0;
+
+    SnareSettings s = wiresOnlySnare();
+
+    SnareEngine plain;
+    const auto ms0 = renderMidSide (plain, rate, 0.3, [&] (SnareEngine& e) { e.start (s, 200.0, 1.0, 99u, 0); });
+    CHECK (allExactlyZero (ms0.side));
+    CHECK (! plain.isWiresSideOn());
+
+    s.wiresStereo = 1.0;
+    SnareEngine spread;
+    const auto ms1 = renderMidSide (spread, rate, 0.3, [&] (SnareEngine& e) { e.start (s, 200.0, 1.0, 99u, 0); });
+    CHECK (spread.isWiresSideOn());
+
+    const double mono = rmsOf (slice (ms0.mid, rate, 0.01, 0.1));
+    const double mid = rmsOf (slice (ms1.mid, rate, 0.01, 0.1));
+    const double left = rmsOf (slice (sum (ms1.mid, ms1.side, 1.0), rate, 0.01, 0.1));
+    const double right = rmsOf (slice (sum (ms1.mid, ms1.side, -1.0), rate, 0.01, 0.1));
+
+    std::printf ("        [wire spread] wires RMS: mono %.5f, mid %.5f (x%.3f), left %.5f, right %.5f\n",
+                 mono, mid, mid / mono, left, right);
+
+    CHECK (std::abs (mid / mono - 1.0 / std::sqrt (2.0)) < 0.08);
+    CHECK (std::abs (left / mono - 1.0) < 0.12);
+    CHECK (std::abs (right / mono - 1.0) < 0.12);
+}
+
+TEZLA_TEST (wires_tilt_and_bed_colour_the_wires)
+{
+    const double rate = 96000.0;
+
+    SnareSettings s = wiresOnlySnare();
+
+    const auto centroidAt = [&] (double tilt, double bed)
+    {
+        SnareSettings t = s;
+        t.wiresTilt = tilt;
+        t.bed = bed;
+        SnareEngine e;
+        return centroidHz (renderSnareEngine (e, t, rate, 0.15, 200.0), rate, 0.15);
+    };
+
+    const double dark = centroidAt (-1.0, 0.0);
+    const double flat = centroidAt (0.0, 0.0);
+    const double bright = centroidAt (1.0, 0.0);
+
+    std::printf ("        [wires tilt] centroid %.0f Hz dark, %.0f flat, %.0f bright\n", dark, flat, bright);
+
+    CHECK (dark < flat * 0.9);
+    CHECK (bright > flat * 1.08);
+
+    // The bed: six resonances at the published-style ratios above the
+    // corner. The lowest, 0.71 x 3 kHz = 2130 Hz, is where the strongest
+    // peak below the corner sits with Bed up -- and it is not there without.
+    SnareSettings b = s;
+    b.bed = 1.0;
+    SnareEngine bedded, plain;
+    const auto withBed = renderSnareEngine (bedded, b, rate, 0.3, 200.0);
+    const auto without = renderSnareEngine (plain, s, rate, 0.3, 200.0);
+
+    const double peak = peakHzBetween (withBed, rate, 1900.0, 2400.0);
+    std::printf ("        [bed] strongest peak between 1.9 and 2.4 kHz: %.0f Hz (expected 2130)\n", peak);
+    CHECK (std::abs (peak - 2130.0) < 70.0);
+    CHECK (withBed != without);
+}
+
+TEZLA_TEST (head_moves_the_upper_modes_from_the_snares_ratios_to_a_toms)
+{
+    // Fletcher & Rossing Table 18.7 (read first-hand): a tom's second and
+    // third modes sit at 2.16 and 3.14 times the fundamental, against the
+    // snare set's 1.6 and 2.2. Head glides the ratios between the two,
+    // geometrically; 0 is the snare set exactly.
+    const double rate = 48000.0;
+
+    SnareSettings s = neutralSnare();
+    SnareEngine e;
+    e.prepare (rate);
+
+    s.head = 0.0;
+    e.start (s, 200.0, 1.0, 1u, 0);
+    CHECK (isExactly (e.getModeRatio (1), SnareEngine::kModeRatios[1]));
+    CHECK (isExactly (e.getModeRatio (2), SnareEngine::kModeRatios[2]));
+
+    s.head = 1.0;
+    e.start (s, 200.0, 1.0, 1u, 0);
+    std::printf ("        [head] ratios at 1: %.4f and %.4f (tom 2.16 and 3.14)\n", e.getModeRatio (1), e.getModeRatio (2));
+    CHECK_NEAR (e.getModeRatio (1), 2.16, 1.0e-9);
+    CHECK_NEAR (e.getModeRatio (2), 3.14, 1.0e-9);
+
+    s.head = 0.5;
+    e.start (s, 200.0, 1.0, 1u, 0);
+    CHECK_NEAR (e.getModeRatio (1), std::sqrt (1.6 * 2.16), 1.0e-9);
+}
+
+TEZLA_TEST (rattle_decay_ends_the_shells_throw_while_the_shell_rings_on)
+{
+    // The shell's drive on the wires used to last exactly as long as the
+    // shell -- and Ring made the shell last. Rattle decay gives the throw a
+    // fall of its own; 0 is the follower as it always was.
+    const double rate = 96000.0;
+
+    SnareSettings s = rattleRig();
+    s.rattleDecaySeconds = 0.0;
+
+    SnareEngine shell;
+    shell.prepare (rate);
+    shell.start (s, 180.0, 1.0, 99u, 0);
+    const auto forever = rattleOnly (s, rate, 0.5);
+
+    SnareEngine e;
+    e.prepare (rate);
+    e.start (s, 180.0, 1.0, 99u, 0);
+
+    for (int n = 0; n < static_cast<int> (0.3 * rate); ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            e.advanceControl (Engine::kControlIntervalSamples);
+        (void) e.process();
+    }
+
+    CHECK (isExactly (e.getRattleEnvelope(), 1.0));
+    CHECK (e.isRattling());
+    CHECK (e.isShellSounding());
+
+    s.rattleDecaySeconds = 0.05;
+    const auto falling = rattleOnly (s, rate, 0.5);
+
+    SnareEngine f;
+    f.prepare (rate);
+    f.start (s, 180.0, 1.0, 99u, 0);
+
+    for (int n = 0; n < static_cast<int> (0.3 * rate); ++n)
+    {
+        if (n % Engine::kControlIntervalSamples == 0)
+            f.advanceControl (Engine::kControlIntervalSamples);
+        (void) f.process();
+    }
+
+    CHECK (! f.isRattling());
+    CHECK (f.isShellSounding());
+
+    // The first 2 ms, where a 50 ms fall to -60 dB has taken 2.4 dB: the
+    // throw starts at the level it always started at.
+    const double earlyForever = rmsBetween (forever, rate, 0.0, 0.002);
+    const double lateForever = rmsBetween (forever, rate, 0.2, 0.3);
+    const double earlyFalling = rmsBetween (falling, rate, 0.0, 0.002);
+    const double lateFalling = rmsBetween (falling, rate, 0.2, 0.3);
+
+    std::printf ("        [rattle decay] shell's throw RMS 0-2 ms %.5f, 200-300 ms %.6f with the shell's decay; "
+                 "%.5f and %.9f with a 50 ms decay of its own\n",
+                 earlyForever, lateForever, earlyFalling, lateFalling);
+
+    CHECK (lateForever > 0.02 * earlyForever);
+    CHECK (isExactlyZero (lateFalling));
+    CHECK (earlyFalling > 0.6 * earlyForever && earlyFalling <= earlyForever);
+}
+
+TEZLA_TEST (rattle_tone_gives_the_shells_throw_a_corner_of_its_own)
+{
+    const double rate = 96000.0;
+
+    SnareSettings s = rattleRig();
+
+    const auto centroidAt = [&] (double octaves)
+    {
+        SnareSettings t = s;
+        t.rattleToneOctaves = octaves;
+        return centroidHz (slice (rattleOnly (t, rate, 0.4), rate, 0.1, 0.4), rate, 0.3);
+    };
+
+    const double dark = centroidAt (-2.0);
+    const double flat = centroidAt (0.0);
+    const double bright = centroidAt (2.0);
+
+    std::printf ("        [rattle tone] the shell's throw: centroid %.0f Hz two octaves down, %.0f at the snap's corner, %.0f two up\n",
+                 dark, flat, bright);
+
+    CHECK (dark < flat * 0.6);
+    CHECK (bright > flat * 1.25);
+
+    SnareEngine e;
+    e.prepare (rate);
+    e.start (s, 180.0, 1.0, 99u, 0);
+    CHECK (! e.isRattleToneOn());
+
+    s.rattleToneOctaves = -1.0;
+    e.start (s, 180.0, 1.0, 99u, 0);
+    CHECK (e.isRattleToneOn());
+}
+
+TEZLA_TEST (rattle_tension_lifts_the_snares_only_above_the_heads_critical_amplitude)
+{
+    // Fletcher & Rossing 18.13: the snares leave the head only above a
+    // certain head amplitude, which rises with their tension; a soft blow at
+    // high tension does not rattle at all (Fig. 18.10). Tension 0 is the
+    // smooth follower and never evaluates a lift.
+    const double rate = 96000.0;
+
+    SnareSettings s = rattleRig();
+    s.decaySeconds = 0.25;
+    s.velocityWires = 0.4;
+
+    const auto liftEnds = [&] (double tension, double velocity, double& earlyPeak)
+    {
+        SnareSettings t = s;
+        t.rattleTension = tension;
+        SnareEngine e;
+        e.prepare (rate);
+        e.start (t, 180.0, velocity, 99u, 0);
+
+        int last = -1;
+        earlyPeak = 0.0;
+
+        for (int n = 0; n < static_cast<int> (0.4 * rate); ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                e.advanceControl (Engine::kControlIntervalSamples);
+
+            (void) e.process();
+
+            if (! isExactlyZero (e.getLiftLevel()))
+                last = n;
+
+            if (n < static_cast<int> (0.01 * rate))
+                earlyPeak = std::max (earlyPeak, e.getLiftLevel());
+        }
+
+        return last / rate;
+    };
+
+    double peak0 = 0.0, peakHard = 0.0, peakSoft = 0.0, peakHalf = 0.0;
+    const double none = liftEnds (0.0, 1.0, peak0);
+    const double hard = liftEnds (1.0, 1.0, peakHard);
+    const double soft = liftEnds (1.0, 0.4, peakSoft);
+    const double half = liftEnds (0.5, 1.0, peakHalf);
+
+    std::printf ("        [tension] lift ends at %.4f s (tension 1, hard), %.4f s (tension 1, soft), %.4f s (tension 0.5); "
+                 "peak lift %.3f hard, %.3f soft; tension 0 never lifts (%.0f)\n",
+                 hard, soft, half, peakHard, peakSoft, none);
+
+    CHECK (none < 0.0);
+    CHECK (isExactlyZero (peak0));
+    CHECK (peakHard > 0.1);
+    CHECK (hard > 0.01 && hard < 0.06);
+    CHECK (soft < hard);
+    CHECK (half > hard);
+}
+
+TEZLA_TEST (burst_spread_places_the_claps_bursts_across_the_field)
+{
+    const double rate = 96000.0;
+
+    ClapSettings s;
+    ClapEngine plain;
+    const auto ms0 = renderMidSide (plain, rate, 0.3, [&] (ClapEngine& e) { e.start (s, 1.0, 99u, 0); });
+    CHECK (allExactlyZero (ms0.side));
+
+    s.stereo = 1.0;
+    ClapEngine spread;
+    spread.prepare (rate);
+    spread.start (s, 1.0, 99u, 0);
+    CHECK (spread.isSideOn());
+
+    const auto ms1 = renderMidSide (spread, rate, 0.3, [&] (ClapEngine& e) { e.start (s, 1.0, 99u, 0); });
+
+    const double mid = rmsOf (ms1.mid);
+    const double side = rmsOf (ms1.side);
+    std::printf ("        [burst spread] clap mid RMS %.5f, side RMS %.5f\n", mid, side);
+
+    CHECK (side > 0.1 * mid);
+}
+
+TEZLA_TEST (drop_curve_bends_the_kicks_landing_and_is_the_exponential_at_zero)
+{
+    // Curve -1 lands on a straight line in cents; at half the stated time
+    // half the depth remains, where the exponential has 8 % left.
+    const double rate = 96000.0;
+
+    KickSettings s = neutralKick();
+    s.startSemitones = 12.0;
+    s.dropSeconds = 0.1;
+    s.velocityDrop = 0.0;
+
+    const auto ratioAtHalfTime = [&] (double curve)
+    {
+        KickSettings k = s;
+        k.dropCurve = curve;
+        KickEngine e;
+        e.prepare (rate);
+        e.start (k, 50.0, 1.0, 5u, 0);
+
+        for (int n = 0; n < static_cast<int> (0.05 * rate); ++n)
+        {
+            if (n % Engine::kControlIntervalSamples == 0)
+                e.advanceControl (Engine::kControlIntervalSamples);
+            (void) e.process();
+        }
+
+        return e.currentHz() / 50.0;
+    };
+
+    const double exponential = ratioAtHalfTime (0.0);
+    const double line = ratioAtHalfTime (-1.0);
+    const double snap = ratioAtHalfTime (1.0);
+
+    std::printf ("        [drop curve] pitch ratio at half the drop: %.4f exponential, %.4f line, %.4f snap\n",
+                 exponential, line, snap);
+
+    CHECK (std::abs (line - std::exp2 (6.0 / 12.0)) < 0.03);
+    CHECK (std::abs (exponential - std::exp2 (12.0 * std::exp (-2.5) / 12.0)) < 0.02);
+    CHECK (snap > line);
+
+    KickEngine e;
+    e.prepare (rate);
+    e.start (s, 50.0, 1.0, 5u, 0);
+    CHECK (isExactlyZero (e.getDropCurve()));
+}
+
+TEZLA_TEST (width_scales_a_pads_side_and_folds_it_to_mono_at_zero)
+{
+    const double rate = 48000.0;
+    const int samples = 24000;
+
+    EngineParameters p;
+    p.hat = bareHat();
+    p.hat.air = 0.4;
+    p.hat.airStereo = 1.0;
+    p.hat.metalStereo = 1.0;
+    p.hat.plate = 0.5;
+
+    const std::vector<Hit> hits { { 100, 42, 1.0 } };
+    constexpr int hat = static_cast<int> (PadIndex::hatClosed);
+
+    p.width[hat] = 1.0;
+    const auto unity = renderBoth (p, rate, samples, hits);
+    p.width[hat] = 0.0;
+    const auto folded = renderBoth (p, rate, samples, hits);
+    p.width[hat] = 2.0;
+    const auto doubled = renderBoth (p, rate, samples, hits);
+
+    const double sideUnity = rmsOf (sideOf (unity));
+    const double sideDouble = rmsOf (sideOf (doubled));
+    const double midUnity = rmsOf (midOf (unity));
+    const double midDouble = rmsOf (midOf (doubled));
+
+    std::printf ("        [width] side RMS %.5f at 100 %%, %.5f at 200 %% (x%.4f); mid %.5f and %.5f\n",
+                 sideUnity, sideDouble, sideDouble / sideUnity, midUnity, midDouble);
+
+    CHECK (sideUnity > 0.0);
+    CHECK (folded.left == folded.right);
+    CHECK (std::abs (sideDouble / sideUnity - 2.0) < 0.01);
+    CHECK (std::abs (midDouble / midUnity - 1.0) < 1.0e-9);
+}
+
+TEZLA_TEST (mono_below_keeps_the_low_end_of_a_spread_pad_in_the_centre)
+{
+    // A room on the kick puts the kick's sub on the side. Mono below
+    // high-passes the side, so the low band folds to mono whatever is spread
+    // above it -- read by the suite's own StereoAnalyser, whose low band
+    // ends at 120 Hz.
+    const double rate = 48000.0;
+    const int samples = 24000;
+
+    EngineParameters p;
+    p.kick1 = neutralKick();
+    p.kick1.decaySeconds = 0.4;
+    p.room[static_cast<int> (RoomIndex::kick1)].level = 1.0;
+    p.room[static_cast<int> (RoomIndex::kick1)].seconds = 0.2;
+    p.room[static_cast<int> (RoomIndex::kick1)].toneHz = 20000.0;
+
+    const std::vector<Hit> hits { { 100, 36, 1.0 } };
+    constexpr int kick = static_cast<int> (PadIndex::kick1);
+
+    const auto lowCorrelation = [&] (double monoBelowHz)
+    {
+        p.monoBelowHz[kick] = monoBelowHz;
+        const auto r = renderBoth (p, rate, samples, hits);
+
+        StereoAnalyser analyser;
+        analyser.prepare (rate, 0.4);
+        const double* channels[2] = { r.left.data(), r.right.data() };
+        analyser.process (channels, 2, samples);
+        return analyser.getBandCorrelation (StereoAnalyser::low);
+    };
+
+    const double open = lowCorrelation (0.0);
+    const double centred = lowCorrelation (150.0);
+
+    std::printf ("        [mono below] low-band correlation %.3f with the side open, %.3f with Mono below at 150 Hz\n",
+                 open, centred);
+
+    CHECK (centred > open);
+    CHECK (centred > 0.9);
+}
+
+TEZLA_TEST (a_room_adds_its_pads_reflections_and_is_not_run_at_zero)
+{
+    const double rate = 48000.0;
+    const int samples = 24000;
+
+    EngineParameters p;
+    p.kick1 = neutralKick();
+    p.kick1.decaySeconds = 0.05;
+    p.kick1.tailMix = 0.0;
+
+    const std::vector<Hit> hits { { 0, 36, 1.0 } };
+
+    // At 0 the room is not run at all: 100 ms in, with the kick still
+    // sounding, its line has never been fed.
+    auto dryEngine = heapEngine();
+    dryEngine->prepare (rate, 512);
+    (void) render (p, rate, 4800, hits, 256, {}, dryEngine.get());
+    CHECK (! dryEngine->room (RoomIndex::kick1).isActive());
+    CHECK (isExactlyZero (dryEngine->getRoomLevelNow (RoomIndex::kick1)));
+    const auto dry = render (p, rate, samples, hits);
+
+    auto& room = p.room[static_cast<int> (RoomIndex::kick1)];
+    room.level = 1.0;
+    room.seconds = 0.2;
+    room.toneHz = 4000.0;
+
+    auto wetEngine = heapEngine();
+    wetEngine->prepare (rate, 512);
+    const auto wet = render (p, rate, 4800, hits, 256, {}, wetEngine.get());
+    CHECK (wetEngine->room (RoomIndex::kick1).isActive());
+    CHECK (isExactly (wetEngine->room (RoomIndex::kick1).getLengthSeconds(), 0.2));
+    CHECK (isExactly (wetEngine->room (RoomIndex::kick1).getToneHz(), 4000.0));
+
+    const auto wetFull = render (p, rate, samples, hits);
+
+    const double tailDry = rmsBetween (dry, rate, 0.15, 0.25);
+    const double tailWet = rmsBetween (wetFull, rate, 0.15, 0.25);
+    const double strikeDry = rmsBetween (dry, rate, 0.0, 0.02);
+    const double strikeWet = rmsBetween (wetFull, rate, 0.0, 0.02);
+
+    std::printf ("        [room] kick RMS 150-250 ms %.6f dry, %.5f with a 200 ms room; the strike %.4f dry, %.4f wet\n",
+                 tailDry, tailWet, strikeDry, strikeWet);
+
+    CHECK (tailWet > tailDry * 10.0);
+    CHECK (std::abs (strikeWet / strikeDry - 1.0) < 0.5);
+    (void) wet;
+}
+
+TEZLA_TEST (the_clap_layer_starts_under_snare_one_after_its_offset_at_every_block_size)
+{
+    const double rate = 48000.0;
+
+    EngineParameters p;
+    p.snare1 = snareEverythingOn();
+    p.snareClap = 0.8;
+    p.snareClapOffsetSeconds = 0.01;
+
+    const std::vector<Hit> hits { { 0, 38, 1.0 } };
+
+    // At 48 k with Auto (x4) the offset is 480 host samples: pending at 300,
+    // sounding at 600, and counted as a hit of its own.
+    auto engine = heapEngine();
+    engine->prepare (rate, 512);
+    (void) render (p, rate, 300, hits, 64, {}, engine.get());
+    CHECK (engine->isSnareClapPending());
+    CHECK (! engine->snareClapLayer().isActive());
+    CHECK (engine->activeHitCount() == 1);
+
+    (void) render (p, rate, 300, {}, 64, {}, engine.get());
+    CHECK (! engine->isSnareClapPending());
+    CHECK (engine->snareClapLayer().isActive());
+    CHECK (engine->activeHitCount() == 2);
+
+    const auto small = renderBoth (p, rate, 24000, hits, 64);
+    const auto large = renderBoth (p, rate, 24000, hits, 512);
+    const auto odd = renderBoth (p, rate, 24000, hits, 97);
+
+    CHECK (small.left == large.left && small.left == odd.left);
+    CHECK (small.right == large.right && small.right == odd.right);
+
+    // The layer is there: the snare with it is not the snare without.
+    EngineParameters bare = p;
+    bare.snareClap = 0.0;
+    const auto alone = renderBoth (bare, rate, 24000, hits, 256);
+    CHECK (alone.left != small.left);
+
+    std::printf ("        [clap layer] snare RMS %.4f alone, %.4f with the clap under it 10 ms behind\n",
+                 rmsOf (alone.left), rmsOf (small.left));
+
+    // The offset is exact to the sample, not to the control grid: at 192 kHz
+    // with oversampling off the internal rate is the host's, and an offset of
+    // 1363 samples -- not a multiple of the 32-sample grid -- starts the layer
+    // on sample 1363, because the render loop cuts a chunk there for it.
+    {
+        EngineParameters q = p;
+        q.oversampling = OversamplingMode::Off;
+        q.snareClapOffsetSeconds = 1363.0 / 192000.0;
+
+        EngineParameters without = q;
+        without.snareClap = 0.0;
+
+        const auto layered = render (q, 192000.0, 4000, hits, 64);
+        const auto plain = render (without, 192000.0, 4000, hits, 64);
+
+        int first = -1;
+
+        for (std::size_t n = 0; n < layered.size() && first < 0; ++n)
+            if (! isExactly (layered[n], plain[n]))
+                first = static_cast<int> (n);
+
+        std::printf ("        [clap layer] first sample the layer touches: %d (asked for 1363)\n", first);
+        CHECK (first == 1363);
+    }
+}
+
+TEZLA_TEST (the_kit_with_everything_spread_is_the_same_at_every_block_size)
+{
+    // The round's block rule: the side path, the rooms, the clap layer's
+    // countdown and the rattle's own envelopes all count in samples on the
+    // control grid, so 64-, 97- and 512-sample blocks produce the same bits.
+    constexpr double rate = 48000.0;
+    constexpr int samples = 24000;
+
+    EngineParameters p;
+    p.kick1 = everythingOn();
+    p.kick1.dropCurve = -0.5;
+    p.kick2 = everythingOn();
+    p.kick2.dropCurve = 0.7;
+    p.snare1 = snareEverythingOn();
+    p.snare1.wiresStereo = 0.8;
+    p.snare1.wiresTilt = 0.5;
+    p.snare1.bed = 0.6;
+    p.snare1.head = 0.5;
+    p.snare1.rattle = 0.7;
+    p.snare1.rattleDecaySeconds = 0.08;
+    p.snare1.rattleToneOctaves = -1.0;
+    p.snare1.rattleTension = 0.6;
+    p.snare2 = p.snare1;
+    p.perc = tomSettings();
+    p.perc.rattle = 0.5;
+    p.perc.wires = 0.3;
+    p.perc.rattleTension = 1.0;
+    p.hat = HatSettings {};
+    p.hat.plate = 0.7;
+    p.hat.wash = 0.8;
+    p.hat.air = 0.4;
+    p.hat.airStereo = 0.7;
+    p.hat.metalStereo = 0.9;
+    p.clap = ClapSettings {};
+    p.clap.stereo = 0.8;
+    p.snareClap = 0.6;
+    p.snareClapOffsetSeconds = 0.007;
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+    {
+        p.width[pad] = 0.5 + 0.2 * pad;
+        p.monoBelowHz[pad] = 100.0 + 50.0 * pad;
+        p.pan[pad] = -0.6 + 0.15 * pad;
+    }
+
+    for (int room = 0; room < kRoomCount; ++room)
+    {
+        p.room[room].level = 0.4 + 0.1 * room;
+        p.room[room].seconds = 0.05 + 0.03 * room;
+        p.room[room].toneHz = 3000.0 + 1000.0 * room;
+    }
+
+    const std::vector<Hit> hits { { 0, 36, 0.9 }, { 1000, 38, 1.0 }, { 2500, 35, 0.7 },
+                                  { 3100, 37, 0.8 }, { 4000, 36, 1.0 }, { 4700, 38, 0.6 },
+                                  { 1500, 46, 0.8 }, { 2200, 42, 1.0 }, { 3600, 42, 0.5 },
+                                  { 5200, 39, 0.9 }, { 6000, 40, 0.8 } };
+
+    const auto small = renderBoth (p, rate, samples, hits, 64);
+    const auto large = renderBoth (p, rate, samples, hits, 512);
+    const auto odd = renderBoth (p, rate, samples, hits, 97);
+
+    double worst = 0.0;
+
+    for (std::size_t i = 0; i < small.left.size(); ++i)
+    {
+        worst = std::max (worst, std::abs (small.left[i] - large.left[i]));
+        worst = std::max (worst, std::abs (small.left[i] - odd.left[i]));
+        worst = std::max (worst, std::abs (small.right[i] - large.right[i]));
+        worst = std::max (worst, std::abs (small.right[i] - odd.right[i]));
+    }
+
+    std::printf ("        [block rule] everything spread: worst difference across 64 / 97 / 512 = %g; side RMS %.5f\n",
+                 worst, rmsOf (sideOf (small)));
+
+    CHECK (worst == 0.0);
+    CHECK (rmsOf (sideOf (small)) > 0.0);
 }

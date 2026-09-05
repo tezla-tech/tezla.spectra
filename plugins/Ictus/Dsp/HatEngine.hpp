@@ -257,6 +257,11 @@ struct HatSettings
     double airTilt { 0.0 };              ///< the hiss's slope about 6 kHz, -1 (dark) .. +1 (bright); 0 is exact
     double airAttackSeconds { 0.0 };     ///< the hiss's rise, 0..0.5; 0 is instant and exact
     double grain { 0.0 };                ///< the hiss's density: 0 every sample, 1 a sparse crackle; 0 is exact
+    double airStereo { 0.0 };            ///< the hiss placed across the field: a second stream as the side, 0..1; 0 is exact
+    double wash { 0.0 };                 ///< the noise driving the plate's modes for its first 40 ms, 0..1; 0 is exact
+
+    // ---- the metal in the field ------------------------------------------
+    double metalStereo { 0.0 };          ///< the plate's modes and the high pulses spread as a side signal, 0..1; 0 is exact
 
     // ---- the band the whole thing is heard through -----------------------
     double colourHz { 3440.0 };          ///< the lower band-pass's centre, 800..12000 Hz
@@ -564,6 +569,67 @@ public:
     /// two thirds of the control.
     static constexpr double kGritMinBits = 4.0;
 
+    // ---- the field (I4.5) --------------------------------------------------
+
+    /// The six pulses' side weights: the low three at the centre, the high
+    /// three placed outwards alternately. A weight of w puts a partial at
+    /// L = m (1 + w), R = m (1 - w) at Metal stereo 1 -- the linear law,
+    /// whose mono fold is the mono hat exactly -- so 0.7 is well off centre
+    /// without leaving one channel empty.
+    static constexpr double kPulseSideWeights[kOscillators] { 0.0, 0.0, 0.0, 0.7, -0.7, 0.45 };
+
+    /// The plate's modes alternate sides by index -- neighbours in frequency
+    /// on opposite sides, the way a spaced pair hears a plate's radiation
+    /// patterns -- with magnitudes between these two on a golden-ratio
+    /// sequence so no two share a place; the lowest mode, which is Tune,
+    /// stays at the centre.
+    static constexpr double kPlateSideFloor = 0.35;
+    static constexpr double kPlateSideRange = 0.4;
+
+    /// Wash: noise drives every mode of the plate for a good part of the
+    /// hit (Fletcher & Rossing 20.3 has a cymbal's high modes building over
+    /// the first 50 ms after the strike and the whole plate shimmering
+    /// after; the hat's noise doing the driving is the cheap, linear cousin
+    /// of the cascade parked in docs/ROADMAP.md). The strike alone leaves
+    /// the plate ringing 64 pure lines, each falling at its own rate --
+    /// which is what the pulses do too, and what a real pair does not: a
+    /// real hat's tail is a shimmer, its modes fed and re-fed for as long as
+    /// the plate moves. So the drive lasts: it falls to kWashFloor at
+    /// kWashDecayFraction of the pad's own decay, never sooner than
+    /// kWashMinSeconds, and the bank then runs on its plain path again.
+    /// Under a drive that long a mode does not integrate the noise as a
+    /// burst, it runs toward a steady state, so the input weights are
+    /// calibrated rather than derived: each mode's is its strike amplitude
+    /// over sqrt (N), N the drive's effective length in samples (half its
+    /// time constant), times kWashGain -- 1/sigma of the noise (sqrt 3 for a
+    /// uniform bipolar draw) times a factor measured so that at Wash 1 the
+    /// wash puts about as much energy into the plate as the strike did (a
+    /// plate-only hat at 96 kHz: see tests/test_Ictus.cpp for the numbers
+    /// at 0.1 and 0.5 s). The first version weighted for the steady state
+    /// of a 4 ms burst and measured 4 % of the strike's energy -- a wash
+    /// nobody could hear.
+    static constexpr double kWashDecayFraction = 0.5;
+    static constexpr double kWashMinSeconds = 0.02;
+    static constexpr double kWashFloor = 1.0e-4;
+    static constexpr double kWashGain = 1.7320508075688772 * 1.1;
+
+    static constexpr std::uint64_t kAirStereoSalt = 0x3C6EF372FE94F82Bull;
+    static constexpr std::uint64_t kWashSalt = 0xA0761D6478BD642Full;
+
+    /// The plate mode `index`'s side weight: 0 for the lowest, else a
+    /// magnitude between kPlateSideFloor and kPlateSideFloor + kPlateSideRange
+    /// on the golden-ratio sequence, alternating in sign with the index.
+    [[nodiscard]] static double plateSideWeightFor (int index) noexcept
+    {
+        if (index <= 0)
+            return 0.0;
+
+        const double phase = static_cast<double> (index + 1) * 0.6180339887498949;
+        const double magnitude = kPlateSideFloor + kPlateSideRange * (phase - std::floor (phase));
+
+        return (index % 2 == 1) ? magnitude : -magnitude;
+    }
+
     /// Places the plate's modes for a Tune, in ascending order, and returns
     /// how many were placed. `hz` and `amplitude` are the mode table; the
     /// amplitudes are normalised so their squares sum to `kPlateExcitation`
@@ -727,12 +793,40 @@ public:
         airFilter_.setMode (dsp::SvfMode::highpass);
         airFilter_.setResonance (dsp::SvfFilter::resonanceForQ (0.707));
 
+        airFilter2_.prepare (rate_);
+        airFilter2_.setMode (dsp::SvfMode::highpass);
+        airFilter2_.setResonance (dsp::SvfFilter::resonanceForQ (0.707));
+
         for (auto& band : sizzleBank_)
         {
             band.prepare (rate_);
             band.setMode (dsp::SvfMode::bandpass);
             band.setResonance (dsp::SvfFilter::resonanceForQ (kSizzleQ));
         }
+
+        for (auto& band : sizzleBank2_)
+        {
+            band.prepare (rate_);
+            band.setMode (dsp::SvfMode::bandpass);
+            band.setResonance (dsp::SvfFilter::resonanceForQ (kSizzleQ));
+        }
+
+        // The side's own copy of the band, the high-pass and Damp: the
+        // spread components heard through the same chain as the mid, minus
+        // Grit and Drive, which are the mid's alone.
+        for (auto* band : { &sideLowBand_, &sideHighBand_ })
+        {
+            band->prepare (rate_);
+            band->setMode (dsp::SvfMode::bandpass);
+        }
+
+        sideHighpass_.prepare (rate_);
+        sideHighpass_.setMode (dsp::SvfMode::highpass);
+        sideHighpass_.setResonance (dsp::SvfFilter::resonanceForQ (kHighpassQ));
+
+        sideDamp_.prepare (rate_);
+        sideDamp_.setMode (dsp::SvfMode::lowpass);
+        sideDamp_.setResonance (dsp::SvfFilter::resonanceForQ (0.707));
 
         damp_.prepare (rate_);
         damp_.setMode (dsp::SvfMode::lowpass);
@@ -773,6 +867,23 @@ public:
 
         for (auto& band : sizzleBank_)
             band.reset();
+
+        airFilter2_.reset();
+        airTiltLow2_.reset();
+        airTiltHigh2_.reset();
+
+        for (auto& band : sizzleBank2_)
+            band.reset();
+
+        sideLowBand_.reset();
+        sideHighBand_.reset();
+        sideHighpass_.reset();
+        sideDamp_.reset();
+        sideOn_ = false;
+        metalStereoOn_ = false;
+        airStereoOn_ = false;
+        washOn_ = false;
+        washEnv_ = 0.0;
 
         damp_.reset();
         shaper_.reset();
@@ -885,6 +996,16 @@ public:
         const double plate = std::clamp (s.plate, 0.0, 1.0);
         plateOn_ = ! dsp::isExactlyZero (plate);
 
+        // ---- the field: the metal's side, and the wash (I4.5) ----
+        //
+        // Both exact at 0 by branch: no weight is read, no second draw is
+        // made, and the plate runs its plain path.
+        metalStereo_ = std::clamp (s.metalStereo, 0.0, 1.0);
+        metalStereoOn_ = ! dsp::isExactlyZero (metalStereo_);
+
+        wash_ = std::clamp (s.wash, 0.0, 1.0);
+        washOn_ = plateOn_ && ! dsp::isExactlyZero (wash_);
+
         if (plateOn_)
         {
             const bool plateOnly = plate >= 1.0;
@@ -907,6 +1028,27 @@ public:
 
                 plate_.setMode (k, plateHz_[k], t60, 1.0);
                 plate_.excite (k, amplitude[k]);
+
+                if (washOn_)
+                {
+                    // The strike's amplitude over the drive's effective length
+                    // in samples: see kWashDecayFraction.
+                    const double washSeconds = std::max (kWashMinSeconds, kWashDecayFraction * bodySeconds);
+                    const double timeConstant = washSeconds / std::log (1.0 / kWashFloor);
+                    const double effectiveSamples = 0.5 * timeConstant * rate_;
+                    plate_.setInputWeight (k, amplitude[k] / std::sqrt (effectiveSamples));
+                }
+
+                if (metalStereoOn_)
+                    plateSide_[k] = plateSideWeightFor (k);
+            }
+
+            if (washOn_)
+            {
+                const double washSeconds = std::max (kWashMinSeconds, kWashDecayFraction * bodySeconds);
+                washRandom_.seed (seed ^ kWashSalt);
+                washEnv_ = 1.0;
+                washCoefficient_ = std::exp (-std::log (1.0 / kWashFloor) / (washSeconds * rate_));
             }
         }
         else
@@ -944,6 +1086,23 @@ public:
         dampOn_ = ! dsp::isExactlyZero (dampAmount_);
         damp_.setCutoffHz (kDampTopHz);
 
+        // The side chain, the mid's twin, set only when something will
+        // reach it. Air stereo needs the hiss to exist at all.
+        airStereo_ = std::clamp (s.airStereo, 0.0, 1.0);
+        airStereoOn_ = ! dsp::isExactlyZero (airStereo_)
+                    && ! dsp::isExactlyZero (scaled (std::clamp (s.air, 0.0, 1.0), s.velocityAir));
+        sideOn_ = metalStereoOn_ || airStereoOn_;
+
+        if (sideOn_)
+        {
+            sideLowBand_.setResonance (q);
+            sideHighBand_.setResonance (q);
+            sideLowBand_.setCutoffHz (colour);
+            sideHighBand_.setCutoffHz (std::min (colour * kUpperBandRatio, rate_ * 0.45));
+            sideHighpass_.setCutoffHz (std::clamp (s.highpassHz, 200.0, 8000.0));
+            sideDamp_.setCutoffHz (kDampTopHz);
+        }
+
         // ---- the envelopes ----
         const double tension = 1.0 - std::clamp (s.shape, 0.0, 1.0);
 
@@ -968,10 +1127,29 @@ public:
         air_ = scaled (std::clamp (s.air, 0.0, 1.0), s.velocityAir);
         airOn_ = ! dsp::isExactlyZero (air_);
 
+        // The hiss in the field: a second, independent stream as the side.
+        // Each channel then carries (mid +- side); the mid's share is scaled
+        // by 1 / sqrt (1 + s^2) so a channel's hiss stays at the same level
+        // whatever the spread, and the mono fold of a full spread is 3 dB
+        // down -- said in the tooltip. At 0 the divisor is exactly 1.0 and
+        // the mid is the hiss as it always was.
+        {
+            const double spreadAmount = airStereoOn_ ? airStereo_ : 0.0;
+            const double norm = 1.0 / std::sqrt (1.0 + spreadAmount * spreadAmount);
+            airMid_ = air_ * norm;
+            airSide_ = air_ * spreadAmount * norm;
+        }
+
         if (airOn_)
         {
             random_.seed (seed ^ kAirSalt);
             airFilter_.setCutoffHz (std::clamp (s.airToneHz, 200.0, std::min (12000.0, rate_ * 0.4)));
+
+            if (airStereoOn_)
+            {
+                random2_.seed (seed ^ kAirStereoSalt);
+                airFilter2_.setCutoffHz (std::clamp (s.airToneHz, 200.0, std::min (12000.0, rate_ * 0.4)));
+            }
 
             // Air tilt: a low shelf and a high shelf of opposite sign about
             // the pivot. Designed per hit -- two shelf designs, nothing per
@@ -984,6 +1162,12 @@ public:
                 const double gainDb = tilt * kAirTiltRangeDb;
                 airTiltLow_.setCoefficients (dsp::design::lowShelf (kAirTiltPivotHz, kAirTiltQ, -gainDb, rate_));
                 airTiltHigh_.setCoefficients (dsp::design::highShelf (kAirTiltPivotHz, kAirTiltQ, gainDb, rate_));
+
+                if (airStereoOn_)
+                {
+                    airTiltLow2_.setCoefficients (airTiltLow_.getCoefficients());
+                    airTiltHigh2_.setCoefficients (airTiltHigh_.getCoefficients());
+                }
             }
 
             // Grain: the fraction of samples that carry an impulse, and what
@@ -1008,7 +1192,12 @@ public:
                 sizzleCentres (partials_, colour, rate_, sizzleHz_);
 
                 for (int i = 0; i < kOscillators; ++i)
+                {
                     sizzleBank_[static_cast<std::size_t> (i)].setCutoffHz (sizzleHz_[i]);
+
+                    if (airStereoOn_)
+                        sizzleBank2_[static_cast<std::size_t> (i)].setCutoffHz (sizzleHz_[i]);
+                }
             }
 
             // Air attack: the hiss can rise after the metal -- the wash of an
@@ -1045,6 +1234,9 @@ public:
                                           dampAmount_ * kDampExponent);
 
         damp_.setCutoffHz (std::min (corner, rate_ * 0.45));
+
+        if (sideOn_)
+            sideDamp_.setCutoffHz (std::min (corner, rate_ * 0.45));
     }
 
     /// Note-off. With Gate lit the WHOLE hit ramps out over the release from
@@ -1082,6 +1274,18 @@ public:
     /// One internal sample. Exactly 0.0 once the hit has been retired.
     [[nodiscard]] double process() noexcept
     {
+        double side = 0.0;
+        return process (side);
+    }
+
+    /// One internal sample, with the side signal alongside: what Metal
+    /// stereo and Air stereo place across the field, heard through the
+    /// same band, high-pass and Damp as the mid. Exactly 0.0 with both at 0
+    /// -- no second chain runs -- so the mid is the mono hat bit for bit.
+    [[nodiscard]] double process (double& side) noexcept
+    {
+        side = 0.0;
+
         if (! active_)
             return 0.0;
 
@@ -1125,6 +1329,7 @@ public:
         // ---- the metal ----
         double low = 0.0;
         double high = 0.0;
+        double pulseSide = 0.0;
 
         for (int i = 0; i < kOscillators; ++i)
         {
@@ -1134,6 +1339,9 @@ public:
                 low += value;
             else
                 high += value;
+
+            if (metalStereoOn_)
+                pulseSide += kPulseSideWeights[i] * value;
         }
 
         double metal = (low + high) * (1.0 / kOscillators);
@@ -1153,9 +1361,60 @@ public:
         // `plateOn_` false is the engine as it was: metal times the envelope
         // and not a multiplication more (the golden render in the I4.3 notes
         // is what says so).
-        double x = plateOn_
-                 ? (metal * metalWeight_ + plate_.process() * plateWeight_) * body
-                 : metal * body;
+        // Wash drives the bank through its input path for the first 40 ms;
+        // Metal stereo reads the modes back out with their side weights
+        // after the sum, so the mid's arithmetic is untouched.
+        double x;
+        double sideMetal = 0.0;
+
+        if (plateOn_)
+        {
+            double plateOut;
+
+            if (washOn_)
+            {
+                double washNoise;
+
+                if (grainOn_)
+                    washNoise = washRandom_.next() < grainDensity_ ? washRandom_.bipolar() * grainMakeup_ : 0.0;
+                else
+                    washNoise = washRandom_.bipolar();
+
+                plateOut = plate_.process (wash_ * kWashGain * washEnv_ * washNoise);
+                washEnv_ *= washCoefficient_;
+
+                if (washEnv_ < kWashFloor)
+                {
+                    washEnv_ = 0.0;
+                    washOn_ = false;
+                }
+            }
+            else
+            {
+                plateOut = plate_.process();
+            }
+
+            x = (metal * metalWeight_ + plateOut * plateWeight_) * body;
+
+            if (metalStereoOn_)
+            {
+                double plateSide = 0.0;
+
+                for (int k = 0; k < plateCount_; ++k)
+                    plateSide += plateSide_[k] * plate_.modeOutput (k);
+
+                sideMetal = (pulseSide * metalWeight_ + plateSide * plateWeight_) * body * metalStereo_;
+            }
+        }
+        else
+        {
+            x = metal * body;
+
+            if (metalStereoOn_)
+                sideMetal = pulseSide * body * metalStereo_;
+        }
+
+        double sideAir = 0.0;
 
         if (airOn_)
         {
@@ -1192,7 +1451,38 @@ public:
                 hiss += sizzle_ * (resonated - hiss);
             }
 
-            x += air_ * kAirGain * airEnv * hiss;
+            x += airMid_ * kAirGain * airEnv * hiss;
+
+            // The second stream, the side: the same tone, tilt and sizzle on
+            // its own draw.
+            if (airStereoOn_)
+            {
+                double noise2;
+
+                if (grainOn_)
+                    noise2 = random2_.next() < grainDensity_ ? random2_.bipolar() * grainMakeup_ : 0.0;
+                else
+                    noise2 = random2_.bipolar();
+
+                double hiss2 = airFilter2_.process (noise2);
+
+                if (airTiltOn_)
+                    hiss2 = airTiltHigh2_.process (airTiltLow2_.process (hiss2));
+
+                if (sizzleOn_)
+                {
+                    double resonated2 = 0.0;
+
+                    for (auto& band : sizzleBank2_)
+                        resonated2 += band.process (hiss2);
+
+                    resonated2 *= kSizzleMakeup / kOscillators;
+
+                    hiss2 += sizzle_ * (resonated2 - hiss2);
+                }
+
+                sideAir = airSide_ * kAirGain * airEnv * hiss2;
+            }
         }
 
         // ---- grit: the steps of a low-resolution sample path ----
@@ -1229,15 +1519,31 @@ public:
 
         x *= gain_;
 
+        // ---- the side, through the mid's twin chain ----
+        if (sideOn_)
+        {
+            double sideSum = sideMetal + sideAir;
+            sideSum = sideLowBand_.process (sideSum) + sideHighBand_.process (sideSum);
+            sideSum = sideHighpass_.process (sideSum);
+
+            if (dampOn_)
+                sideSum = sideDamp_.process (sideSum);
+
+            side = sideSum * gain_;
+        }
+
         // ---- the gate's release ramp ----
         if (releasing_)
         {
-            x *= gateEnv_.process();
+            const double gate = gateEnv_.process();
+            x *= gate;
+            side *= gate;
 
             if (! gateEnv_.isActive())
             {
                 // Landed at exactly 0: the hit is over, whatever was ringing.
                 reset();
+                side = 0.0;
                 return 0.0;
             }
         }
@@ -1249,11 +1555,12 @@ public:
         // and the count is what makes the last sample an exact zero.
         if (! body_.isActive() && ! airEnvelope_.isActive() && dsp::isExactlyZero (strikeLevel_))
         {
-            if (std::abs (x) < kQuietThreshold)
+            if (std::abs (x) < kQuietThreshold && std::abs (side) < kQuietThreshold)
             {
                 if (++quiet_ >= kQuietSamples)
                 {
                     reset();
+                    side = 0.0;
                     return 0.0;
                 }
             }
@@ -1322,6 +1629,17 @@ public:
     /// Grain's kept fraction for this hit; exactly 1.0 at Grain 0.
     [[nodiscard]] double getGrainDensity() const noexcept { return grainOn_ ? grainDensity_ : 1.0; }
 
+    /// Whether the side chain runs for the hit that is sounding -- false
+    /// with Metal stereo and Air stereo both at 0, which is the proof that
+    /// the mono hat has no second chain in it.
+    [[nodiscard]] bool isSideOn() const noexcept { return sideOn_; }
+
+    /// Whether the plate is still being washed by the noise.
+    [[nodiscard]] bool isWashing() const noexcept { return washOn_; }
+
+    /// The mid's share of the hiss for the hit that is sounding.
+    [[nodiscard]] double getAirMidLevel() const noexcept { return airMid_; }
+
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
 private:
@@ -1379,6 +1697,28 @@ private:
     dsp::SmallRandom random_;
     bool airOn_ { false };
     double air_ { 0.0 };
+
+    // the field (I4.5)
+    bool sideOn_ { false };
+    bool metalStereoOn_ { false };
+    bool airStereoOn_ { false };
+    double metalStereo_ { 0.0 };
+    double airStereo_ { 0.0 };
+    double airMid_ { 0.0 };
+    double airSide_ { 0.0 };
+    double plateSide_[kPlateModes] {};
+    dsp::SmallRandom random2_;
+    dsp::SvfFilter airFilter2_;
+    dsp::Biquad<double> airTiltLow2_, airTiltHigh2_;
+    dsp::SvfFilter sizzleBank2_[kOscillators];
+    dsp::SvfFilter sideLowBand_, sideHighBand_, sideHighpass_, sideDamp_;
+
+    // the wash
+    bool washOn_ { false };
+    double wash_ { 0.0 };
+    double washEnv_ { 0.0 };
+    double washCoefficient_ { 0.0 };
+    dsp::SmallRandom washRandom_;
 
     int quiet_ { 0 };
     double gain_ { 1.0 };

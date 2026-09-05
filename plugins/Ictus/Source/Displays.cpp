@@ -1180,4 +1180,90 @@ void BurstView::paint (juce::Graphics& g)
     g.strokePath (path, juce::PathStrokeType (1.6f));
 }
 
+// ---------------------------------------------------------------------------
+// FieldView: the correlation readout on the MIX page
+// ---------------------------------------------------------------------------
+
+FieldView::FieldView (IctusProcessor& processor, ui::Palette palette, juce::Colour tint)
+    : DrumDisplay (processor, palette, tint)
+{
+    setTooltip ("The Main output's correlation over the last 400 ms: +1 is mono, 0 is two "
+                "unrelated channels, -1 is out of phase. The full band above, the band under "
+                "120 Hz below -- the sub check, where a club system cannot place a sound and a "
+                "folded low end must not lose level. The lamp is lit while the low band would "
+                "survive a fold to mono (0.5 or more); Mono below on the MIX page is what keeps "
+                "it lit whatever is spread above.");
+    refresh();
+}
+
+void FieldView::gather (std::vector<double>& inputs)
+{
+    // Quantised to what the eye can see, so the readout repaints when a
+    // digit moves and not on every block.
+    inputs.push_back (std::round (static_cast<double> (processor_.getCorrelation()) * 100.0));
+    inputs.push_back (std::round (static_cast<double> (processor_.getLowCorrelation()) * 100.0));
+    inputs.push_back (processor_.getOutputRms() > 1.0e-4f ? 1.0 : 0.0);
+}
+
+void FieldView::update()
+{
+    full_ = static_cast<double> (processor_.getCorrelation());
+    low_ = static_cast<double> (processor_.getLowCorrelation());
+    quiet_ = processor_.getOutputRms() <= 1.0e-4f;
+
+    caption_ = quiet_ ? "quiet" : "correlation, last 400 ms";
+    captionRight_ = quiet_ ? "" : (low_ >= 0.5 ? "low band mono-safe" : "low band spread");
+}
+
+void FieldView::paint (juce::Graphics& g)
+{
+    paintFrame (g);
+
+    auto plot = plotArea();
+    const float rowHeight = plot.getHeight() * 0.5f;
+
+    const auto drawBar = [&] (juce::Rectangle<float> row, const juce::String& name, double value, bool lamp, bool lit)
+    {
+        auto bar = row.reduced (6.0f, row.getHeight() * 0.3f);
+        const float labelWidth = 62.0f;
+        const float valueWidth = 46.0f;
+
+        g.setColour (palette_.dimText);
+        g.setFont (juce::FontOptions (10.0f));
+        g.drawText (name, bar.removeFromLeft (labelWidth).toNearestInt(), juce::Justification::centredLeft);
+
+        auto valueArea = bar.removeFromRight (valueWidth);
+
+        if (lamp)
+        {
+            auto lampArea = bar.removeFromRight (16.0f).reduced (3.0f);
+            g.setColour (lit ? tint_ : palette_.panel.brighter (0.2f));
+            g.fillEllipse (lampArea.withSizeKeepingCentre (8.0f, 8.0f));
+        }
+
+        // The track, -1 on the left, +1 on the right, the middle marked.
+        g.setColour (palette_.panel.brighter (0.30f));
+        g.fillRoundedRectangle (bar, 2.0f);
+        g.drawVerticalLine (juce::roundToInt (bar.getCentreX()), bar.getY() - 2.0f, bar.getBottom() + 2.0f);
+
+        if (! quiet_)
+        {
+            const float x = along (value, -1.0, 1.0, bar.getX(), bar.getRight(), false);
+            const float from = std::min (x, bar.getCentreX());
+            const float to = std::max (x, bar.getCentreX());
+
+            g.setColour (tint_.withAlpha (0.6f));
+            g.fillRoundedRectangle (juce::Rectangle<float> (from, bar.getY(), std::max (2.0f, to - from), bar.getHeight()), 2.0f);
+
+            g.setColour (palette_.text);
+            g.setFont (juce::FontOptions (11.0f));
+            g.drawText (juce::String (value >= 0.0 ? "+" : "") + juce::String (value, 2),
+                        valueArea.toNearestInt(), juce::Justification::centredRight);
+        }
+    };
+
+    drawBar (plot.removeFromTop (rowHeight), "FULL", full_, false, false);
+    drawBar (plot, "< 120 Hz", low_, true, low_ >= 0.5);
+}
+
 } // namespace tezla::ictus

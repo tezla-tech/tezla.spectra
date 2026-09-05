@@ -150,6 +150,7 @@ struct ClapSettings
     double colourHz { 1200.0 };     ///< the band-pass's centre, 300..6000 Hz
     double width { 0.5 };           ///< how wide it is, 0 (narrow) .. 1 (open)
     double drive { 0.0 };           ///< soft clip over the sum, 0..1
+    double stereo { 0.0 };          ///< the bursts placed across the field and the room decorrelated, 0..1; 0 is exact
 
     // ---- the room --------------------------------------------------------
     double tailSeconds { 0.18 };    ///< its fall, 0.03..1
@@ -212,6 +213,17 @@ public:
     static constexpr double kMinimumReleaseSeconds = 0.001;
 
     static constexpr std::uint64_t kNoiseSalt = 0x14057B7EF767814Full;
+    static constexpr std::uint64_t kStereoSalt = 0x2545F4914F6CDD1Dull;
+
+    /// STEREO (I4.5): each burst's place in the field -- the hands are in
+    /// different places, so the bursts alternate sides -- as side weights
+    /// on the linear law (L = m (1 + w), R = m (1 - w) at Stereo 1), so the
+    /// mono fold is the mono clap exactly. The room behind them is
+    /// decorrelated instead: a second noise draw through its own band as
+    /// the side, with the mid's share scaled by 1 / sqrt (1 + s^2) so a
+    /// channel's tail stays level and the mono fold of a full spread is 3 dB
+    /// down. The cavity stays at the centre.
+    static constexpr double kBurstSideWeights[kMaxBursts] { 0.7, -0.7, 0.45, -0.45, 0.6, -0.6 };
 
     void prepare (double internalRate) noexcept
     {
@@ -226,6 +238,16 @@ public:
         noiseTone_.prepare (rate_);
         noiseTone_.setMode (dsp::SvfMode::highpass);
         noiseTone_.setResonance (dsp::SvfFilter::resonanceForQ (0.707));
+
+        colourSide_.prepare (rate_);
+        colourSide_.setMode (dsp::SvfMode::bandpass);
+
+        tailBand2_.prepare (rate_);
+        tailBand2_.setMode (dsp::SvfMode::bandpass);
+
+        noiseTone2_.prepare (rate_);
+        noiseTone2_.setMode (dsp::SvfMode::highpass);
+        noiseTone2_.setResonance (dsp::SvfFilter::resonanceForQ (0.707));
 
         body_.prepare (rate_);
         body_.setModeCount (kBodyModes);
@@ -246,6 +268,10 @@ public:
         colour_.reset();
         tailBand_.reset();
         noiseTone_.reset();
+        colourSide_.reset();
+        tailBand2_.reset();
+        noiseTone2_.reset();
+        stereoOn_ = false;
         body_.reset();
         tail_.kill();
         gateEnv_.kill();
@@ -335,6 +361,27 @@ public:
 
         random_.seed (seed ^ kNoiseSalt);
 
+        // ---- the field (I4.5): exact at 0 by branch ----
+        stereo_ = std::clamp (s.stereo, 0.0, 1.0);
+        stereoOn_ = ! dsp::isExactlyZero (stereo_);
+
+        {
+            const double spread = stereoOn_ ? stereo_ : 0.0;
+            const double norm = 1.0 / std::sqrt (1.0 + spread * spread);
+            tailMid_ = norm;
+            tailSide_ = spread * norm;
+        }
+
+        if (stereoOn_)
+        {
+            random2_.seed (seed ^ kStereoSalt);
+            colourSide_.setResonance (q);
+            colourSide_.setCutoffHz (colour);
+            tailBand2_.setResonance (q);
+            tailBand2_.setCutoffHz (std::clamp (colour * std::clamp (s.tailTone, 0.25, 1.5), 100.0, rate_ * 0.4));
+            noiseTone2_.setCutoffHz (std::clamp (s.noiseToneHz, 200.0, std::min (8000.0, rate_ * 0.4)));
+        }
+
         gain_ = std::clamp (s.level, 0.0, 1.0) * ((1.0 - amount) + amount * v);
 
         active_ = true;
@@ -396,6 +443,16 @@ public:
     /// tail have landed.
     [[nodiscard]] double process() noexcept
     {
+        double side = 0.0;
+        return process (side);
+    }
+
+    /// One internal sample with the side signal alongside: the bursts placed
+    /// across the field and the room's second draw. Exactly 0.0 at Stereo 0.
+    [[nodiscard]] double process (double& side) noexcept
+    {
+        side = 0.0;
+
         if (! active_)
             return 0.0;
 
@@ -423,14 +480,21 @@ public:
         }
 
         double burstEnvelope = 0.0;
+        double burstSide = 0.0;
         bool burstsSounding = false;
 
-        for (auto& level : burstLevel_)
+        for (int burst = 0; burst < kMaxBursts; ++burst)
         {
+            double& level = burstLevel_[static_cast<std::size_t> (burst)];
+
             if (dsp::isExactlyZero (level))
                 continue;
 
             burstEnvelope += level;
+
+            if (stereoOn_)
+                burstSide += kBurstSideWeights[burst] * level;
+
             level *= burstCoefficient_;
 
             if (level < kBurstFloor)
@@ -461,8 +525,19 @@ public:
         const double hiss = noise_ * noiseTone_.process (random_.bipolar());
 
         // ---- the two bands: the hands, and the room behind them ----
+        //
+        // `tailMid_` is exactly 1.0 with no spread, so the room's share is
+        // what it always was.
         double x = colour_.process (hiss * burstEnvelope)
-                 + tailBand_.process (hiss * tailEnvelope);
+                 + tailBand_.process (hiss * tailEnvelope * tailMid_);
+
+        if (stereoOn_)
+        {
+            const double hiss2 = noise_ * noiseTone2_.process (random2_.bipolar());
+
+            side = stereo_ * colourSide_.process (hiss * burstSide)
+                 + tailBand2_.process (hiss2 * tailEnvelope * tailSide_);
+        }
 
         // ---- the cavity, which rings on its own ----
         if (bodyOn_)
@@ -489,16 +564,20 @@ public:
         }
 
         x *= gain_;
+        side *= gain_;
 
         // ---- the gate's release ramp ----
         if (releasing_)
         {
-            x *= gateEnv_.process();
+            const double gate = gateEnv_.process();
+            x *= gate;
+            side *= gate;
 
             if (! gateEnv_.isActive())
             {
                 // Landed at exactly 0: the hit is over, whatever was ringing.
                 reset();
+                side = 0.0;
                 return 0.0;
             }
         }
@@ -510,6 +589,9 @@ public:
 
     /// How many bursts this hit was armed with -- what a test counts.
     [[nodiscard]] int getBurstCount() const noexcept { return bursts_; }
+
+    /// Whether the side runs for the hit that is sounding.
+    [[nodiscard]] bool isSideOn() const noexcept { return stereoOn_; }
 
     [[nodiscard]] double getSampleRate() const noexcept { return rate_; }
 
@@ -533,6 +615,14 @@ private:
     dsp::SvfFilter colour_, tailBand_, noiseTone_;
     dsp::SmallRandom random_;
     double noise_ { 1.0 };
+
+    // the field (I4.5)
+    bool stereoOn_ { false };
+    double stereo_ { 0.0 };
+    double tailMid_ { 1.0 };
+    double tailSide_ { 0.0 };
+    dsp::SmallRandom random2_;
+    dsp::SvfFilter colourSide_, tailBand2_, noiseTone2_;
 
     dsp::ModalResonator body_;
     bool bodyOn_ { false };

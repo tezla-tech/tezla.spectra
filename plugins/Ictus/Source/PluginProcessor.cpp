@@ -52,7 +52,14 @@ constexpr int kSchemaV10 = 10;
 /// grain, the open pad's own hold, the kick's Under and Knock, the snares'
 /// Ring and Thump, and a Pan per pad.
 constexpr int kSchemaV11 = 11;
-constexpr int kStateSchemaVersion = kSchemaV11;
+
+/// Schema 12: the rig's fifth round (I4.5) -- the pads in the field for real
+/// (the hiss, the metal, the wires and the bursts spread; Width and Mono
+/// below per pad), a room on four pads, the plate's wash, the head's ratios,
+/// the wires' colour, the rattle's own decay, tone and tension, the drop's
+/// curve, and the clap layered under the snare.
+constexpr int kSchemaV12 = 12;
+constexpr int kStateSchemaVersion = kSchemaV12;
 
 /// The tuning travels with the project as text (the Malleus property names,
 /// so the shared panel's state reads the same in every instrument).
@@ -577,6 +584,118 @@ const std::vector<Preset>& presets()
                 { ids::hcDecay, 45.0f },
                 { ids::hoDecay, 400.0f },
                 { ids::htLevel, 80.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The kit placed in the field (I4.5): the hiss and the metal
+            // spread, the wires as a second stream on the side, the clap's
+            // bursts across the pair, a little room on the snare, and the kick
+            // left exactly where it was -- centred, mono under 150 Hz.
+            // Appended.
+            "Wide Kit",
+            {
+                { ids::htAirStereo, 70.0f },
+                { ids::htMetalStereo, 55.0f },
+                { ids::htAir, 45.0f },
+                { ids::htPlate, 50.0f },
+                { ids::s1WiresStereo, 60.0f },
+                { ids::s1Room, 22.0f },
+                { ids::s1RoomSize, 60.0f },
+                { ids::s1RoomTone, 5000.0f },
+                { ids::g1WiresStereo, 40.0f },
+                { ids::cpStereo, 70.0f },
+                { ids::hcPan, 12.0f },
+                { ids::hoPan, 18.0f },
+                { ids::pcPan, -20.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // Four rooms (I4.5): a tight booth on the kick, kept mono under
+            // 150 Hz; a wooden room on the snare and the ghost; a longer,
+            // duller one on the clap, whose whole character is its room.
+            // Appended.
+            "Room Kit",
+            {
+                { ids::k1Room, 18.0f },
+                { ids::k1RoomSize, 40.0f },
+                { ids::k1RoomTone, 2500.0f },
+                { ids::s1Room, 40.0f },
+                { ids::s1RoomSize, 120.0f },
+                { ids::s1RoomTone, 4000.0f },
+                { ids::g1Room, 30.0f },
+                { ids::g1RoomSize, 120.0f },
+                { ids::g1RoomTone, 4000.0f },
+                { ids::cpRoom, 55.0f },
+                { ids::cpRoomSize, 200.0f },
+                { ids::cpRoomTone, 3000.0f },
+                { ids::htAirStereo, 35.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The snares' chatter (I4.5): a long-ringing shell whose throw on
+            // the wires is tensioned so the snares lift and strike at the
+            // head's period, tuned low and dark, and cut before the shell.
+            // Head halfway to a tom's ratios, a bed under the wires. Appended.
+            "Chatter Snare",
+            {
+                { ids::s1Tune, 190.0f },
+                { ids::s1Decay, 420.0f },
+                { ids::s1Ring, 30.0f },
+                { ids::s1Head, 35.0f },
+                { ids::s1Body, 85.0f },
+                { ids::s1Wires, 70.0f },
+                { ids::s1Snappy, 2600.0f },
+                { ids::s1WiresDecay, 120.0f },
+                { ids::s1Rattle, 65.0f },
+                { ids::s1RattleTension, 70.0f },
+                { ids::s1RattleTone, -9.0f },
+                { ids::s1RattleDecay, 150.0f },
+                { ids::s1Bed, 35.0f },
+                { ids::s1WiresTilt, -20.0f },
+                { ids::s1Crack, 30.0f },
+                { ids::s1Thump, 30.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The snare-plus-clap of the classic sampled drum machines as one
+            // pad (I4.5): the CLAP page's sound under Snare 1, 8 ms behind,
+            // its bursts across the field with the wires. Appended.
+            "Clap Snare",
+            {
+                { ids::s1Clap, 70.0f },
+                { ids::s1ClapOffset, 8.0f },
+                { ids::s1WiresStereo, 40.0f },
+                { ids::s1Wires, 55.0f },
+                { ids::s1Body, 75.0f },
+                { ids::cpBursts, 4.0f },
+                { ids::cpFlam, 9.0f },
+                { ids::cpStereo, 60.0f },
+                { ids::cpTail, 120.0f },
+                { ids::cpColour, 1600.0f },
+            }
+        },
+        // -------------------------------------------------------------------
+        {
+            // The laser (I4.5): a four-octave drop landing on a straight
+            // line over 80 ms rather than the exponential's early fall, a
+            // little booth behind it. Appended.
+            "Laser Kick",
+            {
+                { ids::k1Tune, 48.0f },
+                { ids::k1Start, 48.0f },
+                { ids::k1Drop, 80.0f },
+                { ids::k1DropCurve, -100.0f },
+                { ids::k1Decay, 420.0f },
+                { ids::k1Harmonics, 25.0f },
+                { ids::k1Click, 30.0f },
+                { ids::k1Room, 12.0f },
+                { ids::k1RoomSize, 35.0f },
+                { ids::k1RoomTone, 2000.0f },
+                { ids::k1Level, 62.0f },
             }
         },
     };
@@ -1298,6 +1417,116 @@ IctusProcessor::createParameterLayout()
             juce::ParameterID { kPanIds[pad], kSchemaV11 }, panNames[pad],
             Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
 
+    // ---- schema 12: the rig's fifth round (I4.5) ------------------------------
+    //
+    // The field, for real: the sources spread, a Width and a Mono below per
+    // pad, a room on four pads, and the plate washed; the snare's head, the
+    // wires' colour and the rattle's own decay, tone and tension; the drop's
+    // curve; the clap under the snare. Every one is neutral by default -- 0,
+    // 100 % (a gain of one), or the value the engine already used -- so a
+    // project saved at schema 11 reopens bit for bit (the round's golden
+    // render is in plugins/Ictus/PLAN.md).
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htAirStereo, kSchemaV12 }, "Hats Air stereo",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htMetalStereo, kSchemaV12 }, "Hats Metal stereo",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::htWash, kSchemaV12 }, "Hats Wash",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    for (const auto* snare : { &kSnare1Ids, &kGhostIds })
+    {
+        const juce::String who = snare->link == nullptr ? "Snare 1 " : "Ghost ";
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->head, kSchemaV12 }, who + "Head",
+            Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->wiresTilt, kSchemaV12 }, who + "Wires tilt",
+            Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->bed, kSchemaV12 }, who + "Bed",
+            Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->wiresStereo, kSchemaV12 }, who + "Wires stereo",
+            Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        // 0 is "the shell's" -- the follower for as long as the drum rings.
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->rattleDecay, kSchemaV12 }, who + "Rattle decay",
+            skewed (0.0f, 2000.0f, 1.0f, 200.0f), 0.0f, attributes ("ms")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->rattleTone, kSchemaV12 }, who + "Rattle tone",
+            Range (-24.0f, 24.0f, 0.1f), 0.0f, attributes ("st")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { snare->rattleTension, kSchemaV12 }, who + "Rattle tension",
+            Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+    }
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::cpStereo, kSchemaV12 }, "Clap Stereo",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::k1DropCurve, kSchemaV12 }, "Kick 1 Drop curve",
+        Range (-100.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    // Width and Mono below, one per pad in PadIndex order. Width is a gain on
+    // the pad's side alone: 100 % is the field the pad's own spread controls
+    // make, exactly, and 0 folds it to mono. Mono below is the corner under
+    // which the side is removed; 0 is off.
+    static const char* const padNames[kPadCount] {
+        "Kick 1", "Snare 1", "Hat closed", "Hat open", "Clap", "Perc", "Kick 2", "Ghost"
+    };
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { kWidthIds[pad], kSchemaV12 }, juce::String (padNames[pad]) + " Width",
+            Range (0.0f, 200.0f, 0.1f), 100.0f, attributes ("%")));
+
+    for (int pad = 0; pad < kPadCount; ++pad)
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { kMonoBelowIds[pad], kSchemaV12 }, juce::String (padNames[pad]) + " Mono below",
+            skewed (0.0f, 500.0f, 1.0f, 150.0f), 150.0f, attributes ("Hz")));
+
+    // The rooms, in RoomIndex order. 20 kHz on the tone is off.
+    static const char* const roomNames[kRoomCount] { "Kick 1", "Snare 1", "Ghost", "Clap" };
+
+    for (int room = 0; room < kRoomCount; ++room)
+    {
+        const juce::String who = roomNames[room];
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { kRoomIds[room].level, kSchemaV12 }, who + " Room",
+            Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { kRoomIds[room].size, kSchemaV12 }, who + " Room size",
+            skewed (10.0f, 250.0f, 1.0f, 80.0f), 80.0f, attributes ("ms")));
+
+        parameters.push_back (std::make_unique<Parameter> (
+            juce::ParameterID { kRoomIds[room].tone, kSchemaV12 }, who + " Room tone",
+            skewed (500.0f, 20000.0f, 1.0f, 4000.0f), 4000.0f, attributes ("Hz")));
+    }
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::s1Clap, kSchemaV12 }, "Snare 1 Clap",
+        Range (0.0f, 100.0f, 0.1f), 0.0f, attributes ("%")));
+
+    parameters.push_back (std::make_unique<Parameter> (
+        juce::ParameterID { ids::s1ClapOffset, kSchemaV12 }, "Snare 1 Clap offset",
+        Range (0.0f, 50.0f, 0.1f), 0.0f, attributes ("ms")));
+
     return { parameters.begin(), parameters.end() };
 }
 
@@ -1330,6 +1559,10 @@ void IctusProcessor::prepareToPlay (double sampleRate, int maximumExpectedSample
     collectTuning();
 
     scratch_.setSize (2, std::max (maximumExpectedSamplesPerBlock, 1), false, false, true);
+
+    analyser_.prepare (sampleRate_, 0.4);
+    rmsAccumulator_ = 0.0;
+    rmsSamples_ = 0;
 
     reportedLatency_ = engine_.getLatencySamples();
     setLatencySamples (reportedLatency_);
@@ -1383,6 +1616,7 @@ void IctusProcessor::pullParameters()
     k.knock = valueOf (state_, ids::k1Knock) * 0.01;
     k.knockHz = valueOf (state_, ids::k1KnockTone);
     k.knockSeconds = valueOf (state_, ids::k1KnockTime) * 0.001;
+    k.dropCurve = valueOf (state_, ids::k1DropCurve) * 0.01;
 
     pullSnare (parameters_.snare1, kSnare1Ids);
     pullSnare (parameters_.snare2, kGhostIds);
@@ -1401,6 +1635,11 @@ void IctusProcessor::pullParameters()
         ghost.tone = main.tone;
         ghost.snappyHz = main.snappyHz;
         ghost.snap = main.snap;
+
+        // I4.5: the head's ratios and the wires' colour are the drum too.
+        ghost.head = main.head;
+        ghost.wiresTilt = main.wiresTilt;
+        ghost.bed = main.bed;
     }
 
     // ---- the hats: one instrument, two pads ----
@@ -1442,6 +1681,10 @@ void IctusProcessor::pullParameters()
     h.holdOpenSeconds = valueOf (state_, ids::hoHold) * 0.001;
     h.holdLink = valueOf (state_, ids::htHoldLink) > 0.5f;
 
+    h.airStereo = valueOf (state_, ids::htAirStereo) * 0.01;
+    h.metalStereo = valueOf (state_, ids::htMetalStereo) * 0.01;
+    h.wash = valueOf (state_, ids::htWash) * 0.01;
+
     // ---- the clap ----
     auto& c = parameters_.clap;
 
@@ -1463,12 +1706,29 @@ void IctusProcessor::pullParameters()
     c.releaseSeconds = valueOf (state_, ids::cpRelease) * 0.001;
     c.level = valueOf (state_, ids::cpLevel) * 0.01;
     c.velocityLevel = valueOf (state_, ids::cpVelLevel) * 0.01;
+    c.stereo = valueOf (state_, ids::cpStereo) * 0.01;
 
     for (int pad = 0; pad < kPadCount; ++pad)
     {
         parameters_.padNotes[pad] = padNotes_[pad].load();
         parameters_.pan[pad] = valueOf (state_, kPanIds[pad]) * 0.01;
+        parameters_.width[pad] = valueOf (state_, kWidthIds[pad]) * 0.01;
+        parameters_.monoBelowHz[pad] = valueOf (state_, kMonoBelowIds[pad]);
     }
+
+    for (int room = 0; room < kRoomCount; ++room)
+    {
+        auto& r = parameters_.room[room];
+        r.level = valueOf (state_, kRoomIds[room].level) * 0.01;
+        r.seconds = valueOf (state_, kRoomIds[room].size) * 0.001;
+
+        // The top of the range is off: the engine treats 0 as no filter.
+        const float tone = valueOf (state_, kRoomIds[room].tone);
+        r.toneHz = tone >= 19999.0f ? 0.0 : tone;
+    }
+
+    parameters_.snareClap = valueOf (state_, ids::s1Clap) * 0.01;
+    parameters_.snareClapOffsetSeconds = valueOf (state_, ids::s1ClapOffset) * 0.001;
 
     parameters_.masterDb = valueOf (state_, ids::output);
     parameters_.bassMode = valueOf (state_, ids::bassMode) > 0.5f;
@@ -1505,6 +1765,14 @@ void IctusProcessor::pullSnare (SnareSettings& n, const SnareIds& p)
     n.wiresHoldSeconds = valueOf (state_, p.wiresHold) * 0.001;
     n.wiresDecaySeconds = valueOf (state_, p.wiresDecay) * 0.001;
     n.rattle = valueOf (state_, p.rattle) * 0.01;
+
+    n.head = valueOf (state_, p.head) * 0.01;
+    n.wiresTilt = valueOf (state_, p.wiresTilt) * 0.01;
+    n.bed = valueOf (state_, p.bed) * 0.01;
+    n.wiresStereo = valueOf (state_, p.wiresStereo) * 0.01;
+    n.rattleDecaySeconds = valueOf (state_, p.rattleDecay) * 0.001;
+    n.rattleToneOctaves = valueOf (state_, p.rattleTone) / 12.0;
+    n.rattleTension = valueOf (state_, p.rattleTension) * 0.01;
 
     n.crack = valueOf (state_, p.crack) * 0.01;
     n.crackToneHz = valueOf (state_, p.crackTone);
@@ -1592,11 +1860,18 @@ void IctusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
     {
         engine_.process (engineOut, count);
 
+        // The field readout reads the Main output as the host hears it.
+        const double* const analysed[2] { engineLeft, engineRight };
+        analyser_.process (analysed, 2, count);
+
         for (int i = 0; i < count; ++i)
         {
             buffer.setSample (0, from + i, static_cast<FloatType> (engineLeft[i]));
             buffer.setSample (1, from + i, static_cast<FloatType> (engineRight[i]));
+            rmsAccumulator_ += 0.5 * (engineLeft[i] * engineLeft[i] + engineRight[i] * engineRight[i]);
         }
+
+        rmsSamples_ += count;
     };
 
     for (const auto metadata : midi)
@@ -1616,6 +1891,19 @@ void IctusProcessor::processInternal (juce::AudioBuffer<FloatType>& buffer,
         renderSpan (rendered, numSamples - rendered);
 
     activeHits_.store (engine_.activeHitCount());
+
+    correlationFull_.store (static_cast<float> (analyser_.getCorrelation()), std::memory_order_relaxed);
+    correlationLow_.store (static_cast<float> (analyser_.getBandCorrelation (dsp::StereoAnalyser::low)),
+                           std::memory_order_relaxed);
+
+    // The level behind the readout, over about a tenth of a second.
+    if (rmsSamples_ >= static_cast<int> (0.1 * sampleRate_))
+    {
+        outputRms_.store (static_cast<float> (std::sqrt (rmsAccumulator_ / static_cast<double> (rmsSamples_))),
+                          std::memory_order_relaxed);
+        rmsAccumulator_ = 0.0;
+        rmsSamples_ = 0;
+    }
 
     for (int pad = 0; pad < kPadCount; ++pad)
     {

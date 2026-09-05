@@ -41,6 +41,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <tezla/dsp/Correlation.hpp>
 #include <tezla/dsp/Oversampler.hpp>
 #include <tezla/dsp/Scales.hpp>
 #include <tezla/dsp/Tuning.hpp>
@@ -279,6 +280,76 @@ inline constexpr auto cpPan = "cpPan";
 inline constexpr auto pcPan = "pcPan";
 inline constexpr auto k2Pan = "k2Pan";
 inline constexpr auto g1Pan = "g1Pan";
+
+// ---- schema 12: the rig's fifth round (I4.5) --------------------------------
+// HATS -- the hiss and the metal placed across the field, and the plate washed
+inline constexpr auto htAirStereo   = "htAirStereo";
+inline constexpr auto htMetalStereo = "htMetalStereo";
+inline constexpr auto htWash        = "htWash";
+
+// SNARE 1 and GHOST -- the head's ratios, the wires' colour and placement, and
+// the rattle's own decay, tone and tension
+inline constexpr auto s1Head          = "s1Head";
+inline constexpr auto s1WiresTilt     = "s1WiresTilt";
+inline constexpr auto s1Bed           = "s1Bed";
+inline constexpr auto s1WiresStereo   = "s1WiresStereo";
+inline constexpr auto s1RattleDecay   = "s1RattleDecay";
+inline constexpr auto s1RattleTone    = "s1RattleTone";
+inline constexpr auto s1RattleTension = "s1RattleTension";
+inline constexpr auto g1Head          = "g1Head";
+inline constexpr auto g1WiresTilt     = "g1WiresTilt";
+inline constexpr auto g1Bed           = "g1Bed";
+inline constexpr auto g1WiresStereo   = "g1WiresStereo";
+inline constexpr auto g1RattleDecay   = "g1RattleDecay";
+inline constexpr auto g1RattleTone    = "g1RattleTone";
+inline constexpr auto g1RattleTension = "g1RattleTension";
+
+// CLAP -- the bursts placed across the field
+inline constexpr auto cpStereo = "cpStereo";
+
+// KICK 1 -- the drop's shape
+inline constexpr auto k1DropCurve = "k1DropCurve";
+
+// WIDTH -- one per pad, a gain on the pad's side signal. The id says "Side"
+// because the hats and the clap already spend "Width" on the width of their
+// band-pass; the knob on the MIX page reads Width, since that is what a mixer
+// calls it.
+inline constexpr auto k1Side = "k1Side";
+inline constexpr auto s1Side = "s1Side";
+inline constexpr auto hcSide = "hcSide";
+inline constexpr auto hoSide = "hoSide";
+inline constexpr auto cpSide = "cpSide";
+inline constexpr auto pcSide = "pcSide";
+inline constexpr auto k2Side = "k2Side";
+inline constexpr auto g1Side = "g1Side";
+
+// MONO BELOW -- one per pad, the corner under which the side is removed
+inline constexpr auto k1MonoBelow = "k1MonoBelow";
+inline constexpr auto s1MonoBelow = "s1MonoBelow";
+inline constexpr auto hcMonoBelow = "hcMonoBelow";
+inline constexpr auto hoMonoBelow = "hoMonoBelow";
+inline constexpr auto cpMonoBelow = "cpMonoBelow";
+inline constexpr auto pcMonoBelow = "pcMonoBelow";
+inline constexpr auto k2MonoBelow = "k2MonoBelow";
+inline constexpr auto g1MonoBelow = "g1MonoBelow";
+
+// ROOM -- early reflections on the kick, the snare, the ghost and the clap
+inline constexpr auto k1Room     = "k1Room";
+inline constexpr auto k1RoomSize = "k1RoomSize";
+inline constexpr auto k1RoomTone = "k1RoomTone";
+inline constexpr auto s1Room     = "s1Room";
+inline constexpr auto s1RoomSize = "s1RoomSize";
+inline constexpr auto s1RoomTone = "s1RoomTone";
+inline constexpr auto g1Room     = "g1Room";
+inline constexpr auto g1RoomSize = "g1RoomSize";
+inline constexpr auto g1RoomTone = "g1RoomTone";
+inline constexpr auto cpRoom     = "cpRoom";
+inline constexpr auto cpRoomSize = "cpRoomSize";
+inline constexpr auto cpRoomTone = "cpRoomTone";
+
+// SNARE 1 -- the clap engine layered under it
+inline constexpr auto s1Clap       = "s1Clap";
+inline constexpr auto s1ClapOffset = "s1ClapOffset";
 } // namespace ids
 
 /// The pans, indexed by PadIndex -- the order the engine reads them in.
@@ -287,6 +358,36 @@ inline constexpr const char* kPanIds[kPadCount] {
 };
 
 static_assert (kPadCount == 8, "a ninth pad needs a pan id appended to kPanIds");
+
+/// The widths (a gain on each pad's side signal) and the Mono below corners,
+/// indexed by PadIndex like the pans.
+inline constexpr const char* kWidthIds[kPadCount] {
+    ids::k1Side, ids::s1Side, ids::hcSide, ids::hoSide, ids::cpSide, ids::pcSide, ids::k2Side, ids::g1Side
+};
+
+inline constexpr const char* kMonoBelowIds[kPadCount] {
+    ids::k1MonoBelow, ids::s1MonoBelow, ids::hcMonoBelow, ids::hoMonoBelow,
+    ids::cpMonoBelow, ids::pcMonoBelow, ids::k2MonoBelow, ids::g1MonoBelow
+};
+
+static_assert (kPadCount == 8, "a ninth pad needs a width and a mono-below id appended");
+
+/// One room's three parameter IDs, indexed by RoomIndex.
+struct RoomIds
+{
+    const char* level;
+    const char* size;
+    const char* tone;
+};
+
+inline constexpr RoomIds kRoomIds[kRoomCount] {
+    { ids::k1Room, ids::k1RoomSize, ids::k1RoomTone },
+    { ids::s1Room, ids::s1RoomSize, ids::s1RoomTone },
+    { ids::g1Room, ids::g1RoomSize, ids::g1RoomTone },
+    { ids::cpRoom, ids::cpRoomSize, ids::cpRoomTone },
+};
+
+static_assert (kRoomCount == 4, "a fifth room needs its ids appended to kRoomIds");
 
 /// One snare-engine pad's parameter IDs, so the snare page, its pictures and
 /// the parameter pull are written once and run for Snare 1 and the ghost
@@ -323,6 +424,13 @@ struct SnareIds
     const char* thump;
     const char* thumpTone;
     const char* thumpDecay;
+    const char* head;
+    const char* wiresTilt;
+    const char* bed;
+    const char* wiresStereo;
+    const char* rattleDecay;
+    const char* rattleTone;
+    const char* rattleTension;
     const char* link;
 };
 
@@ -334,6 +442,8 @@ inline constexpr SnareIds kSnare1Ids {
     ids::s1Level, ids::s1Gate, ids::s1Release,
     ids::s1VelLevel, ids::s1VelWires, ids::s1VelCrack, ids::s1VelDrop,
     ids::s1Ring, ids::s1Thump, ids::s1ThumpTone, ids::s1ThumpDecay,
+    ids::s1Head, ids::s1WiresTilt, ids::s1Bed, ids::s1WiresStereo,
+    ids::s1RattleDecay, ids::s1RattleTone, ids::s1RattleTension,
     nullptr
 };
 
@@ -345,6 +455,8 @@ inline constexpr SnareIds kGhostIds {
     ids::g1Level, ids::g1Gate, ids::g1Release,
     ids::g1VelLevel, ids::g1VelWires, ids::g1VelCrack, ids::g1VelDrop,
     ids::g1Ring, ids::g1Thump, ids::g1ThumpTone, ids::g1ThumpDecay,
+    ids::g1Head, ids::g1WiresTilt, ids::g1Bed, ids::g1WiresStereo,
+    ids::g1RattleDecay, ids::g1RattleTone, ids::g1RattleTension,
     ids::g1Link
 };
 
@@ -485,6 +597,16 @@ public:
     [[nodiscard]] double getPreparedRate() const noexcept { return sampleRate_; }
     [[nodiscard]] int getOversamplingFactor() const noexcept { return engine_.getOversamplingFactor(); }
 
+    /// The Main output's correlation over the last 400 ms, full band and the
+    /// band under 120 Hz, from the suite's own StereoAnalyser -- what the MIX
+    /// page's readout shows. +1 is mono, 0 uncorrelated, -1 out of phase.
+    [[nodiscard]] float getCorrelation() const noexcept { return correlationFull_.load (std::memory_order_relaxed); }
+    [[nodiscard]] float getLowCorrelation() const noexcept { return correlationLow_.load (std::memory_order_relaxed); }
+
+    /// The output level over the same window, so the readout can go quiet
+    /// when there is nothing to correlate.
+    [[nodiscard]] float getOutputRms() const noexcept { return outputRms_.load (std::memory_order_relaxed); }
+
     /// Live tooltips for the header's OS and RENDER boxes: what Auto is doing
     /// at this session's actual rate, and whether a render override is in
     /// force right now.
@@ -523,6 +645,15 @@ private:
     double sampleRate_ { 48000.0 };
     int reportedLatency_ { 0 };
     std::atomic<int> activeHits_ { 0 };
+
+    // The field readout: the Main output through the stereo analyser at the
+    // host rate, published per block.
+    dsp::StereoAnalyser analyser_;
+    std::atomic<float> correlationFull_ { 1.0f };
+    std::atomic<float> correlationLow_ { 1.0f };
+    std::atomic<float> outputRms_ { 0.0f };
+    double rmsAccumulator_ { 0.0 };
+    int rmsSamples_ { 0 };
 
     // ---- tuning hand-off (the Malleus arrangement) ---------------------------
     dsp::Scale scale_;

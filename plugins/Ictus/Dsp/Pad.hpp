@@ -108,6 +108,18 @@ public:
         return slots_[0].process() + slots_[1].process();
     }
 
+    /// One internal sample with the side signal alongside the mid: both
+    /// slots' mids summed and returned, both sides summed into `side`. A
+    /// fading slot fades its side with its mid. Exactly 0.0 each when idle.
+    [[nodiscard]] double process (double& side) noexcept
+    {
+        double first = 0.0;
+        double second = 0.0;
+        const double mid = slots_[0].process (first) + slots_[1].process (second);
+        side = first + second;
+        return mid;
+    }
+
     [[nodiscard]] bool isActive() const noexcept
     {
         return slots_[0].isActive() || slots_[1].isActive();
@@ -170,6 +182,32 @@ private:
             if (fading)
             {
                 y *= fadeGain;
+                fadeGain -= fadeStep;
+
+                if (fadeGain <= 0.0)
+                    cut();
+            }
+
+            return y;
+        }
+
+        [[nodiscard]] double process (double& side) noexcept
+        {
+            if (! engine.isActive())
+            {
+                if (fading)
+                    cut();
+
+                side = 0.0;
+                return 0.0;
+            }
+
+            double y = engine.process (side);
+
+            if (fading)
+            {
+                y *= fadeGain;
+                side *= fadeGain;
                 fadeGain -= fadeStep;
 
                 if (fadeGain <= 0.0)

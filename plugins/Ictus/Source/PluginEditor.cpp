@@ -222,6 +222,15 @@ void IctusEditor::buildKickPage()
         "clicky kick; 60 ms and up is a laser. The pitch is exact to 0.016 cents "
         "against the ideal curve at every session rate.");
 
+    page.addKnob (ids::k1DropCurve, "Drop curve",
+        "The drop's shape. 0 is the exponential as it always was, exactly: fast "
+        "at first, then easing in over the stated time. Towards -100 it "
+        "straightens into a LINE that lands at the stated time -- the laser, "
+        "falling at one rate from the first sample to the last (measured: half "
+        "the height left at half the time, against 8 % for the curve). Towards "
+        "+100 it holds near the start and then snaps down. Costs nothing.",
+        Emphasis::trim);
+
     page.addKnob (ids::k1Sigh, "Sigh",
         "A second, slower drop: signed semitones the pitch drifts through the "
         "decay, -12 to +12. Positive starts sharp and settles, the way a real kick "
@@ -331,6 +340,30 @@ void IctusEditor::buildKickPage()
     page.addKnob (ids::k1KnockTime, "Knock time",
         "How long the knock rings to -60 dB, 5 to 80 ms. Short is a tick under "
         "the click; long is a boxy body of its own.", Emphasis::trim);
+
+    // ---- room ----
+    page.beginPlate ("Room", "the kick's early reflections", kTintAmplitude, true);
+
+    page.addKnob (kRoomIds[static_cast<int> (RoomIndex::kick1)].level, "Room",
+        "Early reflections of the kick, 0 to 100%: 48 taps a side, random signs, "
+        "falling 30 dB over the room's length, added back as mid AND side -- so "
+        "the room is what puts a kick in a stereo space without a send. Kept mono "
+        "under Mono below on the MIX page, which is what keeps the sub centred. "
+        "Smoothed, so it can be ridden. 0 runs no room at all.", Emphasis::lead);
+
+    page.addKnob (kRoomIds[static_cast<int> (RoomIndex::kick1)].size, "Size",
+        "The reflections' span, 10 to 250 ms: a booth at 20, a live room at 80, "
+        "a hall's first wall at 200. Redrawn at the next hit, not under a ringing "
+        "one.");
+
+    page.addKnob (kRoomIds[static_cast<int> (RoomIndex::kick1)].tone, "Tone",
+        "A low-pass on the reflections, 500 Hz to 20 kHz -- a room is duller than "
+        "the drum that fills it. 20 kHz is off, exactly.", Emphasis::trim);
+
+    page.setValueText (kRoomIds[static_cast<int> (RoomIndex::kick1)].tone, [] (double hz)
+    {
+        return hz >= 19999.0 ? juce::String ("Off") : juce::String (juce::roundToInt (hz));
+    });
 
     // ---- amplitude ----
     page.beginPlate ("Amplitude", "the hit's shape", kTintAmplitude);
@@ -452,11 +485,13 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
 
     if (ghost)
         page.addLamp (ids.link, "Link", "Link",
-            "Lit: the ghost is SNARE's drum -- Tune, Key, Note, Spread, Tone, Snappy and "
-            "Shape follow the main snare and are greyed here -- and only the stroke is its "
-            "own: Decay, Start, Drop, Body, Wires, Wires decay, Rattle, the crack, Level, "
-            "Gate and velocity. That is what a ghost note is: the same drum, hit lighter "
-            "and shorter between the backbeats. Dark: a fully separate second snare.");
+            "Lit: the ghost is SNARE's drum -- Tune, Key, Note, Spread, Tone, Head, "
+            "Snappy, Shape, Wires tilt and Bed follow the main snare and are greyed here "
+            "-- and only the stroke and its placement are its own: Decay, Start, Drop, "
+            "Body, Wires, Wires decay, the rattle and its controls, Wires stereo, the "
+            "crack, the room, Level, Gate and velocity. That is what a ghost note is: the "
+            "same drum, hit lighter and shorter between the backbeats. Dark: a fully "
+            "separate second snare.");
 
     page.addKnob (ids.tune, "Tune",
         "The shell's fundamental, 60 to 800 Hz. A snare sits near 180 to 240; a "
@@ -501,6 +536,14 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
         "third of the time; +100 a rimshot ring three times as long. 0 is "
         "exactly the drum as measured and costs nothing.");
 
+    page.addKnob (ids.head, "Head",
+        "Where the two upper modes sit: at 0 the snare's set, 1.6 and 2.2 times "
+        "the fundamental; at 100 a tom's, 2.16 and 3.14 -- the ratios measured on "
+        "a real tom-tom in the drum-physics literature (Fletcher & Rossing, Table "
+        "18.7). A glide between them, geometric, so the shell goes from snare to "
+        "tom without a step. The Perc pad is this engine on a tom's defaults; "
+        "this is how the snare gets there too. 0 is exact.");
+
     views.modes = static_cast<ModesView*> (
         page.addDisplay (std::make_unique<ModesView> (ictus_, palette_, page.tintOf (kTintPitch), ids, pad), 3));
 
@@ -535,15 +578,72 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
         "How long the stick's burst on the wires takes to land, 50 to 400 ms. With "
         "Rattle up the wires also follow the shell, past this.");
 
+    views.wires = static_cast<WiresView*> (
+        page.addDisplay (std::make_unique<WiresView> (ictus_, palette_, page.tintOf (kTintColour), ids), 3));
+
+    // ---- the rattle: the shell's throw on the wires ----
+    page.beginPlate ("Rattle", "the shell throwing the wires", kTintColour);
+
     page.addKnob (ids.rattle, "Rattle",
         "How much the shell's own motion drives the wires, 0 to 100%: the one "
         "nonlinearity kept from the physical models, so the wires buzz for as "
         "long as the drum rings. At 100 they start 1.8 times louder and are still "
         "there at 100 ms where the plain burst has ended, 29 dB down with the "
-        "shell. 0 runs no follower and is exact.");
+        "shell. 0 runs no follower and is exact.", Emphasis::lead);
 
-    views.wires = static_cast<WiresView*> (
-        page.addDisplay (std::make_unique<WiresView> (ictus_, palette_, page.tintOf (kTintColour), ids), 3));
+    page.addKnob (ids.rattleDecay, "Rattle decay",
+        "How long the shell's throw lasts, on top of the shell's own fall. SHELL "
+        "(the knob at 0) is the old behaviour exactly: the buzz lasts as long as "
+        "the drum rings -- and Ring made the drum ring. A time here is a fall of "
+        "its own to -60 dB, 10 ms to 2 s, multiplied in, so a long-ringing shell "
+        "can carry a short buzz: the wires stop before the drum does, as they do "
+        "on a real snare. Cut exactly once 120 dB down.");
+
+    page.addKnob (ids.rattleTone, "Rattle tone",
+        "The throw's own corner against the snap's, -24 to +24 semitones. 0 is the "
+        "same filter as the stick's burst, exactly. Up, the throw's high-pass rises "
+        "above Snappy -- sizzle. Down, the corner falls AND the filter narrows to a "
+        "band-pass on the way, so two octaves down is the wires' own low chatter, a "
+        "buzz with a pitch (measured centroid 3.7 kHz against 9.5 flat and 13.4 two "
+        "up). The dark end is made up by 2 per octave, so it is judged as tone, not "
+        "loudness. Costs a second filter per stream while it is off 0.");
+
+    page.addKnob (ids.rattleTension, "Tension",
+        "The snares' tension, 0 to 100%. On a real drum the snares only leave the "
+        "head and strike it again above a certain head amplitude, and that "
+        "amplitude rises with their tension -- a soft blow at high tension does not "
+        "rattle at all (Fletcher & Rossing 18.13). 0 is the smooth follower as it "
+        "always was. Up, the drive becomes the head's lift above that threshold: "
+        "a train of strikes at the head's period that stops when the shell has "
+        "fallen under it -- 117, 73 and 28 ms into a 250 ms snare at 25, 50 and "
+        "100 % -- and that a soft hit reaches less of (by Vel > Wires). The knob "
+        "is squared, so the first half is subtle. Costs one compare a sample.");
+
+    // ---- the wires' colour and placement ----
+    page.beginPlate ("Wire colour", "slope, bed and field", kTintColour, true);
+
+    page.addKnob (ids.wiresTilt, "Wires tilt",
+        "The wires' slope about the Snappy corner, -100 (dark) to +100 (bright): "
+        "a low shelf and a high shelf of opposite sign, 12 dB at the ends, so it "
+        "is a slope and not a volume (measured centroids 6.3, 9.5 and 11.2 kHz). "
+        "Snappy could only thin the wires; this can dull them. 0 runs no shelf "
+        "and is exact.");
+
+    page.addKnob (ids.bed, "Bed",
+        "The wires rung through six resonances at fixed ratios about the Snappy "
+        "corner (0.71 to 2.31 times it, Q 8), crossfaded against the plain noise: "
+        "the metal bed under a real set of snares, which is what makes wires "
+        "sound like wires and not like static. 0 runs no bank and is exact.");
+
+    page.addKnob (ids.wiresStereo, "Wires stereo",
+        "The wires placed across the field, 0 to 100%: a second, independent "
+        "stream of wires becomes the SIDE, through the same filter, tilt and bed, "
+        "and the mid's share falls by 1 / sqrt (1 + s^2) so a channel's wires stay "
+        "at the same level whatever the spread. The shell, the crack and the "
+        "thump stay in the centre, so the snare still hits with the kick and only "
+        "its top opens. The mono fold of a full spread is 3 dB down on the wires "
+        "-- the price of decorrelation, and the MIX page's readout shows it. 0 "
+        "runs no second stream and is exact.");
 
     // ---- strike ----
     page.beginPlate ("Strike", "the drop and the stick", kTintClick);
@@ -594,6 +694,45 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
     page.addKnob (ids.thumpDecay, "Thump decay",
         "How long the thump rings to -60 dB, 30 to 500 ms. Short is a knock in "
         "the attack; long is a tom's body under the snare.", Emphasis::trim);
+
+    // ---- room, and the clap under the snare ----
+    {
+        const int room = static_cast<int> (ghost ? RoomIndex::snare2 : RoomIndex::snare1);
+
+        page.beginPlate ("Room", "early reflections of the whole hit", kTintAmplitude);
+
+        page.addKnob (kRoomIds[room].level, "Room",
+            "Early reflections of " + drum + ", 0 to 100%: 48 taps a side, random signs, "
+            "falling 30 dB over the room's length, added back as mid AND side. The "
+            "clap layer goes through it too. Mono under Mono below on the MIX page. "
+            "Smoothed, so it can be ridden. 0 runs no room at all.", Emphasis::lead);
+
+        page.addKnob (kRoomIds[room].size, "Size",
+            "The reflections' span, 10 to 250 ms: a booth at 20, a live room at 80, "
+            "a hall's first wall at 200. Redrawn at the next hit.");
+
+        page.addKnob (kRoomIds[room].tone, "Tone",
+            "A low-pass on the reflections, 500 Hz to 20 kHz. 20 kHz is off, exactly.",
+            Emphasis::trim);
+    }
+
+    if (! ghost)
+    {
+        page.beginPlate ("Layer", "the clap under the snare", kTintClick, true);
+
+        page.addKnob (ids::s1Clap, "Clap",
+            "The CLAP page's sound played under this snare, 0 to 100%, with the "
+            "snare's velocity, at the snare's pan and through the snare's room -- the "
+            "snare-plus-clap of the classic sampled drum machines as one pad. This "
+            "is the layer's own level: muting the clap pad does not mute it. 0 "
+            "starts no layer at all.", Emphasis::lead);
+
+        page.addKnob (ids::s1ClapOffset, "Offset",
+            "How far behind the snare the clap lands, 0 to 50 ms. 0 is together; "
+            "5 to 12 ms is a flam that reads as one thicker hit; more is two. "
+            "Counted in internal samples on the control grid, so the same at every "
+            "block size and rate.", Emphasis::trim);
+    }
 
     // ---- out ----
     page.beginPlate ("Out", "the hit's shape", kTintAmplitude);
@@ -658,6 +797,21 @@ IctusEditor::SnareViews IctusEditor::buildSnarePage (PlatePage& page, const Snar
             return ictus_.noteNameFor (ictus_.previewSnappedHz (hz)).upToFirstOccurrenceOf (" +0c", false, false);
 
         return juce::String (hz, 1);
+    });
+
+    page.setValueText (ids.rattleDecay, [] (double ms)
+    {
+        return ms <= 0.0 ? juce::String ("Shell") : juce::String (juce::roundToInt (ms));
+    });
+
+    page.setValueText (ids.rattleTone, [] (double semitones)
+    {
+        return (semitones > 0.0 ? "+" : "") + juce::String (semitones, 1);
+    });
+
+    page.setValueText (kRoomIds[static_cast<int> (ghost ? RoomIndex::snare2 : RoomIndex::snare1)].tone, [] (double hz)
+    {
+        return hz >= 19999.0 ? juce::String ("Off") : juce::String (juce::roundToInt (hz));
     });
 
     addChildComponent (page);
@@ -726,6 +880,23 @@ void IctusEditor::buildHatPage()
         "is the crunch, which is signal-correlated and fills the gaps between "
         "partials. 0 is exact.");
 
+    page.addKnob (ids::htMetalStereo, "Metal stereo",
+        "The metal placed across the field, 0 to 100%: the six pulses and the "
+        "plate's modes each given a place, left or right, and read out as a "
+        "SIDE while the mid stays exactly the hat it was -- so a mono fold of "
+        "the pair is the old hat bit for bit. Width on the MIX page scales it. 0 "
+        "runs no side at all.");
+
+    page.addKnob (ids::htWash, "Wash",
+        "Noise fed into the plate's modes for half the pad's decay, 0 to 100%. "
+        "The strike alone leaves 64 pure lines each falling at its own rate; a "
+        "real pair is fed and re-fed for as long as it moves. At 100 the wash "
+        "puts as much energy into the plate as the strike did (the hit is about "
+        "3 dB louder, measured x1.9 on a 100 ms pad and x1.8 on 500 ms) -- a "
+        "noisier strike and a shimmer in the tail. Does nothing with Plate at 0; "
+        "costs one noise draw and 64 weights a sample while it runs, and is over "
+        "exactly at half the decay.");
+
     partialsView_ = static_cast<PartialsView*> (
         page.addDisplay (std::make_unique<PartialsView> (ictus_, palette_, page.tintOf (kTintPitch)), 3));
 
@@ -754,6 +925,15 @@ void IctusEditor::buildHatPage()
         "How long the hiss lasts as a percentage of the pad's own decay. Under "
         "100 is a fast chiff on the front of a longer metal ring; over 100 is a "
         "shimmer that outlives it, which is most of what a long open hat is.");
+
+    page.addKnob (ids::htAirStereo, "Air stereo",
+        "The hiss placed across the field, 0 to 100%: a second, independent "
+        "stream of hiss becomes the SIDE, through its own copy of the tone, the "
+        "tilt and the sizzle bank, and the mid's share falls by 1 / sqrt (1 + s^2) "
+        "so a channel's hiss stays at the same level whatever the spread. The "
+        "mono fold of a full spread is 3 dB down on the hiss -- the price of "
+        "decorrelation, and the MIX page's readout shows it. Costs a second "
+        "filter chain while it is up; 0 runs none and is exact.");
 
     // ---- the hiss's texture ----
     page.beginPlate ("Texture", "what kind of hiss", kTintColour, true);
@@ -946,6 +1126,13 @@ void IctusEditor::buildClapPage()
         "How fast each burst falls, 1 to 20 ms. Short is a slap you can count; "
         "long smears them into one gesture.");
 
+    page.addKnob (ids::cpStereo, "Stereo",
+        "The bursts placed across the field, 0 to 100%: each of the six lands a "
+        "little left or right of the last, read out as a SIDE, and the room's "
+        "tail gets a second stream on the side of its own -- several people are "
+        "never in one place. The mid stays the clap it was. 0 runs no side and is "
+        "exact.");
+
     burstView_ = static_cast<BurstView*> (
         page.addDisplay (std::make_unique<BurstView> (ictus_, palette_, page.tintOf (kTintClick)), 3));
 
@@ -1027,6 +1214,27 @@ void IctusEditor::buildClapPage()
         "is a 1 ms ramp, the shortest that does not click. Does nothing with "
         "Gate dark.");
 
+    // ---- room ----
+    page.beginPlate ("Room", "a clap is mostly its room", kTintAmplitude);
+
+    page.addKnob (kRoomIds[static_cast<int> (RoomIndex::clap)].level, "Room",
+        "Early reflections of the clap, 0 to 100%: 48 taps a side, random signs, "
+        "falling 30 dB over the room's length, added back as mid AND side. Tail "
+        "is the clap's own answer; this is the space around it. Mono under Mono "
+        "below on the MIX page. Smoothed. 0 runs no room at all.", Emphasis::lead);
+
+    page.addKnob (kRoomIds[static_cast<int> (RoomIndex::clap)].size, "Size",
+        "The reflections' span, 10 to 250 ms. Redrawn at the next hit.");
+
+    page.addKnob (kRoomIds[static_cast<int> (RoomIndex::clap)].tone, "Tone",
+        "A low-pass on the reflections, 500 Hz to 20 kHz. 20 kHz is off, exactly.",
+        Emphasis::trim);
+
+    page.setValueText (kRoomIds[static_cast<int> (RoomIndex::clap)].tone, [] (double hz)
+    {
+        return hz >= 19999.0 ? juce::String ("Off") : juce::String (juce::roundToInt (hz));
+    });
+
     page.setNote ("The clap is on D#1 by default. Bursts of noise a Flam apart with their "
                   "envelopes summed, a cavity struck by each of them, and then the room: the "
                   "pattern is the recipe from the Nord Modular percussion chapter, which is "
@@ -1093,12 +1301,57 @@ void IctusEditor::buildMixPage()
         });
     }
 
+    // ---- width ----
+    page.beginPlate ("Width", "how far each pad's side reaches", kTintColour);
+
+    for (const auto& entry : entries)
+    {
+        const int index = static_cast<int> (entry.pad);
+
+        page.addKnob (kWidthIds[index], entry.name,
+            juce::String (entry.name) + " width, 0 to 200%: a gain on the pad's SIDE signal alone. 100 is "
+            "the field the pad's own spread controls make (Air stereo, Metal stereo, Wires stereo, the "
+            "clap's Stereo, a Room), exactly; 0 folds the pad to mono; 200 doubles the spread. A pad "
+            "with nothing spread and no room has no side, and this does nothing -- it is greyed then. "
+            "Smoothed over 20 ms.", Emphasis::trim);
+    }
+
+    // ---- mono below ----
+    page.beginPlate ("Mono below", "the corner under which each pad is centred", kTintPitch);
+
+    for (const auto& entry : entries)
+    {
+        const int index = static_cast<int> (entry.pad);
+
+        page.addKnob (kMonoBelowIds[index], entry.name,
+            juce::String (entry.name) + ": the pad's side is high-passed here, 40 to 500 Hz, second "
+            "order, so whatever is spread above it the low end stays in the centre and a fold to mono "
+            "loses nothing there. 150 Hz by default, because a club system cannot place anything "
+            "below it. OFF (the knob at 0) leaves the side whole. Moves under a ringing pad without a "
+            "step, and costs nothing on a pad with no side.", Emphasis::trim);
+
+        page.setValueText (kMonoBelowIds[index], [] (double hz)
+        {
+            return hz <= 0.0 ? juce::String ("Off") : juce::String (juce::roundToInt (hz));
+        });
+    }
+
+    // ---- the readout ----
+    page.beginPlate ("Field", "what the output's correlation is doing", kTintAmplitude);
+
+    fieldView_ = static_cast<FieldView*> (
+        page.addDisplay (std::make_unique<FieldView> (ictus_, palette_, page.tintOf (kTintAmplitude)), 4));
+
     page.setNote ("The pads in the field, so the kit does not need a mixer to be placed. Pan is a balance: "
                   "the centre is exactly the mono render every saved project was mixed against, and a pad "
-                  "hard left leaves the right channel exactly empty. The pads are still mono sources; the "
-                  "width that needs a side signal from the drum itself -- the plate's modes spread, the "
-                  "hiss decorrelated, the clap's bursts placed -- arrives with the next round, together "
-                  "with a Width and a mono-below corner per pad and a correlation readout.");
+                  "hard left leaves the right channel exactly empty. The side of a pad comes from the drum "
+                  "itself -- the hats' Air stereo and Metal stereo, the snares' Wires stereo, the clap's "
+                  "Stereo, and a Room on the kick, the snares and the clap -- and Width scales it, Mono "
+                  "below keeps the low end of it centred, and the readout shows the result. A pad with "
+                  "nothing spread has no side and is the mono render bit for bit. For a drum and bass "
+                  "mix: the kick centred and mono, the snare's body centred with only its wires and room "
+                  "opening, the hats 10 to 25 % off and spread, the clap wide -- the readout's low band "
+                  "lit throughout.");
 
     addChildComponent (page);
 }
@@ -1241,7 +1494,8 @@ void IctusEditor::refreshDisplays()
                            static_cast<DrumDisplay*> (ghostViews_.modes), static_cast<DrumDisplay*> (ghostViews_.wires),
                            static_cast<DrumDisplay*> (ghostViews_.envelope),
                            static_cast<DrumDisplay*> (partialsView_),
-                           static_cast<DrumDisplay*> (burstView_) })
+                           static_cast<DrumDisplay*> (burstView_),
+                           static_cast<DrumDisplay*> (fieldView_) })
         if (display != nullptr)
             display->refresh();
 }
@@ -1264,10 +1518,14 @@ void IctusEditor::updateSnareGreying (PlatePage& page, const SnareIds& ids, Snar
     now.linked = ids.link != nullptr && read (ids.link) > 0.5f;
     now.keyed = (now.linked ? read (kSnare1Ids.followKey) : read (ids.followKey)) > 0.5f;
     now.thump = read (ids.thump) > 0.0f;
+    now.rattle = read (ids.rattle) > 0.0f;
+    now.room = read (kRoomIds[static_cast<int> (ids.link != nullptr ? RoomIndex::snare2 : RoomIndex::snare1)].level) > 0.0f;
+    now.clap = ids.link != nullptr || read (ids::s1Clap) > 0.0f;
 
     if (now.wires == shown.wires && now.crack == shown.crack && now.noise == shown.noise
         && now.gate == shown.gate && now.keyed == shown.keyed && now.linked == shown.linked
-        && now.thump == shown.thump)
+        && now.thump == shown.thump && now.rattle == shown.rattle && now.room == shown.room
+        && now.clap == shown.clap)
         return;
 
     shown = now;
@@ -1290,6 +1548,24 @@ void IctusEditor::updateSnareGreying (PlatePage& page, const SnareIds& ids, Snar
     page.setControlEnabled (ids.tone, ! now.linked);
     page.setControlEnabled (ids.thumpTone, now.thump);
     page.setControlEnabled (ids.thumpDecay, now.thump);
+
+    // I4.5: the rattle's controls with the rattle, the wires' colour with the
+    // wires (and, on the ghost, with LINK dark), the room's size and tone with
+    // the room, the clap's offset with the clap.
+    page.setControlEnabled (ids.rattleDecay, now.wires && now.rattle);
+    page.setControlEnabled (ids.rattleTone, now.wires && now.rattle);
+    page.setControlEnabled (ids.rattleTension, now.wires && now.rattle);
+    page.setControlEnabled (ids.head, ! now.linked);
+    page.setControlEnabled (ids.wiresTilt, now.wires && ! now.linked);
+    page.setControlEnabled (ids.bed, now.wires && ! now.linked);
+    page.setControlEnabled (ids.wiresStereo, now.wires);
+
+    const int room = static_cast<int> (ids.link != nullptr ? RoomIndex::snare2 : RoomIndex::snare1);
+    page.setControlEnabled (kRoomIds[room].size, now.room);
+    page.setControlEnabled (kRoomIds[room].tone, now.room);
+
+    if (ids.link == nullptr)
+        page.setControlEnabled (ids::s1ClapOffset, now.clap);
 }
 
 void IctusEditor::updateGreying()
@@ -1308,13 +1584,15 @@ void IctusEditor::updateGreying()
     const bool gate = read (ids::k1Gate) > 0.5f;
     const bool under = read (ids::k1Under) > 0.0f;
     const bool knock = read (ids::k1Knock) > 0.0f;
+    const bool kickRoom = read (kRoomIds[static_cast<int> (RoomIndex::kick1)].level) > 0.0f;
 
     // Tune does nothing while the key sets the pitch -- Follow key lit, or
     // Bass mode, which keys every hit.
     const bool keyed = read (ids::k1FollowKey) > 0.5f || read (ids::bassMode) > 0.5f;
 
     if (toneOn != shownToneOn_ || harmonics != shownHarmonics_ || tail != shownTail_
-        || gate != shownGate_ || keyed != shownKeyed_ || under != shownUnder_ || knock != shownKnock_)
+        || gate != shownGate_ || keyed != shownKeyed_ || under != shownUnder_ || knock != shownKnock_
+        || kickRoom != shownKickRoom_)
     {
         shownToneOn_ = toneOn;
         shownHarmonics_ = harmonics;
@@ -1323,6 +1601,7 @@ void IctusEditor::updateGreying()
         shownKeyed_ = keyed;
         shownUnder_ = under;
         shownKnock_ = knock;
+        shownKickRoom_ = kickRoom;
 
         kickPage_->setControlEnabled (ids::k1Tone, toneOn);
         kickPage_->setControlEnabled (ids::k1Even, harmonics);
@@ -1335,6 +1614,8 @@ void IctusEditor::updateGreying()
         kickPage_->setControlEnabled (ids::k1UnderAttack, under);
         kickPage_->setControlEnabled (ids::k1KnockTone, knock);
         kickPage_->setControlEnabled (ids::k1KnockTime, knock);
+        kickPage_->setControlEnabled (kRoomIds[static_cast<int> (RoomIndex::kick1)].size, kickRoom);
+        kickPage_->setControlEnabled (kRoomIds[static_cast<int> (RoomIndex::kick1)].tone, kickRoom);
     }
 
     updateSnareGreying (*snarePage_, kSnare1Ids, shownSnare_);
@@ -1362,6 +1643,15 @@ void IctusEditor::updateGreying()
             hatPage_->setControlEnabled (ids::htAirAttack, air);
             hatPage_->setControlEnabled (ids::htGrain, air);
             hatPage_->setControlEnabled (ids::htVelAir, air);
+            hatPage_->setControlEnabled (ids::htAirStereo, air);
+        }
+
+        const bool plate = value (ids::htPlate) > 0.0;
+
+        if (plate != shownHatPlate_)
+        {
+            shownHatPlate_ = plate;
+            hatPage_->setControlEnabled (ids::htWash, plate);
         }
 
         if (hatGate != shownHatGate_)
@@ -1391,6 +1681,41 @@ void IctusEditor::updateGreying()
             shownClapNoise_ = noise;
             clapPage_->setControlEnabled (ids::cpNoiseTone, noise);
         }
+
+        const bool clapRoom = value (kRoomIds[static_cast<int> (RoomIndex::clap)].level) > 0.0;
+
+        if (clapRoom != shownClapRoom_)
+        {
+            shownClapRoom_ = clapRoom;
+            clapPage_->setControlEnabled (kRoomIds[static_cast<int> (RoomIndex::clap)].size, clapRoom);
+            clapPage_->setControlEnabled (kRoomIds[static_cast<int> (RoomIndex::clap)].tone, clapRoom);
+        }
+
+        // The MIX page: Width and Mono below act on a pad's side, which only
+        // a spread control or a room makes. A pad with neither has no side,
+        // and the two knobs say so by greying.
+        const bool hatSide = value (ids::htAirStereo) > 0.0 || value (ids::htMetalStereo) > 0.0;
+        const bool clapSide = value (ids::cpStereo) > 0.0 || clapRoom;
+
+        const bool padSide[kPadCount] {
+            value (kRoomIds[static_cast<int> (RoomIndex::kick1)].level) > 0.0,
+            value (ids::s1WiresStereo) > 0.0 || value (kRoomIds[static_cast<int> (RoomIndex::snare1)].level) > 0.0
+                || (value (ids::s1Clap) > 0.0 && value (ids::cpStereo) > 0.0),
+            hatSide,
+            hatSide,
+            clapSide,
+            false,
+            false,
+            value (ids::g1WiresStereo) > 0.0 || value (kRoomIds[static_cast<int> (RoomIndex::snare2)].level) > 0.0,
+        };
+
+        for (int pad = 0; pad < kPadCount; ++pad)
+            if (padSide[pad] != shownPadField_[pad])
+            {
+                shownPadField_[pad] = padSide[pad];
+                mixPage_->setControlEnabled (kWidthIds[pad], padSide[pad]);
+                mixPage_->setControlEnabled (kMonoBelowIds[pad], padSide[pad]);
+            }
 
         const bool clapGate = value (ids::cpGate) > 0.5;
 

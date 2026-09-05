@@ -486,6 +486,47 @@ not the same sound quieter.
 
 ---
 
+### The fifth round: the field, the rooms, the rattle's own controls (new)
+
+**What it does.** The pads now render mid and side. A drum spreads itself --
+*Air stereo* and *Metal stereo* on the hats, *Wires stereo* on the snares,
+*Stereo* on the clap -- and the MIX page gained a *Width* and a *Mono below* per
+pad and a *Field* readout: the output's correlation, full band and under
+120 Hz, with a lamp while the low end would survive a fold to mono. Four pads
+(kick, snare, ghost, clap) have a *Room*: early reflections of the pad's own
+sound, in stereo. The plate has a *Wash*; the snare a *Head*, a *Wires tilt*, a
+*Bed*, and three controls on the rattle -- *Rattle decay*, *Rattle tone*,
+*Tension*; the kick a *Drop curve*; and the CLAP page's sound can play under
+the snare (*Clap*, *Offset* on the SNARE page).
+
+**How to use it, for drum and bass.** Keep the kick centred and mono: no
+spread, a small Room at most (12-20 %, Size 30-40 ms), Mono below at 150 Hz
+so the sub never leans. The snare's body stays centred by construction -- only
+its wires and its room open -- so *Wires stereo* 40-60 % and a Room of 20-40 %
+at 60-120 ms give it width without moving the hit. The hats: *Air stereo*
+50-70 % and *Metal stereo* 40-60 %, panned 10-25 % off like a played kit,
+Width 100-150 %. The clap wide: *Stereo* 60-80 %, a longer, duller Room. Watch
+the Field readout's lamp: while it is lit the low band folds to mono without
+losing level, whatever is spread above it.
+
+**The rattle.** *Rattle decay* at SHELL is the old behaviour -- the shell's
+throw on the wires lasts as long as the drum rings, and Ring made it ring. A
+time here ends the buzz before the shell does, as it does on a real snare.
+*Rattle tone* down is the wires' own low chatter, a buzz with a pitch; up is
+sizzle. *Tension* is the physics of the snares: they leave the head only when it
+moves far enough, so with tension up the buzz becomes a train of strikes at the
+head's period that stops early and that a soft hit barely reaches -- the drum
+literature's snare action, built as a threshold. The Chatter Snare preset is
+that idea turned up.
+
+**Where it comes from.** Room is the velvet-noise family of reverberators
+(sparse random-sign taps), a shape known second-hand -- the paper itself could
+not be fetched from here, and nothing numeric is taken from it. Head's far end
+is a real tom-tom's measured mode ratios (Fletcher & Rossing, Table 18.7), and
+Tension is their §18.13 read first-hand. Wide Kit, Room Kit, Chatter Snare,
+Clap Snare and Laser Kick are the presets that show each off. None of it has
+been heard on the rig yet.
+
 ## Where the numbers live
 
 Every claim above is measured, and the measurements are in the repository rather

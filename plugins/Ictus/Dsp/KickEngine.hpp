@@ -96,6 +96,7 @@ struct KickSettings
     bool   noteSnap { false };           ///< snap Tune to the nearest degree of the tuning
     double startSemitones { 30.0 };      ///< the drop starts this far above the landed pitch, 0..60
     double dropSeconds { 0.03 };         ///< landing time of the drop, 0.002..0.2
+    double dropCurve { 0.0 };            ///< the drop's shape: -1 a line (the laser), 0 exponential (exact), +1 hold-then-snap
     double sighSemitones { 1.5 };        ///< signed; the slow second drop, -12..12
     double sighSeconds { 0.5 };          ///< landing time of the sigh, 0.1..2
     double phaseDegrees { 0.0 };         ///< where the body starts its cycle, 0..90
@@ -251,7 +252,7 @@ public:
         endHz_ = std::clamp (endHz, 10.0, rate_ * 0.25);
 
         const double start = scaled (std::clamp (s.startSemitones, 0.0, 60.0), s.velocityDrop);
-        drop_.trigger (start, std::clamp (s.dropSeconds, 0.002, 0.2));
+        drop_.trigger (start, std::clamp (s.dropSeconds, 0.002, 0.2), std::clamp (s.dropCurve, -1.0, 1.0));
         sigh_.trigger (std::clamp (s.sighSemitones, -12.0, 12.0), std::clamp (s.sighSeconds, 0.1, 2.0));
 
         phase_ = std::clamp (s.phaseDegrees, 0.0, 90.0) / 360.0;
@@ -412,6 +413,15 @@ public:
 
     [[nodiscard]] bool isGated() const noexcept { return gate_; }
 
+    /// One internal sample with a side signal alongside: the kick has none
+    /// of its own -- it belongs in the centre -- so the side is exactly 0.0
+    /// and the mid is process().
+    [[nodiscard]] double process (double& side) noexcept
+    {
+        side = 0.0;
+        return process();
+    }
+
     /// One internal sample. Exactly 0.0 when the hit is over.
     [[nodiscard]] double process() noexcept
     {
@@ -524,6 +534,9 @@ public:
     {
         return endHz_ * drop_.multiplier() * sigh_.multiplier();
     }
+
+    /// The drop's curve for the hit that is sounding.
+    [[nodiscard]] double getDropCurve() const noexcept { return drop_.getCurve(); }
 
     /// Under's pitch at the last control boundary: the body's times the
     /// interval's ratio, so it drops and sighs with it. 0 with Under off.

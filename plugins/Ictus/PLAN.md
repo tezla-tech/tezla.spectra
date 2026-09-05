@@ -557,6 +557,7 @@ CLAUDE.md.
 | I4.2 the rig's second round: Drive fixed, a gate on the clap | done in code; not yet played on the rig |
 | I4.3 the rig's third round (2026-09-05): "thin and tinny" → **Plate** (a 64-mode cymbal from the published mode law) and **Grit**, six sources fetched by the user and read first-hand | done in code; not yet played on the rig. Plate 0 / Grit 0 is the old hat bit for bit (golden render) |
 | I4.4 the rig's fourth round (2026-09-05, the user's asks after hearing the plate): more say over the hiss (**Air tilt, Air attack, Grain, Vel > Air**), the open pad's own **Open hold** behind a Link lamp, **Under** and **Knock** on the kick, **Ring** and **Thump** on the snares, and a **Pan** per pad on a MIX page | done in code; not yet played on the rig. Every default neutral: the round's golden render (four rates, stereo, every existing stage on) is byte for byte the schema-10 engine |
+| I4.5 the rig's fifth round (2026-09-05, after playing I4.4: "amazing stuff"): the pads render **mid and side** -- **Air stereo, Metal stereo** (hats), **Wires stereo** (snares), **Stereo** (clap), a **Width** and a **Mono below** per pad and a **correlation readout** on the MIX page; a **Room** (shared early reflections) on the kick, the snares and the clap; the plate's **Wash**; the snare's **Head**, **Wires tilt** and **Bed**; the rattle's own **Rattle decay, Rattle tone** and **Tension** (asked for while the round was in flight); the kick's **Drop curve**; the **clap layered under Snare 1** | done in code; not yet played on the rig. Every default neutral: the golden render still byte for byte (md5 `d933a800…`) with the whole mid/side path in place. Measure rows and a full docs pass still to do -- pushed early at the user's request |
 | **PAUSED 2026-09-04 at the user's request** while Stryda is built (`plugins/Stryda/PLAN.md`). **Resume at I5.** I4.3 and I4.4 were direct asks on 2026-09-05 (CLAUDE.md §1, the chat wins for that task) and do not lift the pause | — |
 | I5 punch chain + TransientShaper | pending |
 | I6 humanise + velocity | pending |
@@ -1291,6 +1292,108 @@ the pans ramped from centre (the hard-left check went red on its own).
 mono source), the source spreads (plate modes, hiss, wires, clap bursts), Wash,
 Room, Bed, the clap layer under the snare, Drop curve, and the F&R 18.10/18.13
 reading for the snare head.
+
+**I4.5 -- the fifth round** (2026-09-05, the user, after playing I4.4: *"amazing
+stuff! what about decay control for the snare rattle?"* and *"maybe one more
+control for the rattle? some sort of frequency control? ... use your intel to be
+creative"*, on top of the round-2 list agreed before: *"could we work on some
+widening stereo stuff? this will save us having to tediously do it in the FL
+mixer effects chain"*). Everything appended at `kSchemaV12`, every default
+neutral: the round-1 golden render (the same sixty-line program, four rates,
+stereo, every existing stage on) is still md5 `d933a800…` with the whole
+mid/side path, the rooms, the clap layer and the rattle controls in place.
+**Pushed before the measure rows and the full docs pass were written**, at the
+user's request (a usage limit was closing); this section is the record until
+that pass lands.
+
+**The field.** Every engine's `process (double& side)` returns its mid and
+writes a side that is exactly 0.0 unless a spread control is up, so a pad with
+nothing spread is the mono render bit for bit: the engine forms `mid + side`
+and `mid - side` only when the side is not exactly zero. Linear spreads (the
+hats' *Metal stereo*: per-pulse and per-mode side weights; the clap's *Stereo*:
+per-burst weights) leave the mid untouched, so a mono fold is the old hat or
+clap exactly. Decorrelated spreads (*Air stereo*, *Wires stereo*, the clap's
+tail) run a second, independent noise stream as the side and scale the mid by
+`1 / sqrt (1 + s^2)`, so a channel's level holds and the mono fold of a full
+spread is 3 dB down -- measured: hiss mid x0.707, left 0.991, right 1.006 of
+the mono hiss; wires x0.707, 1.003, 0.984. Per pad on the MIX page: **Width**
+(a smoothed gain on the side, 1.0 exact; measured x2.0000 at 200 %, and L == R
+bit for bit at 0) and **Mono below** (a Butterworth high-pass on the side,
+150 Hz by default, Off at 0, reset and skipped once the side has been exactly
+zero for half a second; measured: the low band's correlation under a kick's
+room 0.087 with it off, 0.999 at 150 Hz, through `dsp::StereoAnalyser`). The
+same analyser reads the Main output at the host rate for the MIX page's
+**Field** readout: full-band and sub-120 Hz correlation, a lamp for the low
+band being mono-safe.
+
+**Room.** `dsp::EarlyReflections` (shared, own commit): 48 taps a side at random
+positions within equal cells, random signs, gains falling 30 dB over the span,
+unit energy per channel, a one-pole tone, an activity counter. One per pad on
+the kick, Snare 1, the ghost and the clap (`RoomIndex`, append-only), fed by
+the pad's mid at the internal rate and returned as mid and side, the level
+smoothed and its target guarded (unguarded, the smoother's moving flag kept a
+room at 0 running -- a break-check found it). Lines are allocated at
+`prepare()` for the largest factor; `setSampleRate`/`design` allocate nothing;
+the taps are redrawn at the pad's note-on when Size differs. Measured: a
+50 ms kick's RMS 150-250 ms after the hit 0.000000 dry, 0.00957 with a 200 ms
+room; a room at 0 is never fed (`isActive()` false 100 ms in). The velvet-noise
+paper this shape comes from was **not fetched** (the proxy refuses dafx.de);
+nothing numeric is taken from it -- `docs/DSP-REFERENCES.md`.
+
+**Wash** (hats). Noise driving every mode of the plate for half the pad's
+decay, weights `amplitude[k] / sqrt (N)` over the drive's effective length and
+a calibrated gain, so at Wash 1 the plate gets about the strike's energy again:
+measured x1.93 on a 100 ms pad and x1.78 on 500 ms, feeding at 0.3 of the decay
+and over exactly by 0.7. The first version (a 4 ms burst on steady-state
+weights) measured 4 % of the strike -- inaudible -- and is why the drive now
+lasts. Spectrally the tail is the same 64 lines; what changes is the onset and
+the shimmer.
+
+**The snare.** *Head* glides the upper modes' ratios from the snare set
+(1.6, 2.2) to a tom's (2.16, 3.14 -- Fletcher & Rossing Table 18.7, **taken**,
+read first-hand), geometrically; exact at 0 and to 1e-9 at 1. *Wires tilt*:
++-12 dB shelves about Snappy (centroids 6317 / 9490 / 11242 Hz). *Bed*: six
+band-passes at 0.71-2.31 x Snappy, Q 8 (the strongest peak between 1.9 and
+2.4 kHz lands at 2098 Hz against 2130 designed). *Wires stereo* as above. The
+ghost's LINK now also copies Head, Wires tilt and Bed. The **clap layer**:
+`Pad<ClapEngine>` inside the engine, started by a Snare 1 hit after an offset
+counted in internal samples and landed on a chunk edge the render loop cuts
+for it -- measured to the sample (asked for 1363, first touched 1363) -- with
+the snare's velocity, at the snare's pan, through the snare's room, at its own
+level (muting the clap pad does not mute it), counted as a hit.
+
+**The rattle's own controls** (the two asks that arrived mid-round). *Rattle
+decay*: 0 is "the shell's" -- the follower for as long as the drum rings, as
+before, bit for bit; a time is a fall to -60 dB multiplied into the drive, cut
+exactly at -120 dB. Measured: the shell's throw 200-300 ms in is 0.0456 RMS with
+the shell's decay and exactly 0 with a 50 ms decay of its own, while the shell
+still sounds. *Rattle tone*: the throw through a second filter on the same
+white sample, summed with the stick's before the tilt and the bed; up, a
+high-pass rising to 4 x Snappy; down, the corner falls AND the morph moves to
+the band-pass, because a lowered high-pass only adds low end under the same top
+and the centroid did not move (measured first, 9610 vs 9459 Hz) -- with the
+band-pass: 3732 / 9566 / 13407 Hz at -2 / 0 / +2 octaves, made up by 2^-tone so
+the level holds. *Tension*: Fletcher & Rossing 18.13, read first-hand -- the
+snares leave the head only above a critical amplitude that rises with their
+tension. The head's normalised motion (peak 0.86 on the default snare) minus a
+threshold of 0.25 x Tension^2, half-wave (thrown once a cycle), crossfaded
+against the follower; scaled by velocity through Vel > Wires. Measured: the
+lift ends 117 / 73 / 28 ms into a 250 ms snare at 25 / 50 / 100 %, a 0.4
+velocity hit at 19 ms against 29, and Tension 0 never evaluates a lift.
+
+**Kick.** *Drop curve*: `TensionDrop`'s new third argument -- at half the drop
+1.4142 (a line, exactly 2^(6/12)), 1.0585 (exponential), 1.6605 (snap).
+
+**Tests.** Sixteen in `tests/test_Ictus.cpp` under the I4.5 rule, five shared
+(`test_TensionDrop.cpp`, `test_EarlyReflections.cpp`); the whole kit with
+everything spread bit-identical across 64-, 97- and 512-sample blocks. Twenty
+break-checks run, each seen red then reverted with the engine files
+checksummed: three stayed green the first time and were re-done -- two were
+weak breaks (the clap's tail still had a side; a 7 ms offset that happened to
+sit on the 32-sample grid) and one was the room-level guard above, a real
+defect. Not yet done: `tools/measure_main.cpp` rows for the round, the
+`qemu-aarch64` cross-check (CLAUDE.md section 2.3 gate), and nothing of this
+has been heard on the rig.
 
 **I4.3 -- a hold on the snares' wires** (2026-09-03, the user). The wires had
 a decay and nothing else, so the only way to get a long buzz was a long
